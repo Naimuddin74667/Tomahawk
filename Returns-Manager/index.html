@@ -48,6 +48,17 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--tx);font-
 .ni.active .nbd{background:rgba(255,255,255,.18);color:#fff}
 .sb-foot{padding:10px 12px;border-top:1px solid var(--bd);font-size:14px;color:var(--t3);line-height:1.6}
 .sb-foot strong{color:var(--t2);font-weight:500;display:block;font-size:15px}
+.sb-sync{display:flex;align-items:center;gap:6px;margin-bottom:2px}
+.sb-sync-dot{width:7px;height:7px;border-radius:50%;background:var(--bd2);flex-shrink:0;transition:background .3s}
+.sb-sync-dot.syncing{background:var(--ab);animation:pulse-sync 1s ease-in-out infinite}
+.sb-sync-dot.synced{background:var(--gb)}
+.sb-sync-dot.failed{background:var(--rb)}
+.sb-sync-txt{font-size:12px;color:var(--t3)}
+.sb-sync-txt.failed{color:var(--rd);cursor:pointer;text-decoration:underline}
+@keyframes pulse-sync{0%,100%{opacity:1}50%{opacity:.3}}
+.pg-export-btn{display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:var(--rs);border:1px solid var(--bd);background:var(--sf);color:var(--t2);font-size:13px;font-family:'DM Sans',sans-serif;cursor:pointer;transition:all .15s;white-space:nowrap}
+.pg-export-btn:hover{border-color:var(--bd2);color:var(--tx)}
+.pg-export-btn svg{width:12px;height:12px;flex-shrink:0}
 .dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--bd2);margin-right:3px;vertical-align:middle}
 .dot.ok{background:var(--gn)}.dot.warn{background:var(--am)}
 
@@ -366,12 +377,21 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
 .amt-sec{display:none}.amt-sec.show{display:block}
 
 /* Settings modal */
-.settings-section{margin-bottom:16px}
-.settings-section h3{font-size:15px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--bd)}
-.settings-item{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--bd)}
+.settings-section{margin-bottom:20px}
+.settings-section:last-child{margin-bottom:0}
+.settings-section-title{font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.settings-section-title::after{content:'';flex:1;height:1px;background:var(--bd)}
+.settings-card{background:var(--s2);border-radius:var(--rs);overflow:hidden;border:1px solid var(--bd)}
+.settings-item{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;gap:12px;border-bottom:1px solid var(--bd);background:var(--sf)}
 .settings-item:last-child{border-bottom:none}
-.settings-item-info h4{font-size:16px;font-weight:500;margin-bottom:1px}
-.settings-item-info p{font-size:15px;color:var(--t2)}
+.settings-item-info{flex:1;min-width:0}
+.settings-item-info h4{font-size:14px;font-weight:500;color:var(--tx);margin-bottom:1px}
+.settings-item-info p{font-size:13px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.settings-sync-bar{display:flex;align-items:center;gap:8px;background:var(--s2);border:1px solid var(--bd);border-radius:var(--rs);padding:10px 12px;margin-bottom:12px}
+.settings-sync-dot{width:8px;height:8px;border-radius:50%;background:var(--gb);flex-shrink:0}
+.settings-sync-info{flex:1;font-size:13px;color:var(--t2)}
+.settings-sync-info strong{color:var(--tx);font-size:14px;display:block;margin-bottom:1px}
+.settings-sync-btns{display:flex;gap:6px}
 
 /* GSheets modal */
 .gs-step{display:flex;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--bd)}
@@ -442,7 +462,14 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
       <span class="nbd nb-r" id="nb-trash">0</span>
     </button>
   </nav>
-  <div class="sb-foot"><span class="dot" id="sf-dot"></span><strong id="sf-title">No CSV loaded</strong><span id="sf-sub"></span><div id="sync-badge" style="margin-top:3px;font-size:14px;color:var(--t3)"></div></div>
+  <div class="sb-foot">
+    <div class="sb-sync" id="sb-sync-row">
+      <span class="sb-sync-dot" id="sb-sync-dot"></span>
+      <span class="sb-sync-txt" id="sb-sync-txt">Not synced</span>
+    </div>
+    <div style="margin-top:6px;display:flex;align-items:center;gap:5px"><span class="dot" id="sf-dot"></span><strong id="sf-title" style="font-size:13px">No CSV loaded</strong><span id="sf-sub" style="font-size:12px"></span></div>
+    <div id="sync-badge" style="display:none"></div>
+  </div>
 </aside>
 
 <main class="main">
@@ -620,6 +647,12 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
       <div class="sc"><div class="sc-l">To putaway</div><div class="sc-v" id="pa-count" style="color:var(--gn)">0</div><div class="sc-s">pending upload</div></div>
       <div class="sc"><div class="sc-l">Done today</div><div class="sc-v" id="pa-done" style="color:var(--bl)">0</div><div class="sc-s">marked complete</div></div>
     </div>
+    <div class="toolbar" style="margin-bottom:8px">
+      <button class="pg-export-btn" onclick="exportPageCSV('putaway')" style="margin-left:auto">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Export CSV
+      </button>
+    </div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px;font-weight:500;color:var(--t2)">
@@ -664,6 +697,12 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
       <div class="sc" id="msc-repair" onclick="filterMaint('repair')"><div class="sc-l">Repair</div><div class="sc-v" id="ms-repair" style="color:var(--rd)">0</div></div>
       <div class="sc" id="msc-wrong" onclick="filterMaint('wrong')"><div class="sc-l">Wrong product</div><div class="sc-v" id="ms-wrong" style="color:var(--pu)">0</div></div>
     </div>
+    <div class="toolbar">
+      <button class="pg-export-btn" onclick="exportPageCSV('maint')" style="margin-left:auto">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Export CSV
+      </button>
+    </div>
     <div id="maint-container"></div>
   </div>
 </div>
@@ -681,7 +720,10 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
     <div class="toolbar">
       <div class="sw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg><input type="text" id="q-all" placeholder="Search tracking, product…" oninput="renderAll()"></div>
       <select class="fil" id="f-co" onchange="renderAll()"><option value="">All conditions</option><option>Good</option><option>Dirty/Used</option><option>Damaged</option><option>Wrong product</option><option>Missing items</option><option>Different item</option></select>
-      <button onclick="clearAll()" class="clear-btn">Clear all</button>
+      <button class="pg-export-btn" onclick="exportPageCSV('all')" style="margin-left:auto">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Export CSV
+      </button>
     </div>
     <div class="tc"><table>
       <thead><tr><th>Logged</th><th>Tracking</th><th>Product</th><th>Platform</th><th>Condition</th><th>Claim</th><th>Status</th></tr></thead>
@@ -714,6 +756,12 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
       <div class="sc" id="tsc-wrong" onclick="filterTrash('wrong')"><div class="sc-l">Wrong product</div><div class="sc-v" id="tr-wrong" style="color:var(--pu)">0</div></div>
       <div class="sc" id="tsc-missing" onclick="filterTrash('missing')"><div class="sc-l">Missing product</div><div class="sc-v" id="tr-missing" style="color:var(--bl)">0</div></div>
     </div>
+    <div class="toolbar">
+      <button class="pg-export-btn" onclick="exportPageCSV('trash')" style="margin-left:auto">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Export CSV
+      </button>
+    </div>
     <div class="tc"><table>
       <thead><tr><th>Return date</th><th>Tracking</th><th>SKU</th><th>Product</th><th>Condition</th><th>Reason</th><th>Moved to trash</th></tr></thead>
       <tbody id="trash-tbody"></tbody>
@@ -737,6 +785,12 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
       <div class="sc" id="csc-co" onclick="filterClaims('open')"><div class="sc-l">Claim open</div><div class="sc-v" id="cs-open" style="color:var(--rd)">0</div><div class="sc-s">awaiting</div></div>
       <div class="sc" id="csc-ca" onclick="filterClaims('approved')"><div class="sc-l">Approved</div><div class="sc-v" id="cs-appr" style="color:var(--gn)">0</div><div class="sc-s" id="cs-appr-amt">₹0</div></div>
       <div class="sc" id="csc-cr" onclick="filterClaims('rejected')"><div class="sc-l">Rejected</div><div class="sc-v" id="cs-rej" style="color:var(--rd)">0</div></div>
+    </div>
+    <div class="toolbar" style="margin-bottom:8px">
+      <button class="pg-export-btn" onclick="exportPageCSV('claims')" style="margin-left:auto">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Export CSV
+      </button>
     </div>
     <div class="tc"><table>
       <thead><tr><th>Return date</th><th>Tracking</th><th>Product</th><th>Condition</th><th>Claim ID</th><th>Claim status</th><th>Approved ₹</th><th>Action</th></tr></thead>
@@ -943,57 +997,86 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
 
 <!-- Settings modal -->
 <div class="overlay" id="settings-modal">
-  <div class="modal" style="width:440px">
+  <div class="modal" style="width:420px">
     <div class="mh"><div><h2>Settings</h2></div><button class="mclose" onclick="closeModal('settings-modal')">×</button></div>
-    <div class="mc-b">
+    <div class="mc-b" style="padding:16px">
+
+      <!-- New Device -->
       <div class="settings-section">
-        <h3>Google Sheets sync</h3>
-        <div class="settings-item">
-          <div class="settings-item-info"><h4>Sync status</h4><p id="gs-settings-status">Checking...</p></div>
-          <button class="btn bgr" onclick="openModal('gs-modal')">Open sync panel</button>
-        </div>
-        <div class="settings-item">
-          <div class="settings-item-info"><h4>Save to sheet now</h4><p>Push all current data to Google Sheet</p></div>
-          <button class="btn bg" onclick="gsSave()">Save now</button>
-        </div>
-        <div class="settings-item">
-          <div class="settings-item-info"><h4>Load from sheet</h4><p>Pull latest data from Google Sheet</p></div>
-          <button class="btn bg" onclick="gsLoad()">Load now</button>
+        <div class="settings-section-title">New device setup</div>
+        <div class="settings-card">
+          <div class="settings-item">
+            <div class="settings-item-info">
+              <h4>Load from Google Sheet</h4>
+              <p>Pull all data to this device</p>
+            </div>
+            <button class="btn bg" style="font-size:13px;padding:5px 10px;flex-shrink:0" onclick="gsLoad()">↓ Load</button>
+          </div>
         </div>
       </div>
+
+      <!-- Backup -->
       <div class="settings-section">
-        <h3>Data management</h3>
-        <div class="settings-item">
-          <div class="settings-item-info"><h4>Export all data</h4><p>Download complete returns log as JSON file</p></div>
-          <button class="btn bg" onclick="exportData()">Export</button>
-        </div>
-        <div class="settings-item">
-          <div class="settings-item-info"><h4>Import data</h4><p>Restore from a previously exported JSON file</p></div>
-          <label class="btn bg" style="cursor:pointer">Import<input type="file" accept=".json" style="display:none" onchange="importData(this)"></label>
-        </div>
-        <div class="settings-item">
-          <div class="settings-item-info"><h4>Export CSV master data</h4><p>Download all loaded Flipkart CSV records</p></div>
-          <button class="btn bg" onclick="exportCSVMaster()">Export CSV</button>
-        </div>
-        <div class="settings-item">
-          <div class="settings-item-info"><h4>Import CSV master data</h4><p>Restore CSV master database from export</p></div>
-          <label class="btn bg" style="cursor:pointer">Import<input type="file" accept=".json" style="display:none" onchange="importCSVMaster(this)"></label>
+        <div class="settings-section-title">Backup</div>
+        <div class="settings-card">
+          <div class="settings-item">
+            <div class="settings-item-info">
+              <h4>Export returns</h4>
+              <p>Download full log as JSON backup</p>
+            </div>
+            <button class="btn bg" style="font-size:13px;padding:5px 10px;flex-shrink:0" onclick="exportData()">Export</button>
+          </div>
+          <div class="settings-item">
+            <div class="settings-item-info">
+              <h4>Import returns</h4>
+              <p>Restore from JSON backup file</p>
+            </div>
+            <label class="btn bg" style="font-size:13px;padding:5px 10px;flex-shrink:0;cursor:pointer">Import<input type="file" accept=".json" style="display:none" onchange="importData(this)"></label>
+          </div>
         </div>
       </div>
-      <div class="settings-section">
-        <h3>Danger zone</h3>
-        <div class="settings-item">
-          <div class="settings-item-info"><h4>Delete specific return</h4><p>Go to All returns, open a return, click Delete</p></div>
-          <button class="btn bg" onclick="closeModal('settings-modal');nav('all',document.getElementById('nav-all'))">Go to All returns</button>
+
+      <!-- Danger Zone (collapsed) -->
+      <div class="settings-section" style="margin-bottom:0">
+        <div class="settings-section-title" style="cursor:pointer;user-select:none" onclick="toggleDangerZone()">
+          <span style="color:var(--rd)">⚠ Danger zone</span>
+          <span id="dz-arrow" style="margin-left:4px;font-size:11px;color:var(--rd)">▶</span>
         </div>
-        <div class="settings-item">
-          <div class="settings-item-info"><h4>Clear all return logs</h4><p>Permanently deletes all logged returns. CSV master data stays.</p></div>
-          <button class="btn b-rd" onclick="clearAll()">Clear logs</button>
+        <div id="dz-panel" style="display:none">
+          <div class="settings-card" style="border-color:var(--rb)">
+            <div class="settings-item">
+              <div class="settings-item-info">
+                <h4>Clear all return logs</h4>
+                <p>Permanently deletes all returns</p>
+              </div>
+              <button class="btn b-rd" style="font-size:13px;padding:5px 10px;flex-shrink:0" onclick="dangerAction('logs')">Clear</button>
+            </div>
+            <div class="settings-item">
+              <div class="settings-item-info">
+                <h4>Clear CSV master data</h4>
+                <p>Removes all Flipkart CSV records</p>
+              </div>
+              <button class="btn b-rd" style="font-size:13px;padding:5px 10px;flex-shrink:0" onclick="dangerAction('csv')">Clear</button>
+            </div>
+          </div>
         </div>
-        <div class="settings-item">
-          <div class="settings-item-info"><h4>Clear CSV master data</h4><p>Removes all loaded Flipkart CSV records.</p></div>
-          <button class="btn b-rd" onclick="clearCSVMaster()">Clear CSV data</button>
-        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Admin password modal -->
+<div class="overlay" id="admin-modal">
+  <div class="modal" style="width:340px">
+    <div class="mh"><div><h2>Admin verification</h2></div><button class="mclose" onclick="closeModal('admin-modal')">×</button></div>
+    <div class="mc-b" style="padding:16px">
+      <p style="font-size:14px;color:var(--t2);margin-bottom:12px">Enter admin password to continue.</p>
+      <input type="password" id="admin-pw-input" placeholder="Password" style="width:100%;margin-bottom:8px" onkeydown="if(event.key==='Enter')confirmDangerAction()">
+      <div id="admin-pw-err" style="font-size:13px;color:var(--rd);margin-bottom:10px;display:none">Incorrect password. Try again.</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn bg" style="flex:1" onclick="closeModal('admin-modal')">Cancel</button>
+        <button class="btn b-rd" style="flex:1" onclick="confirmDangerAction()">Confirm</button>
       </div>
     </div>
   </div>
@@ -1057,7 +1140,8 @@ function fmtSnake(s){return(s||'').replace(/_/g,' ').toLowerCase().replace(/\b\w
 function fmtDate(s){if(!s)return'\u2014';const d=new Date(s);return isNaN(d)?s:d.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}
 function fmtTime(s){if(!s)return'\u2014';const d=new Date(s);return isNaN(d)?s:d.toLocaleDateString('en-IN',{day:'2-digit',month:'short'})+' '+d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})}
 function greeting(){const h=new Date().getHours();return h<12?'Good morning':h<17?'Good afternoon':'Good evening'}
-function openModal(id){document.getElementById(id).classList.add('open')}
+function openModal(id){
+  if(id==='settings-modal') updateSettingsSyncBadge();document.getElementById(id).classList.add('open')}
 function closeModal(id){document.getElementById(id).classList.remove('open')}
 
 // ── Claim status ──────────────────────────────────────────────
@@ -2213,9 +2297,92 @@ function importCSVMaster(input){
 function downloadFile(name,content,type){
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type}));a.download=name;a.click();URL.revokeObjectURL(a.href);
 }
-function clearAll(){
-  if(!confirm('Clear all return logs? CSV master data stays.'))return;
-  returns=[];persist();putawayDoneToday.clear();updateDashboard();renderAll();renderListStats();renderClaims();renderPendingList();renderMaint();renderPutaway();toast('Return logs cleared');closeModal('settings-modal');
+// ── Danger Zone ──────────────────────────────────────────────
+function toggleDangerZone(){
+  const panel=document.getElementById('dz-panel');
+  const arrow=document.getElementById('dz-arrow');
+  const open=panel.style.display==='none';
+  panel.style.display=open?'block':'none';
+  arrow.textContent=open?'▼':'▶';
+}
+let _dangerTarget=null;
+function dangerAction(target){
+  _dangerTarget=target;
+  document.getElementById('admin-pw-input').value='';
+  document.getElementById('admin-pw-err').style.display='none';
+  openModal('admin-modal');
+  setTimeout(()=>document.getElementById('admin-pw-input').focus(),100);
+}
+function confirmDangerAction(){
+  const pw=document.getElementById('admin-pw-input').value;
+  if(pw!=='Admin74667'){
+    document.getElementById('admin-pw-err').style.display='block';
+    document.getElementById('admin-pw-input').value='';
+    document.getElementById('admin-pw-input').focus();
+    return;
+  }
+  closeModal('admin-modal');
+  if(_dangerTarget==='logs'){
+    returns=[];persist();putawayDoneToday.clear();
+    updateDashboard();renderAll();renderListStats();renderClaims();
+    renderPendingList();renderMaint();renderPutaway();
+    toast('Return logs cleared');
+  } else if(_dangerTarget==='csv'){
+    master={};meta={uploadedAt:null};persistCSV();persist();
+    updateCSVStatus();updateDashboard();
+    toast('CSV master data cleared');
+  }
+  _dangerTarget=null;
+}
+function clearAll(){dangerAction('logs');}
+
+// ── Page CSV Exports ──────────────────────────────────────────
+function exportPageCSV(page){
+  let rows=[], headers=[], filename='';
+  if(page==='all'){
+    headers=['ID','Tracking','Order ID','Product','SKU','Platform','Date','Return Reason','Condition','Status','Claim Needed','Claim Ref','Claim Status','Claim Amount','Note','Created At'];
+    rows=returns.map(r=>[r.id,r.tracking,r.orderId,r.product,r.sku,r.platform,r.date,r.returnReason,r.condition,r.status,r.claimNeeded?'Yes':'No',r.claimRef||'',r.claimResolution||'',r.claimApprovedAmt||'',r.note||'',r.createdAt]);
+    filename='all-returns';
+  } else if(page==='claims'){
+    headers=['Tracking','Product','Platform','Condition','Claim Ref','Claim Status','Approved ₹','Note','Resolved At'];
+    rows=returns.filter(r=>r.claimNeeded).map(r=>[r.tracking,r.product,r.platform,r.condition,r.claimRef||'',r.claimResolution||'',r.claimApprovedAmt||'',r.claimNote||'',r.resolvedAt||'']);
+    filename='claims';
+  } else if(page==='putaway'){
+    headers=['Tracking','Product','SKU','Platform','Condition','Qty'];
+    rows=returns.filter(r=>(r.condition==='Good'||r.maintResult==='cleaned'||r.maintResult==='repaired')&&r.status==='Inspected'&&!r.putaway).map(r=>[r.tracking,r.product,r.sku,r.platform,r.condition,r.qty||1]);
+    filename='putaway';
+  } else if(page==='maint'){
+    headers=['Tracking','Product','SKU','Condition','Maint Done','Maint Result','Repair Status'];
+    rows=returns.filter(r=>['Dirty/Used','Damaged'].includes(r.condition)&&r.status==='Inspected').map(r=>[r.tracking,r.product,r.sku,r.condition,r.maintDone?'Yes':'No',r.maintResult||'',r.repairStatus||'']);
+    filename='maintenance';
+  } else if(page==='trash'){
+    headers=['Tracking','Product','SKU','Platform','Condition','Trash Reason','Trashed At'];
+    rows=returns.filter(r=>r.maintResult==='trash'||r.trashedAt).map(r=>[r.tracking,r.product,r.sku,r.platform,r.condition,r.trashReason||'',r.trashedAt||'']);
+    filename='trash';
+  }
+  if(!rows.length){toast('No data to export');return;}
+  const csvContent=[headers,...rows].map(r=>r.map(v=>'"'+(String(v||'').replace(/"/g,'""'))+'"').join(',')).join('\n');
+  const blob=new Blob([csvContent],{type:'text/csv'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  const d=new Date().toISOString().slice(0,10);
+  a.download=`${filename}-${d}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast(`Exported ${rows.length} rows`);
+}
+
+// ── Sync indicator ────────────────────────────────────────────
+function setSyncStatus(state, msg){
+  const dot=document.getElementById('sb-sync-dot');
+  const txt=document.getElementById('sb-sync-txt');
+  if(!dot||!txt)return;
+  dot.className='sb-sync-dot '+state;
+  txt.className='sb-sync-txt'+(state==='failed'?' failed':'');
+  txt.textContent=msg;
+  if(state==='failed') txt.onclick=()=>gsSave();
+  else txt.onclick=null;
 }
 function clearCSVMaster(){
   if(!confirm('Clear all CSV master data? Return logs stay.'))return;
@@ -2250,6 +2417,7 @@ function gsSave(silent) {
   const url = getGsUrl();
   if (!url) { if (!silent) toast('Paste your Apps Script URL in the Google Sheets panel'); return; }
   if (!silent) setGsStatus('Saving...', null);
+  setSyncStatus('syncing', 'Syncing...');
   const payload = JSON.stringify({ action: 'save', returns, master, meta, fbaReturns, fbaManifest });
   fetch(url, {
     method: 'POST',
@@ -2261,8 +2429,10 @@ function gsSave(silent) {
     if (!silent) setGsStatus('Saved at ' + t, true);
     localStorage.setItem('rm_last_sync', t);
     updateSyncBadge();
+    setSyncStatus('synced', 'Synced ' + t);
   }).catch(e => {
     if (!silent) setGsStatus('Save failed: ' + e.message, false);
+    setSyncStatus('failed', 'Sync failed · Retry');
   });
 }
 
@@ -2326,12 +2496,24 @@ function updateSyncBadge() {
   const t = localStorage.getItem('rm_last_sync');
   const el = document.getElementById('sync-badge');
   if (el && t) el.textContent = 'Last sync: ' + t;
+  updateSettingsSyncBadge();
+}
+function updateSettingsSyncBadge() {
+  const t = localStorage.getItem('rm_last_sync');
+  const el = document.getElementById('sync-badge-settings');
+  if (el) el.textContent = t ? 'Last sync: ' + t : 'Not synced yet';
+  // Update dot color based on sync age
+  const dot = document.querySelector('.settings-sync-dot');
+  if (dot && t) {
+    dot.style.background = 'var(--gb)'; // green = synced
+  }
 }
 
 // Auto-save after every change (debounced 3s)
 function scheduleSync() {
   if (!getGsUrl()) return;
   clearTimeout(autoSyncTimer);
+  setSyncStatus('syncing', 'Syncing...');
   autoSyncTimer = setTimeout(() => gsSave(true), 3000);
 }
 
@@ -2921,7 +3103,7 @@ function updateFBABadges(){
 
 // ── Updated platBadge to handle FBA ───────────────────────────
 // Init
-updateCSVStatus();updateDashboard();initGsUrl();updateFBABadges();
+updateCSVStatus();updateDashboard();initGsUrl();updateFBABadges();const _st=localStorage.getItem("rm_last_sync");if(_st)setSyncStatus("synced","Synced "+_st);else setSyncStatus("","Not synced");
 window.addEventListener('load',()=>document.getElementById('dash-greeting').textContent=greeting());
 
 // ── FK Auto-Sync listener ─────────────────────────────────────────────────────
