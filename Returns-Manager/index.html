@@ -1022,10 +1022,9 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
       <div style="background:var(--s2);border-radius:var(--rs);padding:10px 12px;margin-bottom:12px">
         <div style="font-size:14px;font-weight:600;color:var(--t2);margin-bottom:5px">Using on a new device</div>
         <div style="font-size:14px;color:var(--t2);line-height:1.8">
-          1. Copy <code>returns-phase1.html</code> to the new device<br>
-          2. Open in Chrome<br>
-          3. Click this icon → <strong>Load from sheet</strong><br>
-          4. All data loads automatically ✓
+          1. Open <strong>naimuddin74667.github.io/Tomahawk/Returns-Manager</strong> in Chrome<br>
+          2. Click this icon → <strong>Load from sheet</strong><br>
+          3. All data loads automatically ✓
         </div>
       </div>
       <div id="gs-status" style="font-size:14px;margin-top:2px"></div>
@@ -2251,7 +2250,7 @@ function gsSave(silent) {
   const url = getGsUrl();
   if (!url) { if (!silent) toast('Paste your Apps Script URL in the Google Sheets panel'); return; }
   if (!silent) setGsStatus('Saving...', null);
-  const payload = JSON.stringify({ action: 'save', returns, master, meta });
+  const payload = JSON.stringify({ action: 'save', returns, master, meta, fbaReturns, fbaManifest });
   fetch(url, {
     method: 'POST',
     mode: 'no-cors',
@@ -2279,6 +2278,8 @@ function gsAutoLoad() {
       returns = d.returns;
       if (d.master) master = d.master;
       if (d.meta) meta = d.meta;
+      if (d.fbaReturns && d.fbaReturns.length) { fbaReturns = d.fbaReturns; persistFBA(); }
+      if (d.fbaManifest) { fbaManifest = d.fbaManifest; persistFBAManifest(); }
       persist(); persistCSV(); updateCSVStatus(); updateDashboard(); renderAll();
       const t = new Date().toLocaleTimeString('en-IN');
       localStorage.setItem('rm_last_sync', t);
@@ -2301,20 +2302,23 @@ function gsLoad() {
     .then(r => r.json())
     .then(d => {
       if (!d.ok) { setGsStatus('Sheet error: ' + (d.error || 'unknown'), false); return; }
-      if (!confirm('Load ' + d.returns.length + ' returns from Google Sheet? Current data will be replaced.')) return;
+      const retCount = (d.returns || []).length;
+      const fbaCount = (d.fbaReturns || []).length;
+      if (!confirm(`Load ${retCount} returns + ${fbaCount} FBA records from Google Sheet? Current data will be replaced.`)) return;
       returns = d.returns || [];
       if (d.master) master = d.master;
       if (d.meta) meta = d.meta;
+      if (d.fbaReturns) { fbaReturns = d.fbaReturns; persistFBA(); }
+      if (d.fbaManifest) { fbaManifest = d.fbaManifest; persistFBAManifest(); }
       persist(); persistCSV(); updateCSVStatus(); updateDashboard(); renderAll();
       const t = new Date().toLocaleTimeString('en-IN');
-      setGsStatus('Loaded ' + returns.length + ' returns at ' + t, true);
+      setGsStatus(`Loaded ${retCount} returns + ${fbaCount} FBA records at ${t}`, true);
       localStorage.setItem('rm_last_sync', t);
       updateSyncBadge();
-      toast('Loaded from Google Sheet');
+      toast(`Loaded ${retCount} returns + ${fbaCount} FBA records from Sheet`);
     })
     .catch(e => {
-      // CORS blocked \u2014 try JSONP-style via script tag
-      setGsStatus('Direct load blocked by browser. Use Export/Import instead, or host this file on a server.', false);
+      setGsStatus('Load failed. Make sure the Apps Script is deployed as Anyone access.', false);
     });
 }
 
@@ -2867,7 +2871,7 @@ function finalizeFBARecord(recId){
         platform:'Amazon FBA',
         sugCond:cond,
         condition:cond,
-        claimNeeded:claim,
+        claimNeeded:!!claim,
         claimRef:'',
         claimResolution:'',
         claimApprovedAmt:'',
