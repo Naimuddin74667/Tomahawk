@@ -6,6 +6,7 @@
 <meta name="description" content="TomahawkTools — Returns Manager for Flipkart B2C and Amazon FBA">
 <meta name="theme-color" content="#181715">
 <title>Returns Manager — TomahawkTools</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -779,23 +780,15 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="m18.5 2.5 3 3L12 15l-4 1 1-4Z"/></svg>
           Manual sync
         </button>
-        <button id="fk-auto-sync-btn" onclick="runFkAutoSync()" style="display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:14px;font-weight:600;padding:7px 14px;border-radius:var(--rs);border:none;cursor:pointer;transition:all .2s;background:var(--gn);color:#fff">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-          <span id="fk-auto-sync-btn-txt">Sync Claims from Flipkart</span>
-        </button>
+        <label class="btn bp" style="display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:13px;padding:7px 14px;cursor:pointer;font-weight:600">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Upload Claim Report
+          <input type="file" accept=".xlsx,.csv" style="display:none" onchange="handleClaimReport(this)">
+        </label>
       </div>
     </div>
-    <!-- Sync progress bar -->
-    <div id="fk-sync-progress" style="display:none;background:var(--sf);border:1px solid var(--bd);border-radius:var(--rs);padding:12px 14px;margin-bottom:12px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px">
-        <div style="font-size:14px;font-weight:600;color:var(--tx)" id="fk-sync-prog-title">Syncing claims…</div>
-        <div style="font-size:13px;color:var(--t2)" id="fk-sync-prog-count"></div>
-      </div>
-      <div style="background:var(--s2);border-radius:20px;height:6px;overflow:hidden">
-        <div id="fk-sync-prog-bar" style="height:100%;border-radius:20px;background:var(--gn);transition:width .3s;width:0%"></div>
-      </div>
-      <div style="font-size:13px;color:var(--t2);margin-top:6px" id="fk-sync-prog-msg"></div>
-    </div>
+    <!-- Upload result banner -->
+    <div id="claim-report-result" style="display:none;border-radius:var(--rs);padding:10px 14px;margin-bottom:12px;font-size:13px"></div>
     <div class="stats-row">
       <div class="sc" id="csc-all" onclick="filterClaims('all')"><div class="sc-l">All claims</div><div class="sc-v" id="cs-all">0</div></div>
       <div class="sc" id="csc-cp" onclick="filterClaims('pending')"><div class="sc-l">Claim pending</div><div class="sc-v" id="cs-pend" style="color:var(--pu)">0</div><div class="sc-s">not filed</div></div>
@@ -1053,77 +1046,7 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
         </div>
       </div>
 
-      <!-- FK Cookie -->
-      <div class="settings-section">
-        <div class="settings-section-title">Flipkart claim sync</div>
-        <div class="settings-card">
-          <div class="settings-item">
-            <div class="settings-item-info">
-              <h4>FK Session Cookie</h4>
-              <p>Required for auto claim sync &mdash; use the bookmarklet to refresh</p>
-            </div>
-            <div id="cookie-status-badge" style="display:flex;align-items:center;gap:5px;font-size:13px;font-weight:500;padding:3px 10px;border-radius:20px;background:var(--s2);flex-shrink:0">
-              <span id="cookie-status-dot" style="width:7px;height:7px;border-radius:50%;background:var(--bd2);flex-shrink:0"></span>
-              <span id="cookie-status-txt" style="color:var(--t3)">Not set</span>
-            </div>
-          </div>
-          <div class="settings-item" style="flex-direction:column;align-items:flex-start;gap:12px;padding-top:0">
-            <!-- Step 1 -->
-            <div style="width:100%;background:var(--s2);border-radius:var(--rs);padding:12px 14px">
-              <div style="font-size:12px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Step 1 &mdash; Add bookmarklet (one time only)</div>
-              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-                <a id="fk-bookmarklet-link" href="javascript:%28function%28%29%7B%0Avar%20GS%3D%27https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FAKfycbxmINljHqhpuff8aus_OR9C6zoIGV9GyeeMGd_N6Y2I8nWrntY02SNe3-bScNiR2CLkaQ%2Fexec%27%3B%0Avar%20ID%3D%27__fkbm__%27%3B%0Aif%28document.getElementById%28ID%29%29return%3B%0Aif%28%21location.hostname.includes%28%27flipkart.com%27%29%29%7Balert%28%27Please%20run%20this%20bookmarklet%20on%20seller.flipkart.com%27%29%3Breturn%3B%7D%0Avar%20ov%3Ddocument.createElement%28%27div%27%29%3B%0Aov.id%3DID%3B%0Aov.style.cssText%3D%27position%3Afixed%3Bbottom%3A24px%3Bright%3A24px%3Bz-index%3A2147483647%3Bbackground%3A%23111%3Bcolor%3A%23fff%3Bborder-radius%3A14px%3Bpadding%3A20px%2022px%3Bfont-family%3A-apple-system%2Csans-serif%3Bfont-size%3A14px%3Bbox-shadow%3A0%2012px%2040px%20rgba%280%2C0%2C0%2C.6%29%3Bmin-width%3A280px%3Bmax-width%3A320px%27%3B%0Aov.innerHTML%3D%27%3Cdiv%20style%3D%22display%3Aflex%3Balign-items%3Acenter%3Bgap%3A8px%3Bmargin-bottom%3A10px%22%3E%3Cdiv%20style%3D%22width%3A30px%3Bheight%3A30px%3Bborder-radius%3A8px%3Bbackground%3A%23e85d04%3Bdisplay%3Aflex%3Balign-items%3Acenter%3Bjustify-content%3Acenter%3Bfont-size%3A16px%22%3E%26%23128279%3B%3C%2Fdiv%3E%3Cdiv%3E%3Cdiv%20style%3D%22font-weight%3A700%3Bfont-size%3A15px%22%3EReturns%20Manager%3C%2Fdiv%3E%3Cdiv%20style%3D%22font-size%3A11px%3Bcolor%3Argba%28255%2C255%2C255%2C.45%29%22%3EFK%20Cookie%20Updater%3C%2Fdiv%3E%3C%2Fdiv%3E%3C%2Fdiv%3E%3Cdiv%20id%3D%22__fkbm_msg%22%20style%3D%22font-size%3A13px%3Bcolor%3Argba%28255%2C255%2C255%2C.7%29%3Bmargin-bottom%3A10px%22%3ECapturing%20FK%20session...%3C%2Fdiv%3E%3Cdiv%20style%3D%22background%3Argba%28255%2C255%2C255%2C.12%29%3Bborder-radius%3A20px%3Bheight%3A5px%3Bmargin-bottom%3A10px%22%3E%3Cdiv%20id%3D%22__fkbm_bar%22%20style%3D%22height%3A5px%3Bborder-radius%3A20px%3Bbackground%3A%23e85d04%3Bwidth%3A10%25%3Btransition%3Awidth%20.4s%22%3E%3C%2Fdiv%3E%3C%2Fdiv%3E%3Cdiv%20id%3D%22__fkbm_st%22%20style%3D%22font-size%3A13px%3Bfont-weight%3A600%3Bcolor%3A%23f59e0b%22%3EStarting...%3C%2Fdiv%3E%27%3B%0Adocument.body.appendChild%28ov%29%3B%0Afunction%20msg%28t%29%7Bvar%20e%3Ddocument.getElementById%28%27__fkbm_msg%27%29%3Bif%28e%29e.textContent%3Dt%3B%7D%0Afunction%20st%28t%2Cc%29%7Bvar%20e%3Ddocument.getElementById%28%27__fkbm_st%27%29%3Bif%28e%29%7Be.textContent%3Dt%3Be.style.color%3Dc%7C%7C%27%23f59e0b%27%3B%7D%7D%0Afunction%20bar%28p%29%7Bvar%20e%3Ddocument.getElementById%28%27__fkbm_bar%27%29%3Bif%28e%29e.style.width%3Dp%2B%27%25%27%3B%7D%0Afunction%20bye%28ok%29%7BsetTimeout%28function%28%29%7Bvar%20e%3Ddocument.getElementById%28ID%29%3Bif%28e%26%26e.parentNode%29e.parentNode.removeChild%28e%29%3B%7D%2Cok%3F3000%3A6000%29%3B%7D%0Avar%20orig%3Dwindow.fetch%3B%0Avar%20got%3D%7Bcsrf%3A%27%27%2Cloc%3A%27%27%7D%3B%0Awindow.fetch%3Dfunction%28url%2Copts%29%7B%0A%20%20if%28typeof%20url%3D%3D%3D%27string%27%26%26url.indexOf%28%27napi%2Fgraphql%27%29%3E-1%26%26opts%26%26opts.headers%29%7B%0A%20%20%20%20var%20h%3Dopts.headers%3B%0A%20%20%20%20if%28h%5B%27Fk-Csrf-Token%27%5D%29%7Bgot.csrf%3Dh%5B%27Fk-Csrf-Token%27%5D%3Bgot.loc%3Dh%5B%27X-Location-Id%27%5D%7C%7C%27%27%3B%7D%0A%20%20%20%20window.fetch%3Dorig%3B%0A%20%20%7D%0A%20%20return%20orig.apply%28this%2Carguments%29%3B%0A%7D%3B%0Abar%2820%29%3Bst%28%27Step%201%2F3%3A%20Calling%20SPF%20API...%27%29%3Bmsg%28%27Intercepting%20session%20headers...%27%29%3B%0Aorig%28%27https%3A%2F%2Fseller.flipkart.com%2Fnapi%2Fgraphql%27%2C%7B%0A%20%20method%3A%27POST%27%2Ccredentials%3A%27include%27%2C%0A%20%20headers%3A%7B%27Content-Type%27%3A%27application%2Fjson%27%2C%27Accept%27%3A%27%2A%2F%2A%27%2C%27X-Requested-With%27%3A%27XMLHttpRequest%27%2C%27X-Internal-Env-Type%27%3A%27WEB%27%2C%27Origin%27%3A%27https%3A%2F%2Fseller.flipkart.com%27%2C%27Referer%27%3A%27https%3A%2F%2Fseller.flipkart.com%2Findex.html%27%7D%2C%0A%20%20body%3AJSON.stringify%28%7BoperationName%3A%27Payments_SPF_WEB_getSpfClaims%27%2Cquery%3A%27query%20Payments_SPF_WEB_getSpfClaims%28%24filter%3ASpfClaimFilter%2C%24pagination%3ASpfClaimPagination%21%29%7BgetSpfClaims%28filter%3A%24filter%2Cpagination%3A%24pagination%29%7Bhas_more%20claims%7Bclaim_id%20status%7D%7D%7D%27%2Cvariables%3A%7Bfilter%3A%7Bsearch%3A%27%27%2CsearchOption%3A%27tracking_id%27%2Cstatus%3A%27SELLER_PENDING%27%7D%2Cpagination%3A%7Bsize%3A1%7D%7D%7D%29%0A%7D%29.then%28function%28r%29%7B%0A%20%20bar%2860%29%3Bst%28%27Step%202%2F3%3A%20Saving%20to%20Sheet...%27%29%3Bmsg%28%27Headers%20captured.%20Saving%20cookie...%27%29%3B%0A%20%20var%20xhr%3Dnew%20XMLHttpRequest%28%29%3B%0A%20%20xhr.open%28%27POST%27%2CGS%2Ctrue%29%3B%0A%20%20xhr.setRequestHeader%28%27Content-Type%27%2C%27text%2Fplain%27%29%3B%0A%20%20xhr.onload%3Dfunction%28%29%7Bbar%28100%29%3Bst%28%27Cookie%20saved%21%27%2C%27%2322c55e%27%29%3Bmsg%28%27FK%20session%20active%20in%20Returns%20Manager%27%29%3Bbye%28true%29%3B%7D%3B%0A%20%20xhr.onerror%3Dfunction%28%29%7Bst%28%27Network%20error%27%2C%27%23ef4444%27%29%3Bmsg%28%27Could%20not%20reach%20Google%20Apps%20Script%27%29%3Bbye%28false%29%3B%7D%3B%0A%20%20xhr.send%28JSON.stringify%28%7Baction%3A%27saveCookie%27%2Ccookie%3Adocument.cookie%2CcsrfToken%3Agot.csrf%2ClocationId%3Agot.loc%2CsavedAt%3Anew%20Date%28%29.toISOString%28%29%7D%29%29%3B%0A%7D%29.catch%28function%28e%29%7B%0A%20%20window.fetch%3Dorig%3B%0A%20%20st%28%27Failed%27%2C%27%23ef4444%27%29%3B%0A%20%20msg%28%27Error%3A%20%27%2Be.message%29%3B%0A%20%20bye%28false%29%3B%0A%7D%29%3B%0A%7D%29%28%29%3B"
-                  draggable="true"
-                  style="display:inline-flex;align-items:center;gap:7px;padding:9px 16px;background:#e85d04;color:#fff;border-radius:var(--rs);font-size:13px;font-weight:700;text-decoration:none;cursor:grab;user-select:none;box-shadow:0 2px 8px rgba(232,93,4,.3)"
-                  title="Drag this to your bookmarks bar">
-                  &#128279; Update FK Cookie
-                </a>
-                <span style="font-size:13px;color:var(--t2)">&#8592; Drag to bookmarks bar</span>
-              </div>
-            </div>
-            <!-- Step 2 -->
-            <div style="width:100%;background:var(--s2);border-radius:var(--rs);padding:12px 14px">
-              <div style="font-size:12px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Step 2 &mdash; Refresh cookie when needed</div>
-              <p style="font-size:13px;color:var(--t2);line-height:1.6;margin:0 0 10px">
-                Go to <strong>seller.flipkart.com</strong> (any page) and click the bookmarklet.<br>
-                A dark overlay appears at the bottom-right showing progress. Takes ~3 seconds.
-              </p>
-              <div style="display:flex;align-items:center;gap:8px">
-                <button class="btn bg" style="font-size:13px;padding:5px 12px" onclick="pollCookieStatus();document.getElementById('cookie-save-status').textContent='Checking…'">&#10003; Verify cookie saved</button>
-                <span id="cookie-save-status" style="font-size:13px;color:var(--t2)"></span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
 
-      <!-- Danger Zone (collapsed) -->
-      <div class="settings-section" style="margin-bottom:0">
-        <div class="settings-section-title" style="cursor:pointer;user-select:none" onclick="toggleDangerZone()">
-          <span style="color:var(--rd)">⚠ Danger zone</span>
-          <span id="dz-arrow" style="margin-left:4px;font-size:11px;color:var(--rd)">▶</span>
-        </div>
-        <div id="dz-panel" style="display:none">
-          <div class="settings-card" style="border-color:var(--rb)">
-            <div class="settings-item">
-              <div class="settings-item-info">
-                <h4>Clear all return logs</h4>
-                <p>Permanently deletes all returns</p>
-              </div>
-              <button class="btn b-rd" style="font-size:13px;padding:5px 10px;flex-shrink:0" onclick="dangerAction('logs')">Clear</button>
-            </div>
-            <div class="settings-item">
-              <div class="settings-item-info">
-                <h4>Clear CSV master data</h4>
-                <p>Removes all Flipkart CSV records</p>
-              </div>
-              <button class="btn b-rd" style="font-size:13px;padding:5px 10px;flex-shrink:0" onclick="dangerAction('csv')">Clear</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-    </div>
   </div>
 </div>
 
@@ -3164,327 +3087,149 @@ function updateFBABadges(){
 
 // ── Updated platBadge to handle FBA ───────────────────────────
 // Init
-const FK_COOKIE_KEY='rm_fk_cookie_saved_at';
-updateCSVStatus();updateDashboard();initGsUrl();updateFBABadges();updateCookieStatusBadge();setTimeout(()=>pollCookieStatus(true),2000);const _st=localStorage.getItem("rm_last_sync");if(_st)setSyncStatus("synced","Synced "+_st);else setSyncStatus("","Not synced");
+updateCSVStatus();updateDashboard();initGsUrl();updateFBABadges();const _st=localStorage.getItem("rm_last_sync");if(_st)setSyncStatus("synced","Synced "+_st);else setSyncStatus("","Not synced");
 window.addEventListener('load',()=>document.getElementById('dash-greeting').textContent=greeting());
 
 
-// ── FK Cookie management ──────────────────────────────────────
-// FK_COOKIE_KEY declared earlier at init
 
-// Build the bookmarklet href and inject into the link on page load
-function initBookmarklet() {
-  const gsUrl = getGsUrl();
+// ── FK Claim Report Upload ────────────────────────────────────
+// Parses the Flipkart SPF Claim Report XLSX/CSV and matches
+// by Order ID against local returns[], updating claim fields.
 
-  // The bookmarklet:
-  // 1. Shows a visible overlay on Flipkart immediately
-  // 2. Makes a real GraphQL call to SPF to capture live headers (CSRF + Location-Id)
-  // 3. POSTs captured credentials + cookie to Apps Script
-  // 4. Shows success/failure clearly in the overlay
-  const code = `(function(){
-  var GS=''+gsUrl+'';
-  var OID='__fkbm__';
-  if(document.getElementById(OID))return; // prevent double-run
+function handleClaimReport(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
 
-  // ── Overlay ─────────────────────────────────────────────
-  var ov=document.createElement('div');
-  ov.id=OID;
-  ov.style.cssText='position:fixed;bottom:24px;right:24px;z-index:2147483647;background:#111;color:#fff;border-radius:14px;padding:20px 22px;font-family:-apple-system,sans-serif;font-size:14px;box-shadow:0 12px 40px rgba(0,0,0,.5);min-width:280px;max-width:320px';
-  ov.innerHTML=
-    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">'+
-      '<div style="width:28px;height:28px;border-radius:8px;background:#e85d04;display:flex;align-items:center;justify-content:center;font-size:16px">&#128279;</div>'+
-      '<div><div style="font-weight:700;font-size:15px">Returns Manager</div><div style="font-size:12px;color:rgba(255,255,255,.5)">FK Cookie Updater</div></div>'+
-    '</div>'+
-    '<div id="__fkbm_msg" style="font-size:13px;color:rgba(255,255,255,.7);margin-bottom:12px">Capturing credentials\u2026</div>'+
-    '<div style="background:rgba(255,255,255,.1);border-radius:20px;height:5px;overflow:hidden;margin-bottom:12px">'+
-      '<div id="__fkbm_bar" style="height:100%;border-radius:20px;background:#e85d04;transition:width .4s;width:10%"></div>'+
-    '</div>'+
-    '<div id="__fkbm_status" style="font-size:13px;font-weight:600;color:#f59e0b">Step 1/3: Intercepting headers\u2026</div>';
-  document.body.appendChild(ov);
+  const resultEl = document.getElementById('claim-report-result');
+  resultEl.style.display = 'block';
+  resultEl.style.background = 'var(--s2)';
+  resultEl.style.border = '1px solid var(--bd)';
+  resultEl.style.color = 'var(--t2)';
+  resultEl.textContent = 'Reading report…';
 
-  function setMsg(m){var el=document.getElementById('__fkbm_msg');if(el)el.textContent=m;}
-  function setStatus(m,c){var el=document.getElementById('__fkbm_status');if(el){el.textContent=m;el.style.color=c||'#f59e0b';}}
-  function setBar(pct){var el=document.getElementById('__fkbm_bar');if(el)el.style.width=pct+'%';}
-  function done(ok,msg){
-    setBar(100);
-    setStatus(ok?'\u2705 '+msg:'\u274C '+msg, ok?'#22c55e':'#ef4444');
-    setMsg(ok?'Cookie saved to Google Sheet!':'Check you are on seller.flipkart.com');
-    setTimeout(function(){if(ov&&ov.parentNode)ov.parentNode.removeChild(ov);},ok?3000:5000);
-  }
+  const ext = file.name.split('.').pop().toLowerCase();
 
-  // ── Step 1: Intercept a real GraphQL request ─────────────────
-  var captured={csrf:'',locId:'',cookie:''};
-  var orig=window.fetch;
-  window.fetch=function(url,opts){
-    var res=orig.apply(this,arguments);
-    if(typeof url==='string'&&url.includes('napi/graphql')&&opts&&opts.headers){
-      var h=opts.headers;
-      if(h['Fk-Csrf-Token']&&!captured.csrf){
-        captured.csrf=h['Fk-Csrf-Token']||'';
-        captured.locId=h['X-Location-Id']||'';
-        window.fetch=orig; // restore
-        setMsg('Headers captured \u2713');
-        setBar(60);
-        setStatus('Step 2/3: Sending to Apps Script\u2026');
-        sendCredentials();
+  if (ext === 'xlsx') {
+    // Use SheetJS to parse XLSX
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        // Try "Seller Claims" sheet first, then first sheet
+        const sheetName = workbook.SheetNames.find(n => n.toLowerCase().includes('seller')) || workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+        applyClaimReport(rows);
+      } catch(err) {
+        showReportError('Failed to parse XLSX: ' + err.message);
       }
-    }
-    return res;
+    };
+    reader.readAsArrayBuffer(file);
+  } else {
+    // CSV fallback
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        const rows = parseCSV(e.target.result);
+        if (rows.length < 2) { showReportError('No data found in CSV'); return; }
+        const headers = rows[0];
+        const data = rows.slice(1).map(row => {
+          const obj = {};
+          headers.forEach((h, i) => { obj[h.trim()] = (row[i] || '').trim(); });
+          return obj;
+        });
+        applyClaimReport(data);
+      } catch(err) {
+        showReportError('Failed to parse CSV: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+  }
+}
+
+function applyClaimReport(rows) {
+  const resultEl = document.getElementById('claim-report-result');
+
+  // Normalise column names — Flipkart uses "Claim ID " (with trailing space) etc.
+  const norm = obj => {
+    const out = {};
+    Object.keys(obj).forEach(k => { out[k.trim()] = String(obj[k]).trim(); });
+    return out;
   };
 
-  // ── Step 2: Trigger a real GraphQL call to fire our intercept ─
-  setMsg('Making a test SPF API call\u2026');
-  setBar(30);
-  setStatus('Step 1/3: Intercepting headers\u2026');
+  // Build lookup maps from the report
+  // Key by Order ID and by Order Item ID (both appear in returns)
+  const byOrderId   = {};  // orderId   → { claimId, status, amount }
+  const byClaimId   = {};  // claimId   → { claimId, status, amount }
 
-  // Make a real SPF GraphQL query — this will trigger our monkey-patch
-  orig('https://seller.flipkart.com/napi/graphql',{
-    method:'POST',
-    credentials:'include',
-    headers:{
-      'Content-Type':'application/json',
-      'Accept':'*/*',
-      'X-Requested-With':'XMLHttpRequest',
-      'X-Internal-Env-Type':'WEB',
-      'Origin':'https://seller.flipkart.com',
-      'Referer':'https://seller.flipkart.com/index.html'
-    },
-    body:JSON.stringify({
-      operationName:'Payments_SPF_WEB_getSpfClaims',
-      query:'query Payments_SPF_WEB_getSpfClaims($filter:SpfClaimFilter,$pagination:SpfClaimPagination!){getSpfClaims(filter:$filter,pagination:$pagination){has_more claims{claim_id tracking_id status approved_amount}}}',
-      variables:{filter:{search:'',searchOption:'tracking_id',status:'SELLER_PENDING'},pagination:{size:1}}
-    })
-  }).then(function(r){return r.json();}).then(function(d){
-    // If our monkey-patch didn't catch it (already restored), try extracting from response context
-    if(!captured.csrf){
-      // Fallback: read CSRF from cookie string (some tokens are not HttpOnly)
-      var ck=document.cookie;
-      var m=ck.match(/seller_session_unique_token=([^;]+)/);
-      if(m)captured.csrf=decodeURIComponent(m[1]);
-      sendCredentials();
-    }
-  }).catch(function(err){
-    if(!captured.csrf){
-      setStatus('Could not capture CSRF token','#ef4444');
-      setMsg('Make sure you are on seller.flipkart.com and logged in');
-    }
+  rows.forEach(rawRow => {
+    const row = norm(rawRow);
+    const claimId  = row['Claim ID'] || row['Claim ID '] || '';
+    const orderId  = row['Order Id'] || row['Order ID'] || row['Order ID '] || '';
+    const status   = row['Claim Status'] || '';
+    const amount   = parseFloat(row['Approved Amount'] || '') || 0;
+    if (!claimId) return;
+
+    const entry = { claimId, status, amount };
+    if (orderId && orderId !== 'NA') byOrderId[orderId] = entry;
+    byClaimId[claimId] = entry;
   });
 
-  // ── Step 3: Send to Apps Script ──────────────────────────────
-  function sendCredentials(){
-    setBar(75);
-    setStatus('Step 3/3: Saving to Google Sheet\u2026');
-    // Use XMLHttpRequest so we can handle no-cors properly
-    var xhr=new XMLHttpRequest();
-    xhr.open('POST',GS,true);
-    xhr.setRequestHeader('Content-Type','text/plain');
-    xhr.onload=function(){done(true,'Cookie updated!');};
-    xhr.onerror=function(){done(false,'Network error');};
-    xhr.send(JSON.stringify({
-      action:'saveCookie',
-      cookie:document.cookie,
-      csrfToken:captured.csrf,
-      locationId:captured.locId,
-      savedAt:new Date().toISOString()
-    }));
-  }
+  // Match against returns[]
+  let updated = 0, alreadyDone = 0, noMatch = 0;
 
-})();`;
+  returns = returns.map(r => {
+    // Only update claim-needed records
+    if (!r.claimNeeded) return r;
+    // Skip already resolved
+    if (r.claimResolution === 'Approved' || r.claimResolution === 'Rejected') {
+      alreadyDone++; return r;
+    }
 
-  const encoded = 'javascript:' + encodeURIComponent(code);
-  const link = document.getElementById('fk-bookmarklet-link');
-  if (link) link.href = encoded;
+    // Try match by orderId first, then by existing claimRef
+    const orderId = String(r.orderId || '').trim();
+    const match = byOrderId[orderId] || (r.claimRef ? byClaimId[r.claimRef] : null);
+
+    if (!match) { noMatch++; return r; }
+
+    // Apply
+    r.claimRef = match.claimId;
+    if (match.status === 'Approved') {
+      r.claimResolution  = 'Approved';
+      r.claimApprovedAmt = match.amount;
+    } else if (match.status === 'Not Approved') {
+      r.claimResolution = 'Rejected';
+    }
+    // Processing — just add claim ID, no resolution yet
+    updated++;
+    return r;
+  });
+
+  persist();
+  scheduleSync();
+  updateDashboard();
+  renderClaims();
+
+  const total = Object.keys(byOrderId).length;
+  const msg = `✅ Done — ${updated} record${updated!==1?'s':''} updated from ${total} claims in report. ${noMatch} returns had no match. ${alreadyDone} already resolved.`;
+  resultEl.style.background = 'var(--gbg)';
+  resultEl.style.border = '1px solid var(--gb)';
+  resultEl.style.color = 'var(--gn)';
+  resultEl.textContent = msg;
+  toast('✅ Claim report applied — ' + updated + ' updated');
+
+  // Auto-hide after 8s
+  setTimeout(() => { resultEl.style.display = 'none'; }, 8000);
 }
 
-// Called when Apps Script confirms cookie was saved (via saveCookie action)
-// We store the timestamp locally so we know how fresh it is
-function onCookieSaved() {
-  localStorage.setItem(FK_COOKIE_KEY, new Date().toISOString());
-  updateCookieStatusBadge();
-}
-
-function updateCookieStatusBadge() {
-  const dot = document.getElementById('cookie-status-dot');
-  const txt = document.getElementById('cookie-status-txt');
-  const btn = document.getElementById('fk-auto-sync-btn');
-  if (!dot || !txt) return;
-
-  const savedAt = localStorage.getItem(FK_COOKIE_KEY);
-  if (!savedAt) {
-    dot.style.background = 'var(--bd2)';
-    txt.style.color = 'var(--t3)';
-    txt.textContent = 'Not set';
-    if (btn) { btn.style.background = 'var(--t3)'; btn.title = 'Set FK cookie first — Settings → Flipkart claim sync'; }
-    return;
-  }
-
-  const ageDays = (Date.now() - new Date(savedAt).getTime()) / (1000 * 60 * 60 * 24);
-
-  if (ageDays > 7) {
-    dot.style.background = 'var(--rb)';
-    txt.style.color = 'var(--rd)';
-    txt.textContent = 'Expired — click bookmarklet now';
-    if (btn) { btn.style.background = 'var(--rd)'; btn.title = 'Cookie expired — click bookmarklet on Flipkart'; }
-  } else if (ageDays > 4) {
-    dot.style.background = 'var(--ab)';
-    txt.style.color = 'var(--am)';
-    txt.textContent = 'Aging — update soon (' + Math.round(ageDays) + 'd)';
-    if (btn) { btn.style.background = 'var(--am)'; btn.title = 'Cookie aging — update soon'; }
-  } else {
-    dot.style.background = 'var(--gb)';
-    txt.style.color = 'var(--gn)';
-    txt.textContent = 'Fresh (' + (ageDays < 1 ? 'today' : Math.round(ageDays) + 'd old') + ')';
-    if (btn) { btn.style.background = 'var(--gn)'; btn.title = 'Cookie fresh'; }
-  }
-}
-
-// Listen for cookie-saved message from bookmarklet tab
-// Bookmarklet calls Apps Script directly (no-cors), so we poll cookie status
-// via Apps Script cookieStatus endpoint to confirm it was saved
-function pollCookieStatus(silent) {
-  const url = getGsUrl();
-  if (!url) return;
-  fetch(url + '?action=cookieStatus')
-    .then(r => r.json())
-    .then(d => {
-      const statusEl = document.getElementById('cookie-save-status');
-      if (d.ok && d.status !== 'missing') {
-        const savedAt = d.savedAt || new Date().toISOString();
-        localStorage.setItem(FK_COOKIE_KEY, savedAt);
-        updateCookieStatusBadge();
-        if (!silent) {
-          if (statusEl) statusEl.textContent = '\u2705 Cookie confirmed on Sheet';
-          toast('\u2705 FK cookie live — ready to sync claims');
-        }
-      } else {
-        if (!silent && statusEl) statusEl.textContent = 'No cookie found on Sheet yet';
-      }
-    })
-    .catch(() => {
-      const statusEl = document.getElementById('cookie-save-status');
-      if (!silent && statusEl) statusEl.textContent = 'Could not reach Apps Script';
-    });
-}
-
-// ── FK Auto Sync ──────────────────────────────────────────────
-async function runFkAutoSync() {
-  const savedAt = localStorage.getItem(FK_COOKIE_KEY);
-  if (!savedAt) {
-    toast('Set your FK cookie first — use the bookmarklet in Settings');
-    openModal('settings-modal');
-    return;
-  }
-  const ageDays = (Date.now() - new Date(savedAt).getTime()) / (1000 * 60 * 60 * 24);
-  if (ageDays > 7) {
-    toast('FK cookie expired — click the bookmarklet on Flipkart to refresh');
-    openModal('settings-modal');
-    return;
-  }
-
-  // Collect trackings
-  const pending  = returns.filter(r => r.claimNeeded && !r.claimRef)
-    .map(r => ({ tracking: r.tracking, type: 'pending' }));
-  const open     = returns.filter(r => r.claimNeeded && r.claimRef && !r.claimResolution)
-    .map(r => ({ tracking: r.tracking, type: 'open' }));
-  const trackings = [...pending, ...open];
-
-  if (!trackings.length) {
-    toast('No claims to sync \u2014 no Claim Pending or Claim Open records');
-    return;
-  }
-
-  // Show progress
-  const progEl  = document.getElementById('fk-sync-progress');
-  const progBar = document.getElementById('fk-sync-prog-bar');
-  const progMsg = document.getElementById('fk-sync-prog-msg');
-  const progCnt = document.getElementById('fk-sync-prog-count');
-  const progTtl = document.getElementById('fk-sync-prog-title');
-  const btn     = document.getElementById('fk-auto-sync-btn');
-  const btnTxt  = document.getElementById('fk-auto-sync-btn-txt');
-
-  progEl.style.display     = 'block';
-  progBar.style.width      = '5%';
-  progBar.style.background = 'var(--gn)';
-  progTtl.textContent      = 'Syncing ' + trackings.length + ' claim' + (trackings.length !== 1 ? 's' : '') + '\u2026';
-  progCnt.textContent      = '0 / ' + trackings.length;
-  progMsg.textContent      = 'Connecting to Apps Script\u2026';
-  btn.disabled             = true;
-  btnTxt.textContent       = 'Syncing\u2026';
-
-  try {
-    const url  = getGsUrl();
-    const body = JSON.stringify({ action: 'syncClaims', trackings });
-
-    progMsg.textContent  = 'Fetching claim data from Flipkart\u2026 (' + trackings.length + ' trackings)';
-    progBar.style.width  = '20%';
-
-    const res  = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body
-    });
-
-    progBar.style.width = '70%';
-    const data = await res.json();
-
-    if (!data.ok) throw new Error(data.error || 'Sync failed');
-    const result = data.result || {};
-    if (result.error) throw new Error(result.error);
-
-    progBar.style.width = '100%';
-    progCnt.textContent = trackings.length + ' / ' + trackings.length;
-
-    // Apply to local returns[]
-    let updated = 0;
-    returns = returns.map(r => {
-      const t = r.tracking;
-      if (result.approved?.[t]) {
-        r.claimRef = result.approved[t].claimId;
-        r.claimResolution = 'Approved';
-        r.claimApprovedAmt = result.approved[t].amount;
-        updated++;
-      } else if (result.rejected?.[t]) {
-        r.claimRef = result.rejected[t];
-        r.claimResolution = 'Rejected';
-        updated++;
-      } else if (result.processing?.[t]) {
-        r.claimRef = result.processing[t];
-        updated++;
-      }
-      return r;
-    });
-
-    persist();
-    updateDashboard();
-    renderClaims();
-
-    const approvedCnt   = Object.keys(result.approved   || {}).length;
-    const rejectedCnt   = Object.keys(result.rejected   || {}).length;
-    const processingCnt = Object.keys(result.processing || {}).length;
-    const notFoundCnt   = (result.notFound || []).length;
-
-    let summary = [];
-    if (approvedCnt)   summary.push(approvedCnt   + ' approved');
-    if (rejectedCnt)   summary.push(rejectedCnt   + ' rejected');
-    if (processingCnt) summary.push(processingCnt + ' claim ID added');
-    if (notFoundCnt)   summary.push(notFoundCnt   + ' not found on FK');
-
-    progTtl.textContent = '\u2705 Done \u2014 ' + updated + ' record' + (updated !== 1 ? 's' : '') + ' updated';
-    progMsg.textContent = summary.join('  \u00B7  ') || 'No changes found';
-
-    toast('\u2705 FK Sync: ' + updated + ' claim' + (updated !== 1 ? 's' : '') + ' updated');
-    setTimeout(() => { progEl.style.display = 'none'; }, 6000);
-
-  } catch (err) {
-    progBar.style.background = 'var(--rd)';
-    progBar.style.width      = '100%';
-    progTtl.textContent      = '\u274C Sync failed';
-    progMsg.textContent      = err.message;
-    toast('Sync failed: ' + err.message);
-  } finally {
-    btn.disabled       = false;
-    btnTxt.textContent = 'Sync Claims from Flipkart';
-  }
+function showReportError(msg) {
+  const el = document.getElementById('claim-report-result');
+  el.style.background = 'var(--rbg)';
+  el.style.border = '1px solid var(--rb)';
+  el.style.color = 'var(--rd)';
+  el.textContent = '❌ ' + msg;
 }
 
 // ── FK Auto-Sync listener ─────────────────────────────────────────────────────
