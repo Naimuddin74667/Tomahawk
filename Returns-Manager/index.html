@@ -772,12 +772,29 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
 <!-- ══ CLAIMS ══ -->
 <div class="page" id="page-claims">
   <div class="list-pg">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;flex-wrap:wrap;gap:10px">
       <div><div class="pg-t">Claims</div><div class="pg-s">Track all claims with Flipkart or Amazon</div></div>
-      <button class="btn bp" onclick="openModal('fk-sync-modal')" style="display:flex;align-items:center;gap:6px;white-space:nowrap">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-        Sync from Flipkart
-      </button>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button class="btn bg" onclick="openModal('fk-sync-modal')" style="display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:13px;padding:5px 10px">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="m18.5 2.5 3 3L12 15l-4 1 1-4Z"/></svg>
+          Manual sync
+        </button>
+        <button id="fk-auto-sync-btn" onclick="runFkAutoSync()" style="display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:14px;font-weight:600;padding:7px 14px;border-radius:var(--rs);border:none;cursor:pointer;transition:all .2s;background:var(--gn);color:#fff">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          <span id="fk-auto-sync-btn-txt">Sync Claims from Flipkart</span>
+        </button>
+      </div>
+    </div>
+    <!-- Sync progress bar -->
+    <div id="fk-sync-progress" style="display:none;background:var(--sf);border:1px solid var(--bd);border-radius:var(--rs);padding:12px 14px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px">
+        <div style="font-size:14px;font-weight:600;color:var(--tx)" id="fk-sync-prog-title">Syncing claims…</div>
+        <div style="font-size:13px;color:var(--t2)" id="fk-sync-prog-count"></div>
+      </div>
+      <div style="background:var(--s2);border-radius:20px;height:6px;overflow:hidden">
+        <div id="fk-sync-prog-bar" style="height:100%;border-radius:20px;background:var(--gn);transition:width .3s;width:0%"></div>
+      </div>
+      <div style="font-size:13px;color:var(--t2);margin-top:6px" id="fk-sync-prog-msg"></div>
     </div>
     <div class="stats-row">
       <div class="sc" id="csc-all" onclick="filterClaims('all')"><div class="sc-l">All claims</div><div class="sc-v" id="cs-all">0</div></div>
@@ -1032,6 +1049,40 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
               <p>Restore from JSON backup file</p>
             </div>
             <label class="btn bg" style="font-size:13px;padding:5px 10px;flex-shrink:0;cursor:pointer">Import<input type="file" accept=".json" style="display:none" onchange="importData(this)"></label>
+          </div>
+        </div>
+      </div>
+
+      <!-- FK Cookie -->
+      <div class="settings-section">
+        <div class="settings-section-title">Flipkart claim sync</div>
+        <div class="settings-card">
+          <div class="settings-item">
+            <div class="settings-item-info">
+              <h4>FK Session Cookie</h4>
+              <p>Required for auto claim sync &mdash; use the bookmarklet to refresh</p>
+            </div>
+            <div id="cookie-status-badge" style="display:flex;align-items:center;gap:5px;font-size:13px;font-weight:500;padding:3px 10px;border-radius:20px;background:var(--s2);flex-shrink:0">
+              <span id="cookie-status-dot" style="width:7px;height:7px;border-radius:50%;background:var(--bd2);flex-shrink:0"></span>
+              <span id="cookie-status-txt" style="color:var(--t3)">Not set</span>
+            </div>
+          </div>
+          <div class="settings-item" style="flex-direction:column;align-items:flex-start;gap:10px;padding-top:0">
+            <p style="font-size:13px;color:var(--t2);line-height:1.7;margin:0">
+              Drag the button below to your Chrome bookmarks bar. Whenever the cookie turns
+              <span style="color:var(--am);font-weight:600">&bull; amber</span> or
+              <span style="color:var(--rd);font-weight:600">&bull; red</span>, go to
+              <strong>seller.flipkart.com</strong> and click the bookmarklet &mdash; it fetches and saves the cookie automatically.
+            </p>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <a id="fk-bookmarklet-link" href="#" onclick="return false"
+                style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:var(--tx);color:#fff;border-radius:var(--rs);font-size:13px;font-weight:600;text-decoration:none;cursor:grab;user-select:none"
+                title="Drag this to your bookmarks bar">
+                &#128279; Update FK Cookie
+              </a>
+              <span style="font-size:13px;color:var(--t3)">&larr; Drag this to bookmarks bar</span>
+            </div>
+            <div id="cookie-save-status" style="font-size:13px;color:var(--t2)"></div>
           </div>
         </div>
       </div>
@@ -3103,8 +3154,289 @@ function updateFBABadges(){
 
 // ── Updated platBadge to handle FBA ───────────────────────────
 // Init
-updateCSVStatus();updateDashboard();initGsUrl();updateFBABadges();const _st=localStorage.getItem("rm_last_sync");if(_st)setSyncStatus("synced","Synced "+_st);else setSyncStatus("","Not synced");
+updateCSVStatus();updateDashboard();initGsUrl();updateFBABadges();updateCookieStatusBadge();initBookmarklet();setTimeout(pollCookieStatus,2000);const _st=localStorage.getItem("rm_last_sync");if(_st)setSyncStatus("synced","Synced "+_st);else setSyncStatus("","Not synced");
 window.addEventListener('load',()=>document.getElementById('dash-greeting').textContent=greeting());
+
+
+// ── FK Cookie management ──────────────────────────────────────
+const FK_COOKIE_KEY    = 'rm_fk_cookie_saved_at';
+const FK_BOOKMARKLET_GS_URL = localStorage.getItem('rm_gs_url_v2') ||
+  'https://script.google.com/macros/s/AKfycbxmINljHqhpuff8aus_OR9C6zoIGV9GyeeMGd_N6Y2I8nWrntY02SNe3-bScNiR2CLkaQ/exec';
+
+// Build the bookmarklet href and inject into the link on page load
+function initBookmarklet() {
+  // The bookmarklet runs on seller.flipkart.com
+  // It reads cookies + extracts CSRF and Location-Id from a live graphql request,
+  // then POSTs everything to Apps Script directly.
+  const gsUrl = getGsUrl();
+
+  const bookmarkletCode = `(function(){
+    var GS='${gsUrl}';
+    // Extract Fk-Csrf-Token from meta tag or cookie string
+    var csrf='';
+    var metas=document.querySelectorAll('meta');
+    for(var i=0;i<metas.length;i++){
+      if(metas[i].name==='csrf-token'||metas[i].getAttribute('data-csrf')){
+        csrf=metas[i].content||metas[i].getAttribute('data-csrf')||'';
+        break;
+      }
+    }
+    // Try reading from hidden input
+    if(!csrf){
+      var inp=document.querySelector('input[name="csrf"]');
+      if(inp)csrf=inp.value||'';
+    }
+    // Try reading from seller_session_unique_token input (visible in HTML)
+    var tokenInp=document.querySelector('#seller_session_unique_token');
+    if(tokenInp&&!csrf)csrf=tokenInp.value||'';
+
+    // Get Location-Id from body data attribute
+    var locId=document.body.getAttribute('data-gr-aaa-notch-connection-id')||'';
+
+    // Intercept next XHR/fetch to capture real Fk-Csrf-Token and X-Location-Id
+    // by monkey-patching fetch temporarily
+    var realFetch=window.fetch;
+    var captured={csrf:'',locId:''};
+    window.fetch=function(url,opts){
+      if(url&&url.includes&&url.includes('napi/graphql')&&opts&&opts.headers){
+        var h=opts.headers||{};
+        if(h['Fk-Csrf-Token'])captured.csrf=h['Fk-Csrf-Token'];
+        if(h['X-Location-Id'])captured.locId=h['X-Location-Id'];
+        window.fetch=realFetch; // restore immediately
+      }
+      return realFetch.apply(this,arguments);
+    };
+
+    // Get the full cookie string
+    var cookie=document.cookie;
+
+    // Send immediately with what we have, then re-send after intercept fires
+    function sendToGS(c,x,l){
+      var btn=document.getElementById('__fkbm_btn');
+      if(btn){btn.textContent='Sending...';btn.style.background='#f59e0b';}
+      fetch(GS,{
+        method:'POST',
+        mode:'no-cors',
+        headers:{'Content-Type':'text/plain'},
+        body:JSON.stringify({action:'saveCookie',cookie:c,csrfToken:x,locationId:l,savedAt:new Date().toISOString()})
+      }).then(function(){
+        if(btn){btn.textContent='\u2705 Cookie saved!';btn.style.background='#16a34a';}
+        setTimeout(function(){document.body.removeChild(document.getElementById('__fkbm_overlay'));},2000);
+      }).catch(function(e){
+        if(btn){btn.textContent='\u274C Failed: '+e.message;btn.style.background='#dc2626';}
+      });
+    }
+
+    // Show overlay
+    var overlay=document.createElement('div');
+    overlay.id='__fkbm_overlay';
+    overlay.style.cssText='position:fixed;top:20px;right:20px;z-index:999999;background:#181715;color:#fff;border-radius:12px;padding:18px 20px;font-family:sans-serif;font-size:14px;box-shadow:0 8px 32px rgba(0,0,0,.4);min-width:260px';
+    overlay.innerHTML='<div style="font-weight:600;margin-bottom:6px;font-size:15px">\uD83D\uDD17 Returns Manager</div><div style="color:rgba(255,255,255,.6);margin-bottom:12px">Capturing FK credentials\u2026</div><button id="__fkbm_btn" style="width:100%;padding:9px;border-radius:8px;border:none;background:#f59e0b;color:#fff;font-size:14px;font-weight:600;cursor:pointer">Capturing\u2026</button><div style="margin-top:8px;font-size:12px;color:rgba(255,255,255,.4)">You can close this tab after saving</div>';
+    document.body.appendChild(overlay);
+
+    // If we already have csrf from page, send now
+    if(csrf||cookie){
+      sendToGS(cookie,csrf,locId);
+    }
+
+    // Also trigger a real graphql request to capture headers via our monkey-patch
+    // by navigating to SPF page (user may already be there)
+    setTimeout(function(){
+      // After 1s, if intercept fired, re-send with better credentials
+      if(captured.csrf){
+        sendToGS(cookie,captured.csrf,captured.locId||locId);
+      }
+    },1500);
+
+  })();`;
+
+  const encoded = 'javascript:' + encodeURIComponent(bookmarkletCode);
+  const link = document.getElementById('fk-bookmarklet-link');
+  if (link) link.href = encoded;
+}
+
+// Called when Apps Script confirms cookie was saved (via saveCookie action)
+// We store the timestamp locally so we know how fresh it is
+function onCookieSaved() {
+  localStorage.setItem(FK_COOKIE_KEY, new Date().toISOString());
+  updateCookieStatusBadge();
+}
+
+function updateCookieStatusBadge() {
+  const dot = document.getElementById('cookie-status-dot');
+  const txt = document.getElementById('cookie-status-txt');
+  const btn = document.getElementById('fk-auto-sync-btn');
+  if (!dot || !txt) return;
+
+  const savedAt = localStorage.getItem(FK_COOKIE_KEY);
+  if (!savedAt) {
+    dot.style.background = 'var(--bd2)';
+    txt.style.color = 'var(--t3)';
+    txt.textContent = 'Not set';
+    if (btn) { btn.style.background = 'var(--t3)'; btn.title = 'Set FK cookie first — Settings → Flipkart claim sync'; }
+    return;
+  }
+
+  const ageDays = (Date.now() - new Date(savedAt).getTime()) / (1000 * 60 * 60 * 24);
+
+  if (ageDays > 7) {
+    dot.style.background = 'var(--rb)';
+    txt.style.color = 'var(--rd)';
+    txt.textContent = 'Expired — click bookmarklet now';
+    if (btn) { btn.style.background = 'var(--rd)'; btn.title = 'Cookie expired — click bookmarklet on Flipkart'; }
+  } else if (ageDays > 4) {
+    dot.style.background = 'var(--ab)';
+    txt.style.color = 'var(--am)';
+    txt.textContent = 'Aging — update soon (' + Math.round(ageDays) + 'd)';
+    if (btn) { btn.style.background = 'var(--am)'; btn.title = 'Cookie aging — update soon'; }
+  } else {
+    dot.style.background = 'var(--gb)';
+    txt.style.color = 'var(--gn)';
+    txt.textContent = 'Fresh (' + (ageDays < 1 ? 'today' : Math.round(ageDays) + 'd old') + ')';
+    if (btn) { btn.style.background = 'var(--gn)'; btn.title = 'Cookie fresh'; }
+  }
+}
+
+// Listen for cookie-saved message from bookmarklet tab
+// Bookmarklet calls Apps Script directly (no-cors), so we poll cookie status
+// via Apps Script cookieStatus endpoint to confirm it was saved
+function pollCookieStatus() {
+  const url = getGsUrl();
+  if (!url) return;
+  fetch(url + '?action=cookieStatus')
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok && d.status !== 'missing') {
+        // Apps Script has a cookie — store timestamp locally
+        const savedAt = d.savedAt || new Date().toISOString();
+        localStorage.setItem(FK_COOKIE_KEY, savedAt);
+        updateCookieStatusBadge();
+        toast('\u2705 FK cookie is live — ready to sync claims');
+      }
+    })
+    .catch(() => {});
+}
+
+// ── FK Auto Sync ──────────────────────────────────────────────
+async function runFkAutoSync() {
+  const savedAt = localStorage.getItem(FK_COOKIE_KEY);
+  if (!savedAt) {
+    toast('Set your FK cookie first — use the bookmarklet in Settings');
+    openModal('settings-modal');
+    return;
+  }
+  const ageDays = (Date.now() - new Date(savedAt).getTime()) / (1000 * 60 * 60 * 24);
+  if (ageDays > 7) {
+    toast('FK cookie expired — click the bookmarklet on Flipkart to refresh');
+    openModal('settings-modal');
+    return;
+  }
+
+  // Collect trackings
+  const pending  = returns.filter(r => r.claimNeeded && !r.claimRef)
+    .map(r => ({ tracking: r.tracking, type: 'pending' }));
+  const open     = returns.filter(r => r.claimNeeded && r.claimRef && !r.claimResolution)
+    .map(r => ({ tracking: r.tracking, type: 'open' }));
+  const trackings = [...pending, ...open];
+
+  if (!trackings.length) {
+    toast('No claims to sync \u2014 no Claim Pending or Claim Open records');
+    return;
+  }
+
+  // Show progress
+  const progEl  = document.getElementById('fk-sync-progress');
+  const progBar = document.getElementById('fk-sync-prog-bar');
+  const progMsg = document.getElementById('fk-sync-prog-msg');
+  const progCnt = document.getElementById('fk-sync-prog-count');
+  const progTtl = document.getElementById('fk-sync-prog-title');
+  const btn     = document.getElementById('fk-auto-sync-btn');
+  const btnTxt  = document.getElementById('fk-auto-sync-btn-txt');
+
+  progEl.style.display     = 'block';
+  progBar.style.width      = '5%';
+  progBar.style.background = 'var(--gn)';
+  progTtl.textContent      = 'Syncing ' + trackings.length + ' claim' + (trackings.length !== 1 ? 's' : '') + '\u2026';
+  progCnt.textContent      = '0 / ' + trackings.length;
+  progMsg.textContent      = 'Connecting to Apps Script\u2026';
+  btn.disabled             = true;
+  btnTxt.textContent       = 'Syncing\u2026';
+
+  try {
+    const url  = getGsUrl();
+    const body = JSON.stringify({ action: 'syncClaims', trackings });
+
+    progMsg.textContent  = 'Fetching claim data from Flipkart\u2026 (' + trackings.length + ' trackings)';
+    progBar.style.width  = '20%';
+
+    const res  = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body
+    });
+
+    progBar.style.width = '70%';
+    const data = await res.json();
+
+    if (!data.ok) throw new Error(data.error || 'Sync failed');
+    const result = data.result || {};
+    if (result.error) throw new Error(result.error);
+
+    progBar.style.width = '100%';
+    progCnt.textContent = trackings.length + ' / ' + trackings.length;
+
+    // Apply to local returns[]
+    let updated = 0;
+    returns = returns.map(r => {
+      const t = r.tracking;
+      if (result.approved?.[t]) {
+        r.claimRef = result.approved[t].claimId;
+        r.claimResolution = 'Approved';
+        r.claimApprovedAmt = result.approved[t].amount;
+        updated++;
+      } else if (result.rejected?.[t]) {
+        r.claimRef = result.rejected[t];
+        r.claimResolution = 'Rejected';
+        updated++;
+      } else if (result.processing?.[t]) {
+        r.claimRef = result.processing[t];
+        updated++;
+      }
+      return r;
+    });
+
+    persist();
+    updateDashboard();
+    renderClaims();
+
+    const approvedCnt   = Object.keys(result.approved   || {}).length;
+    const rejectedCnt   = Object.keys(result.rejected   || {}).length;
+    const processingCnt = Object.keys(result.processing || {}).length;
+    const notFoundCnt   = (result.notFound || []).length;
+
+    let summary = [];
+    if (approvedCnt)   summary.push(approvedCnt   + ' approved');
+    if (rejectedCnt)   summary.push(rejectedCnt   + ' rejected');
+    if (processingCnt) summary.push(processingCnt + ' claim ID added');
+    if (notFoundCnt)   summary.push(notFoundCnt   + ' not found on FK');
+
+    progTtl.textContent = '\u2705 Done \u2014 ' + updated + ' record' + (updated !== 1 ? 's' : '') + ' updated';
+    progMsg.textContent = summary.join('  \u00B7  ') || 'No changes found';
+
+    toast('\u2705 FK Sync: ' + updated + ' claim' + (updated !== 1 ? 's' : '') + ' updated');
+    setTimeout(() => { progEl.style.display = 'none'; }, 6000);
+
+  } catch (err) {
+    progBar.style.background = 'var(--rd)';
+    progBar.style.width      = '100%';
+    progTtl.textContent      = '\u274C Sync failed';
+    progMsg.textContent      = err.message;
+    toast('Sync failed: ' + err.message);
+  } finally {
+    btn.disabled       = false;
+    btnTxt.textContent = 'Sync Claims from Flipkart';
+  }
+}
 
 // ── FK Auto-Sync listener ─────────────────────────────────────────────────────
 // When opened by the shortcut with #fksync=... in URL, apply changes automatically
@@ -3274,6 +3606,8 @@ function applyFkSync(){
     </div>
   </div>
 </div>
+
+
 
 </body>
 </html>
