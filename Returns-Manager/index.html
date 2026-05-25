@@ -776,9 +776,9 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;flex-wrap:wrap;gap:10px">
       <div><div class="pg-t">Claims</div><div class="pg-s">Track all claims with Flipkart or Amazon</div></div>
       <div style="display:flex;align-items:center;gap:8px">
-        <button class="btn bg" onclick="openModal('fk-sync-modal')" style="display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:13px;padding:5px 10px">
+        <button class="btn bg" onclick="openModal('fk-sync-modal')" style="display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:13px;padding:5px 10px" title="Manually paste claim IDs from Flipkart portal">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="m18.5 2.5 3 3L12 15l-4 1 1-4Z"/></svg>
-          Manual sync
+          Add Claim ID
         </button>
         <label class="btn bp" style="display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:13px;padding:7px 14px;cursor:pointer;font-weight:600">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -786,6 +786,11 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
           <input type="file" accept=".xlsx,.csv" style="display:none" onchange="handleClaimReport(this)">
         </label>
       </div>
+    </div>
+    <!-- 5-day delay notice -->
+    <div style="display:flex;align-items:flex-start;gap:7px;background:var(--bbg);border:1px solid var(--bb);border-radius:var(--rs);padding:8px 12px;margin-bottom:10px;font-size:13px;color:var(--bl)">
+      <span style="flex-shrink:0;margin-top:1px">ℹ️</span>
+      <span>Flipkart's SPF Claim Report has a <strong>~5-day delay</strong> — claims filed today appear after ~5 days. Download from <em>Seller Hub → Payments → SPF Claims</em> and upload to sync automatically. Use <strong>Add Claim ID</strong> to manually add IDs within the 5-day window.</span>
     </div>
     <!-- Upload result banner -->
     <div id="claim-report-result" style="display:none;border-radius:var(--rs);padding:10px 14px;margin-bottom:12px;font-size:13px"></div>
@@ -1102,6 +1107,22 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
 <div class="toast" id="toast"></div>
 
 <script>
+/*
+ * Returns Manager — TomahawkTools
+ * ─────────────────────────────────────────────────────────────
+ * v5  2026-05-25  Phase 5: FK Claim Report upload (SheetJS XLSX).
+ *                Removed bookmarklet/GAS proxy/Chrome-extension sync.
+ *                Added column header validation in applyClaimReport.
+ *                Added claim lifecycle direction guard (no downgrade).
+ *                Renamed "Manual sync" → "Add Claim ID" (cleaner UX).
+ *                Added 5-day delay ℹ️ notice on Claims page.
+ *                Cleaned up old FK clipboard sync modal.
+ * v4  2026-05-xx  Phase 4: FBA Process, repair handover slip.
+ * v3  2026-05-xx  Phase 3: FBA Scan, removal order CSV.
+ * v2  2026-05-xx  Phase 2: Process page, maintenance, claims modal.
+ * v1  2026-05-xx  Phase 1: Scan entry, Google Sheets sync.
+ */
+
 // ── Storage keys ──────────────────────────────────────────────
 const RK='rm_r_v11',MK='rm_m_v11',CSK='rm_csv_v11';
 function loadR(){try{return JSON.parse(localStorage.getItem(RK))||[]}catch{return[]}}
@@ -3159,6 +3180,24 @@ function applyClaimReport(rows) {
     return out;
   };
 
+  // ── Column validation ─────────────────────────────────────────
+  // Before doing anything, check that the uploaded file looks like
+  // an FK SPF Claim Report. If key columns are missing, reject it early.
+  if (rows.length === 0) { showReportError('The file appears to be empty.'); return; }
+  const sampleRow = norm(rows[0]);
+  const allKeys = Object.keys(sampleRow).map(k => k.toLowerCase());
+  const hasClaimId  = allKeys.some(k => k.includes('claim id') || k === 'claim_id' || k === 'claimid');
+  const hasOrderId  = allKeys.some(k => k.includes('order id') || k === 'order_id' || k.includes('orderid'));
+  const hasStatus   = allKeys.some(k => k.includes('claim status') || k.includes('status'));
+  if (!hasClaimId || !hasOrderId || !hasStatus) {
+    showReportError(
+      'This doesn\'t look like an FK SPF Claim Report. ' +
+      'Expected columns: "Claim ID", "Order Id", "Claim Status", "Approved Amount". ' +
+      'Please download the report from Seller Hub → Payments → SPF Claims.'
+    );
+    return;
+  }
+
   // Build lookup maps from the report
   // Key by Order ID and by Order Item ID (both appear in returns)
   const byOrderId   = {};  // orderId   → { claimId, status, amount }
@@ -3177,24 +3216,46 @@ function applyClaimReport(rows) {
     byClaimId[claimId] = entry;
   });
 
+  // Also build a lookup by tracking number directly —
+  // some non-FK-standard trackings (e.g. "207355-08892--77qb") appear
+  // in the report's Order ID or Shipment ID column rather than a clean orderId.
+  // We normalise by stripping spaces and lowercasing for fuzzy fallback.
+  const byTracking = {}; // normalised tracking → entry
+  rows.forEach(rawRow => {
+    const row = norm(rawRow);
+    const claimId   = row['Claim ID'] || '';
+    const trackingR = row['Tracking ID'] || row['Shipment ID'] || row['Tracking'] || '';
+    const status    = row['Claim Status'] || '';
+    const amount    = parseFloat(row['Approved Amount'] || '') || 0;
+    if (!claimId || !trackingR) return;
+    byTracking[trackingR.toLowerCase().replace(/\s/g,'')] = { claimId, status, amount };
+  });
+
   // Match against returns[]
   let updated = 0, alreadyDone = 0, noMatch = 0;
 
   returns = returns.map(r => {
     // Only update claim-needed records
     if (!r.claimNeeded) return r;
-    // Skip already resolved
+    // ── Lifecycle guard ──────────────────────────────────────────
+    // Never downgrade: Approved/Rejected are terminal states.
+    // If a claim is already resolved, leave it alone even if this
+    // report has a different or missing entry (e.g. old date range).
     if (r.claimResolution === 'Approved' || r.claimResolution === 'Rejected') {
       alreadyDone++; return r;
     }
 
-    // Try match by orderId first, then by existing claimRef
+    // Try match by orderId first, then by existing claimRef, then by tracking
     const orderId = String(r.orderId || '').trim();
-    const match = byOrderId[orderId] || (r.claimRef ? byClaimId[r.claimRef] : null);
+    const normTrack = (r.tracking || '').toLowerCase().replace(/\s/g,'');
+    const match = byOrderId[orderId]
+      || (r.claimRef ? byClaimId[r.claimRef] : null)
+      || byTracking[normTrack]
+      || null;
 
     if (!match) { noMatch++; return r; }
 
-    // Apply
+    // Apply — only advance the lifecycle, never reverse it
     r.claimRef = match.claimId;
     if (match.status === 'Approved') {
       r.claimResolution  = 'Approved';
@@ -3202,7 +3263,7 @@ function applyClaimReport(rows) {
     } else if (match.status === 'Not Approved') {
       r.claimResolution = 'Rejected';
     }
-    // Processing — just add claim ID, no resolution yet
+    // 'Processing' → just records the claim ID, no resolution change
     updated++;
     return r;
   });
@@ -3232,8 +3293,13 @@ function showReportError(msg) {
   el.textContent = '❌ ' + msg;
 }
 
-// ── FK Auto-Sync listener ─────────────────────────────────────────────────────
-// When opened by the shortcut with #fksync=... in URL, apply changes automatically
+// ── FK Auto-Sync listener (DISABLED — Phase 4 legacy) ────────
+// This listener handled the #fksync=... URL hash injected by the
+// old Claude-in-Chrome shortcut approach. That approach was
+// abandoned in Phase 5 (Flipkart intercepts injected scripts).
+// Kept here as dead code for reference only — the IIFE is gated.
+// DO NOT enable without verifying FK session context behaviour.
+/*
 (function(){
   const hash = decodeURIComponent(location.hash || '');
   const match = hash.match(/#fksync=(.+)/);
@@ -3276,9 +3342,7 @@ function showReportError(msg) {
       persist();
       updateDashboard();
       renderClaims();
-      // Clean URL so refresh doesn't re-apply
       history.replaceState(null, '', location.pathname);
-      // Show success toast after short delay
       setTimeout(() => toast(`✅ FK Sync: ${updated} claim${updated!==1?'s':''} auto-updated`), 800);
     } else {
       history.replaceState(null, '', location.pathname);
@@ -3288,6 +3352,7 @@ function showReportError(msg) {
     console.error('FK Sync error:', e);
   }
 })();
+*/
 
 
 // ── Flipkart SPF Claim Sync ───────────────────────────────────
@@ -3364,30 +3429,25 @@ function applyFkSync(){
 }
 </script>
 
-<!-- ── Flipkart Sync Modal ── -->
+<!-- ── Add Claim ID Modal (manual entry for 5-day window gap) ── -->
 <div class="overlay" id="fk-sync-modal">
   <div class="modal" style="max-width:680px;width:96%">
     <div class="mh">
       <div>
-        <h2>Sync claims from Flipkart</h2>
-        <p>Run the shortcut in Claude in Chrome on the Flipkart SPF page, then paste the result below</p>
+        <h2>Add Claim ID</h2>
+        <p>Manually add claim IDs for pending claims within the 5-day report delay window</p>
       </div>
       <button class="mclose" onclick="closeModal('fk-sync-modal')">×</button>
     </div>
     <div class="mbody">
-      <!-- Step 1 -->
-      <div style="background:var(--s2);border-radius:var(--rs);padding:14px 16px;margin-bottom:14px">
-        <div style="font-size:13px;font-weight:600;color:var(--tx);margin-bottom:6px">Step 1 — Run the Claude in Chrome shortcut</div>
-        <ol style="font-size:13px;color:var(--t2);margin:0 0 0 18px;line-height:1.8">
-          <li>Open the <strong>Flipkart Seller Hub → Payments → Claims</strong> page in Chrome</li>
-          <li>Open Claude in Chrome → Shortcuts → <strong>"Sync FK Claims"</strong></li>
-          <li>It will scrape all pages and copy the data to your clipboard automatically</li>
-        </ol>
+      <!-- Explanation -->
+      <div style="background:var(--bbg);border:1px solid var(--bb);border-radius:var(--rs);padding:12px 14px;margin-bottom:14px;font-size:13px;color:var(--bl)">
+        <strong>When to use this:</strong> After filing a claim on Flipkart SPF, the report won't show it for ~5 days. Use this to manually add the Claim ID now so the return moves from <em>Claim Pending → Claim Open</em>. Paste data from the shortcut or type tab-separated rows.
       </div>
-      <!-- Step 2 -->
+      <!-- Paste area -->
       <div style="margin-bottom:12px">
-        <label style="font-size:13px;font-weight:500;color:var(--tx);display:block;margin-bottom:6px">Step 2 — Paste the result here</label>
-        <textarea id="fk-sync-input" rows="5" placeholder="Paste the JSON data copied by the shortcut here…" oninput="renderFkSyncPreview()" style="width:100%;border:1px solid var(--bd);border-radius:var(--rs);padding:10px 12px;font-family:'DM Mono',monospace;font-size:12px;background:var(--sf);color:var(--tx);resize:vertical"></textarea>
+        <label style="font-size:13px;font-weight:500;color:var(--tx);display:block;margin-bottom:6px">Paste claim data (JSON from shortcut, or tab-separated: claimId ⇥ trackingId ⇥ status)</label>
+        <textarea id="fk-sync-input" rows="5" placeholder="Paste JSON data from the Claude in Chrome shortcut, or type rows like:&#10;CLM123456&#9;FMPC6061535163&#9;Processing" oninput="renderFkSyncPreview()" style="width:100%;border:1px solid var(--bd);border-radius:var(--rs);padding:10px 12px;font-family:'DM Mono',monospace;font-size:12px;background:var(--sf);color:var(--tx);resize:vertical"></textarea>
       </div>
       <!-- Preview -->
       <div id="fk-sync-preview" style="margin-bottom:4px">
@@ -3396,7 +3456,7 @@ function applyFkSync(){
     </div>
     <div class="mfoot">
       <button class="btn bg" onclick="closeModal('fk-sync-modal')">Cancel</button>
-      <button class="btn bp" onclick="applyFkSync()">Apply sync</button>
+      <button class="btn bp" onclick="applyFkSync()">Apply</button>
     </div>
   </div>
 </div>
