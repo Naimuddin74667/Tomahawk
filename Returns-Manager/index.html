@@ -1067,22 +1067,32 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
               <span id="cookie-status-txt" style="color:var(--t3)">Not set</span>
             </div>
           </div>
-          <div class="settings-item" style="flex-direction:column;align-items:flex-start;gap:10px;padding-top:0">
-            <p style="font-size:13px;color:var(--t2);line-height:1.7;margin:0">
-              Drag the button below to your Chrome bookmarks bar. Whenever the cookie turns
-              <span style="color:var(--am);font-weight:600">&bull; amber</span> or
-              <span style="color:var(--rd);font-weight:600">&bull; red</span>, go to
-              <strong>seller.flipkart.com</strong> and click the bookmarklet &mdash; it fetches and saves the cookie automatically.
-            </p>
-            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-              <a id="fk-bookmarklet-link" href="#" onclick="return false"
-                style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:var(--tx);color:#fff;border-radius:var(--rs);font-size:13px;font-weight:600;text-decoration:none;cursor:grab;user-select:none"
-                title="Drag this to your bookmarks bar">
-                &#128279; Update FK Cookie
-              </a>
-              <span style="font-size:13px;color:var(--t3)">&larr; Drag this to bookmarks bar</span>
+          <div class="settings-item" style="flex-direction:column;align-items:flex-start;gap:12px;padding-top:0">
+            <!-- Step 1 -->
+            <div style="width:100%;background:var(--s2);border-radius:var(--rs);padding:12px 14px">
+              <div style="font-size:12px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Step 1 &mdash; Add bookmarklet (one time only)</div>
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <a id="fk-bookmarklet-link" href="#" onclick="return false"
+                  draggable="true"
+                  style="display:inline-flex;align-items:center;gap:7px;padding:9px 16px;background:#e85d04;color:#fff;border-radius:var(--rs);font-size:13px;font-weight:700;text-decoration:none;cursor:grab;user-select:none;box-shadow:0 2px 8px rgba(232,93,4,.3)"
+                  title="Drag this to your bookmarks bar">
+                  &#128279; Update FK Cookie
+                </a>
+                <span style="font-size:13px;color:var(--t2)">&#8592; Drag to bookmarks bar</span>
+              </div>
             </div>
-            <div id="cookie-save-status" style="font-size:13px;color:var(--t2)"></div>
+            <!-- Step 2 -->
+            <div style="width:100%;background:var(--s2);border-radius:var(--rs);padding:12px 14px">
+              <div style="font-size:12px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Step 2 &mdash; Refresh cookie when needed</div>
+              <p style="font-size:13px;color:var(--t2);line-height:1.6;margin:0 0 10px">
+                Go to <strong>seller.flipkart.com</strong> (any page) and click the bookmarklet.<br>
+                A dark overlay appears at the bottom-right showing progress. Takes ~3 seconds.
+              </p>
+              <div style="display:flex;align-items:center;gap:8px">
+                <button class="btn bg" style="font-size:13px;padding:5px 12px" onclick="pollCookieStatus();document.getElementById('cookie-save-status').textContent='Checking…'">&#10003; Verify cookie saved</button>
+                <span id="cookie-save-status" style="font-size:13px;color:var(--t2)"></span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -3154,103 +3164,134 @@ function updateFBABadges(){
 
 // ── Updated platBadge to handle FBA ───────────────────────────
 // Init
-updateCSVStatus();updateDashboard();initGsUrl();updateFBABadges();updateCookieStatusBadge();initBookmarklet();setTimeout(pollCookieStatus,2000);const _st=localStorage.getItem("rm_last_sync");if(_st)setSyncStatus("synced","Synced "+_st);else setSyncStatus("","Not synced");
+const FK_COOKIE_KEY='rm_fk_cookie_saved_at';
+updateCSVStatus();updateDashboard();initGsUrl();updateFBABadges();updateCookieStatusBadge();initBookmarklet();setTimeout(()=>pollCookieStatus(true),2000);const _st=localStorage.getItem("rm_last_sync");if(_st)setSyncStatus("synced","Synced "+_st);else setSyncStatus("","Not synced");
 window.addEventListener('load',()=>document.getElementById('dash-greeting').textContent=greeting());
 
 
 // ── FK Cookie management ──────────────────────────────────────
-const FK_COOKIE_KEY    = 'rm_fk_cookie_saved_at';
-const FK_BOOKMARKLET_GS_URL = localStorage.getItem('rm_gs_url_v2') ||
-  'https://script.google.com/macros/s/AKfycbxmINljHqhpuff8aus_OR9C6zoIGV9GyeeMGd_N6Y2I8nWrntY02SNe3-bScNiR2CLkaQ/exec';
+// FK_COOKIE_KEY declared earlier at init
 
 // Build the bookmarklet href and inject into the link on page load
 function initBookmarklet() {
-  // The bookmarklet runs on seller.flipkart.com
-  // It reads cookies + extracts CSRF and Location-Id from a live graphql request,
-  // then POSTs everything to Apps Script directly.
   const gsUrl = getGsUrl();
 
-  const bookmarkletCode = `(function(){
-    var GS='${gsUrl}';
-    // Extract Fk-Csrf-Token from meta tag or cookie string
-    var csrf='';
-    var metas=document.querySelectorAll('meta');
-    for(var i=0;i<metas.length;i++){
-      if(metas[i].name==='csrf-token'||metas[i].getAttribute('data-csrf')){
-        csrf=metas[i].content||metas[i].getAttribute('data-csrf')||'';
-        break;
+  // The bookmarklet:
+  // 1. Shows a visible overlay on Flipkart immediately
+  // 2. Makes a real GraphQL call to SPF to capture live headers (CSRF + Location-Id)
+  // 3. POSTs captured credentials + cookie to Apps Script
+  // 4. Shows success/failure clearly in the overlay
+  const code = `(function(){
+  var GS=''+gsUrl+'';
+  var OID='__fkbm__';
+  if(document.getElementById(OID))return; // prevent double-run
+
+  // ── Overlay ─────────────────────────────────────────────
+  var ov=document.createElement('div');
+  ov.id=OID;
+  ov.style.cssText='position:fixed;bottom:24px;right:24px;z-index:2147483647;background:#111;color:#fff;border-radius:14px;padding:20px 22px;font-family:-apple-system,sans-serif;font-size:14px;box-shadow:0 12px 40px rgba(0,0,0,.5);min-width:280px;max-width:320px';
+  ov.innerHTML=
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">'+
+      '<div style="width:28px;height:28px;border-radius:8px;background:#e85d04;display:flex;align-items:center;justify-content:center;font-size:16px">&#128279;</div>'+
+      '<div><div style="font-weight:700;font-size:15px">Returns Manager</div><div style="font-size:12px;color:rgba(255,255,255,.5)">FK Cookie Updater</div></div>'+
+    '</div>'+
+    '<div id="__fkbm_msg" style="font-size:13px;color:rgba(255,255,255,.7);margin-bottom:12px">Capturing credentials\u2026</div>'+
+    '<div style="background:rgba(255,255,255,.1);border-radius:20px;height:5px;overflow:hidden;margin-bottom:12px">'+
+      '<div id="__fkbm_bar" style="height:100%;border-radius:20px;background:#e85d04;transition:width .4s;width:10%"></div>'+
+    '</div>'+
+    '<div id="__fkbm_status" style="font-size:13px;font-weight:600;color:#f59e0b">Step 1/3: Intercepting headers\u2026</div>';
+  document.body.appendChild(ov);
+
+  function setMsg(m){var el=document.getElementById('__fkbm_msg');if(el)el.textContent=m;}
+  function setStatus(m,c){var el=document.getElementById('__fkbm_status');if(el){el.textContent=m;el.style.color=c||'#f59e0b';}}
+  function setBar(pct){var el=document.getElementById('__fkbm_bar');if(el)el.style.width=pct+'%';}
+  function done(ok,msg){
+    setBar(100);
+    setStatus(ok?'\u2705 '+msg:'\u274C '+msg, ok?'#22c55e':'#ef4444');
+    setMsg(ok?'Cookie saved to Google Sheet!':'Check you are on seller.flipkart.com');
+    setTimeout(function(){if(ov&&ov.parentNode)ov.parentNode.removeChild(ov);},ok?3000:5000);
+  }
+
+  // ── Step 1: Intercept a real GraphQL request ─────────────────
+  var captured={csrf:'',locId:'',cookie:''};
+  var orig=window.fetch;
+  window.fetch=function(url,opts){
+    var res=orig.apply(this,arguments);
+    if(typeof url==='string'&&url.includes('napi/graphql')&&opts&&opts.headers){
+      var h=opts.headers;
+      if(h['Fk-Csrf-Token']&&!captured.csrf){
+        captured.csrf=h['Fk-Csrf-Token']||'';
+        captured.locId=h['X-Location-Id']||'';
+        window.fetch=orig; // restore
+        setMsg('Headers captured \u2713');
+        setBar(60);
+        setStatus('Step 2/3: Sending to Apps Script\u2026');
+        sendCredentials();
       }
     }
-    // Try reading from hidden input
-    if(!csrf){
-      var inp=document.querySelector('input[name="csrf"]');
-      if(inp)csrf=inp.value||'';
+    return res;
+  };
+
+  // ── Step 2: Trigger a real GraphQL call to fire our intercept ─
+  setMsg('Making a test SPF API call\u2026');
+  setBar(30);
+  setStatus('Step 1/3: Intercepting headers\u2026');
+
+  // Make a real SPF GraphQL query — this will trigger our monkey-patch
+  orig('https://seller.flipkart.com/napi/graphql',{
+    method:'POST',
+    credentials:'include',
+    headers:{
+      'Content-Type':'application/json',
+      'Accept':'*/*',
+      'X-Requested-With':'XMLHttpRequest',
+      'X-Internal-Env-Type':'WEB',
+      'Origin':'https://seller.flipkart.com',
+      'Referer':'https://seller.flipkart.com/index.html'
+    },
+    body:JSON.stringify({
+      operationName:'Payments_SPF_WEB_getSpfClaims',
+      query:'query Payments_SPF_WEB_getSpfClaims($filter:SpfClaimFilter,$pagination:SpfClaimPagination!){getSpfClaims(filter:$filter,pagination:$pagination){has_more claims{claim_id tracking_id status approved_amount}}}',
+      variables:{filter:{search:'',searchOption:'tracking_id',status:'SELLER_PENDING'},pagination:{size:1}}
+    })
+  }).then(function(r){return r.json();}).then(function(d){
+    // If our monkey-patch didn't catch it (already restored), try extracting from response context
+    if(!captured.csrf){
+      // Fallback: read CSRF from cookie string (some tokens are not HttpOnly)
+      var ck=document.cookie;
+      var m=ck.match(/seller_session_unique_token=([^;]+)/);
+      if(m)captured.csrf=decodeURIComponent(m[1]);
+      sendCredentials();
     }
-    // Try reading from seller_session_unique_token input (visible in HTML)
-    var tokenInp=document.querySelector('#seller_session_unique_token');
-    if(tokenInp&&!csrf)csrf=tokenInp.value||'';
-
-    // Get Location-Id from body data attribute
-    var locId=document.body.getAttribute('data-gr-aaa-notch-connection-id')||'';
-
-    // Intercept next XHR/fetch to capture real Fk-Csrf-Token and X-Location-Id
-    // by monkey-patching fetch temporarily
-    var realFetch=window.fetch;
-    var captured={csrf:'',locId:''};
-    window.fetch=function(url,opts){
-      if(url&&url.includes&&url.includes('napi/graphql')&&opts&&opts.headers){
-        var h=opts.headers||{};
-        if(h['Fk-Csrf-Token'])captured.csrf=h['Fk-Csrf-Token'];
-        if(h['X-Location-Id'])captured.locId=h['X-Location-Id'];
-        window.fetch=realFetch; // restore immediately
-      }
-      return realFetch.apply(this,arguments);
-    };
-
-    // Get the full cookie string
-    var cookie=document.cookie;
-
-    // Send immediately with what we have, then re-send after intercept fires
-    function sendToGS(c,x,l){
-      var btn=document.getElementById('__fkbm_btn');
-      if(btn){btn.textContent='Sending...';btn.style.background='#f59e0b';}
-      fetch(GS,{
-        method:'POST',
-        mode:'no-cors',
-        headers:{'Content-Type':'text/plain'},
-        body:JSON.stringify({action:'saveCookie',cookie:c,csrfToken:x,locationId:l,savedAt:new Date().toISOString()})
-      }).then(function(){
-        if(btn){btn.textContent='\u2705 Cookie saved!';btn.style.background='#16a34a';}
-        setTimeout(function(){document.body.removeChild(document.getElementById('__fkbm_overlay'));},2000);
-      }).catch(function(e){
-        if(btn){btn.textContent='\u274C Failed: '+e.message;btn.style.background='#dc2626';}
-      });
+  }).catch(function(err){
+    if(!captured.csrf){
+      setStatus('Could not capture CSRF token','#ef4444');
+      setMsg('Make sure you are on seller.flipkart.com and logged in');
     }
+  });
 
-    // Show overlay
-    var overlay=document.createElement('div');
-    overlay.id='__fkbm_overlay';
-    overlay.style.cssText='position:fixed;top:20px;right:20px;z-index:999999;background:#181715;color:#fff;border-radius:12px;padding:18px 20px;font-family:sans-serif;font-size:14px;box-shadow:0 8px 32px rgba(0,0,0,.4);min-width:260px';
-    overlay.innerHTML='<div style="font-weight:600;margin-bottom:6px;font-size:15px">\uD83D\uDD17 Returns Manager</div><div style="color:rgba(255,255,255,.6);margin-bottom:12px">Capturing FK credentials\u2026</div><button id="__fkbm_btn" style="width:100%;padding:9px;border-radius:8px;border:none;background:#f59e0b;color:#fff;font-size:14px;font-weight:600;cursor:pointer">Capturing\u2026</button><div style="margin-top:8px;font-size:12px;color:rgba(255,255,255,.4)">You can close this tab after saving</div>';
-    document.body.appendChild(overlay);
+  // ── Step 3: Send to Apps Script ──────────────────────────────
+  function sendCredentials(){
+    setBar(75);
+    setStatus('Step 3/3: Saving to Google Sheet\u2026');
+    // Use XMLHttpRequest so we can handle no-cors properly
+    var xhr=new XMLHttpRequest();
+    xhr.open('POST',GS,true);
+    xhr.setRequestHeader('Content-Type','text/plain');
+    xhr.onload=function(){done(true,'Cookie updated!');};
+    xhr.onerror=function(){done(false,'Network error');};
+    xhr.send(JSON.stringify({
+      action:'saveCookie',
+      cookie:document.cookie,
+      csrfToken:captured.csrf,
+      locationId:captured.locId,
+      savedAt:new Date().toISOString()
+    }));
+  }
 
-    // If we already have csrf from page, send now
-    if(csrf||cookie){
-      sendToGS(cookie,csrf,locId);
-    }
+})();`;
 
-    // Also trigger a real graphql request to capture headers via our monkey-patch
-    // by navigating to SPF page (user may already be there)
-    setTimeout(function(){
-      // After 1s, if intercept fired, re-send with better credentials
-      if(captured.csrf){
-        sendToGS(cookie,captured.csrf,captured.locId||locId);
-      }
-    },1500);
-
-  })();`;
-
-  const encoded = 'javascript:' + encodeURIComponent(bookmarkletCode);
+  const encoded = 'javascript:' + encodeURIComponent(code);
   const link = document.getElementById('fk-bookmarklet-link');
   if (link) link.href = encoded;
 }
@@ -3300,21 +3341,29 @@ function updateCookieStatusBadge() {
 // Listen for cookie-saved message from bookmarklet tab
 // Bookmarklet calls Apps Script directly (no-cors), so we poll cookie status
 // via Apps Script cookieStatus endpoint to confirm it was saved
-function pollCookieStatus() {
+function pollCookieStatus(silent) {
   const url = getGsUrl();
   if (!url) return;
   fetch(url + '?action=cookieStatus')
     .then(r => r.json())
     .then(d => {
+      const statusEl = document.getElementById('cookie-save-status');
       if (d.ok && d.status !== 'missing') {
-        // Apps Script has a cookie — store timestamp locally
         const savedAt = d.savedAt || new Date().toISOString();
         localStorage.setItem(FK_COOKIE_KEY, savedAt);
         updateCookieStatusBadge();
-        toast('\u2705 FK cookie is live — ready to sync claims');
+        if (!silent) {
+          if (statusEl) statusEl.textContent = '\u2705 Cookie confirmed on Sheet';
+          toast('\u2705 FK cookie live — ready to sync claims');
+        }
+      } else {
+        if (!silent && statusEl) statusEl.textContent = 'No cookie found on Sheet yet';
       }
     })
-    .catch(() => {});
+    .catch(() => {
+      const statusEl = document.getElementById('cookie-save-status');
+      if (!silent && statusEl) statusEl.textContent = 'Could not reach Apps Script';
+    });
 }
 
 // ── FK Auto Sync ──────────────────────────────────────────────
