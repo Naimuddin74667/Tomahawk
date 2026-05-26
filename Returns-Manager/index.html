@@ -775,25 +775,7 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
   <div class="list-pg">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;flex-wrap:wrap;gap:10px">
       <div><div class="pg-t">Claims</div><div class="pg-s">Track all claims with Flipkart or Amazon</div></div>
-      <div style="display:flex;align-items:center;gap:8px">
-        <button class="btn bg" onclick="openModal('fk-sync-modal')" style="display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:13px;padding:5px 10px" title="Manually paste claim IDs from Flipkart portal">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="m18.5 2.5 3 3L12 15l-4 1 1-4Z"/></svg>
-          Add Claim ID
-        </button>
-        <label class="btn bp" style="display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:13px;padding:7px 14px;cursor:pointer;font-weight:600">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          Upload Claim Report
-          <input type="file" accept=".xlsx,.csv" style="display:none" onchange="handleClaimReport(this)">
-        </label>
-      </div>
     </div>
-    <!-- 5-day delay notice -->
-    <div style="display:flex;align-items:flex-start;gap:7px;background:var(--bbg);border:1px solid var(--bb);border-radius:var(--rs);padding:8px 12px;margin-bottom:10px;font-size:13px;color:var(--bl)">
-      <span style="flex-shrink:0;margin-top:1px">ℹ️</span>
-      <span>Flipkart's SPF Claim Report has a <strong>~5-day delay</strong> — claims filed today appear after ~5 days. Download from <em>Seller Hub → Payments → SPF Claims</em> and upload to sync automatically. Use <strong>Add Claim ID</strong> to manually add IDs within the 5-day window.</span>
-    </div>
-    <!-- Upload result banner -->
-    <div id="claim-report-result" style="display:none;border-radius:var(--rs);padding:10px 14px;margin-bottom:12px;font-size:13px"></div>
     <div class="stats-row">
       <div class="sc" id="csc-all" onclick="filterClaims('all')"><div class="sc-l">All claims</div><div class="sc-v" id="cs-all">0</div></div>
       <div class="sc" id="csc-cp" onclick="filterClaims('pending')"><div class="sc-l">Claim pending</div><div class="sc-v" id="cs-pend" style="color:var(--pu)">0</div><div class="sc-s">not filed</div></div>
@@ -1051,7 +1033,34 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
         </div>
       </div>
 
+      <!-- Danger Zone -->
+      <div class="settings-section">
+        <div class="settings-section-title" style="color:var(--rd)">Danger zone</div>
+        <div class="settings-card" style="border-color:var(--rb)">
+          <div style="padding:10px 12px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;font-size:14px;font-weight:600;color:var(--rd)" onclick="toggleDangerZone()">
+            <span>⚠ Destructive actions</span>
+            <span id="dz-arrow" style="font-size:12px">▶</span>
+          </div>
+          <div id="dz-panel" style="display:none;border-top:1px solid var(--rb);padding:12px">
+            <div class="settings-item" style="margin-bottom:10px">
+              <div class="settings-item-info">
+                <h4>Clear return logs</h4>
+                <p>Delete all scanned &amp; processed returns. CSV master data is kept.</p>
+              </div>
+              <button class="btn bg" style="font-size:13px;padding:5px 10px;flex-shrink:0;border-color:var(--rb);color:var(--rd)" onclick="dangerAction('logs')">Clear logs</button>
+            </div>
+            <div class="settings-item">
+              <div class="settings-item-info">
+                <h4>Clear CSV master data</h4>
+                <p>Wipe the uploaded Flipkart/Amazon CSV database.</p>
+              </div>
+              <button class="btn bg" style="font-size:13px;padding:5px 10px;flex-shrink:0;border-color:var(--rb);color:var(--rd)" onclick="dangerAction('csv')">Clear CSV</button>
+            </div>
+          </div>
+        </div>
+      </div>
 
+    </div>
   </div>
 </div>
 
@@ -3429,37 +3438,6 @@ function applyFkSync(){
 }
 </script>
 
-<!-- ── Add Claim ID Modal (manual entry for 5-day window gap) ── -->
-<div class="overlay" id="fk-sync-modal">
-  <div class="modal" style="max-width:680px;width:96%">
-    <div class="mh">
-      <div>
-        <h2>Add Claim ID</h2>
-        <p>Manually add claim IDs for pending claims within the 5-day report delay window</p>
-      </div>
-      <button class="mclose" onclick="closeModal('fk-sync-modal')">×</button>
-    </div>
-    <div class="mbody">
-      <!-- Explanation -->
-      <div style="background:var(--bbg);border:1px solid var(--bb);border-radius:var(--rs);padding:12px 14px;margin-bottom:14px;font-size:13px;color:var(--bl)">
-        <strong>When to use this:</strong> After filing a claim on Flipkart SPF, the report won't show it for ~5 days. Use this to manually add the Claim ID now so the return moves from <em>Claim Pending → Claim Open</em>. Paste data from the shortcut or type tab-separated rows.
-      </div>
-      <!-- Paste area -->
-      <div style="margin-bottom:12px">
-        <label style="font-size:13px;font-weight:500;color:var(--tx);display:block;margin-bottom:6px">Paste claim data (JSON from shortcut, or tab-separated: claimId ⇥ trackingId ⇥ status)</label>
-        <textarea id="fk-sync-input" rows="5" placeholder="Paste JSON data from the Claude in Chrome shortcut, or type rows like:&#10;CLM123456&#9;FMPC6061535163&#9;Processing" oninput="renderFkSyncPreview()" style="width:100%;border:1px solid var(--bd);border-radius:var(--rs);padding:10px 12px;font-family:'DM Mono',monospace;font-size:12px;background:var(--sf);color:var(--tx);resize:vertical"></textarea>
-      </div>
-      <!-- Preview -->
-      <div id="fk-sync-preview" style="margin-bottom:4px">
-        <p style="color:var(--t3);font-size:14px">Paste data above to preview matches.</p>
-      </div>
-    </div>
-    <div class="mfoot">
-      <button class="btn bg" onclick="closeModal('fk-sync-modal')">Cancel</button>
-      <button class="btn bp" onclick="applyFkSync()">Apply</button>
-    </div>
-  </div>
-</div>
 
 
 
