@@ -417,7 +417,7 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
 <aside class="sb">
   <div class="sb-logo">
     <div class="lm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 3l-4 4-4-4"/></svg></div>
-    <div class="ln">Returns Manager</div><div class="lt">Phase 2</div>
+    <div class="ln">Returns Manager</div><div class="lt">Phase 6</div>
   </div>
   <nav class="nav">
     <div class="nl">Main</div>
@@ -513,8 +513,13 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
     </div>
     <!-- 5 metric cards: Total, Return Pending, Putaway Pending, Claim Pending, Claim Open -->
     <div class="metrics">
-      <div class="mc" onclick="nav('all',document.getElementById('nav-all'));filterAll('all')">
-        <div class="mc-l">Total returns</div><div class="mc-v" id="m-total">0</div><div class="mc-s">scanned &amp; logged</div>
+      <div class="mc" onclick="nav('all',document.getElementById('nav-all'));filterAll('all')" style="cursor:pointer">
+        <div class="mc-l">B2C returns</div><div class="mc-v" id="m-total">0</div><div class="mc-s">scanned &amp; logged</div>
+        <div style="display:flex;align-items:center;gap:6px;margin-top:6px;padding-top:6px;border-top:1px solid var(--br)">
+          <span style="font-size:11px;color:var(--t3);font-family:var(--mono)">FBA</span>
+          <span style="font-size:15px;font-weight:700;color:var(--fba)" id="m-fba-total">0</span>
+          <span style="font-size:11px;color:var(--t3)">inspected</span>
+        </div>
       </div>
       <div class="mc mc-or" onclick="nav('all',document.getElementById('nav-all'));setTimeout(()=>filterAll('Return Pending'),50)">
         <div class="mc-l">Return pending</div><div class="mc-v" id="m-pending">0</div><div class="mc-s">click to view list</div>
@@ -1119,12 +1124,19 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
 /*
  * Returns Manager — TomahawkTools
  * ─────────────────────────────────────────────────────────────
+ * v6  2026-05-26  Phase 6: UC OAuth integration (working).
+ *                UC SKU fetch via SOAP (built, blocked by UC IP whitelist).
+ *                SKU_Map sheet tab added for UC ↔ marketplace mapping.
+ *                Dashboard B2C/FBA count split (was incorrectly merged).
+ *                Dead FK Auto-Sync IIFE removed (Phase 4 legacy).
+ *                Dead fk-sync functions removed (modal never existed).
+ *                clearAll() wrapper removed. Unused claimModalId removed.
+ *                Phase label updated to Phase 6 throughout.
  * v5  2026-05-25  Phase 5: FK Claim Report upload (SheetJS XLSX).
  *                Removed bookmarklet/GAS proxy/Chrome-extension sync.
  *                Added column header validation in applyClaimReport.
  *                Added claim lifecycle direction guard (no downgrade).
  *                Renamed "Manual sync" → "Add Claim ID" (cleaner UX).
- *                Added 5-day delay ℹ️ notice on Claims page.
  *                Cleaned up old FK clipboard sync modal.
  * v4  2026-05-xx  Phase 4: FBA Process, repair handover slip.
  * v3  2026-05-xx  Phase 3: FBA Scan, removal order CSV.
@@ -1143,7 +1155,7 @@ function persistCSV(){localStorage.setItem(CSK,JSON.stringify(master))}
 let returns=loadR(), master=loadCSV(), meta=loadM();
 let currentProcessId=null, claimNeeded=null;
 let sessionCount=0, sessionItems=[];
-let claimModalId=null, resModalId=null, resChoice=null;
+let resModalId=null, resChoice=null;
 let putawayView='sku', maintFilter='all', allFilter='all', claimsFilter='all';
 let putawayDoneToday=new Set();
 
@@ -1861,7 +1873,7 @@ function downloadRepairSlip(){
     </div>
   </div>
   <div style="background:#F0EFE9;padding:9px 20px;display:flex;align-items:center;justify-content:space-between;border:1px solid #E3E1D9;border-top:none">
-    <span style="font-size:10px;color:#9B9890;font-family:monospace">Returns Manager · Phase 1 · Generated ${dateStr}</span>
+    <span style="font-size:10px;color:#9B9890;font-family:monospace">Returns Manager · Phase 6 · Generated ${dateStr}</span>
     <span style="font-size:10px;color:#9B9890;font-family:monospace">${slipId}</span>
   </div>
   <script>window.onload=function(){window.print();window.onafterprint=function(){window.close();}}<\/script>
@@ -2180,7 +2192,8 @@ function updateDashboard(){
   const approvedAmt=approved.reduce((s,r)=>s+(parseFloat(r.claimApprovedAmt)||0),0);
   const maintCount=getMaintItems().length;
   const se=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
-  se('m-total',returns.length+fbaReturns.filter(r=>r.status==='FBA Inspected').length);
+  se('m-total',returns.length);
+  se('m-fba-total',fbaReturns.filter(r=>r.status==='FBA Inspected').length);
   se('m-putaway',putawayPend);se('m-pending',pend);se('m-cp',cp);se('m-co',co);
   se('d-approved','₹'+approvedAmt.toLocaleString('en-IN'));
   se('d-cr',approved.length);
@@ -2348,7 +2361,6 @@ function confirmDangerAction(){
   }
   _dangerTarget=null;
 }
-function clearAll(){dangerAction('logs');}
 
 // ── Page CSV Exports ──────────────────────────────────────────
 function exportPageCSV(page){
@@ -2473,7 +2485,7 @@ function gsAutoLoad() {
     .catch(e => {
       // On https:// (GitHub Pages) this should work fine.
       // On file:// protocol, CORS may block — user can manually load via Settings.
-      console.warn('Auto-load from Sheet failed:', e.message);
+      if (e) setSyncStatus('error', 'Auto-load failed');
     });
 }
 
@@ -3302,142 +3314,7 @@ function showReportError(msg) {
   el.textContent = '❌ ' + msg;
 }
 
-// ── FK Auto-Sync listener (DISABLED — Phase 4 legacy) ────────
-// This listener handled the #fksync=... URL hash injected by the
-// old Claude-in-Chrome shortcut approach. That approach was
-// abandoned in Phase 5 (Flipkart intercepts injected scripts).
-// Kept here as dead code for reference only — the IIFE is gated.
-// DO NOT enable without verifying FK session context behaviour.
-/*
-(function(){
-  const hash = decodeURIComponent(location.hash || '');
-  const match = hash.match(/#fksync=(.+)/);
-  if (!match) return;
-
-  try {
-    const sync = JSON.parse(match[1]);
-    let updated = 0;
-
-    // Build lookup maps
-    const procMap     = sync.processing || {};  // tracking → claimId
-    const approvedMap = sync.approved   || {};  // tracking → { claimId, amount }
-    const rejectedMap = sync.rejected   || {};  // tracking → claimId
-
-    returns = returns.map(r => {
-      // CLAIM PENDING → CLAIM OPEN: has claimNeeded but no claimRef yet
-      if (r.claimNeeded && !r.claimRef && procMap[r.tracking]) {
-        r.claimRef = procMap[r.tracking];
-        updated++;
-      }
-
-      // CLAIM OPEN → APPROVED: has claimRef, status approved on FK
-      if (r.claimNeeded && r.claimRef && !r.claimResolution) {
-        if (approvedMap[r.tracking]) {
-          r.claimResolution = 'Approved';
-          r.claimApprovedAmt = approvedMap[r.tracking].amount || '';
-          if (!r.claimRef) r.claimRef = approvedMap[r.tracking].claimId;
-          updated++;
-        } else if (rejectedMap[r.tracking]) {
-          r.claimResolution = 'Rejected';
-          if (!r.claimRef) r.claimRef = rejectedMap[r.tracking];
-          updated++;
-        }
-      }
-
-      return r;
-    });
-
-    if (updated > 0) {
-      persist();
-      updateDashboard();
-      renderClaims();
-      history.replaceState(null, '', location.pathname);
-      setTimeout(() => toast(`✅ FK Sync: ${updated} claim${updated!==1?'s':''} auto-updated`), 800);
-    } else {
-      history.replaceState(null, '', location.pathname);
-      setTimeout(() => toast('FK Sync: no new matches found'), 800);
-    }
-  } catch(e) {
-    console.error('FK Sync error:', e);
-  }
-})();
-*/
-
-
-// ── Flipkart SPF Claim Sync ───────────────────────────────────
-function openFkSync(){openModal('fk-sync-modal');renderFkSyncPreview();}
-
-function parseFkSyncInput(){
-  const raw=document.getElementById('fk-sync-input').value.trim();
-  if(!raw)return[];
-  // Accept JSON array from shortcut, or tab-separated rows pasted from portal
-  try{
-    const parsed=JSON.parse(raw);
-    if(Array.isArray(parsed))return parsed;
-  }catch(e){}
-  // Tab/newline paste fallback: each line = "claimId\ttrackingId\tstatus"
-  return raw.split('\n').map(l=>{
-    const parts=l.split('\t').map(s=>s.trim());
-    if(parts.length<2)return null;
-    return{claimId:parts[0],trackingId:parts[1],status:parts[2]||''};
-  }).filter(Boolean);
-}
-
-function renderFkSyncPreview(){
-  const rows=parseFkSyncInput();
-  const preview=document.getElementById('fk-sync-preview');
-  if(!rows.length){preview.innerHTML='<p style="color:var(--t3);font-size:14px">Paste data above to preview matches.</p>';return;}
-  let matched=0,notfound=0;
-  const html=rows.map(row=>{
-    const r=returns.find(x=>x.tracking===row.trackingId||x.tracking===row.trackingId.replace(/\s/g,''));
-    if(r)matched++;else notfound++;
-    const cs=r?claimStatus(r):'—';
-    return`<tr style="font-size:13px">
-      <td style="font-family:'DM Mono',monospace;font-size:12px;color:var(--t2)">${row.claimId}</td>
-      <td style="font-family:'DM Mono',monospace;font-size:12px">${row.trackingId}</td>
-      <td><span class="pill ${row.status==='Processing'?'pill-am':row.status==='Approved'?'pill-gn':row.status==='Not Approved'?'pill-rd':'pill-gr'}">${row.status||'—'}</span></td>
-      <td>${r?`<span style="color:var(--gn)">✓ ${r.sku||r.product||r.tracking}</span>`:`<span style="color:var(--rd)">Not found</span>`}</td>
-    </tr>`;
-  }).join('');
-  preview.innerHTML=`
-    <div style="display:flex;gap:12px;margin-bottom:10px">
-      <span style="font-size:13px;color:var(--gn)">✓ ${matched} matched</span>
-      ${notfound?`<span style="font-size:13px;color:var(--rd)">✗ ${notfound} not found</span>`:''}
-    </div>
-    <div style="max-height:260px;overflow-y:auto;border:1px solid var(--bd);border-radius:var(--rs)">
-    <table style="width:100%;border-collapse:collapse">
-      <thead><tr style="background:var(--s2)">
-        <th style="text-align:left;padding:6px 10px;font-size:12px;color:var(--t3);font-weight:500">Claim ID</th>
-        <th style="text-align:left;padding:6px 10px;font-size:12px;color:var(--t3);font-weight:500">Tracking</th>
-        <th style="text-align:left;padding:6px 10px;font-size:12px;color:var(--t3);font-weight:500">FK Status</th>
-        <th style="text-align:left;padding:6px 10px;font-size:12px;color:var(--t3);font-weight:500">App match</th>
-      </tr></thead>
-      <tbody>${html}</tbody>
-    </table></div>`;
-}
-
-function applyFkSync(){
-  const rows=parseFkSyncInput();
-  if(!rows.length){toast('No data to sync');return;}
-  let updated=0;
-  rows.forEach(row=>{
-    const r=returns.find(x=>x.tracking===row.trackingId||x.tracking===row.trackingId.replace(/\s/g,''));
-    if(!r)return;
-    // Set claimRef if not already set
-    if(row.claimId&&!r.claimRef){r.claimRef=row.claimId;updated++;}
-    else if(row.claimId&&r.claimRef!==row.claimId){r.claimRef=row.claimId;updated++;}
-    // Sync resolution status from Flipkart
-    if(row.status==='Approved'&&r.claimResolution!=='Approved'){r.claimResolution='Approved';}
-    if(row.status==='Not Approved'&&r.claimResolution!=='Rejected'){r.claimResolution='Rejected';}
-  });
-  persist();
-  updateDashboard();
-  renderClaims();
-  closeModal('fk-sync-modal');
-  toast(`✓ Synced ${updated} claim ID${updated!==1?'s':''} from Flipkart`);
-}
 </script>
-
 
 
 
