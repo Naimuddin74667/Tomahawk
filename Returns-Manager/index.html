@@ -1144,13 +1144,30 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
  * v1  2026-05-xx  Phase 1: Scan entry, Google Sheets sync.
  */
 
-// ── Storage keys ──────────────────────────────────────────────
+// ── Environment detection ─────────────────────────────────────
+// LIVE  = GitHub Pages → GSheet is sole source of truth, no localStorage
+// LOCAL = localhost / file:// → localStorage for fast dev testing
+const IS_LIVE = location.hostname === 'naimuddin74667.github.io';
+
+// ── Storage keys (local dev only) ────────────────────────────
 const RK='rm_r_v11',MK='rm_m_v11',CSK='rm_csv_v11';
-function loadR(){try{return JSON.parse(localStorage.getItem(RK))||[]}catch{return[]}}
-function loadM(){try{return JSON.parse(localStorage.getItem(MK))||{}}catch{return{}}}
-function loadCSV(){try{return JSON.parse(localStorage.getItem(CSK))||{}}catch{return{}}}
-function persist(){localStorage.setItem(RK,JSON.stringify(returns));localStorage.setItem(MK,JSON.stringify(meta));scheduleSync();}
-function persistCSV(){localStorage.setItem(CSK,JSON.stringify(master))}
+function loadR(){if(IS_LIVE)return[];try{return JSON.parse(localStorage.getItem(RK))||[]}catch{return[]}}
+function loadM(){if(IS_LIVE)return{};try{return JSON.parse(localStorage.getItem(MK))||{}}catch{return{}}}
+function loadCSV(){if(IS_LIVE)return{};try{return JSON.parse(localStorage.getItem(CSK))||{}}catch{return{}}}
+
+// persist() — on live: immediate GSheet save. On local: localStorage + debounced sync.
+function persist(){
+  if(IS_LIVE){
+    scheduleSync();
+  } else {
+    localStorage.setItem(RK,JSON.stringify(returns));
+    localStorage.setItem(MK,JSON.stringify(meta));
+    scheduleSync();
+  }
+}
+function persistCSV(){
+  if(!IS_LIVE) localStorage.setItem(CSK,JSON.stringify(master));
+}
 
 let returns=loadR(), master=loadCSV(), meta=loadM();
 let currentProcessId=null, claimNeeded=null;
@@ -2419,7 +2436,7 @@ function clearCSVMaster(){
 const GS_URL_KEY = 'rm_gs_url_v2';
 const GS_SHEET_ID = '1020TgPUh2xC4Sc-PJodz1HMGLhuD5Fo_avHeUFrtJ5I';
 const GS_HARDCODED_URL = 'https://script.google.com/macros/s/AKfycbxmINljHqhpuff8aus_OR9C6zoIGV9GyeeMGd_N6Y2I8nWrntY02SNe3-bScNiR2CLkaQ/exec';
-let gsUrl = localStorage.getItem(GS_URL_KEY) || GS_HARDCODED_URL;
+let gsUrl = IS_LIVE ? GS_HARDCODED_URL : (localStorage.getItem(GS_URL_KEY) || GS_HARDCODED_URL);
 let autoSyncTimer = null;
 
 function getGsUrl() {
@@ -2428,7 +2445,7 @@ function getGsUrl() {
     gsUrl = el.value.trim();
   }
   if (!gsUrl) gsUrl = GS_HARDCODED_URL;
-  localStorage.setItem(GS_URL_KEY, gsUrl);
+  if (!IS_LIVE) localStorage.setItem(GS_URL_KEY, gsUrl);
   return gsUrl;
 }
 function setGsStatus(msg, ok) {
@@ -2453,7 +2470,7 @@ function gsSave(silent) {
   }).then(() => {
     const t = new Date().toLocaleTimeString('en-IN');
     if (!silent) setGsStatus('Saved at ' + t, true);
-    localStorage.setItem('rm_last_sync', t);
+    if (!IS_LIVE) localStorage.setItem('rm_last_sync', t);
     updateSyncBadge();
     setSyncStatus('synced', 'Synced ' + t);
   }).catch(e => {
@@ -2462,31 +2479,33 @@ function gsSave(silent) {
   });
 }
 
-// Auto-load from Google Sheet on startup if local data is empty
+// Auto-load on startup
+// Live (GitHub): always load from GSheet — memory is always empty on page open
+// Local (dev):   only load if localStorage is empty — don't overwrite dev data
 function gsAutoLoad() {
-  if (returns.length > 0) return; // already have local data, skip
+  if (!IS_LIVE && returns.length > 0) return;
   const url = getGsUrl();
-  if (!url) return; // no URL configured
+  if (!url) return;
+  setSyncStatus('syncing', 'Loading...');
   fetch(url + '?action=load', { method: 'GET' })
     .then(r => r.json())
     .then(d => {
-      if (!d.ok || !d.returns || !d.returns.length) return;
-      returns = d.returns;
-      if (d.master) master = d.master;
-      if (d.meta) meta = d.meta;
-      if (d.fbaReturns && d.fbaReturns.length) { fbaReturns = d.fbaReturns; persistFBA(); }
-      if (d.fbaManifest) { fbaManifest = d.fbaManifest; persistFBAManifest(); }
-      persist(); persistCSV(); updateCSVStatus(); updateDashboard(); renderAll();
+      if (!d.ok) { setSyncStatus('error', 'Load failed'); return; }
+      returns     = d.returns     || [];
+      master      = d.master      || master;
+      meta        = d.meta        || meta;
+      fbaReturns  = d.fbaReturns  || [];
+      fbaManifest = d.fbaManifest || {};
+      persistFBA(); persistFBAManifest();
+      if (!IS_LIVE) { persist(); persistCSV(); }
+      updateCSVStatus(); updateDashboard(); renderAll();
       const t = new Date().toLocaleTimeString('en-IN');
-      localStorage.setItem('rm_last_sync', t);
+      if (!IS_LIVE) localStorage.setItem('rm_last_sync', t);
       updateSyncBadge();
-      toast('Auto-loaded ' + returns.length + ' returns from Sheet');
+      setSyncStatus('synced', 'Synced ' + t);
+      if (returns.length) toast('Loaded ' + returns.length + ' returns from Sheet');
     })
-    .catch(e => {
-      // On https:// (GitHub Pages) this should work fine.
-      // On file:// protocol, CORS may block — user can manually load via Settings.
-      if (e) setSyncStatus('error', 'Auto-load failed');
-    });
+    .catch(() => setSyncStatus('error', 'Auto-load failed'));
 }
 
 // Load all data from Google Sheet
@@ -2501,46 +2520,53 @@ function gsLoad() {
       const retCount = (d.returns || []).length;
       const fbaCount = (d.fbaReturns || []).length;
       if (!confirm(`Load ${retCount} returns + ${fbaCount} FBA records from Google Sheet? Current data will be replaced.`)) return;
-      returns = d.returns || [];
-      if (d.master) master = d.master;
-      if (d.meta) meta = d.meta;
-      if (d.fbaReturns) { fbaReturns = d.fbaReturns; persistFBA(); }
-      if (d.fbaManifest) { fbaManifest = d.fbaManifest; persistFBAManifest(); }
-      persist(); persistCSV(); updateCSVStatus(); updateDashboard(); renderAll();
+      returns     = d.returns     || [];
+      master      = d.master      || master;
+      meta        = d.meta        || meta;
+      fbaReturns  = d.fbaReturns  || [];
+      fbaManifest = d.fbaManifest || {};
+      persistFBA(); persistFBAManifest();
+      if (!IS_LIVE) { persist(); persistCSV(); }
+      updateCSVStatus(); updateDashboard(); renderAll();
       const t = new Date().toLocaleTimeString('en-IN');
       setGsStatus(`Loaded ${retCount} returns + ${fbaCount} FBA records at ${t}`, true);
-      localStorage.setItem('rm_last_sync', t);
+      if (!IS_LIVE) localStorage.setItem('rm_last_sync', t);
       updateSyncBadge();
       toast(`Loaded ${retCount} returns + ${fbaCount} FBA records from Sheet`);
     })
-    .catch(e => {
+    .catch(() => {
       setGsStatus('Load failed. Make sure the Apps Script is deployed as Anyone access.', false);
     });
 }
 
 function updateSyncBadge() {
-  const t = localStorage.getItem('rm_last_sync');
+  const t = IS_LIVE ? null : localStorage.getItem('rm_last_sync');
   const el = document.getElementById('sync-badge');
   if (el && t) el.textContent = 'Last sync: ' + t;
   updateSettingsSyncBadge();
 }
 function updateSettingsSyncBadge() {
-  const t = localStorage.getItem('rm_last_sync');
+  const t = IS_LIVE ? null : localStorage.getItem('rm_last_sync');
   const el = document.getElementById('sync-badge-settings');
   if (el) el.textContent = t ? 'Last sync: ' + t : 'Not synced yet';
-  // Update dot color based on sync age
   const dot = document.querySelector('.settings-sync-dot');
   if (dot && t) {
-    dot.style.background = 'var(--gb)'; // green = synced
+    dot.style.background = 'var(--gb)';
   }
 }
 
-// Auto-save after every change (debounced 3s)
+// Auto-save: immediate on live (no data loss on shutdown), debounced 3s on local
 function scheduleSync() {
   if (!getGsUrl()) return;
-  clearTimeout(autoSyncTimer);
-  setSyncStatus('syncing', 'Syncing...');
-  autoSyncTimer = setTimeout(() => gsSave(true), 3000);
+  if (IS_LIVE) {
+    // Save immediately — no debounce — every change hits GSheet right away
+    clearTimeout(autoSyncTimer);
+    gsSave(true);
+  } else {
+    clearTimeout(autoSyncTimer);
+    setSyncStatus('syncing', 'Syncing...');
+    autoSyncTimer = setTimeout(() => gsSave(true), 3000);
+  }
 }
 
 function copyScript() {
@@ -2548,13 +2574,11 @@ function copyScript() {
   navigator.clipboard.writeText(txt).then(() => toast('Script copied to clipboard'));
 }
 function initGsUrl() {
-  // Always use hardcoded URL as default
   if (!gsUrl) gsUrl = GS_HARDCODED_URL;
-  localStorage.setItem(GS_URL_KEY, gsUrl);
+  if (!IS_LIVE) localStorage.setItem(GS_URL_KEY, gsUrl);
   const el = document.getElementById('gs-url');
   if (el) el.value = gsUrl;
   updateSyncBadge();
-  // Auto-load on startup after 1s, then auto-save after 4s
   setTimeout(() => gsAutoLoad(), 1000);
 }
 
@@ -2596,10 +2620,10 @@ function handleCSVType(input, type){
 
 // ── FBA Storage ───────────────────────────────────────────────
 const FBAK='rm_fba_v1', FBAMK='rm_fba_manifest_v1';
-function loadFBA(){try{return JSON.parse(localStorage.getItem(FBAK))||[]}catch{return[]}}
-function loadFBAManifest(){try{return JSON.parse(localStorage.getItem(FBAMK))||{}}catch{return{}}}
-function persistFBA(){localStorage.setItem(FBAK,JSON.stringify(fbaReturns));updateFBABadges();}
-function persistFBAManifest(){localStorage.setItem(FBAMK,JSON.stringify(fbaManifest));}
+function loadFBA(){if(IS_LIVE)return[];try{return JSON.parse(localStorage.getItem(FBAK))||[]}catch{return[]}}
+function loadFBAManifest(){if(IS_LIVE)return{};try{return JSON.parse(localStorage.getItem(FBAMK))||{}}catch{return{}}}
+function persistFBA(){if(!IS_LIVE)localStorage.setItem(FBAK,JSON.stringify(fbaReturns));updateFBABadges();}
+function persistFBAManifest(){if(!IS_LIVE)localStorage.setItem(FBAMK,JSON.stringify(fbaManifest));}
 
 let fbaReturns=loadFBA(), fbaManifest=loadFBAManifest();
 let fbaSessionCount=0, fbaSessionItems=[], fbaCurrentId=null;
@@ -3129,7 +3153,7 @@ function updateFBABadges(){
 
 // ── Updated platBadge to handle FBA ───────────────────────────
 // Init
-updateCSVStatus();updateDashboard();initGsUrl();updateFBABadges();const _st=localStorage.getItem("rm_last_sync");if(_st)setSyncStatus("synced","Synced "+_st);else setSyncStatus("","Not synced");
+updateCSVStatus();updateDashboard();initGsUrl();updateFBABadges();if(!IS_LIVE){const _st=localStorage.getItem("rm_last_sync");if(_st)setSyncStatus("synced","Synced "+_st);else setSyncStatus("","Not synced");}
 window.addEventListener('load',()=>document.getElementById('dash-greeting').textContent=greeting());
 
 
