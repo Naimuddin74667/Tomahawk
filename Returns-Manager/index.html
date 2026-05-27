@@ -7,7 +7,6 @@
 <meta name="theme-color" content="#181715">
 <title>Returns Manager — TomahawkTools</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 /* ── Tomahawk Brand ── */
@@ -1240,20 +1239,8 @@ function persistCSV(){
   if(!IS_LIVE){
     localStorage.setItem(CSK,JSON.stringify(master));
   } else {
-    // Save chunked master CSV to Supabase meta table
-    const masterStr = JSON.stringify(master);
-    const CHUNK = 45000;
-    if(masterStr.length <= CHUNK){
-      sbSetMeta('master_json', masterStr);
-      sbSetMeta('master_chunks', '1');
-    } else {
-      const chunks = Math.ceil(masterStr.length / CHUNK);
-      sbSetMeta('master_chunks', String(chunks));
-      for(let i=0;i<chunks;i++){
-        sbSetMeta('master_json_'+i, masterStr.slice(i*CHUNK,(i+1)*CHUNK));
-      }
-    }
-    sbSetMeta('uploadedAt', meta.uploadedAt||'');
+    // Saved as part of scheduleSync via saveAll
+    scheduleSync();
   }
 }
 
@@ -2599,15 +2586,11 @@ function clearCSVMaster(){
 }
 
 // Google Sheets sync
-// ── Supabase config ──────────────────────────────────────────
-const SB_URL  = 'https://mrgzykthfpkyyehyosyz.supabase.co';
-const SB_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1yZ3p5a3RoZnBreXllaHlvc3l6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4NjU5NzgsImV4cCI6MjA5NTQ0MTk3OH0.Vuc6uJW1QCudxIkODSf0tSQknR-FCo6gOEibBf1WHsE';
-const sb      = supabase.createClient(SB_URL, SB_KEY);
+// ── Cloudflare Worker config ─────────────────────────────────
+// Worker URL set after deployment — update this after creating the Worker
+const CF_WORKER_URL = 'https://tomahawk-returns.naimuddin74667.workers.dev';
 let autoSyncTimer = null;
-// Legacy GAS URL kept for local dev fallback only
 const GS_URL_KEY = 'rm_gs_url_v2';
-const GS_HARDCODED_URL = 'https://script.google.com/macros/s/AKfycbxmINljHqhpuff8aus_OR9C6zoIGV9GyeeMGd_N6Y2I8nWrntY02SNe3-bScNiR2CLkaQ/exec';
-let gsUrl = IS_LIVE ? GS_HARDCODED_URL : (localStorage.getItem(GS_URL_KEY) || GS_HARDCODED_URL);
 
 // ── Supabase helpers ─────────────────────────────────────────
 function setGsStatus(msg, ok) {
@@ -2617,172 +2600,88 @@ function setGsStatus(msg, ok) {
   el.style.color = ok === true ? 'var(--gn)' : ok === false ? 'var(--rd)' : 'var(--t2)';
 }
 
-// Map app return object → Supabase row (snake_case)
-function returnToRow(r) {
-  return {
-    id: r.id, tracking: r.tracking, order_id: r.orderId,
-    product: r.product, sku: r.sku, qty: r.qty||1,
-    price: r.price||null, date: r.date, platform: r.platform||'Flipkart B2C',
-    return_reason: r.returnReason, condition: r.condition, status: r.status,
-    claim_needed: !!r.claimNeeded, claim_ref: r.claimRef||null,
-    claim_resolution: r.claimResolution||null,
-    claim_approved_amt: r.claimApprovedAmt||null, claim_note: r.claimNote||null,
-    putaway: !!r.putaway, maint_done: !!r.maintDone,
-    maint_result: r.maintResult||null, repair_status: r.repairStatus||null,
-    repairer_name: r.repairerName||null,
-    handed_over_at: r.handedOverAt||null,
-    received_from_repairer_at: r.receivedFromRepairerAt||null,
-    trash_reason: r.trashReason||null, trashed_at: r.trashedAt||null,
-    note: r.note||null, fnsku: r.fnsku||null,
-    removal_order_id: r.removalOrderId||null,
-    disposition: r.disposition||null, fba_qty: r.fbaQty||null,
-    actual_sku: r.actualSku||null, sug_cond: r.sugCond||null,
-    sub_reason: r.subReason||null, customer_comment: r.customerComment||null,
-    return_status: r.returnStatus||null, fsn: r.fsn||null,
-    created_at: r.createdAt||new Date().toISOString(),
-    processed_at: r.processedAt||null, resolved_at: r.resolvedAt||null
-  };
+// ── Cloudflare Worker API call helper ────────────────────────
+async function cfGet(action) {
+  const res = await fetch(CF_WORKER_URL + '?action=' + action);
+  return res.json();
 }
-// Map Supabase row → app return object (camelCase)
-function rowToReturn(row) {
-  return {
-    id: row.id, tracking: row.tracking, orderId: row.order_id,
-    product: row.product, sku: row.sku, qty: row.qty,
-    price: row.price, date: row.date, platform: row.platform,
-    returnReason: row.return_reason, condition: row.condition, status: row.status,
-    claimNeeded: !!row.claim_needed, claimRef: row.claim_ref||'',
-    claimResolution: row.claim_resolution||'',
-    claimApprovedAmt: row.claim_approved_amt||'', claimNote: row.claim_note||'',
-    putaway: !!row.putaway, maintDone: !!row.maint_done,
-    maintResult: row.maint_result||'', repairStatus: row.repair_status||'',
-    repairerName: row.repairer_name||'',
-    handedOverAt: row.handed_over_at||'',
-    receivedFromRepairerAt: row.received_from_repairer_at||'',
-    trashReason: row.trash_reason||'', trashedAt: row.trashed_at||'',
-    note: row.note||'', fnsku: row.fnsku||'',
-    removalOrderId: row.removal_order_id||'',
-    disposition: row.disposition||'', fbaQty: row.fba_qty||'',
-    actualSku: row.actual_sku||'', sugCond: row.sug_cond||'',
-    subReason: row.sub_reason||'', customerComment: row.customer_comment||'',
-    returnStatus: row.return_status||'', fsn: row.fsn||'',
-    createdAt: row.created_at||'', processedAt: row.processed_at||'',
-    resolvedAt: row.resolved_at||''
-  };
-}
-function fbaToRow(r) {
-  return {
-    id: r.id, tracking: r.tracking, order_id: r.orderId,
-    request_date: r.requestDate||null, carrier: r.carrier||null,
-    ship_status: r.shipStatus||null, disposition: r.disposition||null,
-    platform: r.platform||'Amazon FBA', status: r.status||null,
-    lines_count: (r.lines||[]).length, data: r,
-    created_at: r.createdAt||new Date().toISOString(),
-    processed_at: r.processedAt||null
-  };
+async function cfPost(action, body) {
+  const res = await fetch(CF_WORKER_URL + '?action=' + action, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  return res.json();
 }
 
-// ── Supabase: save a single return (upsert) ──────────────────
-async function sbSaveReturn(r) {
-  const { error } = await sb.from('returns').upsert(returnToRow(r), { onConflict: 'id' });
-  if (error) console.error('sbSaveReturn:', error.message);
-}
-// ── Supabase: save a single FBA return (upsert) ──────────────
-async function sbSaveFba(r) {
-  const { error } = await sb.from('fba_returns').upsert(fbaToRow(r), { onConflict: 'id' });
-  if (error) console.error('sbSaveFba:', error.message);
-}
-// ── Supabase: save meta key ───────────────────────────────────
-async function sbSetMeta(key, value) {
-  const { error } = await sb.from('meta').upsert({ key, value: String(value), updated_at: new Date().toISOString() }, { onConflict: 'key' });
-  if (error) console.error('sbSetMeta:', error.message);
-}
-// ── Supabase: load all data on startup ───────────────────────
+// ── Load all data from Worker ─────────────────────────────────
 async function sbLoad(isRetry) {
-  if(!isRetry) setSyncStatus('syncing', 'Loading...');
+  if (!isRetry) setSyncStatus('syncing', 'Loading...');
   try {
-    const timeout = new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), 8000));
-    const fetchAll = Promise.all([
-      sb.from('returns').select('*').order('created_at', { ascending: false }),
-      sb.from('fba_returns').select('*').order('created_at', { ascending: false }),
-      sb.from('meta').select('*')
-    ]);
-    const [retRes, fbaRes, metaRes] = await Promise.race([fetchAll, timeout]);
-    if (retRes.error) throw retRes.error;
-    if (fbaRes.error) throw fbaRes.error;
-
-    returns    = (retRes.data  || []).map(rowToReturn);
-    fbaReturns = (fbaRes.data  || []).map(r => r.data || r);
-
-    // Rebuild master CSV from meta
-    const metaMap = {};
-    (metaRes.data || []).forEach(r => { metaMap[r.key] = r.value; });
-    try {
-      const chunks = parseInt(metaMap['master_chunks'] || '1');
-      if (chunks === 1) {
-        master = JSON.parse(metaMap['master_json'] || '{}');
-      } else {
-        let str = '';
-        for (let i = 0; i < chunks; i++) str += (metaMap['master_json_' + i] || '');
-        master = JSON.parse(str || '{}');
-      }
-    } catch(e) { master = {}; }
-
+    const d = await cfGet('load');
+    if (!d.ok) throw new Error(d.error || 'Load failed');
+    returns    = d.returns    || [];
+    fbaReturns = d.fbaReturns || [];
+    master     = d.master     || {};
+    meta       = d.meta       || {};
     updateCSVStatus(); updateDashboard(); renderAll();
     const t = new Date().toLocaleTimeString('en-IN');
     setSyncStatus('synced', 'Synced ' + t);
     updateSyncBadge(t);
     if (returns.length) toast('Loaded ' + returns.length + ' returns');
   } catch(err) {
-    console.error('sbLoad error:', err.message);
-    if(err.message === 'timeout' && !isRetry) {
-      // DB was sleeping — retry once after wakeup
-      setSyncStatus('syncing', 'Waking up DB...');
-      setTimeout(() => sbLoad(true), 3000);
+    console.error('sbLoad:', err.message);
+    if (!isRetry) {
+      setSyncStatus('syncing', 'Retrying...');
+      setTimeout(() => sbLoad(true), 2000);
     } else {
-      setSyncStatus('error', 'Load failed — tap to retry');
-      document.querySelector('.sync-status')?.addEventListener('click', () => sbLoad(), {once:true});
-      toast('Failed to load: ' + err.message);
+      setSyncStatus('error', 'Load failed');
+      toast('Load failed: ' + err.message);
     }
   }
 }
 
-// ── Supabase: manual reload ───────────────────────────────────
 async function gsLoad() {
-  if (!IS_LIVE) { toast('Supabase disabled in local mode'); return; }
+  if (!IS_LIVE) { toast('Worker disabled in local mode'); return; }
   await sbLoad();
 }
 
-// ── scheduleSync: upsert changed return to Supabase ──────────
-// Called after every persist(). On live: immediate upsert of all returns.
-// On local: no-op.
+// ── scheduleSync: save all returns to Worker on every change ──
+// 400ms debounce batches rapid changes (scan → process → putaway)
 function scheduleSync() {
   if (!IS_LIVE) return;
   clearTimeout(autoSyncTimer);
   autoSyncTimer = setTimeout(async () => {
     setSyncStatus('syncing', 'Saving...');
     try {
-      // Upsert all returns + FBA in parallel batches
-      const rows = returns.map(returnToRow);
-      const fbaRows = fbaReturns.map(fbaToRow);
-      const batchSize = 50;
-      const batches = [];
-      for (let i = 0; i < rows.length; i += batchSize) {
-        batches.push(sb.from('returns').upsert(rows.slice(i, i+batchSize), { onConflict: 'id' }));
+      // Build master CSV pairs
+      const masterStr = JSON.stringify(master);
+      const CHUNK = 45000;
+      const masterPairs = [];
+      if (masterStr.length <= CHUNK) {
+        masterPairs.push({ key: 'master_json', value: masterStr });
+        masterPairs.push({ key: 'master_chunks', value: '1' });
+      } else {
+        const chunks = Math.ceil(masterStr.length / CHUNK);
+        masterPairs.push({ key: 'master_chunks', value: String(chunks) });
+        for (let i = 0; i < chunks; i++) {
+          masterPairs.push({ key: 'master_json_' + i, value: masterStr.slice(i*CHUNK,(i+1)*CHUNK) });
+        }
       }
-      for (let i = 0; i < fbaRows.length; i += batchSize) {
-        batches.push(sb.from('fba_returns').upsert(fbaRows.slice(i, i+batchSize), { onConflict: 'id' }));
-      }
-      const results = await Promise.all(batches);
-      const errs = results.filter(r => r.error);
-      if (errs.length) throw new Error(errs[0].error.message);
+      const d = await cfPost('saveAll', {
+        returns,
+        fbaReturns,
+        masterPairs
+      });
+      if (!d.ok) throw new Error(d.error || 'Save failed');
       const t = new Date().toLocaleTimeString('en-IN');
       setSyncStatus('synced', 'Synced ' + t);
       updateSyncBadge(t);
     } catch(err) {
-      console.error('scheduleSync error:', err);
+      console.error('scheduleSync:', err.message);
       setSyncStatus('failed', 'Sync failed');
     }
-  }, 400); // 400ms debounce — batches rapid changes
+  }, 400);
 }
 
 function updateSyncBadge(t) {
@@ -2799,14 +2698,13 @@ function updateSettingsSyncBadge(t) {
 }
 
 function copyScript() {
-  navigator.clipboard.writeText(SB_URL).then(() => toast('Supabase URL copied'));
+  navigator.clipboard.writeText(CF_WORKER_URL).then(() => toast('Worker URL copied'));
 }
 function initGsUrl() {
   updateSyncBadge();
-  if (IS_LIVE) sbLoad(); // load from Supabase on startup
+  if (IS_LIVE) sbLoad();
 }
 
-// Badges
 function platBadge(p){
   if(p==='Amazon FBA')return`<span class="badge b-fba">Amazon FBA</span>`;
   if(p==='Amazon B2C')return`<span class="badge b-amzb2c">Amazon B2C</span>`;
