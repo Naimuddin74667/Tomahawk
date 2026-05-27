@@ -2616,9 +2616,12 @@ async function cfPost(action, body) {
 
 // ── Load all data from Worker ─────────────────────────────────
 async function sbLoad(isRetry) {
+  console.log('sbLoad called, IS_LIVE=', IS_LIVE, 'isRetry=', isRetry);
   if (!isRetry) setSyncStatus('syncing', 'Loading...');
   try {
+    console.log('Fetching from:', CF_WORKER_URL + '?action=load');
     const d = await cfGet('load');
+    console.log('Response:', d);
     if (!d.ok) throw new Error(d.error || 'Load failed');
     returns    = d.returns    || [];
     fbaReturns = d.fbaReturns || [];
@@ -3310,11 +3313,14 @@ function initTheme() {
   document.documentElement.setAttribute('data-theme', theme);
   updateThemeButtons(theme);
 }
-initTheme();updateFBABadges();if(IS_LIVE){setSyncStatus('','Loading...');}else{setSyncStatus('synced','Local only');}
-window.addEventListener('load',()=>{
-  document.getElementById('dash-greeting').textContent=greeting();
-  if(IS_LIVE) sbLoad();
-});
+initTheme();updateFBABadges();
+if(IS_LIVE){
+  setSyncStatus('','Loading...');
+  sbLoad();
+}else{
+  setSyncStatus('synced','Local only');
+}
+document.getElementById('dash-greeting').textContent=greeting();
 
 
 
