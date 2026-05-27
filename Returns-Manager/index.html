@@ -2697,15 +2697,16 @@ async function sbSetMeta(key, value) {
   if (error) console.error('sbSetMeta:', error.message);
 }
 // ── Supabase: load all data on startup ───────────────────────
-async function sbLoad() {
-  setSyncStatus('syncing', 'Loading...');
+async function sbLoad(isRetry) {
+  if(!isRetry) setSyncStatus('syncing', 'Loading...');
   try {
-    // Parallel fetch — all tables at once
-    const [retRes, fbaRes, metaRes] = await Promise.all([
+    const timeout = new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), 8000));
+    const fetchAll = Promise.all([
       sb.from('returns').select('*').order('created_at', { ascending: false }),
       sb.from('fba_returns').select('*').order('created_at', { ascending: false }),
       sb.from('meta').select('*')
     ]);
+    const [retRes, fbaRes, metaRes] = await Promise.race([fetchAll, timeout]);
     if (retRes.error) throw retRes.error;
     if (fbaRes.error) throw fbaRes.error;
 
@@ -2732,9 +2733,16 @@ async function sbLoad() {
     updateSyncBadge(t);
     if (returns.length) toast('Loaded ' + returns.length + ' returns');
   } catch(err) {
-    console.error('sbLoad error:', err);
-    setSyncStatus('error', 'Load failed');
-    toast('Load failed: ' + err.message);
+    console.error('sbLoad error:', err.message);
+    if(err.message === 'timeout' && !isRetry) {
+      // DB was sleeping — retry once after wakeup
+      setSyncStatus('syncing', 'Waking up DB...');
+      setTimeout(() => sbLoad(true), 3000);
+    } else {
+      setSyncStatus('error', 'Load failed — tap to retry');
+      document.querySelector('.sync-status')?.addEventListener('click', () => sbLoad(), {once:true});
+      toast('Failed to load: ' + err.message);
+    }
   }
 }
 
