@@ -1,0 +1,1588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SKU Label System</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --border: #2e3352;
+    --accent: #f0b429;
+    --accent2: #e05c5c;
+    --accent3: #4ade80;
+    --text: #e8eaf0;
+    --text2: #8b90a7;
+    --logo-fill: #ffffff;
+    --mono: 'IBM Plex Mono', monospace;
+    --sans: 'IBM Plex Sans', sans-serif;
+  }
+
+  body.light-mode {
+    --bg: #f4f5f7;
+    --surface: #ffffff;
+    --surface2: #f0f1f4;
+    --border: #d0d4e0;
+    --accent: #d4920a;
+    --accent2: #c0392b;
+    --accent3: #16a34a;
+    --text: #1a1d27;
+    --text2: #5a6075;
+    --logo-fill: #1F1B20;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    transition: background 0.2s, color 0.2s;
+  }
+
+  /* TOP BAR */
+  .topbar {
+    background: var(--surface);
+    border-bottom: 2px solid var(--accent);
+    padding: 10px 28px;
+    display: flex;
+    align-items: center;
+    gap: 0;
+  }
+  .topbar-logo {
+    height: 38px;
+    width: auto;
+    fill: var(--logo-fill);
+    flex-shrink: 0;
+  }
+  .topbar-sub { font-size: 11px; color: var(--text2); }
+  .topbar-right { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+
+  /* TABS */
+  .tabs {
+    display: flex;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 28px;
+    gap: 4px;
+  }
+  .tab {
+    padding: 12px 20px;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text2);
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    transition: all 0.2s;
+    letter-spacing: 0.5px;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* MAIN LAYOUT */
+  .main { display: flex; flex: 1; gap: 0; }
+  .panel { padding: 28px; }
+  .left-panel { width: 420px; flex-shrink: 0; border-right: 1px solid var(--border); }
+  .right-panel { flex: 1; }
+
+  /* SECTION TITLES */
+  .section-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 18px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .section-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* FORM */
+  .form-group { margin-bottom: 16px; }
+  label { display: block; font-size: 11px; font-weight: 600; color: var(--text2); margin-bottom: 6px; letter-spacing: 0.5px; text-transform: uppercase; }
+  input, select, textarea {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 10px 14px;
+    transition: border-color 0.2s;
+    outline: none;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+  input::placeholder { color: var(--text2); }
+  select option { background: var(--surface2); }
+
+  /* SKU INPUT with search */
+  .sku-input-wrap { position: relative; }
+  .sku-input-wrap input { padding-right: 40px; }
+  .sku-check-icon {
+    position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+    font-size: 16px; cursor: pointer;
+  }
+
+  /* DUPLICATE WARNING */
+  .warning-box {
+    background: #2a1810;
+    border: 1px solid #c0392b;
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 16px;
+    display: none;
+  }
+  .warning-box.show { display: block; }
+  .warning-title { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--accent2); margin-bottom: 8px; }
+  .warning-list { list-style: none; }
+  .warning-list li {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: #ff9f9f;
+    padding: 4px 0;
+    border-bottom: 1px solid #3a1a1a;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+  }
+  .warning-list li:hover { color: var(--accent); }
+  .warning-list li::before { content: '→'; color: var(--accent2); }
+  .warning-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+  /* BUTTONS */
+  .btn {
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    border: none;
+    transition: all 0.15s;
+    letter-spacing: 0.5px;
+  }
+  .btn-primary { background: var(--accent); color: #000; }
+  .btn-primary:hover { background: #ffd060; transform: translateY(-1px); }
+  .btn-danger { background: var(--accent2); color: #fff; font-size: 11px; padding: 8px 14px; }
+  .btn-danger:hover { background: #c0392b; }
+  .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text2); font-size: 11px; padding: 8px 14px; }
+  .btn-ghost:hover { border-color: var(--text2); color: var(--text); }
+  .btn-success { background: var(--accent3); color: #000; }
+  .btn-success:hover { background: #22c55e; }
+  .btn-full { width: 100%; }
+
+  /* LABEL PREVIEW */
+  .label-preview-wrap {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 300px;
+    justify-content: center;
+  }
+  .label-empty {
+    text-align: center;
+    color: var(--text2);
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.8;
+  }
+  .label-empty-icon { font-size: 40px; margin-bottom: 12px; opacity: 0.4; }
+
+  /* THE ACTUAL LABEL — Landscape 150mm x 100mm */
+  #label-output {
+    background: #fff;
+    width: 100%;
+    max-width: 567px;
+    height: 340px;
+    border-radius: 4px;
+    color: #000;
+    font-family: var(--mono);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    box-sizing: border-box;
+    overflow: hidden;
+    display: none;
+    grid-template-columns: 2fr 1fr;
+    grid-template-rows: auto auto auto auto;
+  }
+  .label-header {
+    grid-column: 1/3;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 2px solid #000;
+    padding: 7px 14px;
+    flex-shrink: 0;
+  }
+  .label-logo { height: 36px; width: auto; }
+  .label-tag { font-size: 10px; color: #000; border-left: 1px solid #000; padding-left: 10px; letter-spacing: 1px; }
+  .label-date { font-size: 10px; color: #000; text-align: right; line-height: 1.7; }
+  .label-sku-box {
+    grid-column: 1/2;
+    grid-row: 2/3;
+    padding: 8px 6px 4px 14px;
+  }
+  .label-sku-inner {
+    border: 2px solid #000;
+    border-radius: 4px;
+    height: 95px;
+    padding: 8px 14px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .label-category { font-size: 13px; color: #555; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 8px; }
+  .label-sku-big { font-size: 20px; font-weight: 700; color: #000; word-break: break-all; line-height: 1.3; }
+  .label-qr-box {
+    grid-column: 2/3;
+    grid-row: 2/4;
+    padding: 8px 14px 8px 6px;
+  }
+  .label-qr-inner {
+    border: 2px solid #000;
+    border-radius: 4px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+  }
+  .label-qr-inner img { display: block; }
+  .label-qr-text { font-size: 8px; color: #000; text-align: center; line-height: 1.5; font-weight: 600; }
+  .label-qty-box {
+    grid-column: 1/2;
+    grid-row: 3/4;
+    padding: 4px 6px 8px 14px;
+  }
+  .label-qty-inner {
+    border: 2px solid #000;
+    border-radius: 4px;
+    height: 120px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  .label-qty-label { font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #555; margin-bottom: 4px; }
+  .label-qty-value { font-size: 64px; font-weight: 700; line-height: 1; color: #000; }
+  .label-qty-unit { font-size: 12px; font-weight: 700; color: #555; margin-top: 4px; letter-spacing: 2px; }
+  .label-footer {
+    grid-column: 1/3;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 2px solid #000;
+    padding: 7px 14px;
+    flex-shrink: 0;
+  }
+  .label-counted { font-size: 13px; font-weight: 600; color: #555; }
+  .label-seal-badge {
+    background: #000;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 5px 16px;
+    border-radius: 3px;
+    letter-spacing: 1.5px;
+  }
+
+  /* TABLE */
+  .page { display: none; }
+  .page.active { display: block; }
+
+  .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .data-table th {
+    background: var(--surface2);
+    color: var(--text2);
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  .data-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text);
+    vertical-align: middle;
+  }
+  .data-table tr:hover td { background: var(--surface2); }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }
+  .badge-sealed { background: #1a3a1a; color: var(--accent3); }
+  .badge-loose { background: #3a2a10; color: var(--accent); }
+
+  .stat-row { display: flex; gap: 16px; margin-bottom: 24px; }
+  .stat-card {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .stat-num { font-family: var(--mono); font-size: 28px; font-weight: 700; color: var(--accent); }
+  .stat-label { font-size: 11px; color: var(--text2); margin-top: 4px; }
+
+  /* UC DISABLE */
+  .uc-entry {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .uc-sku { color: var(--accent2); font-weight: 700; min-width: 140px; }
+  .uc-note { color: var(--text2); flex: 1; font-size: 11px; }
+  .uc-del { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 14px; padding: 4px; }
+  .uc-del:hover { color: var(--accent2); }
+
+  .inline-form { display: flex; gap: 10px; margin-bottom: 20px; }
+  .inline-form input { flex: 1; }
+
+  .toast {
+    position: fixed; bottom: 24px; right: 24px;
+    background: var(--surface);
+    border-left: 4px solid var(--accent3);
+    border-radius: 6px;
+    padding: 14px 20px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    transform: translateY(80px);
+    opacity: 0;
+    transition: all 0.3s;
+    z-index: 999;
+    max-width: 300px;
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .toast.error { border-left-color: var(--accent2); }
+
+  .print-btn-wrap { margin-top: 16px; display: flex; gap: 10px; justify-content: center; }
+
+  .empty-state { text-align: center; padding: 60px 20px; color: var(--text2); font-family: var(--mono); font-size: 12px; }
+  .empty-state-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.3; }
+
+  .search-bar { margin-bottom: 16px; }
+  .search-bar input { background: var(--surface2); }
+
+  .export-btn { float: right; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <!-- Logo: tight viewBox to remove whitespace, content at ~490,530 to 7762,1790 -->
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="490 530 7280 1260" class="topbar-logo" id="topbar-logo">
+    <path d="M796.6 803.57l625.42 0c4.17,0.55 6.71,2.65 7.48,6.14l-84.8 151.21 -181.47 0c-16.1,25.18 -100.16,178.13 -252.2,458.77l-203.52 0 -0.67 -3.08c109.72,-202.64 190.86,-354.55 243.59,-455.69l-240.46 0 -0.77 -3.7c47.6,-91.52 76.61,-142.78 87.4,-153.65zm-14.19 821.74l-287.36 153.05 187.35 -278.86 1362.49 0 -8.53 5.99 -1253.95 119.82zm6102.31 -1005.2l131.69 -113.42 0 215.51 -960.53 0 8.48 -6 820.36 -96.09zm-574.92 183.46l298.9 0 1.32 6.14c-45.66,84.33 -70.46,131.58 -74.1,141.4 160.29,-96.44 243.35,-144.55 249.31,-144.55l224.51 0 1.32 6.11c-3.09,0.39 -163.87,96.95 -482.4,289.8l215.31 314.14 -5.44 3.08 -212.81 0c-5.17,-3.62 -50.38,-70.48 -135.48,-200.49l-3.14 0c-57.01,115.32 -92.82,182.15 -107.4,200.49l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.77,-24.7l-1.96 -9.09c-2.91,-13.47 -17.46,-33.95 -43.92,-61.58l5.47 -2.99zm-900.24 0.38l295.21 0 0.67 3.13 -177.4 332.67 0.7 3.15 3.15 0 281.78 -191.3c5.47,6.84 8.72,12.09 9.42,15.42l50.56 191.26 2.97 0c-0.06,-5.07 62.84,-123.21 188.62,-354.33l199.85 0 7 3.13c-2.97,8.9 -110.79,213.14 -323.65,612.64l-212.28 0c-4.01,0 -6.55,-2.09 -7.43,-6.09l-8.67 -40.1c-6.4,-29.71 -17.38,-75.75 -32.99,-138.44l-289.68 184.63 -221.52 0 -0.69 -3.12 276.81 -529.56 -3.98 -18.37c-2.88,-13.46 -17.46,-33.93 -43.89,-61.59l5.44 -3.13zm-792.78 -0.38l758.24 0 0.66 2.99c-195.43,377.28 -303.39,581.65 -323.9,613.13l-197.37 0c-4.22,0 -6.58,-2.06 -7.45,-6.06 5.76,-4.89 46.12,-79.83 121.01,-225.06l-249.55 0c-5.54,7.52 -48.45,84.55 -128.62,231.12l-203.51 0 -0.67 -3.08c178.19,-329 269.43,-500.66 273.89,-514.68 2.75,-6.83 3.49,-17.15 2.64,-30.81 -2.41,-11.19 -17.16,-31.67 -44.05,-61.41l-1.32 -6.14zm185.18 228.04l249.02 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.73 0c-2.8,0 -16.07,23.62 -40.03,70.69zm-991.54 -228.04l298.86 0 1.32 6.14 -118.16 221.9 0.69 3.15 249.5 0c81.88,-151.73 124.55,-228.88 128.62,-231.19l191.28 0c4.13,0.55 6.7,2.65 7.45,6.14 -213.25,402.5 -322.44,606 -327.72,609.98l-196.86 0 -0.67 -3.08 112.7 -218.93 -252.85 0c-6.07,5.96 -41.47,70.68 -105.58,194.4 -11.11,18.37 -17.29,27.61 -18.72,27.61l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.79,-24.7l-1.98 -9.09c-2.9,-13.47 -17.45,-33.95 -43.92,-61.58l5.51 -2.99zm-792.75 0l758.27 0 0.64 2.99c-195.44,377.28 -303.38,581.65 -323.89,613.13l-197.37 0c-4.24,0 -6.6,-2.06 -7.45,-6.06 5.75,-4.89 46.12,-79.83 120.97,-225.06l-249.51 0c-5.56,7.52 -48.47,84.55 -128.62,231.12l-203.49 0 -0.69 -3.08c178.16,-329 269.38,-500.66 273.91,-514.68 2.71,-6.83 3.45,-17.15 2.6,-30.81 -2.39,-11.19 -17.15,-31.67 -44.05,-61.41l-1.32 -6.14zm185.2 228.04l249 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.72 0c-2.81,0 -16.06,23.62 -40.02,70.69zm-1103.91 -228.04l298.89 0c4.16,0.55 6.74,2.81 7.57,6.66l9.27 43.04c6.44,29.76 17.44,75.82 32.88,138.45 190.96,-123.03 291.13,-185.84 300.97,-188.15l206.5 0c4.3,0.55 6.73,2.81 7.55,6.66 -212.8,402.15 -321.84,605.48 -327.27,609.46l-203.52 0 -0.69 -3.08 175.45 -329.54 -0.68 -3.15 -2.97 0 -282.28 191.28c-5.52,-6.84 -8.76,-12.07 -9.47,-15.4l-50.55 -191.26 -2.98 0c-112.09,216.6 -175.21,333.7 -189.29,351.15l-202.99 0 -0.71 -3.08 274.04 -514.16c2.58,-7.52 2.71,-15.74 0.78,-24.65l-1.95 -9.11c-2.91,-13.47 -17.46,-33.95 -43.93,-61.59l5.38 -3.53zm-496.95 0l400.37 0c23.26,0 40.99,20.47 53.34,61.46 5.96,27.63 -9.61,69.81 -46.53,126.69 -44.77,80.33 -115.53,214.7 -211.82,403.33 -9.73,16.45 -24.43,24.64 -43.84,24.64l-517.82 0c-14.01,-8.19 -22.34,-17.45 -24.49,-27.61 -6.2,-28.7 27.81,-103.76 102.25,-225.02 91.52,-179.21 152.8,-290.15 184.01,-332.87 24.3,-20.48 59.21,-30.62 104.53,-30.62zm-137.63 461.82l203.51 0c1.89,-7.52 54.92,-107.99 159.41,-301.53l-0.63 -2.94 -196.86 0c-5.24,4 -60.32,105.51 -165.43,304.47z"/>
+    <path d="M7160.73 529.99c52.95,0 95.89,42.94 95.89,95.95 0,52.95 -42.94,95.89 -95.89,95.89 -53,0 -95.97,-42.94 -95.97,-95.89 0,-53.01 42.97,-95.95 95.97,-95.95zm-42.35 149.95l0 -110.28 46.91 0c11.77,0 20.35,1.01 25.65,3.01 5.34,1.97 9.65,5.52 12.86,10.57 3.22,5.05 4.8,10.81 4.8,17.39 0,8.2 -2.44,15.09 -7.3,20.45 -4.85,5.38 -12.16,8.8 -21.83,10.2 4.84,2.81 8.84,5.9 11.95,9.27 3.13,3.36 7.34,9.3 12.66,17.89l13.46 21.5 -26.6 0 -16.09 -23.99c-5.74,-8.56 -9.67,-13.99 -11.76,-16.2 -2.1,-2.26 -4.33,-3.73 -6.7,-4.58 -2.37,-0.83 -6.08,-1.25 -11.2,-1.25l-4.5 0 0 46.02 -22.31 0zm22.31 -63.65l16.45 0c10.69,0 17.35,-0.44 20.02,-1.32 2.65,-0.87 4.74,-2.48 6.23,-4.68 1.53,-2.18 2.3,-4.96 2.3,-8.25 0,-3.76 -1.01,-6.69 -3,-8.99 -1.97,-2.32 -4.75,-3.73 -8.39,-4.34 -1.8,-0.25 -7.21,-0.37 -16.25,-0.37l-17.36 0 0 27.95zm20.04 -72.89c45.53,0 82.45,36.94 82.45,82.54 0,45.52 -36.92,82.49 -82.45,82.49 -45.59,0 -82.53,-36.97 -82.53,-82.49 0,-45.6 36.94,-82.54 82.53,-82.54z"/>
+  </svg>
+  <div class="topbar-sub" style="margin-left:12px;">Stock Taking Tool</div>
+  <div class="topbar-right">
+    <span id="sync-status" style="font-family:var(--mono);font-size:11px;color:var(--text2);">⏳ Loading...</span>
+    <button class="btn btn-ghost" onclick="loadFromWorker()" title="Reload from cloud">↺ Sync</button>
+    <button class="btn btn-ghost" onclick="toggleTheme()" id="theme-btn" title="Toggle light/dark mode">🌙</button>
+    <button class="btn btn-ghost" onclick="exportData()">⬇ Export All</button>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('generate')">🏷 Generate Label</div>
+  <div class="tab" onclick="switchTab('master')">📋 SKU Master List</div>
+  <div class="tab" onclick="switchTab('loose')">📦 Loose Count</div>
+  <div class="tab" onclick="switchTab('final')">✅ Final Stock</div>
+  <div class="tab" onclick="switchTab('uc')">🗑 UC Disable List</div>
+  <div class="tab" onclick="switchTab('settings')">⚙ Settings</div>
+</div>
+
+<!-- TAB 1: GENERATE LABEL -->
+<div id="tab-generate" class="page active">
+  <div class="main">
+    <!-- LEFT: FORM -->
+    <div class="left-panel panel">
+      <div class="section-title">📝 Label Details</div>
+
+      <div class="form-group">
+        <label>SKU Code *</label>
+        <div class="sku-input-wrap">
+          <input type="text" id="inp-sku" placeholder="e.g. SONY-TWS-001" oninput="checkDuplicates()" autocomplete="off">
+          <span class="sku-check-icon">🔍</span>
+        </div>
+      </div>
+
+      <!-- DUPLICATE WARNING -->
+      <div class="warning-box" id="warning-box">
+        <div class="warning-title">⚠ SIMILAR SKUs FOUND — Check before creating new</div>
+        <ul class="warning-list" id="warning-list"></ul>
+        <div class="warning-actions">
+          <button class="btn btn-danger" onclick="useExistingSkip()">Use Similar SKU ↑</button>
+          <button class="btn btn-ghost" onclick="dismissWarning()">Create New Anyway</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Category *</label>
+        <select id="inp-name">
+          <option value="">— Select Category —</option>
+          <option value="Audio">Audio</option>
+          <option value="Charging">Charging</option>
+          <option value="Peripherals">Peripherals</option>
+          <option value="Accessories">Accessories</option>
+          <option value="Wearables">Wearables</option>
+          <option value="Cables">Cables</option>
+          <option value="Storage">Storage</option>
+          <option value="Screens">Screens</option>
+          <option value="Power">Power</option>
+          <option value="Networking">Networking</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Quantity in this Box *</label>
+        <input type="number" id="inp-qty" placeholder="e.g. 20" min="1">
+      </div>
+
+      <div class="form-group">
+        <label>Counted By</label>
+        <select id="inp-counted">
+          <option value="Tomahawk Tools Team">— Select Person —</option>
+          <option value="Person 1">Person 1</option>
+          <option value="Person 2">Person 2</option>
+          <option value="Person 3">Person 3</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Notes (optional)</label>
+        <input type="text" id="inp-notes" placeholder="e.g. Black colour, damaged box">
+      </div>
+
+      <button class="btn btn-primary btn-full" onclick="generateLabel()" style="margin-top:8px">
+        🖨 Generate & Preview Label
+      </button>
+    </div>
+
+    <!-- RIGHT: PREVIEW -->
+    <div class="right-panel panel">
+      <div class="section-title">👁 Label Preview — Landscape 150×100mm</div>
+
+      <div class="label-preview-wrap">
+        <div class="label-empty" id="label-empty">
+          <div class="label-empty-icon">🏷</div>
+          Fill the form on the left<br>and click Generate Label<br><br>
+          <span style="color:#555;font-size:10px">Label will appear here ready to print</span>
+        </div>
+
+        <div id="label-output" style="display:none;">
+          <!-- HEADER -->
+          <div class="label-header">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <svg class="label-logo" xmlns="http://www.w3.org/2000/svg" viewBox="490 530 7280 1260" fill="#1F1B20">
+                <path d="M796.6 803.57l625.42 0c4.17,0.55 6.71,2.65 7.48,6.14l-84.8 151.21 -181.47 0c-16.1,25.18 -100.16,178.13 -252.2,458.77l-203.52 0 -0.67 -3.08c109.72,-202.64 190.86,-354.55 243.59,-455.69l-240.46 0 -0.77 -3.7c47.6,-91.52 76.61,-142.78 87.4,-153.65zm-14.19 821.74l-287.36 153.05 187.35 -278.86 1362.49 0 -8.53 5.99 -1253.95 119.82zm6102.31 -1005.2l131.69 -113.42 0 215.51 -960.53 0 8.48 -6 820.36 -96.09zm-574.92 183.46l298.9 0 1.32 6.14c-45.66,84.33 -70.46,131.58 -74.1,141.4 160.29,-96.44 243.35,-144.55 249.31,-144.55l224.51 0 1.32 6.11c-3.09,0.39 -163.87,96.95 -482.4,289.8l215.31 314.14 -5.44 3.08 -212.81 0c-5.17,-3.62 -50.38,-70.48 -135.48,-200.49l-3.14 0c-57.01,115.32 -92.82,182.15 -107.4,200.49l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.77,-24.7l-1.96 -9.09c-2.91,-13.47 -17.46,-33.95 -43.92,-61.58l5.47 -2.99zm-900.24 0.38l295.21 0 0.67 3.13 -177.4 332.67 0.7 3.15 3.15 0 281.78 -191.3c5.47,6.84 8.72,12.09 9.42,15.42l50.56 191.26 2.97 0c-0.06,-5.07 62.84,-123.21 188.62,-354.33l199.85 0 7 3.13c-2.97,8.9 -110.79,213.14 -323.65,612.64l-212.28 0c-4.01,0 -6.55,-2.09 -7.43,-6.09l-8.67 -40.1c-6.4,-29.71 -17.38,-75.75 -32.99,-138.44l-289.68 184.63 -221.52 0 -0.69 -3.12 276.81 -529.56 -3.98 -18.37c-2.88,-13.46 -17.46,-33.93 -43.89,-61.59l5.44 -3.13zm-792.78 -0.38l758.24 0 0.66 2.99c-195.43,377.28 -303.39,581.65 -323.9,613.13l-197.37 0c-4.22,0 -6.58,-2.06 -7.45,-6.06 5.76,-4.89 46.12,-79.83 121.01,-225.06l-249.55 0c-5.54,7.52 -48.45,84.55 -128.62,231.12l-203.51 0 -0.67 -3.08c178.19,-329 269.43,-500.66 273.89,-514.68 2.75,-6.83 3.49,-17.15 2.64,-30.81 -2.41,-11.19 -17.16,-31.67 -44.05,-61.41l-1.32 -6.14zm185.18 228.04l249.02 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.73 0c-2.8,0 -16.07,23.62 -40.03,70.69zm-991.54 -228.04l298.86 0 1.32 6.14 -118.16 221.9 0.69 3.15 249.5 0c81.88,-151.73 124.55,-228.88 128.62,-231.19l191.28 0c4.13,0.55 6.7,2.65 7.45,6.14 -213.25,402.5 -322.44,606 -327.72,609.98l-196.86 0 -0.67 -3.08 112.7 -218.93 -252.85 0c-6.07,5.96 -41.47,70.68 -105.58,194.4 -11.11,18.37 -17.29,27.61 -18.72,27.61l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.79,-24.7l-1.98 -9.09c-2.9,-13.47 -17.45,-33.95 -43.92,-61.58l5.51 -2.99zm-792.75 0l758.27 0 0.64 2.99c-195.44,377.28 -303.38,581.65 -323.89,613.13l-197.37 0c-4.24,0 -6.6,-2.06 -7.45,-6.06 5.75,-4.89 46.12,-79.83 120.97,-225.06l-249.51 0c-5.56,7.52 -48.47,84.55 -128.62,231.12l-203.49 0 -0.69 -3.08c178.16,-329 269.38,-500.66 273.91,-514.68 2.71,-6.83 3.45,-17.15 2.6,-30.81 -2.39,-11.19 -17.15,-31.67 -44.05,-61.41l-1.32 -6.14zm185.2 228.04l249 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.72 0c-2.81,0 -16.06,23.62 -40.02,70.69zm-1103.91 -228.04l298.89 0c4.16,0.55 6.74,2.81 7.57,6.66l9.27 43.04c6.44,29.76 17.44,75.82 32.88,138.45 190.96,-123.03 291.13,-185.84 300.97,-188.15l206.5 0c4.3,0.55 6.73,2.81 7.55,6.66 -212.8,402.15 -321.84,605.48 -327.27,609.46l-203.52 0 -0.69 -3.08 175.45 -329.54 -0.68 -3.15 -2.97 0 -282.28 191.28c-5.52,-6.84 -8.76,-12.07 -9.47,-15.4l-50.55 -191.26 -2.98 0c-112.09,216.6 -175.21,333.7 -189.29,351.15l-202.99 0 -0.71 -3.08 274.04 -514.16c2.58,-7.52 2.71,-15.74 0.78,-24.65l-1.95 -9.11c-2.91,-13.47 -17.46,-33.95 -43.93,-61.59l5.38 -3.53zm-496.95 0l400.37 0c23.26,0 40.99,20.47 53.34,61.46 5.96,27.63 -9.61,69.81 -46.53,126.69 -44.77,80.33 -115.53,214.7 -211.82,403.33 -9.73,16.45 -24.43,24.64 -43.84,24.64l-517.82 0c-14.01,-8.19 -22.34,-17.45 -24.49,-27.61 -6.2,-28.7 27.81,-103.76 102.25,-225.02 91.52,-179.21 152.8,-290.15 184.01,-332.87 24.3,-20.48 59.21,-30.62 104.53,-30.62zm-137.63 461.82l203.51 0c1.89,-7.52 54.92,-107.99 159.41,-301.53l-0.63 -2.94 -196.86 0c-5.24,4 -60.32,105.51 -165.43,304.47z"/>
+                <path d="M7160.73 529.99c52.95,0 95.89,42.94 95.89,95.95 0,52.95 -42.94,95.89 -95.89,95.89 -53,0 -95.97,-42.94 -95.97,-95.89 0,-53.01 42.97,-95.95 95.97,-95.95zm-42.35 149.95l0 -110.28 46.91 0c11.77,0 20.35,1.01 25.65,3.01 5.34,1.97 9.65,5.52 12.86,10.57 3.22,5.05 4.8,10.81 4.8,17.39 0,8.2 -2.44,15.09 -7.3,20.45 -4.85,5.38 -12.16,8.8 -21.83,10.2 4.84,2.81 8.84,5.9 11.95,9.27 3.13,3.36 7.34,9.3 12.66,17.89l13.46 21.5 -26.6 0 -16.09 -23.99c-5.74,-8.56 -9.67,-13.99 -11.76,-16.2 -2.1,-2.26 -4.33,-3.73 -6.7,-4.58 -2.37,-0.83 -6.08,-1.25 -11.2,-1.25l-4.5 0 0 46.02 -22.31 0zm22.31 -63.65l16.45 0c10.69,0 17.35,-0.44 20.02,-1.32 2.65,-0.87 4.74,-2.48 6.23,-4.68 1.53,-2.18 2.3,-4.96 2.3,-8.25 0,-3.76 -1.01,-6.69 -3,-8.99 -1.97,-2.32 -4.75,-3.73 -8.39,-4.34 -1.8,-0.25 -7.21,-0.37 -16.25,-0.37l-17.36 0 0 27.95zm20.04 -72.89c45.53,0 82.45,36.94 82.45,82.54 0,45.52 -36.92,82.49 -82.45,82.49 -45.59,0 -82.53,-36.97 -82.53,-82.49 0,-45.6 36.94,-82.54 82.53,-82.54z"/>
+              </svg>
+              <span class="label-tag">STOCK TAKE — SEALED BOX</span>
+            </div>
+            <div class="label-date" id="lbl-date">—</div>
+          </div>
+
+          <!-- R2 Col A+B: Category + SKU -->
+          <div class="label-sku-box">
+            <div class="label-sku-inner">
+              <div class="label-category" id="lbl-name">—</div>
+              <div class="label-sku-big" id="lbl-sku-text">—</div>
+            </div>
+          </div>
+
+          <!-- R2+R3 Col C: QR Code -->
+          <div class="label-qr-box">
+            <div class="label-qr-inner">
+              <img id="qr-img" src="" width="130" height="130" alt="QR"/>
+              <div class="label-qr-text" id="lbl-qr-text">—</div>
+            </div>
+          </div>
+
+          <!-- R3 Col A+B: QTY IN BOX -->
+          <div class="label-qty-box">
+            <div class="label-qty-inner">
+              <div class="label-qty-label">QTY IN BOX</div>
+              <div class="label-qty-value" id="lbl-qty">—</div>
+              <div class="label-qty-unit">PIECES</div>
+            </div>
+          </div>
+
+          <!-- FOOTER -->
+          <div class="label-footer">
+            <span class="label-counted" id="lbl-counted">Counted by: —</span>
+            <span id="lbl-notes" style="font-size:9px;font-style:italic;color:#888;"></span>
+            <span class="label-seal-badge">✓ SEALED &amp; COUNTED</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="print-btn-wrap" id="print-btn-wrap" style="display:none">
+        <button class="btn btn-success" onclick="printLabel()">🖨 Print Label</button>
+        <button class="btn btn-ghost" onclick="saveLabelToMaster()">💾 Save to Master List</button>
+        <button class="btn btn-ghost" onclick="clearForm()">✖ Clear</button>
+      </div>
+
+      <!-- INSTRUCTIONS -->
+      <div style="margin-top:24px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:16px;">
+        <div style="font-family:var(--mono);font-size:10px;font-weight:700;color:var(--accent);margin-bottom:10px;letter-spacing:1px;">📋 YOUR COUNTING FLOW</div>
+        <div style="font-size:11px;color:var(--text2);line-height:2;">
+          1️⃣ &nbsp;Generate label for one SKU<br>
+          2️⃣ &nbsp;Count the box physically<br>
+          3️⃣ &nbsp;Enter qty → Print label<br>
+          4️⃣ &nbsp;Seal the box → Stick the label<br>
+          5️⃣ &nbsp;Repeat for all SKUs<br>
+          6️⃣ &nbsp;Count loose items last<br>
+          7️⃣ &nbsp;Sealed box qty + loose = Final stock
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TAB 2: SKU MASTER -->
+<div id="tab-master" class="page">
+  <div class="panel">
+    <div class="stat-row" id="stat-row">
+      <div class="stat-card"><div class="stat-num" id="stat-total">0</div><div class="stat-label">Unique SKUs</div></div>
+      <div class="stat-card"><div class="stat-num" id="stat-boxes">0</div><div class="stat-label">Total Boxes Sealed</div></div>
+      <div class="stat-card"><div class="stat-num" id="stat-qty">0</div><div class="stat-label">Total Units Counted</div></div>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div class="section-title" style="margin-bottom:0;flex:1">📋 SKU Master List</div>
+      <div style="display:flex;gap:8px;margin-left:16px;">
+        <button class="btn btn-ghost" onclick="exportReport()">📄 Export Report</button>
+        <button class="btn btn-ghost" onclick="exportMaster()">⬇ Export CSV</button>
+      </div>
+    </div>
+
+    <div class="search-bar">
+      <input type="text" placeholder="🔍  Search SKU or product name..." oninput="filterMaster(this.value)">
+    </div>
+
+    <div id="master-empty" class="empty-state">
+      <div class="empty-state-icon">📋</div>
+      No SKUs saved yet.<br>Generate and save labels from the Label tab.
+    </div>
+
+    <table class="data-table" id="master-table" style="display:none">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>SKU Code</th>
+          <th>Category</th>
+          <th>Total Qty</th>
+          <th>Counted By</th>
+          <th>Date</th>
+          <th>Notes</th>
+          <th>Status</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="master-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- TAB 3: LOOSE COUNT -->
+<div id="tab-loose" class="page">
+  <div class="panel">
+    <div class="section-title">📦 Loose Item Count</div>
+
+    <div style="background:#1a1a2a;border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:20px;font-size:11px;color:var(--text2);font-family:var(--mono);line-height:1.8;">
+      💡 After sealing all boxes, count loose items per SKU here. The Final Stock tab will combine sealed + loose automatically.
+    </div>
+
+    <!-- ADD LOOSE ENTRY -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:20px;">
+      <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--accent);margin-bottom:14px;letter-spacing:1px;">+ ADD LOOSE COUNT</div>
+      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+        <div style="flex:2;min-width:180px;">
+          <label style="display:block;font-size:10px;color:var(--text2);margin-bottom:5px;font-weight:600;letter-spacing:0.5px;">SKU CODE</label>
+          <input type="text" id="loose-sku" placeholder="Type SKU or select from list..." list="sku-list" style="width:100%;font-family:var(--mono);">
+          <datalist id="sku-list"></datalist>
+        </div>
+        <div style="flex:1;min-width:120px;">
+          <label style="display:block;font-size:10px;color:var(--text2);margin-bottom:5px;font-weight:600;letter-spacing:0.5px;">LOOSE QTY</label>
+          <input type="number" id="loose-qty" placeholder="e.g. 7" min="0" style="width:100%;font-family:var(--mono);">
+        </div>
+        <div style="flex:1;min-width:120px;">
+          <label style="display:block;font-size:10px;color:var(--text2);margin-bottom:5px;font-weight:600;letter-spacing:0.5px;">LOCATION (optional)</label>
+          <input type="text" id="loose-location" placeholder="e.g. Bin D1" style="width:100%;font-family:var(--mono);">
+        </div>
+        <button class="btn btn-primary" onclick="addLooseEntry()" style="flex-shrink:0;height:38px;">+ Save</button>
+      </div>
+    </div>
+
+    <!-- LOOSE LIST -->
+    <div id="loose-empty" class="empty-state">
+      <div class="empty-state-icon">📦</div>
+      No loose counts added yet.<br>Add loose qty per SKU above.
+    </div>
+
+    <table class="data-table" id="loose-table" style="display:none;">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>SKU Code</th>
+          <th>Category</th>
+          <th>Loose Qty</th>
+          <th>Location</th>
+          <th>Date</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="loose-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- TAB 4: FINAL STOCK -->
+<div id="tab-final" class="page">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+      <div class="section-title" style="margin-bottom:0;flex:1">✅ Final Stock Report</div>
+      <button class="btn btn-success" onclick="exportFinalStock()" style="margin-left:16px;">⬇ Export Final Report</button>
+    </div>
+
+    <div style="background:#1a2a1a;border:1px solid #2a4a2a;border-radius:8px;padding:14px;margin-bottom:20px;font-size:11px;color:var(--text2);font-family:var(--mono);line-height:1.8;">
+      ✅ This is your complete inventory — Sealed Boxes + Loose Items combined. Export and update Unicommerce.
+    </div>
+
+    <!-- SUMMARY STATS -->
+    <div class="stat-row" style="margin-bottom:20px;">
+      <div class="stat-card"><div class="stat-num" id="final-skus">0</div><div class="stat-label">Total SKUs</div></div>
+      <div class="stat-card"><div class="stat-num" id="final-sealed">0</div><div class="stat-label">Sealed Box Units</div></div>
+      <div class="stat-card"><div class="stat-num" id="final-loose">0</div><div class="stat-label">Loose Units</div></div>
+      <div class="stat-card" style="border-color:var(--accent);"><div class="stat-num" id="final-total" style="color:var(--accent3);">0</div><div class="stat-label">Grand Total Units</div></div>
+    </div>
+
+    <div id="final-empty" class="empty-state">
+      <div class="empty-state-icon">✅</div>
+      No stock data yet.<br>Generate labels and add loose counts first.
+    </div>
+
+    <table class="data-table" id="final-table" style="display:none;">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>SKU Code</th>
+          <th>Category</th>
+          <th>Sealed Boxes</th>
+          <th>Sealed Qty</th>
+          <th>Loose Qty</th>
+          <th style="color:var(--accent);">Total Qty</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="final-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- TAB 5: UC DISABLE LIST -->
+<div id="tab-uc" class="page">
+  <div class="panel">
+    <div class="section-title">🗑 UC Disable List — Duplicates to Disable After Stock Taking</div>
+
+    <div style="background:#1a1010;border:1px solid #5a2020;border-radius:8px;padding:14px;margin-bottom:20px;font-size:11px;color:#ff9f9f;font-family:var(--mono);line-height:1.8;">
+      ⚠ Add old/duplicate SKU codes here that you want to <strong>DISABLE in Unicommerce</strong> after stock taking is done.<br>
+      Do NOT disable until your stock taking is 100% complete.
+    </div>
+
+    <div class="inline-form">
+      <input type="text" id="uc-sku-inp" placeholder="Old/duplicate SKU code to disable" style="font-family:var(--mono);">
+      <input type="text" id="uc-note-inp" placeholder="Note (e.g. spelling error, old code)" style="font-family:var(--mono);">
+      <button class="btn btn-danger" onclick="addUCEntry()">+ Add</button>
+    </div>
+
+    <div id="uc-empty" class="empty-state">
+      <div class="empty-state-icon">🗑</div>
+      No duplicate SKUs added yet.<br>Add old UC codes above to track what to disable.
+    </div>
+
+    <div id="uc-list"></div>
+
+    <div id="uc-export-wrap" style="display:none;margin-top:20px;">
+      <button class="btn btn-ghost" onclick="exportUC()">⬇ Export UC Disable List (CSV)</button>
+      <span style="font-size:11px;color:var(--text2);margin-left:12px;">Use this after stock taking to update Unicommerce</span>
+    </div>
+  </div>
+</div>
+
+<!-- TAB 4: SETTINGS -->
+<div id="tab-settings" class="page">
+  <div class="panel" style="max-width:700px;">
+
+    <!-- TEAM MEMBERS -->
+    <div class="section-title">👤 Team Members (Counted By)</div>
+    <div class="inline-form">
+      <input type="text" id="person-inp" placeholder="e.g. Rahul, Amit, Priya..." style="font-family:var(--mono);">
+      <button class="btn btn-primary" onclick="addPerson()">+ Add</button>
+    </div>
+    <div id="person-list" style="margin-bottom:32px;"></div>
+
+    <!-- CATEGORIES -->
+    <div class="section-title">📂 Categories</div>
+    <div class="inline-form">
+      <input type="text" id="cat-inp" placeholder="e.g. Smart Home, Gaming..." style="font-family:var(--mono);">
+      <button class="btn btn-primary" onclick="addCategory()">+ Add</button>
+    </div>
+    <div id="cat-list"></div>
+
+  </div>
+</div>
+
+<!-- UNSAVED WARNING MODAL -->
+<div id="unsaved-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-top:3px solid var(--accent2);border-radius:10px;padding:28px;max-width:420px;width:90%;margin:0 16px;">
+    <div style="font-family:var(--mono);font-size:14px;font-weight:700;color:var(--accent2);margin-bottom:12px;">⚠ Not Saved to Master List!</div>
+    <div style="font-size:13px;color:var(--text);line-height:1.7;margin-bottom:20px;">
+      You haven't saved this label to the Master List yet.<br><br>
+      <span style="color:var(--text2);font-size:12px;">If you print without saving, this box won't be counted in your Final Stock report.</span>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="btn btn-primary" onclick="saveAndPrint()" style="flex:1;">💾 Save & Print</button>
+      <button class="btn btn-ghost" onclick="printAnyway()" style="flex:1;">🖨 Print Without Saving</button>
+      <button class="btn btn-ghost" onclick="closeModal()" style="width:100%;margin-top:4px;">✖ Go Back</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── CONFIG ─────────────────────────────────────────────────────────────
+const WORKER = 'https://tomahawk-returns.naimuddin.workers.dev';
+const IS_LOCAL = location.protocol === 'file:' || location.hostname === 'localhost';
+
+// ── STATE ─────────────────────────────────────────────────────────────
+let masterList = JSON.parse(localStorage.getItem('sku_master') || '[]');
+let looseList  = JSON.parse(localStorage.getItem('sku_loose')  || '[]');
+let ucList     = JSON.parse(localStorage.getItem('sku_uc')     || '[]');
+let persons    = JSON.parse(localStorage.getItem('sku_persons') || '["Person 1","Person 2","Person 3"]');
+let categories = JSON.parse(localStorage.getItem('sku_cats')    || '["Audio","Charging","Peripherals","Accessories","Wearables","Cables","Storage","Screens","Power","Networking","Other"]');
+let currentLabel = null;
+let warningDismissed = false;
+
+// ── SYNC STATUS ────────────────────────────────────────────────────────
+function setSyncStatus(status) {
+  const el = document.getElementById('sync-status');
+  if (!el) return;
+  const map = {
+    syncing: ['🔄 Syncing...', 'var(--accent)'],
+    saved:   ['☁ Saved',       'var(--accent3)'],
+    error:   ['⚠ Sync Error',  'var(--accent2)'],
+    local:   ['💾 Local Only', 'var(--text2)']
+  };
+  const [text, color] = map[status] || map.local;
+  el.textContent = text;
+  el.style.color = color;
+}
+
+// ── WORKER API ─────────────────────────────────────────────────────────
+async function apiGet(action) {
+  const r = await fetch(`${WORKER}?action=${action}`);
+  return r.json();
+}
+async function apiPost(action, body) {
+  const r = await fetch(`${WORKER}?action=${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  return r.json();
+}
+
+// ── LOAD FROM WORKER ───────────────────────────────────────────────────
+async function loadFromWorker() {
+  if (IS_LOCAL) { setSyncStatus('local'); return; }
+  setSyncStatus('syncing');
+  try {
+    const data = await apiGet('loadStock');
+    if (!data.ok) throw new Error(data.error);
+    masterList = (data.masterList || []).map(r => ({
+      id: parseInt(r.id), sku: r.sku, name: r.name,
+      qty: r.qty, boxNum: r.box_num, countedBy: r.counted_by,
+      date: r.date, notes: r.notes, saved: true
+    }));
+    looseList = (data.looseList || []).map(r => ({
+      id: parseInt(r.id), sku: r.sku, name: r.name,
+      qty: r.qty, location: r.location, date: r.date
+    }));
+    ucList = (data.ucList || []).map(r => ({
+      id: parseInt(r.id), sku: r.sku, note: r.note, date: r.date
+    }));
+    if (data.persons    && data.persons.length)    persons    = data.persons;
+    if (data.categories && data.categories.length) categories = data.categories;
+    // Mirror to localStorage as offline fallback
+    localStorage.setItem('sku_master',  JSON.stringify(masterList));
+    localStorage.setItem('sku_loose',   JSON.stringify(looseList));
+    localStorage.setItem('sku_uc',      JSON.stringify(ucList));
+    localStorage.setItem('sku_persons', JSON.stringify(persons));
+    localStorage.setItem('sku_cats',    JSON.stringify(categories));
+    setSyncStatus('saved');
+    showToast('☁ Data loaded from cloud');
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('⚠ Cloud sync failed — using local data', true);
+  }
+}
+
+loadFromWorker();
+
+// ── TABS ──────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach((t,i) => {
+    t.classList.toggle('active', ['generate','master','loose','final','uc','settings'][i] === tab);
+  });
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('tab-' + tab).classList.add('active');
+  if (tab === 'master') renderMaster();
+  if (tab === 'uc') renderUC();
+  if (tab === 'settings') renderSettings();
+  if (tab === 'loose') renderLoose();
+  if (tab === 'final') renderFinal();
+}
+
+// ── DUPLICATE CHECK ────────────────────────────────────────────────────
+function similarity(a, b) {
+  a = a.toLowerCase().replace(/[-_.\s]/g, '');
+  b = b.toLowerCase().replace(/[-_.\s]/g, '');
+  if (a === b) return 1;
+  if (a.includes(b) || b.includes(a)) return 0.85;
+  let matches = 0;
+  for (let ch of a) if (b.includes(ch)) matches++;
+  return matches / Math.max(a.length, b.length);
+}
+
+function checkDuplicates() {
+  warningDismissed = false;
+  const val = document.getElementById('inp-sku').value.trim();
+  if (val.length < 2) { hideWarning(); return; }
+
+  // Only warn for SIMILAR but not exact same SKU (spelling error detection)
+  const similar = masterList.filter(s => {
+    return s.sku.toLowerCase() !== val.toLowerCase() && similarity(s.sku, val) > 0.6;
+  });
+
+  // Also deduplicate by SKU name in warning list
+  const seen = new Set();
+  const unique = similar.filter(s => {
+    if (seen.has(s.sku.toLowerCase())) return false;
+    seen.add(s.sku.toLowerCase());
+    return true;
+  });
+
+  if (unique.length > 0) {
+    const list = document.getElementById('warning-list');
+    list.innerHTML = unique.slice(0,5).map(s =>
+      `<li onclick="useSimilarSku('${s.sku}','${s.name}')">
+        <span style="color:var(--accent);font-weight:700;">${s.sku}</span>
+        &nbsp;—&nbsp;${s.name}
+      </li>`
+    ).join('');
+    document.getElementById('warning-box').classList.add('show');
+  } else {
+    hideWarning();
+  }
+}
+
+function hideWarning() { document.getElementById('warning-box').classList.remove('show'); }
+function dismissWarning() { warningDismissed = true; hideWarning(); }
+function useSimilarSku(sku, name) {
+  document.getElementById('inp-sku').value = sku;
+  document.getElementById('inp-name').value = name;
+  hideWarning();
+  showToast('✅ Using existing SKU: ' + sku);
+}
+function useExistingSkip() {
+  const list = document.getElementById('warning-list');
+  const first = list.querySelector('li');
+  if (first) first.click();
+}
+
+// ── GENERATE LABEL ─────────────────────────────────────────────────────
+function generateLabel() {
+  const sku  = document.getElementById('inp-sku').value.trim();
+  const name = document.getElementById('inp-name').value.trim();
+  const qty  = document.getElementById('inp-qty').value.trim();
+  const by   = document.getElementById('inp-counted').value.trim();
+  const co   = 'Tomahawk Tools';
+  const notes= document.getElementById('inp-notes').value.trim();
+
+  // All mandatory except notes
+  if (!sku)  { showToast('⚠ SKU Code is required', true); document.getElementById('inp-sku').focus(); return; }
+  if (!name) { showToast('⚠ Category is required', true); return; }
+  if (!qty)  { showToast('⚠ Quantity is required', true); document.getElementById('inp-qty').focus(); return; }
+  if (isNaN(qty) || parseInt(qty) < 1) { showToast('⚠ Enter a valid quantity', true); return; }
+  if (!by || by === 'Tomahawk Tools Team') { showToast('⚠ Please select who counted this box', true); return; }
+
+  const today = new Date();
+  const dateStr = today.toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'});
+
+  // Fill label
+  document.getElementById('lbl-date').innerHTML = dateStr + '<br>' + today.toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit'});
+  document.getElementById('lbl-name').textContent = name.toUpperCase();
+  document.getElementById('lbl-sku-text').textContent = sku;
+  document.getElementById('lbl-qty').textContent = qty;
+  document.getElementById('lbl-counted').textContent = 'Counted by: ' + by;
+  document.getElementById('lbl-notes').textContent = notes ? '📝 ' + notes : '';
+
+  // Show label
+  document.getElementById('label-empty').style.display = 'none';
+  const labelEl = document.getElementById('label-output');
+  labelEl.style.display = 'grid';
+  document.getElementById('print-btn-wrap').style.display = 'flex';
+
+  // Generate QR code via API
+  const qrData = encodeURIComponent(`SKU:${sku}|QTY:${qty}`);
+  document.getElementById('qr-img').src = `https://api.qrserver.com/v1/create-qr-code/?size=130x130&data=${qrData}&color=000000&bgcolor=ffffff&margin=4`;
+  document.getElementById('lbl-qr-text').innerHTML = `${sku}<br>QTY:${qty}`;
+
+  currentLabel = { sku, name, qty: parseInt(qty), countedBy: by, company: co, notes, date: dateStr, saved: false };
+  showToast('✅ Label generated for ' + sku);
+}
+
+// ── PRINT ──────────────────────────────────────────────────────────────
+function printLabel() {
+  if (!currentLabel) return;
+  if (!currentLabel.saved) {
+    // Show warning modal
+    document.getElementById('unsaved-modal').style.display = 'flex';
+    return;
+  }
+  executePrint();
+}
+
+function saveAndPrint() {
+  closeModal();
+  saveLabelToMaster();
+  executePrint();
+}
+
+function printAnyway() {
+  closeModal();
+  executePrint();
+}
+
+function closeModal() {
+  document.getElementById('unsaved-modal').style.display = 'none';
+}
+
+function executePrint() {
+  if (!currentLabel) return;
+  const qrSrc = document.getElementById('qr-img').src;
+  const logoSVG = document.querySelector('.label-logo').outerHTML;
+  const W = 567, H = 340;
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap');
+@page{size:${W}px ${H}px;margin:0;}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}
+html,body{width:${W}px;height:${H}px;background:#fff;overflow:hidden;}
+#label{width:${W}px;height:${H}px;display:grid;grid-template-columns:2fr 1fr;grid-template-rows:auto auto auto auto;font-family:'IBM Plex Mono',monospace;background:#fff;color:#000;}
+.lh{grid-column:1/3;display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #000;padding:7px 14px;}
+.lh-left{display:flex;align-items:center;gap:12px;}
+.lh-tag{font-size:10px;color:#000;border-left:1px solid #000;padding-left:10px;letter-spacing:1px;}
+.lh-date{font-size:10px;color:#000;text-align:right;line-height:1.7;}
+.lm-sku-box{grid-column:1/2;grid-row:2/3;padding:8px 6px 4px 14px;}
+.lm-sku-inner{border:2px solid #000;border-radius:4px;height:95px;padding:8px 14px;display:flex;flex-direction:column;justify-content:center;}
+.lm-cat{font-size:13px;color:#555;font-weight:700;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;}
+.lm-name{font-size:20px;font-weight:700;color:#000;word-break:break-all;line-height:1.3;}
+.lm-qr-box{grid-column:2/3;grid-row:2/4;padding:8px 14px 8px 6px;}
+.lm-qr-inner{border:2px solid #000;border-radius:4px;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;}
+.lm-qty-box{grid-column:1/2;grid-row:3/4;padding:4px 6px 8px 14px;}
+.lm-qty-inner{border:2px solid #000;border-radius:4px;height:120px;display:flex;flex-direction:column;align-items:center;justify-content:center;}
+.lm-qty-label{font-size:11px;font-weight:700;letter-spacing:2px;color:#555;margin-bottom:4px;}
+.lm-qty-val{font-size:64px;font-weight:700;line-height:1;color:#000;}
+.lm-qty-unit{font-size:12px;font-weight:700;color:#555;margin-top:4px;letter-spacing:2px;}
+.lf{grid-column:1/3;display:flex;justify-content:space-between;align-items:center;border-top:2px solid #000;padding:7px 14px;}
+.lf-counted{font-size:13px;font-weight:600;color:#555;}
+.lf-badge{background:#000!important;color:#fff!important;font-size:11px;font-weight:700;padding:5px 16px;border-radius:3px;letter-spacing:1.5px;}
+</style></head><body>
+<div id="label">
+  <div class="lh">
+    <div class="lh-left">
+      ${logoSVG.replace('class="label-logo"','style="height:36px;width:auto;"')}
+      <span class="lh-tag">STOCK TAKE — SEALED BOX</span>
+    </div>
+    <div class="lh-date">${currentLabel.date}<br>${new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})}</div>
+  </div>
+  <div class="lm-sku-box">
+    <div class="lm-sku-inner">
+      <div class="lm-cat">${currentLabel.name}</div>
+      <div class="lm-name">${currentLabel.sku}</div>
+    </div>
+  </div>
+  <div class="lm-qr-box">
+    <div class="lm-qr-inner">
+      <img src="${qrSrc}" width="130" height="130" alt="QR"/>
+      <div style="font-size:8px;color:#000;font-weight:600;text-align:center;line-height:1.5;">${currentLabel.sku}<br>QTY:${currentLabel.qty}</div>
+    </div>
+  </div>
+  <div class="lm-qty-box">
+    <div class="lm-qty-inner">
+      <div class="lm-qty-label">QTY IN BOX</div>
+      <div class="lm-qty-val">${currentLabel.qty}</div>
+      <div class="lm-qty-unit">PIECES</div>
+    </div>
+  </div>
+  <div class="lf">
+    <span class="lf-counted">Counted by: ${currentLabel.countedBy}</span>
+    ${currentLabel.notes ? `<span style="font-size:9px;font-style:italic;color:#888;">${currentLabel.notes}</span>` : ''}
+    <span class="lf-badge">&#10003; SEALED &amp; COUNTED</span>
+  </div>
+</div>
+<script>window.onload=function(){setTimeout(function(){window.print();},500);};<\/script>
+</body></html>`;
+  const blob = new Blob([html], {type: 'text/html'});
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
+}
+// ── SAVE TO MASTER ─────────────────────────────────────────────────────
+function saveLabelToMaster() {
+  if (!currentLabel) return;
+  const entry = { ...currentLabel, id: Date.now(), boxNum: getBoxCount(currentLabel.sku) + 1, saved: true };
+  masterList.push(entry);
+  localStorage.setItem('sku_master', JSON.stringify(masterList));
+  currentLabel.saved = true;
+  const saveBtn = document.querySelector('[onclick="saveLabelToMaster()"]');
+  if (saveBtn) { saveBtn.textContent = '✅ Saved to Master List'; saveBtn.disabled = true; }
+  showToast('💾 Box saved for ' + entry.sku);
+  if (!IS_LOCAL) {
+    setSyncStatus('syncing');
+    apiPost('saveBox', { box: entry })
+      .then(r => setSyncStatus(r.ok ? 'saved' : 'error'))
+      .catch(() => setSyncStatus('error'));
+  }
+}
+
+function getBoxCount(sku) {
+  return masterList.filter(s => s.sku.toLowerCase() === sku.toLowerCase()).length;
+}
+
+function clearForm() {
+  ['inp-sku','inp-name','inp-qty','inp-notes'].forEach(id => document.getElementById(id).value = '');
+  const sel = document.getElementById('inp-counted');
+  if (sel) sel.selectedIndex = 0;
+  document.getElementById('label-empty').style.display = 'block';
+  document.getElementById('label-output').style.display = 'none';
+  document.getElementById('print-btn-wrap').style.display = 'none';
+  const saveBtn = document.querySelector('[onclick="saveLabelToMaster()"]');
+  if (saveBtn) { saveBtn.textContent = '💾 Save to Master List'; saveBtn.disabled = false; }
+  hideWarning();
+  currentLabel = null;
+  warningDismissed = false;
+}
+
+// ── MASTER LIST ────────────────────────────────────────────────────────
+function renderMaster(filter='') {
+  // Group boxes by SKU
+  const grouped = {};
+  masterList.forEach(s => {
+    const key = s.sku.toLowerCase();
+    if (!grouped[key]) grouped[key] = { sku: s.sku, name: s.name, boxes: [] };
+    grouped[key].boxes.push(s);
+  });
+
+  const skuGroups = Object.values(grouped).filter(g =>
+    !filter ||
+    g.sku.toLowerCase().includes(filter.toLowerCase()) ||
+    g.name.toLowerCase().includes(filter.toLowerCase())
+  );
+
+  const totalSkus   = Object.keys(grouped).length;
+  const totalBoxes  = masterList.length;
+  const totalQty    = masterList.reduce((a,s) => a + s.qty, 0);
+
+  document.getElementById('stat-total').textContent = totalSkus;
+  document.getElementById('stat-boxes').textContent = totalBoxes;
+  document.getElementById('stat-qty').textContent   = totalQty;
+
+  const empty = document.getElementById('master-empty');
+  const table = document.getElementById('master-table');
+
+  if (masterList.length === 0) { empty.style.display = 'block'; table.style.display = 'none'; return; }
+  empty.style.display = 'none';
+  table.style.display = 'table';
+
+  const tbody = document.getElementById('master-tbody');
+  tbody.innerHTML = skuGroups.map((g, i) => {
+    const totalQtyForSku = g.boxes.reduce((a,b) => a + b.qty, 0);
+    const groupId = `grp-${g.sku.replace(/[^a-z0-9]/gi,'_')}`;
+    const boxRows = g.boxes.map((b, bi) => `
+      <tr class="${groupId}" style="background:${bi%2===0?'var(--surface2)':'var(--surface)'};display:none;">
+        <td style="color:var(--text2);padding-left:28px;">↳ Box ${b.boxNum||bi+1}</td>
+        <td style="color:var(--accent);font-family:var(--mono);font-size:11px;">${b.sku}</td>
+        <td style="color:var(--text2);font-size:11px;">${b.name}</td>
+        <td style="font-weight:700;color:var(--accent3);">${b.qty} pcs</td>
+        <td style="font-size:11px;">${b.countedBy||'—'}</td>
+        <td style="font-size:11px;">${b.date||'—'}</td>
+        <td style="color:var(--text2);font-size:10px;">${b.notes||'—'}</td>
+        <td><span class="badge badge-sealed">✓ SEALED</span></td>
+        <td><button class="btn btn-ghost" style="font-size:10px;padding:4px 8px;" onclick="deleteBox(${b.id})">🗑 Delete Box</button></td>
+      </tr>`).join('');
+    return `
+      <tr style="background:#1a2a1a;cursor:pointer;" onclick="toggleGroup('${groupId}', this)">
+        <td style="font-weight:700;color:var(--accent3);font-size:13px;">${i+1}</td>
+        <td style="font-weight:700;color:var(--accent);font-size:13px;" colspan="2">
+          <span id="arrow-${groupId}" style="margin-right:8px;display:inline-block;transition:transform 0.2s;">▶</span>${g.sku}
+        </td>
+        <td style="font-weight:700;color:#fff;font-size:13px;">${totalQtyForSku} pcs total</td>
+        <td colspan="4" style="color:var(--text2);font-size:11px;">
+          <span style="color:var(--accent3);font-weight:700;">${g.boxes.length} box${g.boxes.length>1?'es':''}</span>
+          &nbsp;|&nbsp; Category: ${g.name}
+        </td>
+        <td><button class="btn btn-danger" style="font-size:10px;padding:4px 8px;" onclick="event.stopPropagation();deleteSKU('${g.sku}')">🗑 Delete All</button></td>
+      </tr>
+      ${boxRows}`;
+  }).join('');
+}
+
+function filterMaster(val) { renderMaster(val); }
+
+function toggleGroup(groupId, headerRow) {
+  const rows = document.querySelectorAll(`tr.${groupId}`);
+  const arrow = document.getElementById(`arrow-${groupId}`);
+  const isHidden = rows[0] && rows[0].style.display === 'none';
+  rows.forEach(r => r.style.display = isHidden ? '' : 'none');
+  if (arrow) arrow.style.transform = isHidden ? 'rotate(90deg)' : 'rotate(0deg)';
+}
+
+function deleteBox(id) {
+  if (!confirm('Delete this box entry? This cannot be undone.')) return;
+  masterList = masterList.filter(s => s.id !== id);
+  localStorage.setItem('sku_master', JSON.stringify(masterList));
+  renderMaster();
+  showToast('Box deleted');
+  if (!IS_LOCAL) {
+    setSyncStatus('syncing');
+    apiPost('deleteBox', { id })
+      .then(r => setSyncStatus(r.ok ? 'saved' : 'error'))
+      .catch(() => setSyncStatus('error'));
+  }
+}
+
+function deleteSKU(sku) {
+  if (!confirm(`Delete ALL boxes for ${sku}? This cannot be undone.`)) return;
+  masterList = masterList.filter(s => s.sku.toLowerCase() !== sku.toLowerCase());
+  localStorage.setItem('sku_master', JSON.stringify(masterList));
+  renderMaster();
+  showToast('All boxes deleted for ' + sku);
+  if (!IS_LOCAL) {
+    setSyncStatus('syncing');
+    apiPost('deleteSKU', { sku })
+      .then(r => setSyncStatus(r.ok ? 'saved' : 'error'))
+      .catch(() => setSyncStatus('error'));
+  }
+}
+
+function deleteMaster(id) { deleteBox(id); }
+
+function exportMaster() {
+  if (masterList.length === 0) { showToast('No data to export', true); return; }
+  const rows = [['SKU Code','Category','Box No','Qty In Box','Counted By','Date','Notes']];
+  // Group and export with totals
+  const grouped = {};
+  masterList.forEach(s => {
+    const key = s.sku.toLowerCase();
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(s);
+  });
+  Object.values(grouped).forEach(boxes => {
+    const totalQ = boxes.reduce((a,b) => a + b.qty, 0);
+    rows.push([boxes[0].sku, boxes[0].name, `TOTAL: ${boxes.length} boxes`, `TOTAL: ${totalQ} pcs`, '', '', '']);
+    boxes.forEach((b,i) => rows.push([b.sku, b.name, `Box ${b.boxNum||i+1}`, b.qty, b.countedBy, b.date, b.notes]));
+    rows.push(['','','','','','','']); // blank row between SKUs
+  });
+  downloadCSV(rows, 'SKU_Master_List.csv');
+}
+
+function exportReport() {
+  if (masterList.length === 0) { showToast('No data to export', true); return; }
+
+  // Group by SKU
+  const grouped = {};
+  masterList.forEach(s => {
+    const key = s.sku.toLowerCase();
+    if (!grouped[key]) grouped[key] = { sku: s.sku, name: s.name, boxes: [] };
+    grouped[key].boxes.push(s);
+  });
+
+  const rows = [['SKU Code', 'Category', 'Total Qty', 'Total Box Count', 'Date', 'Remarks']];
+  Object.values(grouped).forEach(g => {
+    const totalQty   = g.boxes.reduce((a,b) => a + b.qty, 0);
+    const totalBoxes = g.boxes.length;
+    const date       = g.boxes[0].date || '';
+    const remarks    = g.boxes.map((b,i) => `Box${b.boxNum||i+1}:${b.qty}pcs`).join(', ');
+    rows.push([g.sku, g.name, totalQty, totalBoxes, date, remarks]);
+  });
+
+  downloadCSV(rows, 'SKU_Stock_Report.csv');
+  showToast('📄 Report exported!');
+}
+
+// ── LOOSE COUNT ────────────────────────────────────────────────────────
+
+function renderLoose() {
+  const dl = document.getElementById('sku-list');
+  const skus = [...new Set(masterList.map(s => s.sku))];
+  dl.innerHTML = skus.map(s => `<option value="${s}">`).join('');
+
+  const empty = document.getElementById('loose-empty');
+  const table = document.getElementById('loose-table');
+  if (looseList.length === 0) { empty.style.display = 'block'; table.style.display = 'none'; return; }
+  empty.style.display = 'none';
+  table.style.display = 'table';
+
+  const tbody = document.getElementById('loose-tbody');
+  tbody.innerHTML = looseList.map((l, i) => {
+    const master = masterList.find(s => s.sku.toLowerCase() === l.sku.toLowerCase());
+    return `<tr>
+      <td style="color:var(--text2)">${i+1}</td>
+      <td style="color:var(--accent);font-weight:700;font-family:var(--mono);">${l.sku}</td>
+      <td style="color:var(--text2);font-size:11px;">${master ? master.name : '—'}</td>
+      <td style="font-weight:700;color:var(--accent3);font-size:14px;">${l.qty} pcs</td>
+      <td style="font-size:11px;color:var(--text2);">${l.location || '—'}</td>
+      <td style="font-size:11px;">${l.date || '—'}</td>
+      <td><button class="btn btn-ghost" style="font-size:10px;padding:4px 8px;" onclick="deleteLoose(${l.id})">🗑 Delete</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function addLooseEntry() {
+  const sku = document.getElementById('loose-sku').value.trim();
+  const qty = parseInt(document.getElementById('loose-qty').value);
+  const loc = document.getElementById('loose-location').value.trim();
+  if (!sku) { showToast('Enter a SKU code', true); return; }
+  if (isNaN(qty) || qty < 0) { showToast('Enter a valid quantity', true); return; }
+
+  let entry;
+  const existing = looseList.find(l => l.sku.toLowerCase() === sku.toLowerCase());
+  if (existing) {
+    existing.qty = qty; existing.location = loc;
+    existing.date = new Date().toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'});
+    entry = existing;
+    showToast('✅ Updated loose qty for ' + sku);
+  } else {
+    const master = masterList.find(s => s.sku.toLowerCase() === sku.toLowerCase());
+    entry = { id: Date.now(), sku, name: master ? master.name : '', qty, location: loc,
+      date: new Date().toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) };
+    looseList.push(entry);
+    showToast('✅ Loose count saved for ' + sku);
+  }
+  localStorage.setItem('sku_loose', JSON.stringify(looseList));
+  document.getElementById('loose-sku').value = '';
+  document.getElementById('loose-qty').value = '';
+  document.getElementById('loose-location').value = '';
+  renderLoose();
+  if (!IS_LOCAL) {
+    setSyncStatus('syncing');
+    apiPost('saveLoose', { loose: entry })
+      .then(r => setSyncStatus(r.ok ? 'saved' : 'error'))
+      .catch(() => setSyncStatus('error'));
+  }
+}
+
+function deleteLoose(id) {
+  if (!confirm('Delete this loose count entry?')) return;
+  looseList = looseList.filter(l => l.id !== id);
+  localStorage.setItem('sku_loose', JSON.stringify(looseList));
+  renderLoose();
+  showToast('Deleted');
+  if (!IS_LOCAL) {
+    setSyncStatus('syncing');
+    apiPost('deleteLoose', { id })
+      .then(r => setSyncStatus(r.ok ? 'saved' : 'error'))
+      .catch(() => setSyncStatus('error'));
+  }
+}
+
+// ── FINAL STOCK ────────────────────────────────────────────────────────
+function renderFinal() {
+  const sealed = {};
+  masterList.forEach(s => {
+    const k = s.sku.toLowerCase();
+    if (!sealed[k]) sealed[k] = { sku: s.sku, name: s.name, boxes: 0, qty: 0 };
+    sealed[k].boxes++; sealed[k].qty += s.qty;
+  });
+
+  const allSkus = [...new Set([...Object.keys(sealed), ...looseList.map(l => l.sku.toLowerCase())])];
+  const rows = allSkus.map(k => {
+    const s = sealed[k] || { sku: k, name: '', boxes: 0, qty: 0 };
+    const l = looseList.find(l => l.sku.toLowerCase() === k) || { qty: 0 };
+    return { sku: s.sku, name: s.name, boxes: s.boxes, sealedQty: s.qty, looseQty: l.qty, total: s.qty + l.qty };
+  }).sort((a,b) => a.sku.localeCompare(b.sku));
+
+  document.getElementById('final-skus').textContent  = rows.length;
+  document.getElementById('final-sealed').textContent = rows.reduce((a,r) => a + r.sealedQty, 0);
+  document.getElementById('final-loose').textContent  = rows.reduce((a,r) => a + r.looseQty, 0);
+  document.getElementById('final-total').textContent  = rows.reduce((a,r) => a + r.total, 0);
+
+  const empty = document.getElementById('final-empty');
+  const table = document.getElementById('final-table');
+  if (rows.length === 0) { empty.style.display = 'block'; table.style.display = 'none'; return; }
+  empty.style.display = 'none'; table.style.display = 'table';
+
+  document.getElementById('final-tbody').innerHTML = rows.map((r,i) => `
+    <tr>
+      <td style="color:var(--text2)">${i+1}</td>
+      <td style="color:var(--accent);font-weight:700;font-family:var(--mono);">${r.sku}</td>
+      <td style="color:var(--text2);font-size:11px;">${r.name}</td>
+      <td style="font-size:11px;">${r.boxes} box${r.boxes!==1?'es':''}</td>
+      <td style="color:var(--text2);">${r.sealedQty} pcs</td>
+      <td style="color:var(--text2);">${r.looseQty} pcs</td>
+      <td style="font-weight:700;font-size:15px;color:var(--accent3);">${r.total} pcs</td>
+      <td><span class="badge badge-sealed">✓ COUNTED</span></td>
+    </tr>`).join('');
+}
+
+function exportFinalStock() {
+  const sealed = {};
+  masterList.forEach(s => {
+    const k = s.sku.toLowerCase();
+    if (!sealed[k]) sealed[k] = { sku: s.sku, name: s.name, boxes: 0, qty: 0 };
+    sealed[k].boxes++; sealed[k].qty += s.qty;
+  });
+  const allSkus = [...new Set([...Object.keys(sealed), ...looseList.map(l => l.sku.toLowerCase())])];
+  const rows = [['SKU Code','Category','Sealed Boxes','Sealed Qty','Loose Qty','Total Qty']];
+  allSkus.forEach(k => {
+    const s = sealed[k] || { sku: k, name: '', boxes: 0, qty: 0 };
+    const l = looseList.find(l => l.sku.toLowerCase() === k) || { qty: 0 };
+    rows.push([s.sku, s.name, s.boxes, s.qty, l.qty, s.qty + l.qty]);
+  });
+  downloadCSV(rows, 'Final_Stock_Report.csv');
+  showToast('✅ Final Stock Report exported!');
+}
+
+function addUCEntry() {
+  const sku  = document.getElementById('uc-sku-inp').value.trim();
+  const note = document.getElementById('uc-note-inp').value.trim();
+  if (!sku) { showToast('Enter a SKU code to disable', true); return; }
+  if (ucList.find(u => u.sku.toLowerCase() === sku.toLowerCase())) {
+    showToast('Already in disable list', true); return;
+  }
+  const entry = { sku, note, date: new Date().toLocaleDateString('en-IN'), id: Date.now() };
+  ucList.push(entry);
+  localStorage.setItem('sku_uc', JSON.stringify(ucList));
+  document.getElementById('uc-sku-inp').value = '';
+  document.getElementById('uc-note-inp').value = '';
+  renderUC();
+  showToast('Added to UC disable list: ' + sku);
+  if (!IS_LOCAL) {
+    setSyncStatus('syncing');
+    apiPost('saveUCDisable', { entry })
+      .then(r => setSyncStatus(r.ok ? 'saved' : 'error'))
+      .catch(() => setSyncStatus('error'));
+  }
+}
+
+function renderUC() {
+  const empty = document.getElementById('uc-empty');
+  const list  = document.getElementById('uc-list');
+  const exportWrap = document.getElementById('uc-export-wrap');
+  if (ucList.length === 0) { empty.style.display = 'block'; list.innerHTML = ''; exportWrap.style.display = 'none'; return; }
+  empty.style.display = 'none';
+  exportWrap.style.display = 'block';
+  list.innerHTML = ucList.map(u => `
+    <div class="uc-entry">
+      <span class="uc-sku">${u.sku}</span>
+      <span class="uc-note">${u.note || 'No note'}</span>
+      <span style="font-size:10px;color:var(--text2);">${u.date}</span>
+      <button class="uc-del" onclick="deleteUC(${u.id})">✕</button>
+    </div>
+  `).join('');
+}
+
+function deleteUC(id) {
+  ucList = ucList.filter(u => u.id !== id);
+  localStorage.setItem('sku_uc', JSON.stringify(ucList));
+  renderUC();
+  if (!IS_LOCAL) {
+    setSyncStatus('syncing');
+    apiPost('deleteUCDisable', { id })
+      .then(r => setSyncStatus(r.ok ? 'saved' : 'error'))
+      .catch(() => setSyncStatus('error'));
+  }
+}
+
+function exportUC() {
+  if (ucList.length === 0) return;
+  const rows = [['SKU Code to Disable','Reason / Note','Date Added']];
+  ucList.forEach(u => rows.push([u.sku, u.note, u.date]));
+  downloadCSV(rows, 'UC_Disable_List.csv');
+  showToast('UC Disable List exported!');
+}
+
+// ── EXPORT ALL ─────────────────────────────────────────────────────────
+function exportData() {
+  exportMaster();
+  if (ucList.length > 0) exportUC();
+}
+
+// ── UTILS ──────────────────────────────────────────────────────────────
+function downloadCSV(rows, filename) {
+  const csv = rows.map(r => r.map(v => `"${String(v || '').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+  a.download = filename;
+  a.click();
+}
+
+function showToast(msg, isError=false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(() => t.className = 'toast', 3000);
+}
+
+// ── SETTINGS ───────────────────────────────────────────────────────────
+function renderSettings() {
+  renderPersonList();
+  renderCatList();
+}
+
+function renderPersonList() {
+  document.getElementById('person-list').innerHTML = persons.length === 0
+    ? '<div style="color:var(--text2);font-size:11px;font-family:var(--mono);padding:8px 0;">No team members added yet.</div>'
+    : persons.map((p,i) => `
+      <div class="uc-entry">
+        <span style="color:var(--accent3);font-family:var(--mono);font-weight:700;flex:1;">👤 ${p}</span>
+        <button class="uc-del" onclick="deletePerson(${i})">✕</button>
+      </div>`).join('');
+  rebuildDropdowns();
+}
+
+function renderCatList() {
+  document.getElementById('cat-list').innerHTML = categories.length === 0
+    ? '<div style="color:var(--text2);font-size:11px;font-family:var(--mono);padding:8px 0;">No categories added yet.</div>'
+    : categories.map((c,i) => `
+      <div class="uc-entry">
+        <span style="color:var(--accent);font-family:var(--mono);font-weight:700;flex:1;">📂 ${c}</span>
+        <button class="uc-del" onclick="deleteCategory(${i})">✕</button>
+      </div>`).join('');
+  rebuildDropdowns();
+}
+
+function syncSettings() {
+  localStorage.setItem('sku_persons', JSON.stringify(persons));
+  localStorage.setItem('sku_cats',    JSON.stringify(categories));
+  if (!IS_LOCAL) {
+    setSyncStatus('syncing');
+    apiPost('saveStockSettings', { persons, categories })
+      .then(r => setSyncStatus(r.ok ? 'saved' : 'error'))
+      .catch(() => setSyncStatus('error'));
+  }
+}
+
+function addPerson() {
+  const val = document.getElementById('person-inp').value.trim();
+  if (!val) return;
+  if (persons.includes(val)) { showToast('Already exists', true); return; }
+  persons.push(val);
+  document.getElementById('person-inp').value = '';
+  renderPersonList();
+  showToast('✅ Added: ' + val);
+  syncSettings();
+}
+
+function deletePerson(i) {
+  persons.splice(i, 1);
+  renderPersonList();
+  syncSettings();
+}
+
+function addCategory() {
+  const val = document.getElementById('cat-inp').value.trim();
+  if (!val) return;
+  if (categories.includes(val)) { showToast('Already exists', true); return; }
+  categories.push(val);
+  document.getElementById('cat-inp').value = '';
+  renderCatList();
+  showToast('✅ Added: ' + val);
+  syncSettings();
+}
+
+function deleteCategory(i) {
+  categories.splice(i, 1);
+  renderCatList();
+  syncSettings();
+}
+
+function rebuildDropdowns() {
+  // Rebuild category dropdown
+  const catSel = document.getElementById('inp-name');
+  const selCat = catSel.value;
+  catSel.innerHTML = '<option value="">— Select Category —</option>' +
+    categories.map(c => `<option value="${c}" ${c===selCat?'selected':''}>${c}</option>`).join('');
+
+  // Rebuild persons dropdown
+  const perSel = document.getElementById('inp-counted');
+  const selPer = perSel.value;
+  perSel.innerHTML = '<option value="Tomahawk Tools Team">— Select Person —</option>' +
+    persons.map(p => `<option value="${p}" ${p===selPer?'selected':''}>${p}</option>`).join('');
+}
+
+// ── THEME TOGGLE ───────────────────────────────────────────────────────
+function toggleTheme() {
+  const isLight = document.body.classList.toggle('light-mode');
+  document.getElementById('theme-btn').textContent = isLight ? '🌙' : '☀️';
+  localStorage.setItem('sku_theme', isLight ? 'light' : 'dark');
+}
+
+// Init theme on load
+if (localStorage.getItem('sku_theme') === 'light') {
+  document.body.classList.add('light-mode');
+  document.getElementById('theme-btn').textContent = '🌙';
+}
+
+// Init dropdowns on load
+rebuildDropdowns();
+</script>
+</body>
+</html>
