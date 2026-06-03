@@ -418,6 +418,27 @@ function closeNav() {
 
   .export-btn { float: right; }
 
+
+  .badge-unprinted { background: #3a2a00; color: var(--accent); border: 1px solid var(--accent); }
+  .badge-printed   { background: #1a3a1a; color: var(--accent3); }
+  .print-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+  .print-filter-bar .btn.active-filter {
+    background: var(--accent);
+    color: #000;
+    border-color: var(--accent);
+  }
+
+  /* Hide print buttons on mobile */
+  @media (max-width: 768px) {
+    .hide-on-mobile { display: none !important; }
+  }
+
   /* ── MOBILE RESPONSIVE ────────────────────────────────────────── */
 
   /* Hamburger — hidden on desktop */
@@ -751,7 +772,7 @@ function closeNav() {
       </div>
 
       <div class="print-btn-wrap" id="print-btn-wrap" style="display:none">
-        <button class="btn btn-success" onclick="printLabel()">🖨 Print Label</button>
+        <button class="btn btn-success hide-on-mobile" onclick="printLabel()">🖨 Print Label</button>
         <button class="btn btn-ghost" onclick="saveLabelToMaster()">💾 Save to Box Records</button>
         <button class="btn btn-ghost" onclick="clearForm()">✖ Clear</button>
       </div>
@@ -790,6 +811,10 @@ function closeNav() {
       </div>
     </div>
 
+    <div class="print-filter-bar">
+      <button class="btn btn-ghost" id="btn-filter-unprinted" onclick="toggleUnprintedFilter()">🖨 Show Unprinted Only</button>
+      <span id="unprinted-count" style="font-family:var(--mono);font-size:11px;color:var(--accent);"></span>
+    </div>
     <div class="search-bar">
       <input type="text" placeholder="🔍  Search SKU or product name..." oninput="filterMaster(this.value)">
     </div>
@@ -977,7 +1002,7 @@ function closeNav() {
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
       <button class="btn btn-primary" onclick="saveAndPrint()" style="flex:1;">💾 Save & Print</button>
-      <button class="btn btn-ghost" onclick="printAnyway()" style="flex:1;">🖨 Print Without Saving</button>
+      <button class="btn btn-ghost hide-on-mobile" onclick="printAnyway()" style="flex:1;">🖨 Print Without Saving</button>
       <button class="btn btn-ghost" onclick="closeModal()" style="width:100%;margin-top:4px;">✖ Go Back</button>
     </div>
   </div>
@@ -1038,7 +1063,7 @@ async function loadFromWorker() {
     masterList = (data.masterList || []).map(r => ({
       id: parseInt(r.id), sku: r.sku, name: r.name,
       qty: r.qty, boxNum: r.box_num, countedBy: r.counted_by,
-      date: r.date, notes: r.notes, saved: true
+      date: r.date, notes: r.notes, saved: true, printed: r.printed === 1 || r.printed === true || false
     }));
     looseList = (data.looseList || []).map(r => ({
       id: parseInt(r.id), sku: r.sku, name: r.name,
@@ -1235,6 +1260,27 @@ html,body{width:${W}px;height:${H}px;background:#fff;overflow:hidden;}
 .lf{grid-column:1/3;display:flex;justify-content:space-between;align-items:center;border-top:2px solid #000;padding:7px 14px;}
 .lf-counted{font-size:13px;font-weight:600;color:#555;}
 .lf-badge{background:#000!important;color:#fff!important;font-size:11px;font-weight:700;padding:5px 16px;border-radius:3px;letter-spacing:1.5px;}
+
+
+  .badge-unprinted { background: #3a2a00; color: var(--accent); border: 1px solid var(--accent); }
+  .badge-printed   { background: #1a3a1a; color: var(--accent3); }
+  .print-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+  .print-filter-bar .btn.active-filter {
+    background: var(--accent);
+    color: #000;
+    border-color: var(--accent);
+  }
+
+  /* Hide print buttons on mobile */
+  @media (max-width: 768px) {
+    .hide-on-mobile { display: none !important; }
+  }
 
   /* ── MOBILE RESPONSIVE ────────────────────────────────────────── */
 
@@ -1454,7 +1500,7 @@ html,body{width:${W}px;height:${H}px;background:#fff;overflow:hidden;}
 // ── SAVE TO MASTER ─────────────────────────────────────────────────────
 function saveLabelToMaster() {
   if (!currentLabel) return;
-  const entry = { ...currentLabel, id: Date.now(), boxNum: getBoxCount(currentLabel.sku) + 1, saved: true };
+  const entry = { ...currentLabel, id: Date.now(), boxNum: getBoxCount(currentLabel.sku) + 1, saved: true, printed: false };
   masterList.push(entry);
   localStorage.setItem('sku_master', JSON.stringify(masterList));
   currentLabel.saved = true;
@@ -1488,6 +1534,49 @@ function clearForm() {
 }
 
 // ── MASTER LIST ────────────────────────────────────────────────────────
+let showUnprintedOnly = false;
+
+function toggleUnprintedFilter() {
+  showUnprintedOnly = !showUnprintedOnly;
+  const btn = document.getElementById('btn-filter-unprinted');
+  btn.classList.toggle('active-filter', showUnprintedOnly);
+  btn.textContent = showUnprintedOnly ? '✅ Show All' : '🖨 Show Unprinted Only';
+  renderMaster(document.querySelector('.search-bar input').value);
+}
+
+function markPrinted(id) {
+  const entry = masterList.find(s => s.id === id);
+  if (!entry) return;
+  entry.printed = true;
+  localStorage.setItem('sku_master', JSON.stringify(masterList));
+  renderMaster(document.querySelector('.search-bar input').value);
+  showToast('🖨 Marked as printed');
+  if (!IS_LOCAL) {
+    setSyncStatus('syncing');
+    apiPost('saveBox', { box: entry })
+      .then(r => setSyncStatus(r.ok ? 'saved' : 'error'))
+      .catch(() => setSyncStatus('error'));
+  }
+}
+
+function printFromRecord(id) {
+  const entry = masterList.find(s => s.id === id);
+  if (!entry) return;
+  currentLabel = { ...entry };
+  const qrData = encodeURIComponent('SKU:' + entry.sku + '|QTY:' + entry.qty);
+  const qrSrc = 'https://api.qrserver.com/v1/create-qr-code/?size=130x130&data=' + qrData + '&color=000000&bgcolor=ffffff&margin=4';
+  document.getElementById('qr-img').src = qrSrc;
+  document.getElementById('lbl-date').innerHTML = entry.date || '';
+  document.getElementById('lbl-name').textContent = (entry.name || '').toUpperCase();
+  document.getElementById('lbl-sku-text').textContent = entry.sku;
+  document.getElementById('lbl-qty').textContent = entry.qty;
+  document.getElementById('lbl-counted').textContent = 'Counted by: ' + (entry.countedBy || '');
+  document.getElementById('lbl-notes').textContent = entry.notes ? '\u{1F4DD} ' + entry.notes : '';
+  const img = document.getElementById('qr-img');
+  const doPrint = () => { executePrint(); markPrinted(id); };
+  if (img.complete && img.naturalWidth > 0) { doPrint(); } else { img.onload = doPrint; }
+}
+
 function renderMaster(filter='') {
   // Group boxes by SKU
   const grouped = {};
@@ -1497,12 +1586,22 @@ function renderMaster(filter='') {
     grouped[key].boxes.push(s);
   });
 
-  const skuGroups = Object.values(grouped).filter(g =>
-    !filter ||
-    g.sku.toLowerCase().includes(filter.toLowerCase()) ||
-    g.name.toLowerCase().includes(filter.toLowerCase())
-  );
+  const skuGroups = Object.values(grouped).filter(g => {
+    const matchesSearch = !filter ||
+      g.sku.toLowerCase().includes(filter.toLowerCase()) ||
+      g.name.toLowerCase().includes(filter.toLowerCase());
+    const matchesFilter = !showUnprintedOnly || g.boxes.some(b => !b.printed);
+    return matchesSearch && matchesFilter;
+  });
 
+  // Update unprinted count badge
+  const unprintedTotal = masterList.filter(b => !b.printed).length;
+  const unprintedEl = document.getElementById('unprinted-count');
+  if (unprintedEl) unprintedEl.textContent = unprintedTotal > 0
+    ? unprintedTotal + ' box' + (unprintedTotal !== 1 ? 'es' : '') + ' not printed'
+    : '✅ All printed';
+
+  
   const totalSkus   = Object.keys(grouped).length;
   const totalBoxes  = masterList.length;
   const totalQty    = masterList.reduce((a,s) => a + s.qty, 0);
@@ -1531,8 +1630,16 @@ function renderMaster(filter='') {
         <td style="font-size:11px;">${b.countedBy||'—'}</td>
         <td style="font-size:11px;">${b.date||'—'}</td>
         <td style="color:var(--text2);font-size:10px;">${b.notes||'—'}</td>
-        <td><span class="badge badge-sealed">✓ SEALED</span></td>
-        <td><button class="btn btn-ghost" style="font-size:10px;padding:4px 8px;" onclick="deleteBox(${b.id})">🗑 Delete Box</button></td>
+        <td>
+          <span class="badge badge-sealed">✓ SEALED</span>
+          ${b.printed
+            ? '<span class=\"badge badge-printed\" style=\"margin-left:4px;\">\u{1F5A8} Printed</span>'
+            : '<span class=\"badge badge-unprinted\" style=\"margin-left:4px;\">\u26A0 Not Printed</span>'}
+        </td>
+        <td style="white-space:nowrap;">
+          <button class="btn btn-ghost hide-on-mobile" style="font-size:10px;padding:4px 8px;margin-right:4px;" onclick="printFromRecord(${b.id})">\u{1F5A8} Print</button>
+          <button class="btn btn-ghost" style="font-size:10px;padding:4px 8px;" onclick="deleteBox(${b.id})">\u{1F5D1}</button>
+        </td>
       </tr>`).join('');
     return `
       <tr style="background:#1a2a1a;cursor:pointer;" onclick="toggleGroup('${groupId}', this)">
@@ -1544,6 +1651,7 @@ function renderMaster(filter='') {
         <td colspan="4" style="color:var(--text2);font-size:11px;">
           <span style="color:var(--accent3);font-weight:700;">${g.boxes.length} box${g.boxes.length>1?'es':''}</span>
           &nbsp;|&nbsp; Category: ${g.name}
+          ${g.boxes.some(b => !b.printed) ? '<span style="color:var(--accent);font-family:var(--mono);font-size:10px;margin-left:8px;">⚠ ' + g.boxes.filter(b=>!b.printed).length + ' not printed</span>' : '<span style="color:var(--accent3);font-size:10px;margin-left:8px;">🖨 all printed</span>'}
         </td>
         <td><button class="btn btn-danger" style="font-size:10px;padding:4px 8px;" onclick="event.stopPropagation();deleteSKU('${g.sku}')">🗑 Delete All</button></td>
       </tr>
