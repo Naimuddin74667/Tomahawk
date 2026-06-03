@@ -419,20 +419,6 @@ function closeNav() {
   .export-btn { float: right; }
 
 
-  .badge-unprinted { background: #3a2a00; color: var(--accent); border: 1px solid var(--accent); }
-  .badge-printed   { background: #1a3a1a; color: var(--accent3); }
-  .print-filter-bar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 14px;
-    flex-wrap: wrap;
-  }
-  .print-filter-bar .btn.active-filter {
-    background: var(--accent);
-    color: #000;
-    border-color: var(--accent);
-  }
 
   /* Hide print buttons on mobile */
   @media (max-width: 768px) {
@@ -659,7 +645,7 @@ function closeNav() {
       <div class="form-group">
         <label>SKU Code *</label>
         <div class="sku-input-wrap">
-          <input type="text" id="inp-sku" placeholder="e.g. SONY-TWS-001" oninput="checkDuplicates()" autocomplete="off">
+          <input type="text" id="inp-sku" placeholder="e.g. SONY-TWS-001" oninput="this.value=this.value.toUpperCase();checkDuplicates()" autocomplete="off" style="text-transform:uppercase;">
           <span class="sku-check-icon">🔍</span>
         </div>
       </div>
@@ -815,10 +801,6 @@ function closeNav() {
       </div>
     </div>
 
-    <div class="print-filter-bar">
-      <button class="btn btn-ghost" id="btn-filter-unprinted" onclick="toggleUnprintedFilter()">🖨 Show Unprinted Only</button>
-      <span id="unprinted-count" style="font-family:var(--mono);font-size:11px;color:var(--accent);"></span>
-    </div>
     <div class="search-bar">
       <input type="text" placeholder="🔍  Search SKU or product name..." oninput="filterMaster(this.value)">
     </div>
@@ -849,57 +831,155 @@ function closeNav() {
 
 <!-- TAB 3: LOOSE COUNT -->
 <div id="tab-loose" class="page">
-  <div class="panel">
-    <div class="section-title">📦 Loose Items</div>
+  <div class="main">
 
-    <div style="background:#1a1a2a;border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:20px;font-size:11px;color:var(--text2);font-family:var(--mono);line-height:1.8;">
-      💡 After sealing all boxes, count loose items per SKU here. The Final Stock tab will combine sealed + loose automatically.
+    <!-- LEFT: FORM -->
+    <div class="left-panel panel">
+      <div class="section-title">📦 Loose Item Details</div>
+
+      <div class="form-group">
+        <label>SKU Code *</label>
+        <div class="sku-input-wrap">
+          <input type="text" id="loose-sku" placeholder="e.g. SONY-TWS-001"
+            oninput="this.value=this.value.toUpperCase();looseCheckDuplicates()"
+            list="sku-list" autocomplete="off" style="text-transform:uppercase;padding-right:40px;">
+          <datalist id="sku-list"></datalist>
+          <span class="sku-check-icon">🔍</span>
+        </div>
+      </div>
+
+      <!-- LOOSE DUPLICATE WARNING -->
+      <div class="warning-box" id="loose-warning-box">
+        <div class="warning-title">⚠ SIMILAR SKUs FOUND — Check before creating new</div>
+        <ul class="warning-list" id="loose-warning-list"></ul>
+        <div class="warning-actions">
+          <button class="btn btn-danger" onclick="looseUseExistingSkip()">Use Similar SKU ↑</button>
+          <button class="btn btn-ghost" onclick="looseDismissWarning()">Create New Anyway</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Category</label>
+        <select id="loose-name">
+          <option value="">— Select Category —</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Loose Qty *</label>
+        <input type="number" id="loose-qty" placeholder="e.g. 7" min="0">
+      </div>
+
+      <div class="form-group">
+        <label>Counted By</label>
+        <select id="loose-counted">
+          <option value="Tomahawk Tools Team">— Select Person —</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Notes (optional)</label>
+        <input type="text" id="loose-notes" placeholder="e.g. Near shelf A3">
+      </div>
+
+      <button class="btn btn-primary btn-full" onclick="generateLooseLabel()" style="margin-top:8px;">
+        🖨 Generate & Preview Label
+      </button>
     </div>
 
-    <!-- ADD LOOSE ENTRY -->
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:20px;">
-      <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--accent);margin-bottom:14px;letter-spacing:1px;">+ ADD LOOSE COUNT</div>
-      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
-        <div style="flex:2;min-width:180px;">
-          <label style="display:block;font-size:10px;color:var(--text2);margin-bottom:5px;font-weight:600;letter-spacing:0.5px;">SKU CODE</label>
-          <input type="text" id="loose-sku" placeholder="Type SKU or select from list..." list="sku-list" style="width:100%;font-family:var(--mono);">
-          <datalist id="sku-list"></datalist>
+    <!-- RIGHT: PREVIEW + LIST -->
+    <div class="right-panel panel">
+      <div class="section-title">👁 Loose Label Preview — 150×100mm</div>
+
+      <div class="label-preview-wrap">
+        <div class="label-empty" id="loose-label-empty">
+          <div class="label-empty-icon">📦</div>
+          Fill the form on the left<br>and click Generate Label<br><br>
+          <span style="color:#555;font-size:10px">Label will appear here ready to print</span>
         </div>
-        <div style="flex:1;min-width:120px;">
-          <label style="display:block;font-size:10px;color:var(--text2);margin-bottom:5px;font-weight:600;letter-spacing:0.5px;">LOOSE QTY</label>
-          <input type="number" id="loose-qty" placeholder="e.g. 7" min="0" style="width:100%;font-family:var(--mono);">
+
+        <div id="loose-label-output" style="display:none;background:#fff;width:100%;max-width:567px;height:340px;border-radius:4px;color:#000;font-family:var(--mono);box-shadow:0 4px 24px rgba(0,0,0,0.5);box-sizing:border-box;overflow:hidden;grid-template-columns:2fr 1fr;grid-template-rows:auto auto auto auto;">
+          <!-- HEADER -->
+          <div class="label-header">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <svg class="label-logo" xmlns="http://www.w3.org/2000/svg" viewBox="490 530 7280 1260" fill="#1F1B20">
+                <path d="M796.6 803.57l625.42 0c4.17,0.55 6.71,2.65 7.48,6.14l-84.8 151.21 -181.47 0c-16.1,25.18 -100.16,178.13 -252.2,458.77l-203.52 0 -0.67 -3.08c109.72,-202.64 190.86,-354.55 243.59,-455.69l-240.46 0 -0.77 -3.7c47.6,-91.52 76.61,-142.78 87.4,-153.65zm-14.19 821.74l-287.36 153.05 187.35 -278.86 1362.49 0 -8.53 5.99 -1253.95 119.82zm6102.31 -1005.2l131.69 -113.42 0 215.51 -960.53 0 8.48 -6 820.36 -96.09zm-574.92 183.46l298.9 0 1.32 6.14c-45.66,84.33 -70.46,131.58 -74.1,141.4 160.29,-96.44 243.35,-144.55 249.31,-144.55l224.51 0 1.32 6.11c-3.09,0.39 -163.87,96.95 -482.4,289.8l215.31 314.14 -5.44 3.08 -212.81 0c-5.17,-3.62 -50.38,-70.48 -135.48,-200.49l-3.14 0c-57.01,115.32 -92.82,182.15 -107.4,200.49l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.77,-24.7l-1.96 -9.09c-2.91,-13.47 -17.46,-33.95 -43.92,-61.58l5.47 -2.99zm-900.24 0.38l295.21 0 0.67 3.13 -177.4 332.67 0.7 3.15 3.15 0 281.78 -191.3c5.47,6.84 8.72,12.09 9.42,15.42l50.56 191.26 2.97 0c-0.06,-5.07 62.84,-123.21 188.62,-354.33l199.85 0 7 3.13c-2.97,8.9 -110.79,213.14 -323.65,612.64l-212.28 0c-4.01,0 -6.55,-2.09 -7.43,-6.09l-8.67 -40.1c-6.4,-29.71 -17.38,-75.75 -32.99,-138.44l-289.68 184.63 -221.52 0 -0.69 -3.12 276.81 -529.56 -3.98 -18.37c-2.88,-13.46 -17.46,-33.93 -43.89,-61.59l5.44 -3.13zm-792.78 -0.38l758.24 0 0.66 2.99c-195.43,377.28 -303.39,581.65 -323.9,613.13l-197.37 0c-4.22,0 -6.58,-2.06 -7.45,-6.06 5.76,-4.89 46.12,-79.83 121.01,-225.06l-249.55 0c-5.54,7.52 -48.45,84.55 -128.62,231.12l-203.51 0 -0.67 -3.08c178.19,-329 269.43,-500.66 273.89,-514.68 2.75,-6.83 3.49,-17.15 2.64,-30.81 -2.41,-11.19 -17.16,-31.67 -44.05,-61.41l-1.32 -6.14zm185.18 228.04l249.02 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.73 0c-2.8,0 -16.07,23.62 -40.03,70.69zm-991.54 -228.04l298.86 0 1.32 6.14 -118.16 221.9 0.69 3.15 249.5 0c81.88,-151.73 124.55,-228.88 128.62,-231.19l191.28 0c4.13,0.55 6.7,2.65 7.45,6.14 -213.25,402.5 -322.44,606 -327.72,609.98l-196.86 0 -0.67 -3.08 112.7 -218.93 -252.85 0c-6.07,5.96 -41.47,70.68 -105.58,194.4 -11.11,18.37 -17.29,27.61 -18.72,27.61l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.79,-24.7l-1.98 -9.09c-2.9,-13.47 -17.45,-33.95 -43.92,-61.58l5.51 -2.99zm-792.75 0l758.27 0 0.64 2.99c-195.44,377.28 -303.38,581.65 -323.89,613.13l-197.37 0c-4.24,0 -6.6,-2.06 -7.45,-6.06 5.75,-4.89 46.12,-79.83 120.97,-225.06l-249.51 0c-5.56,7.52 -48.47,84.55 -128.62,231.12l-203.49 0 -0.69 -3.08c178.16,-329 269.38,-500.66 273.91,-514.68 2.71,-6.83 3.45,-17.15 2.6,-30.81 -2.39,-11.19 -17.15,-31.67 -44.05,-61.41l-1.32 -6.14zm185.2 228.04l249 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.72 0c-2.81,0 -16.06,23.62 -40.02,70.69zm-1103.91 -228.04l298.89 0c4.16,0.55 6.74,2.81 7.57,6.66l9.27 43.04c6.44,29.76 17.44,75.82 32.88,138.45 190.96,-123.03 291.13,-185.84 300.97,-188.15l206.5 0c4.3,0.55 6.73,2.81 7.55,6.66 -212.8,402.15 -321.84,605.48 -327.27,609.46l-203.52 0 -0.69 -3.08 175.45 -329.54 -0.68 -3.15 -2.97 0 -282.28 191.28c-5.52,-6.84 -8.76,-12.07 -9.47,-15.4l-50.55 -191.26 -2.98 0c-112.09,216.6 -175.21,333.7 -189.29,351.15l-202.99 0 -0.71 -3.08 274.04 -514.16c2.58,-7.52 2.71,-15.74 0.78,-24.65l-1.95 -9.11c-2.91,-13.47 -17.46,-33.95 -43.93,-61.59l5.38 -3.53zm-496.95 0l400.37 0c23.26,0 40.99,20.47 53.34,61.46 5.96,27.63 -9.61,69.81 -46.53,126.69 -44.77,80.33 -115.53,214.7 -211.82,403.33 -9.73,16.45 -24.43,24.64 -43.84,24.64l-517.82 0c-14.01,-8.19 -22.34,-17.45 -24.49,-27.61 -6.2,-28.7 27.81,-103.76 102.25,-225.02 91.52,-179.21 152.8,-290.15 184.01,-332.87 24.3,-20.48 59.21,-30.62 104.53,-30.62zm-137.63 461.82l203.51 0c1.89,-7.52 54.92,-107.99 159.41,-301.53l-0.63 -2.94 -196.86 0c-5.24,4 -60.32,105.51 -165.43,304.47z"/>
+                <path d="M7160.73 529.99c52.95,0 95.89,42.94 95.89,95.95 0,52.95 -42.94,95.89 -95.89,95.89 -53,0 -95.97,-42.94 -95.97,-95.89 0,-53.01 42.97,-95.95 95.97,-95.95zm-42.35 149.95l0 -110.28 46.91 0c11.77,0 20.35,1.01 25.65,3.01 5.34,1.97 9.65,5.52 12.86,10.57 3.22,5.05 4.8,10.81 4.8,17.39 0,8.2 -2.44,15.09 -7.3,20.45 -4.85,5.38 -12.16,8.8 -21.83,10.2 4.84,2.81 8.84,5.9 11.95,9.27 3.13,3.36 7.34,9.3 12.66,17.89l13.46 21.5 -26.6 0 -16.09 -23.99c-5.74,-8.56 -9.67,-13.99 -11.76,-16.2 -2.1,-2.26 -4.33,-3.73 -6.7,-4.58 -2.37,-0.83 -6.08,-1.25 -11.2,-1.25l-4.5 0 0 46.02 -22.31 0zm22.31 -63.65l16.45 0c10.69,0 17.35,-0.44 20.02,-1.32 2.65,-0.87 4.74,-2.48 6.23,-4.68 1.53,-2.18 2.3,-4.96 2.3,-8.25 0,-3.76 -1.01,-6.69 -3,-8.99 -1.97,-2.32 -4.75,-3.73 -8.39,-4.34 -1.8,-0.25 -7.21,-0.37 -16.25,-0.37l-17.36 0 0 27.95zm20.04 -72.89c45.53,0 82.45,36.94 82.45,82.54 0,45.52 -36.92,82.49 -82.45,82.49 -45.59,0 -82.53,-36.97 -82.53,-82.49 0,-45.6 36.94,-82.54 82.53,-82.54z"/>
+              </svg>
+              <span class="label-tag">STOCK TAKE — LOOSE ITEMS</span>
+            </div>
+            <div class="label-date" id="loose-lbl-date">—</div>
+          </div>
+
+          <!-- SKU BOX -->
+          <div class="label-sku-box">
+            <div class="label-sku-inner" style="background:#000;border-color:#000;">
+              <div class="label-category" id="loose-lbl-name" style="color:#aaa;">—</div>
+              <div class="label-sku-big" id="loose-lbl-sku-text" style="color:#fff;">—</div>
+            </div>
+          </div>
+
+          <!-- QR CODE (SKU only) -->
+          <div class="label-qr-box">
+            <div class="label-qr-inner">
+              <img id="loose-qr-img" src="" width="130" height="130" alt="QR"/>
+              <div class="label-qr-text" id="loose-lbl-qr-text">—</div>
+            </div>
+          </div>
+
+          <!-- LOOSE BOX -->
+          <div class="label-qty-box">
+            <div class="label-qty-inner" style="background:#000;border-color:#000;justify-content:center;">
+              <div class="label-qty-value" id="loose-lbl-qty" style="font-size:86px;font-weight:900;color:#fff;letter-spacing:-2px;line-height:1;">LOOSE</div>
+            </div>
+          </div>
+
+          <!-- FOOTER -->
+          <div class="label-footer">
+            <span class="label-counted" id="loose-lbl-counted">Counted by: —</span>
+            <span id="loose-lbl-notes" style="font-size:9px;font-style:italic;color:#888;"></span>
+            <span class="label-seal-badge" style="background:#1a5a8a;">📦 LOOSE &amp; COUNTED</span>
+          </div>
         </div>
-        <div style="flex:1;min-width:120px;">
-          <label style="display:block;font-size:10px;color:var(--text2);margin-bottom:5px;font-weight:600;letter-spacing:0.5px;">LOCATION (optional)</label>
-          <input type="text" id="loose-location" placeholder="e.g. Bin D1" style="width:100%;font-family:var(--mono);">
+      </div>
+
+      <div class="print-btn-wrap" id="loose-print-btn-wrap" style="display:none">
+        <button class="btn btn-success hide-on-mobile" onclick="printLooseLabel()">🖨 Print Label</button>
+        <button class="btn btn-ghost" onclick="saveLooseEntry()">💾 Save to Loose Items</button>
+        <button class="btn btn-ghost" onclick="clearLooseForm()">✖ Clear</button>
+      </div>
+
+      <!-- LOOSE RECORDS LIST -->
+      <div style="margin-top:28px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <div class="section-title" style="margin-bottom:0;flex:1;">📋 Saved Loose Items</div>
         </div>
-        <button class="btn btn-primary" onclick="addLooseEntry()" style="flex-shrink:0;height:38px;">+ Save</button>
+
+        <div id="loose-empty" class="empty-state">
+          <div class="empty-state-icon">📦</div>
+          No loose counts saved yet.<br>Generate and save labels above.
+        </div>
+
+        <div class="table-scroll">
+        <table class="data-table" id="loose-table" style="display:none;">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>SKU Code</th>
+              <th>Category</th>
+              <th>Loose Qty</th>
+              <th>Date</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="loose-tbody"></tbody>
+        </table>
+        </div>
       </div>
     </div>
 
-    <!-- LOOSE LIST -->
-    <div id="loose-empty" class="empty-state">
-      <div class="empty-state-icon">📦</div>
-      No loose counts added yet.<br>Add loose qty per SKU above.
-    </div>
-
-    <div class="table-scroll"><table class="data-table" id="loose-table" style="display:none;">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>SKU Code</th>
-          <th>Category</th>
-          <th>Loose Qty</th>
-          <th>Location</th>
-          <th>Date</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody id="loose-tbody"></tbody>
-    </table></div>
   </div>
 </div>
-
 <!-- TAB 4: FINAL STOCK -->
 <div id="tab-final" class="page">
   <div class="panel">
@@ -1012,6 +1092,23 @@ function closeNav() {
   </div>
 </div>
 
+
+<!-- LOOSE UNSAVED WARNING MODAL -->
+<div id="loose-unsaved-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-top:3px solid var(--accent2);border-radius:10px;padding:28px;max-width:420px;width:90%;margin:0 16px;">
+    <div style="font-family:var(--mono);font-size:14px;font-weight:700;color:var(--accent2);margin-bottom:12px;">⚠ Not Saved to Loose Items!</div>
+    <div style="font-size:13px;color:var(--text);line-height:1.7;margin-bottom:20px;">
+      You haven't saved this label to Loose Items yet.<br><br>
+      <span style="color:var(--text2);font-size:12px;">If you print without saving, this won't appear in your Final Stock report.</span>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="btn btn-primary" onclick="looseSaveAndPrint()" style="flex:1;">💾 Save & Print</button>
+      <button class="btn btn-ghost hide-on-mobile" onclick="loosePrintAnyway()" style="flex:1;">🖨 Print Without Saving</button>
+      <button class="btn btn-ghost" onclick="closeLooseModal()" style="width:100%;margin-top:4px;">✖ Go Back</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -1070,7 +1167,7 @@ async function loadFromWorker() {
       date: r.date, notes: r.notes, saved: true, printed: r.printed === 1 || r.printed === true || false
     }));
     looseList = (data.looseList || []).map(r => ({
-      id: parseInt(r.id), sku: r.sku, name: r.name,
+      id: parseInt(r.id), sku: (r.sku||'').toUpperCase(), name: r.name,
       qty: r.qty, location: r.location, date: r.date
     }));
     ucList = (data.ucList || []).map(r => ({
@@ -1168,7 +1265,7 @@ function useExistingSkip() {
 
 // ── GENERATE LABEL ─────────────────────────────────────────────────────
 function generateLabel() {
-  const sku  = document.getElementById('inp-sku').value.trim();
+  const sku  = document.getElementById('inp-sku').value.trim().toUpperCase();
   const name = document.getElementById('inp-name').value.trim();
   const qty  = document.getElementById('inp-qty').value.trim();
   const by   = document.getElementById('inp-counted').value.trim();
@@ -1266,20 +1363,6 @@ html,body{width:${W}px;height:${H}px;background:#fff;overflow:hidden;}
 .lf-badge{background:#000!important;color:#fff!important;font-size:11px;font-weight:700;padding:5px 16px;border-radius:3px;letter-spacing:1.5px;}
 
 
-  .badge-unprinted { background: #3a2a00; color: var(--accent); border: 1px solid var(--accent); }
-  .badge-printed   { background: #1a3a1a; color: var(--accent3); }
-  .print-filter-bar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 14px;
-    flex-wrap: wrap;
-  }
-  .print-filter-bar .btn.active-filter {
-    background: var(--accent);
-    color: #000;
-    border-color: var(--accent);
-  }
 
   /* Hide print buttons on mobile */
   @media (max-width: 768px) {
@@ -1542,16 +1625,6 @@ function clearForm() {
 }
 
 // ── MASTER LIST ────────────────────────────────────────────────────────
-let showUnprintedOnly = false;
-
-function toggleUnprintedFilter() {
-  showUnprintedOnly = !showUnprintedOnly;
-  const btn = document.getElementById('btn-filter-unprinted');
-  btn.classList.toggle('active-filter', showUnprintedOnly);
-  btn.textContent = showUnprintedOnly ? '✅ Show All' : '🖨 Show Unprinted Only';
-  renderMaster(document.querySelector('.search-bar input').value);
-}
-
 function markPrinted(id) {
   const entry = masterList.find(s => s.id === id);
   if (!entry) return;
@@ -1594,20 +1667,12 @@ function renderMaster(filter='') {
     grouped[key].boxes.push(s);
   });
 
-  const skuGroups = Object.values(grouped).filter(g => {
-    const matchesSearch = !filter ||
-      g.sku.toLowerCase().includes(filter.toLowerCase()) ||
-      g.name.toLowerCase().includes(filter.toLowerCase());
-    const matchesFilter = !showUnprintedOnly || g.boxes.some(b => !b.printed);
-    return matchesSearch && matchesFilter;
-  });
+  const skuGroups = Object.values(grouped).filter(g =>
+    !filter ||
+    g.sku.toLowerCase().includes(filter.toLowerCase()) ||
+    g.name.toLowerCase().includes(filter.toLowerCase())
+  );
 
-  // Update unprinted count badge
-  const unprintedTotal = masterList.filter(b => !b.printed).length;
-  const unprintedEl = document.getElementById('unprinted-count');
-  if (unprintedEl) unprintedEl.textContent = unprintedTotal > 0
-    ? unprintedTotal + ' box' + (unprintedTotal !== 1 ? 'es' : '') + ' not printed'
-    : '✅ All printed';
 
   
   const totalSkus   = Object.keys(grouped).length;
@@ -1640,9 +1705,7 @@ function renderMaster(filter='') {
         <td style="color:var(--text2);font-size:10px;">${b.notes||'—'}</td>
         <td>
           <span class="badge badge-sealed">✓ SEALED</span>
-          ${b.printed
-            ? '<span class=\"badge badge-printed\" style=\"margin-left:4px;\">\u{1F5A8} Printed</span>'
-            : '<span class=\"badge badge-unprinted\" style=\"margin-left:4px;\">\u26A0 Not Printed</span>'}
+
         </td>
         <td style="white-space:nowrap;">
           <button class="btn btn-ghost hide-on-mobile" style="font-size:10px;padding:4px 8px;margin-right:4px;" onclick="printFromRecord(${b.id})">\u{1F5A8} Print</button>
@@ -1752,6 +1815,225 @@ function exportReport() {
 
 // ── LOOSE COUNT ────────────────────────────────────────────────────────
 
+let currentLooseLabel = null;
+
+let looseWarningDismissed = false;
+
+function looseCheckDuplicates() {
+  looseWarningDismissed = false;
+  const val = document.getElementById('loose-sku').value.trim();
+  if (val.length < 2) { looseHideWarning(); return; }
+
+  // Auto-fill category if exact match
+  const exact = masterList.find(s => s.sku.toLowerCase() === val.toLowerCase());
+  if (exact) {
+    const sel = document.getElementById('loose-name');
+    if (sel) sel.value = exact.name;
+  }
+
+  // Show warning for similar (not exact) SKUs
+  const similar = masterList.filter(s =>
+    s.sku.toLowerCase() !== val.toLowerCase() && similarity(s.sku, val) > 0.6
+  );
+  const seen = new Set();
+  const unique = similar.filter(s => {
+    if (seen.has(s.sku.toLowerCase())) return false;
+    seen.add(s.sku.toLowerCase()); return true;
+  });
+
+  if (unique.length > 0 && !looseWarningDismissed) {
+    const list = document.getElementById('loose-warning-list');
+    list.innerHTML = unique.slice(0,5).map(s =>
+      `<li onclick="looseUseSimilarSku('${s.sku}','${s.name}')">
+        <span style="color:var(--accent);font-weight:700;">${s.sku}</span>
+        &nbsp;—&nbsp;${s.name}
+      </li>`
+    ).join('');
+    document.getElementById('loose-warning-box').classList.add('show');
+  } else {
+    looseHideWarning();
+  }
+}
+
+function looseHideWarning() {
+  const el = document.getElementById('loose-warning-box');
+  if (el) el.classList.remove('show');
+}
+
+function looseDismissWarning() {
+  looseWarningDismissed = true;
+  looseHideWarning();
+}
+
+function looseUseSimilarSku(sku, name) {
+  document.getElementById('loose-sku').value = sku;
+  const sel = document.getElementById('loose-name');
+  if (sel) sel.value = name;
+  looseHideWarning();
+  showToast('✅ Using existing SKU: ' + sku);
+}
+
+function looseUseExistingSkip() {
+  const first = document.querySelector('#loose-warning-list li');
+  if (first) first.click();
+}
+
+function generateLooseLabel() {
+  const sku   = document.getElementById('loose-sku').value.trim().toUpperCase();
+  const name  = document.getElementById('loose-name').value.trim();
+  const qty   = document.getElementById('loose-qty').value.trim();
+  const by    = document.getElementById('loose-counted').value.trim();
+  const loc   = '';
+  const notes = document.getElementById('loose-notes').value.trim();
+
+  if (!sku)  { showToast('⚠ SKU Code is required', true); return; }
+  if (!qty || isNaN(qty) || parseInt(qty) < 0) { showToast('⚠ Enter a valid quantity', true); return; }
+  if (!by || by === 'Tomahawk Tools Team') { showToast('⚠ Please select who counted', true); return; }
+
+  const today   = new Date();
+  const dateStr = today.toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'});
+
+  document.getElementById('loose-lbl-date').innerHTML = dateStr + '<br>' + today.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
+  document.getElementById('loose-lbl-name').textContent    = (name || 'LOOSE').toUpperCase();
+  document.getElementById('loose-lbl-sku-text').textContent = sku;
+  document.getElementById('loose-lbl-qty').textContent     = qty;
+  document.getElementById('loose-lbl-counted').textContent = 'Counted by: ' + by;
+  document.getElementById('loose-lbl-notes').textContent   = notes ? '\uD83D\uDCDD ' + notes : '';
+
+  document.getElementById('loose-label-empty').style.display = 'none';
+  document.getElementById('loose-label-output').style.display = 'grid';
+  document.getElementById('loose-print-btn-wrap').style.display = 'flex';
+
+  const qrData = encodeURIComponent('SKU:' + sku);
+  document.getElementById('loose-qr-img').src = 'https://api.qrserver.com/v1/create-qr-code/?size=130x130&data=' + qrData + '&color=000000&bgcolor=ffffff&margin=4';
+  document.getElementById('loose-lbl-qr-text').innerHTML = sku + '<br>LOOSE';
+
+  currentLooseLabel = { sku, name, qty: parseInt(qty), countedBy: by, location: loc, notes, date: dateStr, saved: false };
+  showToast('\u2705 Loose label generated for ' + sku);
+}
+
+function printLooseLabel() {
+  if (!currentLooseLabel) return;
+  if (!currentLooseLabel.saved) {
+    document.getElementById('loose-unsaved-modal').style.display = 'flex';
+    return;
+  }
+  executeLoosePrint();
+}
+
+function looseSaveAndPrint() {
+  document.getElementById('loose-unsaved-modal').style.display = 'none';
+  saveLooseEntry();
+  executeLoosePrint();
+}
+
+function loosePrintAnyway() {
+  document.getElementById('loose-unsaved-modal').style.display = 'none';
+  executeLoosePrint();
+}
+
+function closeLooseModal() {
+  document.getElementById('loose-unsaved-modal').style.display = 'none';
+}
+
+function executeLoosePrint() {
+  if (!currentLooseLabel) return;
+  const qrSrc   = document.getElementById('loose-qr-img').src;
+  const logoSVG = document.querySelector('.label-logo').outerHTML;
+  const W = 567, H = 340;
+  const parts = [];
+  parts.push('<!DOCTYPE html><html><head><meta charset="UTF-8">');
+  parts.push('<style>');
+  parts.push('@import url(\'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap\');');
+  parts.push('@page{size:' + W + 'px ' + H + 'px;margin:0;}');
+  parts.push('*{box-sizing:border-box;margin:0;padding:0;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}');
+  parts.push('html,body{width:' + W + 'px;height:' + H + 'px;background:#fff;overflow:hidden;}');
+  parts.push('#label{width:' + W + 'px;height:' + H + 'px;display:grid;grid-template-columns:2fr 1fr;grid-template-rows:auto auto auto auto;font-family:\'IBM Plex Mono\',monospace;background:#fff;color:#000;}');
+  parts.push('.lh{grid-column:1/3;display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #000;padding:7px 14px;}');
+  parts.push('.lh-left{display:flex;align-items:center;gap:12px;}');
+  parts.push('.lh-tag{font-size:10px;color:#000;border-left:1px solid #000;padding-left:10px;letter-spacing:1px;}');
+  parts.push('.lh-date{font-size:10px;color:#000;text-align:right;line-height:1.7;}');
+  parts.push('.lm-sku-box{grid-column:1/2;grid-row:2/3;padding:8px 6px 4px 14px;}');
+  parts.push('.lm-sku-inner{border:2px solid #000;border-radius:4px;height:95px;padding:8px 14px;display:flex;flex-direction:column;justify-content:center;}');
+  parts.push('.lm-cat{font-size:13px;color:#555;font-weight:700;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;}');
+  parts.push('.lm-name{font-size:20px;font-weight:700;color:#000;word-break:break-all;line-height:1.3;}');
+  parts.push('.lm-qr-box{grid-column:2/3;grid-row:2/4;padding:8px 14px 8px 6px;}');
+  parts.push('.lm-qr-inner{border:2px solid #000;border-radius:4px;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;}');
+  parts.push('.lm-qty-box{grid-column:1/2;grid-row:3/4;padding:4px 6px 8px 14px;}');
+  parts.push('.lm-qty-inner{border:2px solid #000;border-radius:4px;height:120px;display:flex;flex-direction:column;align-items:center;justify-content:center;}');
+  parts.push('.lm-qty-label{font-size:11px;font-weight:700;letter-spacing:2px;color:#555;margin-bottom:4px;}');
+  parts.push('.lm-qty-val{font-size:64px;font-weight:700;line-height:1;color:#000;}');
+  parts.push('.lm-qty-unit{font-size:12px;font-weight:700;color:#555;margin-top:4px;letter-spacing:2px;}');
+  parts.push('.lf{grid-column:1/3;display:flex;justify-content:space-between;align-items:center;border-top:2px solid #000;padding:7px 14px;}');
+  parts.push('.lf-counted{font-size:13px;font-weight:600;color:#555;}');
+  parts.push('.lf-badge{background:#1a5a8a!important;color:#fff!important;font-size:11px;font-weight:700;padding:5px 16px;border-radius:3px;letter-spacing:1.5px;}');
+  parts.push('</style></head><body><div id="label">');
+  parts.push('<div class="lh"><div class="lh-left">');
+  parts.push(logoSVG.replace('class="label-logo"', 'style="height:36px;width:auto;"'));
+  parts.push('<span class="lh-tag">STOCK TAKE \u2014 LOOSE ITEMS</span></div>');
+  parts.push('<div class="lh-date">' + currentLooseLabel.date + '<br>' + new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}) + '</div></div>');
+  parts.push('<div class="lm-sku-box"><div class="lm-sku-inner" style="background:#000;border-color:#000;">');
+  parts.push('<div class="lm-cat" style="color:#aaa;">' + (currentLooseLabel.name || 'LOOSE') + '</div>');
+  parts.push('<div class="lm-name" style="color:#fff;">' + currentLooseLabel.sku + '</div></div></div>');
+  parts.push('<div class="lm-qr-box"><div class="lm-qr-inner">');
+  parts.push('<img src="' + qrSrc + '" width="130" height="130" alt="QR"/>');
+  parts.push('<div style="font-size:8px;color:#000;font-weight:600;text-align:center;line-height:1.5;">' + currentLooseLabel.sku + '<br>LOOSE</div>');
+  parts.push('</div></div>');
+  parts.push('<div class="lm-qty-box"><div class="lm-qty-inner" style="background:#000;border-color:#000;">');
+  parts.push('<div style="font-size:86px;font-weight:900;line-height:1;color:#fff;letter-spacing:-2px;">LOOSE</div>');
+  parts.push('</div></div>');
+  parts.push('<div class="lf"><span class="lf-counted">Counted by: ' + currentLooseLabel.countedBy + '</span>');
+  if (currentLooseLabel.notes) parts.push('<span style="font-size:9px;font-style:italic;color:#888;">' + currentLooseLabel.notes + '</span>');
+  parts.push('<span class="lf-badge">\uD83D\uDCE6 LOOSE &amp; COUNTED</span></div>');
+  parts.push('</div><script>window.onload=function(){setTimeout(function(){window.print();},500);};<' + '/script></body></html>');
+  const blob = new Blob([parts.join('')], {type: 'text/html'});
+  window.open(URL.createObjectURL(blob), '_blank');
+}
+
+function saveLooseEntry() {
+  if (!currentLooseLabel) return;
+  const { sku, name, qty, date } = currentLooseLabel;
+  const location = '';
+  let entry;
+  const existing = looseList.find(l => l.sku.toLowerCase() === sku.toLowerCase());
+  if (existing) {
+    existing.qty = qty; existing.location = location; existing.date = date;
+    entry = existing;
+    showToast('\u2705 Updated loose qty for ' + sku);
+  } else {
+    entry = { id: Date.now(), sku, name, qty, location: location || '', date };
+    looseList.push(entry);
+    showToast('\u2705 Loose count saved for ' + sku);
+  }
+  localStorage.setItem('sku_loose', JSON.stringify(looseList));
+  currentLooseLabel.saved = true;
+  const saveBtn = document.querySelector('[onclick="saveLooseEntry()"]');
+  if (saveBtn) { saveBtn.textContent = '\u2705 Saved'; saveBtn.disabled = true; }
+  renderLoose();
+  if (!IS_LOCAL) {
+    setSyncStatus('syncing');
+    apiPost('saveLoose', { loose: entry })
+      .then(r => setSyncStatus(r.ok ? 'saved' : 'error'))
+      .catch(() => setSyncStatus('error'));
+  }
+}
+
+function clearLooseForm() {
+  looseWarningDismissed = false;
+  looseHideWarning();
+  ['loose-sku','loose-qty','loose-notes'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  const sn = document.getElementById('loose-name');    if (sn) sn.selectedIndex = 0;
+  const sc = document.getElementById('loose-counted'); if (sc) sc.selectedIndex = 0;
+  document.getElementById('loose-label-empty').style.display  = 'block';
+  document.getElementById('loose-label-output').style.display = 'none';
+  document.getElementById('loose-print-btn-wrap').style.display = 'none';
+  const saveBtn = document.querySelector('[onclick="saveLooseEntry()"]');
+  if (saveBtn) { saveBtn.textContent = '\uD83D\uDCBE Save to Loose Items'; saveBtn.disabled = false; }
+  currentLooseLabel = null;
+}
+
 function renderLoose() {
   const dl = document.getElementById('sku-list');
   const skus = [...new Set(masterList.map(s => s.sku))];
@@ -1771,17 +2053,17 @@ function renderLoose() {
       <td style="color:var(--accent);font-weight:700;font-family:var(--mono);">${l.sku}</td>
       <td style="color:var(--text2);font-size:11px;">${master ? master.name : '—'}</td>
       <td style="font-weight:700;color:var(--accent3);font-size:14px;">${l.qty} pcs</td>
-      <td style="font-size:11px;color:var(--text2);">${l.location || '—'}</td>
       <td style="font-size:11px;">${l.date || '—'}</td>
+
       <td><button class="btn btn-ghost" style="font-size:10px;padding:4px 8px;" onclick="deleteLoose(${l.id})">🗑 Delete</button></td>
     </tr>`;
   }).join('');
 }
 
 function addLooseEntry() {
-  const sku = document.getElementById('loose-sku').value.trim();
+  const sku = document.getElementById('loose-sku').value.trim().toUpperCase();
   const qty = parseInt(document.getElementById('loose-qty').value);
-  const loc = document.getElementById('loose-location').value.trim();
+  const loc = '';
   if (!sku) { showToast('Enter a SKU code', true); return; }
   if (isNaN(qty) || qty < 0) { showToast('Enter a valid quantity', true); return; }
 
@@ -1802,7 +2084,6 @@ function addLooseEntry() {
   localStorage.setItem('sku_loose', JSON.stringify(looseList));
   document.getElementById('loose-sku').value = '';
   document.getElementById('loose-qty').value = '';
-  document.getElementById('loose-location').value = '';
   renderLoose();
   if (!IS_LOCAL) {
     setSyncStatus('syncing');
@@ -2038,17 +2319,23 @@ function deleteCategory(i) {
 }
 
 function rebuildDropdowns() {
-  // Rebuild category dropdown
-  const catSel = document.getElementById('inp-name');
-  const selCat = catSel.value;
-  catSel.innerHTML = '<option value="">— Select Category —</option>' +
-    categories.map(c => `<option value="${c}" ${c===selCat?'selected':''}>${c}</option>`).join('');
+  // Rebuild category dropdowns (box + loose)
+  ['inp-name','loose-name'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">— Select Category —</option>' +
+      categories.map(c => `<option value="${c}" ${c===cur?'selected':''}>${c}</option>`).join('');
+  });
 
-  // Rebuild persons dropdown
-  const perSel = document.getElementById('inp-counted');
-  const selPer = perSel.value;
-  perSel.innerHTML = '<option value="Tomahawk Tools Team">— Select Person —</option>' +
-    persons.map(p => `<option value="${p}" ${p===selPer?'selected':''}>${p}</option>`).join('');
+  // Rebuild persons dropdowns (box + loose)
+  ['inp-counted','loose-counted'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = '<option value="Tomahawk Tools Team">— Select Person —</option>' +
+      persons.map(p => `<option value="${p}" ${p===cur?'selected':''}>${p}</option>`).join('');
+  });
 }
 
 // ── THEME TOGGLE ───────────────────────────────────────────────────────
