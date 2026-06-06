@@ -1608,29 +1608,44 @@ async function toggleScan() {
 async function startScan() {
   if (!activeSession) { showToast('No active session', 'error'); return; }
   try {
-    // Try rear camera first, fall back to any camera
+    // Try rear camera with best quality, fall back progressively
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { exact: 'environment' } }
+        video: { facingMode: { exact: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
       });
-    } catch(e) {
-      stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    } catch(e1) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+      } catch(e2) {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      }
     }
 
     videoStream = stream;
+
+    // Apply continuous autofocus after stream starts
+    try {
+      const track = stream.getVideoTracks()[0];
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      if (caps.focusMode && caps.focusMode.includes('continuous')) {
+        await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+      }
+    } catch(e) { /* autofocus not supported on this device */ }
+
     const video = document.getElementById('scan-video');
     video.srcObject = stream;
 
     // Wait for video to be fully ready before starting frame loop
-    await new Promise((resolve, reject) => {
-      video.onloadedmetadata = () => {
-        video.play().then(resolve).catch(reject);
-      };
-      video.onerror = reject;
-      // Safety timeout
-      setTimeout(resolve, 3000);
+    await new Promise((resolve) => {
+      video.onloadedmetadata = () => video.play().then(resolve).catch(resolve);
+      setTimeout(resolve, 3000); // safety timeout
     });
+
+    // Extra wait for camera to stabilise focus
+    await new Promise(r => setTimeout(r, 500));
 
     scanning = true;
     const btn = document.getElementById('btn-scan-start');
@@ -1638,8 +1653,8 @@ async function startScan() {
     btn.classList.add('scanning');
     document.getElementById('scan-status-text').textContent = 'Scanning... point at QR code';
 
-    // Start frame loop — 100ms for faster detection on mobile
-    scanInterval = setInterval(processFrame, 100);
+    // Start frame loop — 150ms gives camera time to focus between frames
+    scanInterval = setInterval(processFrame, 150);
 
   } catch (e) {
     console.error('Camera error:', e);
@@ -1667,21 +1682,34 @@ function processFrame() {
   // Wait until video is actually streaming frames
   if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
 
-  canvas.width  = video.videoWidth;
-  canvas.height = video.videoHeight;
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+
+  // Scan full frame at native resolution for best accuracy
+  canvas.width  = vw;
+  canvas.height = vh;
   const ctx = canvas.getContext('2d');
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  ctx.drawImage(video, 0, 0, vw, vh);
 
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-
-  // Try both inversion modes — handles dark and light QR codes
+  // Try full frame first
+  let imageData = ctx.getImageData(0, 0, vw, vh);
   let code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+
+  // If not found, try centre crop (60% of frame) — helps with large QR codes
+  if (!code) {
+    const cropX = Math.floor(vw * 0.2);
+    const cropY = Math.floor(vh * 0.2);
+    const cropW = Math.floor(vw * 0.6);
+    const cropH = Math.floor(vh * 0.6);
+    imageData = ctx.getImageData(cropX, cropY, cropW, cropH);
+    code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+  }
 
   if (code && code.data) {
     clearInterval(scanInterval);
     scanInterval = null;
-    // Brief vibration feedback on mobile
     if (navigator.vibrate) navigator.vibrate(60);
+    document.getElementById('scan-status-text').textContent = '✅ QR detected!';
     handleQR(code.data);
   }
 }
