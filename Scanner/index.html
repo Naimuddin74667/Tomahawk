@@ -1608,12 +1608,29 @@ async function toggleScan() {
 async function startScan() {
   if (!activeSession) { showToast('No active session', 'error'); return; }
   try {
-    videoStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
-    });
+    // Try rear camera first, fall back to any camera
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { exact: 'environment' } }
+      });
+    } catch(e) {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    }
+
+    videoStream = stream;
     const video = document.getElementById('scan-video');
-    video.srcObject = videoStream;
-    await video.play();
+    video.srcObject = stream;
+
+    // Wait for video to be fully ready before starting frame loop
+    await new Promise((resolve, reject) => {
+      video.onloadedmetadata = () => {
+        video.play().then(resolve).catch(reject);
+      };
+      video.onerror = reject;
+      // Safety timeout
+      setTimeout(resolve, 3000);
+    });
 
     scanning = true;
     const btn = document.getElementById('btn-scan-start');
@@ -1621,10 +1638,13 @@ async function startScan() {
     btn.classList.add('scanning');
     document.getElementById('scan-status-text').textContent = 'Scanning... point at QR code';
 
-    // Poll frames for QR
-    scanInterval = setInterval(processFrame, 200);
+    // Start frame loop — 100ms for faster detection on mobile
+    scanInterval = setInterval(processFrame, 100);
+
   } catch (e) {
-    showToast('Camera access denied', 'error');
+    console.error('Camera error:', e);
+    showToast('Camera error: ' + (e.message || 'Access denied'), 'error');
+    scanning = false;
   }
 }
 
@@ -1643,19 +1663,25 @@ function stopScan() {
 function processFrame() {
   const video  = document.getElementById('scan-video');
   const canvas = document.getElementById('scan-canvas');
-  if (!video.videoWidth) return;
+
+  // Wait until video is actually streaming frames
+  if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
 
   canvas.width  = video.videoWidth;
   canvas.height = video.videoHeight;
   const ctx = canvas.getContext('2d');
-  ctx.drawImage(video, 0, 0);
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
-  if (code) {
-    // Pause scanning while handling result
+
+  // Try both inversion modes — handles dark and light QR codes
+  let code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+
+  if (code && code.data) {
     clearInterval(scanInterval);
     scanInterval = null;
+    // Brief vibration feedback on mobile
+    if (navigator.vibrate) navigator.vibrate(60);
     handleQR(code.data);
   }
 }
