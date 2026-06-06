@@ -1419,6 +1419,7 @@ let looseMode     = false;
 let videoStream   = null;
 let scanInterval  = null;
 let pendingSku    = null;   // sku waiting for qty input
+let frameCount    = 0;
 let viewedSession = null;   // for detail overlay
 
 // ══════════════════════════════════════════════════════
@@ -1654,7 +1655,7 @@ async function startScan() {
     document.getElementById('scan-status-text').textContent = 'Scanning... point at QR code';
 
     // Start frame loop — 150ms gives camera time to focus between frames
-    scanInterval = setInterval(processFrame, 150);
+    scanInterval = setInterval(processFrame, 80);
 
   } catch (e) {
     console.error('Camera error:', e);
@@ -1705,9 +1706,16 @@ function processFrame() {
     code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
   }
 
+  frameCount++;
+  // Update status every 20 frames so user knows scanner is active
+  if (frameCount % 20 === 0) {
+    document.getElementById('scan-status-text').textContent = '🔍 Scanning... (' + frameCount + ')';
+  }
+
   if (code && code.data) {
     clearInterval(scanInterval);
     scanInterval = null;
+    frameCount = 0;
     if (navigator.vibrate) navigator.vibrate(60);
     document.getElementById('scan-status-text').textContent = '✅ QR detected!';
     handleQR(code.data);
@@ -1715,22 +1723,29 @@ function processFrame() {
 }
 
 function handleQR(rawData) {
-  // Parse QR: "SKU:TLL-02|QTY:20" or "SKU:TLL-02"
-  const skuMatch = rawData.match(/SKU:([^|]+)/);
-  const qtyMatch = rawData.match(/QTY:(\d+)/);
+  // Show raw QR data in status bar for debugging — helps verify what was scanned
+  document.getElementById('scan-status-text').textContent = 'Read: ' + rawData.substring(0, 40);
+  console.log('QR raw data:', rawData);
+
+  // Parse QR formats:
+  // Sealed: "SKU:TLL-02|QTY:20"  or  "SKU:TBL-0024|QTY:5"
+  // Loose:  "SKU:TLL-02"
+  const skuMatch = rawData.match(/SKU:([^|\n\r]+)/i);
+  const qtyMatch = rawData.match(/QTY:(\d+)/i);
 
   if (!skuMatch) {
-    showToast('Invalid QR code', 'error');
-    // Resume scanning
-    scanInterval = setInterval(processFrame, 200);
+    // QR detected but not our format — show what was read and resume
+    showToast('Not a stock QR: ' + rawData.substring(0, 20), 'error');
+    setTimeout(() => {
+      if (scanning) scanInterval = setInterval(processFrame, 80);
+    }, 2000);
     return;
   }
 
-  const sku = skuMatch[1].trim();
+  const sku = skuMatch[1].trim().toUpperCase();
   const qty = qtyMatch ? parseInt(qtyMatch[1]) : null;
 
   if (looseMode) {
-    // Always treat as loose — ask for qty regardless
     pendingSku = sku;
     openQtyModal(sku);
   } else if (qty !== null) {
@@ -1758,7 +1773,7 @@ function closeQtyModal() {
   pendingSku = null;
   // Resume scanning
   if (scanning && !scanInterval) {
-    scanInterval = setInterval(processFrame, 200);
+    scanInterval = setInterval(processFrame, 80);
   }
 }
 
@@ -1807,7 +1822,7 @@ async function saveRecord(sku, qty, type) {
   // Resume scanning after success card (3s)
   setTimeout(() => {
     if (scanning && !scanInterval) {
-      scanInterval = setInterval(processFrame, 200);
+      scanInterval = setInterval(processFrame, 80);
     }
   }, 3100);
 }
