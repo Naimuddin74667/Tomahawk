@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="TK Scanner">
 <title>Tomahawk Scanner</title>
 <link rel="manifest" href="manifest.json">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
 
@@ -1419,7 +1419,6 @@ let looseMode     = false;
 let videoStream   = null;
 let scanInterval  = null;
 let pendingSku    = null;   // sku waiting for qty input
-let frameCount    = 0;
 let viewedSession = null;   // for detail overlay
 
 // ══════════════════════════════════════════════════════
@@ -1606,66 +1605,67 @@ async function toggleScan() {
   }
 }
 
+let zxingReader = null;
+
 async function startScan() {
   if (!activeSession) { showToast('No active session', 'error'); return; }
   try {
-    // Try rear camera with best quality, fall back progressively
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { exact: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
-      });
-    } catch(e1) {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
-        });
-      } catch(e2) {
-        stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      }
-    }
-
-    videoStream = stream;
-
-    // Apply continuous autofocus after stream starts
-    try {
-      const track = stream.getVideoTracks()[0];
-      const caps = track.getCapabilities ? track.getCapabilities() : {};
-      if (caps.focusMode && caps.focusMode.includes('continuous')) {
-        await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
-      }
-    } catch(e) { /* autofocus not supported on this device */ }
-
     const video = document.getElementById('scan-video');
-    video.srcObject = stream;
 
-    // Wait for video to be fully ready before starting frame loop
-    await new Promise((resolve) => {
-      video.onloadedmetadata = () => video.play().then(resolve).catch(resolve);
-      setTimeout(resolve, 3000); // safety timeout
-    });
+    // Reset any previous reader
+    if (zxingReader) { try { zxingReader.reset(); } catch(e){} }
 
-    // Extra wait for camera to stabilise focus
-    await new Promise(r => setTimeout(r, 500));
+    // ZXing BrowserMultiFormatReader handles QR, barcodes, all formats
+    zxingReader = new ZXing.BrowserMultiFormatReader();
+
+    // Get camera list — prefer rear
+    const devices = await ZXing.BrowserMultiFormatReader.listVideoInputDevices();
+    let deviceId = undefined;
+    if (devices && devices.length > 0) {
+      const rear = devices.find(d =>
+        d.label.toLowerCase().includes('back') ||
+        d.label.toLowerCase().includes('rear') ||
+        d.label.toLowerCase().includes('environment') ||
+        d.label.toLowerCase().includes('0,')
+      );
+      deviceId = rear ? rear.deviceId : devices[devices.length - 1].deviceId;
+    }
 
     scanning = true;
     const btn = document.getElementById('btn-scan-start');
     btn.innerHTML = '<span>⏹</span> Stop Scan';
     btn.classList.add('scanning');
-    document.getElementById('scan-status-text').textContent = 'Scanning... point at QR code';
+    document.getElementById('scan-status-text').textContent = '🔍 Scanning... point at QR code';
 
-    // Start frame loop — 150ms gives camera time to focus between frames
-    scanInterval = setInterval(processFrame, 80);
+    // ZXing handles everything — camera open, frame reading, QR decode
+    await zxingReader.decodeFromVideoDevice(deviceId, video, (result, err) => {
+      if (result) {
+        if (navigator.vibrate) navigator.vibrate(80);
+        handleQR(result.getText());
+        // Auto-restart after 3s success card
+        setTimeout(() => {
+          if (scanning) startScan();
+        }, 3200);
+      }
+      // NotFoundException fires every frame when no QR found — ignore it
+      if (err && !(err instanceof ZXing.NotFoundException)) {
+        console.warn('ZXing:', err.message);
+      }
+    });
 
   } catch (e) {
-    console.error('Camera error:', e);
-    showToast('Camera error: ' + (e.message || 'Access denied'), 'error');
+    console.error('Scan error:', e);
+    showToast('Camera error: ' + (e.message || 'Check camera permission'), 'error');
     scanning = false;
+    const btn = document.getElementById('btn-scan-start');
+    btn.innerHTML = '<span>📷</span> Start Scan';
+    btn.classList.remove('scanning');
   }
 }
 
 function stopScan() {
   scanning = false;
+  if (zxingReader) { try { zxingReader.reset(); } catch(e){} zxingReader = null; }
   if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
   if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
   const video = document.getElementById('scan-video');
@@ -1676,51 +1676,7 @@ function stopScan() {
   document.getElementById('scan-status-text').textContent = 'Tap button to start camera';
 }
 
-function processFrame() {
-  const video  = document.getElementById('scan-video');
-  const canvas = document.getElementById('scan-canvas');
-
-  // Wait until video is actually streaming frames
-  if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
-
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-
-  // Scan full frame at native resolution for best accuracy
-  canvas.width  = vw;
-  canvas.height = vh;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(video, 0, 0, vw, vh);
-
-  // Try full frame first
-  let imageData = ctx.getImageData(0, 0, vw, vh);
-  let code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
-
-  // If not found, try centre crop (60% of frame) — helps with large QR codes
-  if (!code) {
-    const cropX = Math.floor(vw * 0.2);
-    const cropY = Math.floor(vh * 0.2);
-    const cropW = Math.floor(vw * 0.6);
-    const cropH = Math.floor(vh * 0.6);
-    imageData = ctx.getImageData(cropX, cropY, cropW, cropH);
-    code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
-  }
-
-  frameCount++;
-  // Update status every 20 frames so user knows scanner is active
-  if (frameCount % 20 === 0) {
-    document.getElementById('scan-status-text').textContent = '🔍 Scanning... (' + frameCount + ')';
-  }
-
-  if (code && code.data) {
-    clearInterval(scanInterval);
-    scanInterval = null;
-    frameCount = 0;
-    if (navigator.vibrate) navigator.vibrate(60);
-    document.getElementById('scan-status-text').textContent = '✅ QR detected!';
-    handleQR(code.data);
-  }
-}
+// processFrame removed — ZXing handles frame decoding internally
 
 function handleQR(rawData) {
   // Show raw QR data in status bar for debugging — helps verify what was scanned
@@ -1736,9 +1692,7 @@ function handleQR(rawData) {
   if (!skuMatch) {
     // QR detected but not our format — show what was read and resume
     showToast('Not a stock QR: ' + rawData.substring(0, 20), 'error');
-    setTimeout(() => {
-      if (scanning) scanInterval = setInterval(processFrame, 80);
-    }, 2000);
+    setTimeout(() => { if (scanning) startScan(); }, 2000);
     return;
   }
 
@@ -1771,10 +1725,7 @@ function openQtyModal(sku) {
 function closeQtyModal() {
   document.getElementById('qty-modal').classList.remove('show');
   pendingSku = null;
-  // Resume scanning
-  if (scanning && !scanInterval) {
-    scanInterval = setInterval(processFrame, 80);
-  }
+  if (scanning) setTimeout(() => startScan(), 300);
 }
 
 function confirmQty() {
@@ -1819,12 +1770,7 @@ async function saveRecord(sku, qty, type) {
   }
   if (!r.ok) showToast('Sync error — data saved locally', 'error');
 
-  // Resume scanning after success card (3s)
-  setTimeout(() => {
-    if (scanning && !scanInterval) {
-      scanInterval = setInterval(processFrame, 80);
-    }
-  }, 3100);
+  // ZXing auto-restarts via startScan after success card
 }
 
 // ══════════════════════════════════════════════════════
