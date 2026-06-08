@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>QR Test Scanner</title>
+<script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #000;
+    color: #fff;
+    font-family: monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px;
+  }
+  h2 { color: #f0b429; margin-bottom: 16px; font-size: 18px; }
+
+  video {
+    width: 100%;
+    max-width: 400px;
+    border: 2px solid #f0b429;
+    border-radius: 10px;
+    background: #111;
+  }
+
+  #result {
+    margin-top: 20px;
+    width: 100%;
+    max-width: 400px;
+    background: #111;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 16px;
+    font-size: 14px;
+    min-height: 80px;
+    word-break: break-all;
+  }
+  #result .label { color: #888; font-size: 11px; margin-bottom: 6px; }
+  #result .value { color: #4ade80; font-size: 16px; font-weight: bold; }
+
+  #status {
+    margin-top: 12px;
+    font-size: 12px;
+    color: #888;
+  }
+
+  button {
+    margin-top: 20px;
+    background: #f0b429;
+    color: #000;
+    border: none;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: bold;
+    padding: 14px 32px;
+    cursor: pointer;
+    width: 100%;
+    max-width: 400px;
+  }
+
+  #log {
+    margin-top: 16px;
+    width: 100%;
+    max-width: 400px;
+    font-size: 10px;
+    color: #555;
+    height: 80px;
+    overflow-y: auto;
+  }
+</style>
+</head>
+<body>
+
+<h2>📷 QR Test Scanner</h2>
+
+<video id="video" playsinline autoplay muted></video>
+
+<div id="result">
+  <div class="label">SCANNED DATA</div>
+  <div class="value" id="result-text">Waiting for scan...</div>
+</div>
+
+<div id="status">Tap Start to open camera</div>
+
+<button id="btn" onclick="toggleScan()">▶ Start Scan</button>
+
+<div id="log"></div>
+
+<script>
+let reader = null;
+let running = false;
+
+function log(msg) {
+  const el = document.getElementById('log');
+  el.innerHTML = new Date().toLocaleTimeString() + ' — ' + msg + '<br>' + el.innerHTML;
+}
+
+function status(msg) {
+  document.getElementById('status').textContent = msg;
+  log(msg);
+}
+
+async function toggleScan() {
+  if (running) {
+    stopScan();
+  } else {
+    await startScan();
+  }
+}
+
+async function startScan() {
+  try {
+    status('Loading ZXing...');
+
+    reader = new ZXing.BrowserMultiFormatReader();
+    status('ZXing loaded. Getting cameras...');
+
+    const devices = await ZXing.BrowserMultiFormatReader.listVideoInputDevices();
+    status('Found ' + devices.length + ' camera(s)');
+
+    devices.forEach((d, i) => log('Camera ' + i + ': ' + d.label));
+
+    // Pick rear camera
+    let deviceId = undefined;
+    if (devices.length > 0) {
+      const rear = devices.find(d =>
+        d.label.toLowerCase().includes('back') ||
+        d.label.toLowerCase().includes('rear') ||
+        d.label.toLowerCase().includes('environment')
+      );
+      const chosen = rear || devices[devices.length - 1];
+      deviceId = chosen.deviceId;
+      status('Using: ' + (chosen.label || 'Camera ' + devices.length));
+    }
+
+    const video = document.getElementById('video');
+    running = true;
+    document.getElementById('btn').textContent = '⏹ Stop Scan';
+
+    status('Starting camera...');
+
+    await reader.decodeFromVideoDevice(deviceId, video, (result, err) => {
+      if (result) {
+        const text = result.getText();
+        document.getElementById('result-text').textContent = text;
+        status('✅ SCANNED: ' + text);
+        if (navigator.vibrate) navigator.vibrate(100);
+      }
+      if (err && !(err instanceof ZXing.NotFoundException)) {
+        log('ERR: ' + err.message);
+      }
+    });
+
+    status('Camera active — point at QR code');
+
+  } catch(e) {
+    status('ERROR: ' + e.message);
+    log('Exception: ' + e.stack);
+    running = false;
+    document.getElementById('btn').textContent = '▶ Start Scan';
+  }
+}
+
+function stopScan() {
+  if (reader) { try { reader.reset(); } catch(e){} reader = null; }
+  running = false;
+  document.getElementById('btn').textContent = '▶ Start Scan';
+  status('Stopped');
+}
+</script>
+</body>
+</html>
