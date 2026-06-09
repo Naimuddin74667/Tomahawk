@@ -4,18 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Stock Taking System</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js">
-// ── MOBILE NAV ──────────────────────────────────────────────────────────
-function toggleNav() {
-  document.getElementById('main-nav').classList.toggle('open');
-  document.getElementById('nav-overlay').classList.toggle('open');
-}
-function closeNav() {
-  document.getElementById('main-nav').classList.remove('open');
-  document.getElementById('nav-overlay').classList.remove('open');
-}
-
-</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
 
@@ -632,6 +621,7 @@ function closeNav() {
   <div class="tab" onclick="switchTab('loose')">📦 Loose Items</div>
   <div class="tab" onclick="switchTab('final')">✅ Final Stock</div>
   <div class="tab" onclick="switchTab('uc')">🗑 UC Disable List</div>
+  <div class="tab" onclick="switchTab('bin')">📦 Bin Allotment</div>
   <div class="tab" onclick="switchTab('settings')">⚙ Settings</div>
 </nav>
 
@@ -1015,6 +1005,7 @@ function closeNav() {
           <th>Sealed Qty</th>
           <th>Loose Qty</th>
           <th style="color:var(--accent);">Total Qty</th>
+          <th>Bin</th>
           <th>Status</th>
         </tr>
       </thead>
@@ -1024,6 +1015,60 @@ function closeNav() {
 </div>
 
 <!-- TAB 5: UC DISABLE LIST -->
+<!-- TAB: BIN ALLOTMENT -->
+<div id="tab-bin" class="page">
+  <div class="main">
+    <div class="left-panel panel">
+      <div class="section-title">📦 Bin Allotment</div>
+
+      <div class="form-group">
+        <label>SKU Code *</label>
+        <select id="bin-sku-select" onchange="onBinSkuChange()">
+          <option value="">— Select SKU —</option>
+        </select>
+      </div>
+
+      <div id="bin-current-info" style="display:none;margin-bottom:14px;padding:10px 14px;background:var(--surface2);border-radius:6px;border-left:3px solid var(--accent);">
+        <div style="font-size:11px;color:var(--text2);margin-bottom:4px;font-family:var(--mono);">CURRENTLY ALLOTTED TO</div>
+        <div id="bin-current-value" style="font-family:var(--mono);font-size:18px;font-weight:700;color:var(--accent);"></div>
+      </div>
+
+      <div class="form-group">
+        <label>Select Bin *</label>
+        <select id="bin-select">
+          <option value="">— Select Bin —</option>
+          <optgroup label="Row A"><option>A1</option><option>A2</option><option>A3</option><option>A4</option></optgroup>
+          <optgroup label="Row B"><option>B1</option><option>B2</option><option>B3</option><option>B4</option></optgroup>
+          <optgroup label="Row C"><option>C1</option><option>C2</option><option>C3</option><option>C4</option></optgroup>
+          <optgroup label="Row D"><option>D1</option><option>D2</option><option>D3</option><option>D4</option></optgroup>
+          <optgroup label="Row E"><option>E1</option><option>E2</option><option>E3</option><option>E4</option></optgroup>
+          <optgroup label="Row F"><option>F1</option><option>F2</option><option>F3</option><option>F4</option></optgroup>
+        </select>
+      </div>
+
+      <button class="btn btn-primary btn-full" onclick="allotBin()" style="margin-top:8px;">📦 Allot Bin</button>
+      <button class="btn btn-ghost btn-full" id="btn-remove-bin" onclick="removeBinAllotment()" style="margin-top:8px;display:none;">🗑 Remove Allotment</button>
+    </div>
+
+    <div class="right-panel panel">
+      <div class="section-title" style="margin-bottom:16px;">🗺 Bin Map</div>
+      <div id="bin-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:24px;"></div>
+
+      <div class="section-title" style="margin-bottom:12px;">📋 All Allotments</div>
+      <div id="bin-empty" class="empty-state">
+        <div class="empty-state-icon">📦</div>
+        No bins allotted yet.<br>Select a SKU and bin above.
+      </div>
+      <div class="table-scroll">
+        <table class="data-table" id="bin-table" style="display:none;">
+          <thead><tr><th>#</th><th>Bin</th><th>SKU Code</th><th>Category</th><th>Action</th></tr></thead>
+          <tbody id="bin-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="tab-uc" class="page">
   <div class="panel">
     <div class="section-title">🗑 UC Disable List — Duplicates to Disable After Stock Taking</div>
@@ -1119,6 +1164,7 @@ const IS_LOCAL = location.protocol === 'file:' || location.hostname === 'localho
 // ── STATE ─────────────────────────────────────────────────────────────
 let masterList = JSON.parse(localStorage.getItem('sku_master') || '[]');
 let looseList  = JSON.parse(localStorage.getItem('sku_loose')  || '[]');
+let binList    = JSON.parse(localStorage.getItem('sku_bin')    || '[]');
 let ucList     = JSON.parse(localStorage.getItem('sku_uc')     || '[]');
 let persons    = JSON.parse(localStorage.getItem('sku_persons') || '["Person 1","Person 2","Person 3"]');
 let categories = JSON.parse(localStorage.getItem('sku_cats')    || '["Audio","Charging","Peripherals","Accessories","Wearables","Cables","Storage","Screens","Power","Networking","Other"]');
@@ -1181,6 +1227,9 @@ async function loadFromWorker() {
     localStorage.setItem('sku_uc',      JSON.stringify(ucList));
     localStorage.setItem('sku_persons', JSON.stringify(persons));
     localStorage.setItem('sku_cats',    JSON.stringify(categories));
+    binList = (data.binList || []).map(r => ({ sku: (r.sku||'').toUpperCase(), bin: r.bin }));
+    localStorage.setItem('sku_bin', JSON.stringify(binList));
+    renderBin();
     setSyncStatus('saved');
     showToast('☁ Data loaded from cloud');
   } catch(e) {
@@ -1194,6 +1243,7 @@ loadFromWorker();
 // ── TABS ──────────────────────────────────────────────────────────────
 function switchTab(tab) {
   closeNav(); // close drawer on mobile when tab selected
+  if (tab === 'bin') { renderBin(); }
   document.querySelectorAll('.tab').forEach((t,i) => {
     t.classList.toggle('active', ['generate','master','loose','final','uc','settings'][i] === tab);
   });
@@ -1624,6 +1674,22 @@ function clearForm() {
   warningDismissed = false;
 }
 
+
+// ── UNIFIED SKU POOL ─────────────────────────────────────────────────────
+function getAllSkus() {
+  const seen = new Set();
+  return [...masterList.map(s => ({sku:s.sku,name:s.name})), ...looseList.map(s => ({sku:s.sku,name:s.name}))]
+    .filter(s => { if (seen.has(s.sku.toLowerCase())) return false; seen.add(s.sku.toLowerCase()); return true; });
+}
+
+function getBinForSku(sku) {
+  const e = binList.find(b => b.sku.toLowerCase() === sku.toLowerCase());
+  return e ? e.bin : null;
+}
+
+const BINS = ['A1','A2','A3','A4','B1','B2','B3','B4','C1','C2','C3','C4',
+              'D1','D2','D3','D4','E1','E2','E3','E4','F1','F2','F3','F4'];
+
 // ── MASTER LIST ────────────────────────────────────────────────────────
 function markPrinted(id) {
   const entry = masterList.find(s => s.id === id);
@@ -1722,6 +1788,7 @@ function renderMaster(filter='') {
         <td colspan="4" style="color:var(--text2);font-size:11px;">
           <span style="color:var(--accent3);font-weight:700;">${g.boxes.length} box${g.boxes.length>1?'es':''}</span>
           &nbsp;|&nbsp; Category: ${g.name}
+          ${getBinForSku(g.sku) ? '&nbsp;<span style=\'background:rgba(240,180,41,0.15);color:var(--accent);padding:2px 7px;border-radius:4px;font-family:var(--mono);font-weight:700;font-size:11px;\'>📦 ' + getBinForSku(g.sku) + '</span>' : ''}
           ${g.boxes.some(b => !b.printed) ? '<span style="color:var(--accent);font-family:var(--mono);font-size:10px;margin-left:8px;">⚠ ' + g.boxes.filter(b=>!b.printed).length + ' not printed</span>' : '<span style="color:var(--accent3);font-size:10px;margin-left:8px;">🖨 all printed</span>'}
         </td>
         <td><button class="btn btn-danger" style="font-size:10px;padding:4px 8px;" onclick="event.stopPropagation();deleteSKU('${g.sku}')">🗑 Delete All</button></td>
@@ -2142,6 +2209,7 @@ function renderFinal() {
       <td style="color:var(--text2);">${r.sealedQty} pcs</td>
       <td style="color:var(--text2);">${r.looseQty} pcs</td>
       <td style="font-weight:700;font-size:15px;color:var(--accent3);">${r.total} pcs</td>
+      <td style="font-family:var(--mono);font-size:12px;">${getBinForSku(r.sku) ? '<span style=\"background:rgba(240,180,41,0.15);color:var(--accent);padding:3px 8px;border-radius:4px;font-weight:700;\">' + getBinForSku(r.sku) + '</span>' : '<span style=\"color:var(--text2);">—</span>'}</td>
       <td><span class="badge badge-sealed">✓ COUNTED</span></td>
     </tr>`).join('');
 }
@@ -2352,6 +2420,7 @@ if (localStorage.getItem('sku_theme') === 'light') {
 }
 
 // Init dropdowns on load
+renderBin();
 rebuildDropdowns();
 
 // ── MOBILE NAV ──────────────────────────────────────────────────────────
@@ -2363,6 +2432,254 @@ function closeNav() {
   document.getElementById('main-nav').classList.remove('open');
   document.getElementById('nav-overlay').classList.remove('open');
 }
+
+
+// ── BIN ALLOTMENT ────────────────────────────────────────────────────────
+
+function populateBinSkuDropdown() {
+  const sel = document.getElementById('bin-sku-select');
+  if (!sel) return;
+  const cur = sel.value;
+  const all = getAllSkus();
+  sel.innerHTML = '<option value="">— Select SKU —</option>' +
+    all.map(s => `<option value="${s.sku}" ${s.sku===cur?'selected':''}>${s.sku}${getBinForSku(s.sku) ? ' → '+getBinForSku(s.sku) : ''}</option>`).join('');
+}
+
+function onBinSkuChange() {
+  const sku = document.getElementById('bin-sku-select').value;
+  const info = document.getElementById('bin-current-info');
+  const removeBtn = document.getElementById('btn-remove-bin');
+  if (!sku) { info.style.display='none'; removeBtn.style.display='none'; return; }
+  const bin = getBinForSku(sku);
+  if (bin) {
+    document.getElementById('bin-current-value').textContent = bin;
+    info.style.display = 'block';
+    removeBtn.style.display = 'block';
+    document.getElementById('bin-select').value = bin;
+  } else {
+    info.style.display = 'none';
+    removeBtn.style.display = 'none';
+    document.getElementById('bin-select').value = '';
+  }
+}
+
+function allotBin() {
+  const sku = document.getElementById('bin-sku-select').value;
+  const bin = document.getElementById('bin-select').value;
+  if (!sku) { showToast('⚠ Select a SKU', true); return; }
+  if (!bin) { showToast('⚠ Select a bin', true); return; }
+  const existing = binList.find(b => b.sku.toLowerCase() === sku.toLowerCase());
+  if (existing) { existing.bin = bin; showToast('✅ Bin updated: '+sku+' → '+bin); }
+  else { binList.push({sku, bin}); showToast('✅ Bin allotted: '+sku+' → '+bin); }
+  localStorage.setItem('sku_bin', JSON.stringify(binList));
+  renderBin(); renderMaster(); renderFinal();
+  if (!IS_LOCAL) {
+    setSyncStatus('syncing');
+    apiPost('saveBinAllotment', {sku, bin}).then(r => setSyncStatus(r.ok?'saved':'error')).catch(()=>setSyncStatus('error'));
+  }
+}
+
+function removeBinAllotment() {
+  const sku = document.getElementById('bin-sku-select').value;
+  if (!sku) return;
+  binList = binList.filter(b => b.sku.toLowerCase() !== sku.toLowerCase());
+  localStorage.setItem('sku_bin', JSON.stringify(binList));
+  document.getElementById('bin-current-info').style.display = 'none';
+  document.getElementById('btn-remove-bin').style.display = 'none';
+  document.getElementById('bin-select').value = '';
+  showToast('🗑 Allotment removed for '+sku);
+  renderBin(); renderMaster(); renderFinal();
+  if (!IS_LOCAL) {
+    setSyncStatus('syncing');
+    apiPost('deleteBinAllotment', {sku}).then(r => setSyncStatus(r.ok?'saved':'error')).catch(()=>setSyncStatus('error'));
+  }
+}
+
+function quickRemoveBin(sku) {
+  binList = binList.filter(b => b.sku.toLowerCase() !== sku.toLowerCase());
+  localStorage.setItem('sku_bin', JSON.stringify(binList));
+  renderBin(); renderMaster(); renderFinal();
+  showToast('🗑 Removed allotment for '+sku);
+  if (!IS_LOCAL) {
+    setSyncStatus('syncing');
+    apiPost('deleteBinAllotment', {sku}).then(r => setSyncStatus(r.ok?'saved':'error')).catch(()=>setSyncStatus('error'));
+  }
+}
+
+function quickReallot(sku) {
+  document.getElementById('bin-sku-select').value = sku;
+  onBinSkuChange();
+}
+
+function renderBin() {
+  populateBinSkuDropdown();
+
+  // Bin grid
+  const grid = document.getElementById('bin-grid');
+  if (grid) {
+    grid.innerHTML = BINS.map(bin => {
+      const skusInBin = binList.filter(b => b.bin === bin);
+      const filled = skusInBin.length > 0;
+      return `<div style="border:2px solid ${filled?'var(--accent)':'var(--border)'};border-radius:6px;padding:8px 6px;text-align:center;background:${filled?'rgba(240,180,41,0.08)':'var(--surface)'};cursor:pointer;transition:all 0.2s;" onclick="document.getElementById('bin-select').value='${bin}'">
+        <div style="font-family:var(--mono);font-weight:700;font-size:14px;color:${filled?'var(--accent)':'var(--text2)'};">${bin}</div>
+        ${filled ? skusInBin.map(s=>`<div style="font-size:9px;color:var(--text);margin-top:3px;word-break:break-all;">${s.sku}</div>`).join('') : '<div style="font-size:9px;color:var(--text2);margin-top:3px;">Empty</div>'}
+      </div>`;
+    }).join('');
+  }
+
+  // Table
+  const empty = document.getElementById('bin-empty');
+  const table = document.getElementById('bin-table');
+  if (!empty || !table) return;
+  const sorted = [...binList].sort((a,b) => a.bin.localeCompare(b.bin));
+  if (sorted.length === 0) { empty.style.display='block'; table.style.display='none'; return; }
+  empty.style.display='none'; table.style.display='table';
+  const pool = getAllSkus();
+  document.getElementById('bin-tbody').innerHTML = sorted.map((b,i) => {
+    const meta = pool.find(s => s.sku.toLowerCase() === b.sku.toLowerCase());
+    return `<tr>
+      <td style="color:var(--text2)">${i+1}</td>
+      <td style="font-family:var(--mono);font-weight:700;font-size:15px;color:var(--accent);">${b.bin}</td>
+      <td style="color:var(--accent);font-weight:700;font-family:var(--mono);">${b.sku}</td>
+      <td style="color:var(--text2);font-size:11px;">${meta?meta.name:'—'}</td>
+      <td>
+        <button class="btn btn-ghost" style="font-size:10px;padding:4px 8px;" onclick="quickReallot('${b.sku}')">✏ Change</button>
+        <button class="btn btn-ghost" style="font-size:10px;padding:4px 8px;margin-left:4px;" onclick="quickRemoveBin('${b.sku}')">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+
+
+// ── MOBILE NAV ──────────────────────────────────────────────────────────
+function toggleNav() {
+  document.getElementById('main-nav').classList.toggle('open');
+  document.getElementById('nav-overlay').classList.toggle('open');
+}
+function closeNav() {
+  document.getElementById('main-nav').classList.remove('open');
+  document.getElementById('nav-overlay').classList.remove('open');
+}
+
+
+// ── BIN ALLOTMENT ────────────────────────────────────────────────────────
+
+function populateBinSkuDropdown() {
+  const sel = document.getElementById('bin-sku-select');
+  if (!sel) return;
+  const cur = sel.value;
+  const all = getAllSkus();
+  sel.innerHTML = '<option value="">— Select SKU —</option>' +
+    all.map(s => `<option value="${s.sku}" ${s.sku===cur?'selected':''}>${s.sku}${getBinForSku(s.sku) ? ' → '+getBinForSku(s.sku) : ''}</option>`).join('');
+}
+
+function onBinSkuChange() {
+  const sku = document.getElementById('bin-sku-select').value;
+  const info = document.getElementById('bin-current-info');
+  const removeBtn = document.getElementById('btn-remove-bin');
+  if (!sku) { info.style.display='none'; removeBtn.style.display='none'; return; }
+  const bin = getBinForSku(sku);
+  if (bin) {
+    document.getElementById('bin-current-value').textContent = bin;
+    info.style.display = 'block';
+    removeBtn.style.display = 'block';
+    document.getElementById('bin-select').value = bin;
+  } else {
+    info.style.display = 'none';
+    removeBtn.style.display = 'none';
+    document.getElementById('bin-select').value = '';
+  }
+}
+
+function allotBin() {
+  const sku = document.getElementById('bin-sku-select').value;
+  const bin = document.getElementById('bin-select').value;
+  if (!sku) { showToast('⚠ Select a SKU', true); return; }
+  if (!bin) { showToast('⚠ Select a bin', true); return; }
+  const existing = binList.find(b => b.sku.toLowerCase() === sku.toLowerCase());
+  if (existing) { existing.bin = bin; showToast('✅ Bin updated: '+sku+' → '+bin); }
+  else { binList.push({sku, bin}); showToast('✅ Bin allotted: '+sku+' → '+bin); }
+  localStorage.setItem('sku_bin', JSON.stringify(binList));
+  renderBin(); renderMaster(); renderFinal();
+  if (!IS_LOCAL) {
+    setSyncStatus('syncing');
+    apiPost('saveBinAllotment', {sku, bin}).then(r => setSyncStatus(r.ok?'saved':'error')).catch(()=>setSyncStatus('error'));
+  }
+}
+
+function removeBinAllotment() {
+  const sku = document.getElementById('bin-sku-select').value;
+  if (!sku) return;
+  binList = binList.filter(b => b.sku.toLowerCase() !== sku.toLowerCase());
+  localStorage.setItem('sku_bin', JSON.stringify(binList));
+  document.getElementById('bin-current-info').style.display = 'none';
+  document.getElementById('btn-remove-bin').style.display = 'none';
+  document.getElementById('bin-select').value = '';
+  showToast('🗑 Allotment removed for '+sku);
+  renderBin(); renderMaster(); renderFinal();
+  if (!IS_LOCAL) {
+    setSyncStatus('syncing');
+    apiPost('deleteBinAllotment', {sku}).then(r => setSyncStatus(r.ok?'saved':'error')).catch(()=>setSyncStatus('error'));
+  }
+}
+
+function quickRemoveBin(sku) {
+  binList = binList.filter(b => b.sku.toLowerCase() !== sku.toLowerCase());
+  localStorage.setItem('sku_bin', JSON.stringify(binList));
+  renderBin(); renderMaster(); renderFinal();
+  showToast('🗑 Removed allotment for '+sku);
+  if (!IS_LOCAL) {
+    setSyncStatus('syncing');
+    apiPost('deleteBinAllotment', {sku}).then(r => setSyncStatus(r.ok?'saved':'error')).catch(()=>setSyncStatus('error'));
+  }
+}
+
+function quickReallot(sku) {
+  document.getElementById('bin-sku-select').value = sku;
+  onBinSkuChange();
+}
+
+function renderBin() {
+  populateBinSkuDropdown();
+
+  // Bin grid
+  const grid = document.getElementById('bin-grid');
+  if (grid) {
+    grid.innerHTML = BINS.map(bin => {
+      const skusInBin = binList.filter(b => b.bin === bin);
+      const filled = skusInBin.length > 0;
+      return `<div style="border:2px solid ${filled?'var(--accent)':'var(--border)'};border-radius:6px;padding:8px 6px;text-align:center;background:${filled?'rgba(240,180,41,0.08)':'var(--surface)'};cursor:pointer;transition:all 0.2s;" onclick="document.getElementById('bin-select').value='${bin}'">
+        <div style="font-family:var(--mono);font-weight:700;font-size:14px;color:${filled?'var(--accent)':'var(--text2)'};">${bin}</div>
+        ${filled ? skusInBin.map(s=>`<div style="font-size:9px;color:var(--text);margin-top:3px;word-break:break-all;">${s.sku}</div>`).join('') : '<div style="font-size:9px;color:var(--text2);margin-top:3px;">Empty</div>'}
+      </div>`;
+    }).join('');
+  }
+
+  // Table
+  const empty = document.getElementById('bin-empty');
+  const table = document.getElementById('bin-table');
+  if (!empty || !table) return;
+  const sorted = [...binList].sort((a,b) => a.bin.localeCompare(b.bin));
+  if (sorted.length === 0) { empty.style.display='block'; table.style.display='none'; return; }
+  empty.style.display='none'; table.style.display='table';
+  const pool = getAllSkus();
+  document.getElementById('bin-tbody').innerHTML = sorted.map((b,i) => {
+    const meta = pool.find(s => s.sku.toLowerCase() === b.sku.toLowerCase());
+    return `<tr>
+      <td style="color:var(--text2)">${i+1}</td>
+      <td style="font-family:var(--mono);font-weight:700;font-size:15px;color:var(--accent);">${b.bin}</td>
+      <td style="color:var(--accent);font-weight:700;font-family:var(--mono);">${b.sku}</td>
+      <td style="color:var(--text2);font-size:11px;">${meta?meta.name:'—'}</td>
+      <td>
+        <button class="btn btn-ghost" style="font-size:10px;padding:4px 8px;" onclick="quickReallot('${b.sku}')">✏ Change</button>
+        <button class="btn btn-ghost" style="font-size:10px;padding:4px 8px;margin-left:4px;" onclick="quickRemoveBin('${b.sku}')">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+
 
 </script>
 </body>
