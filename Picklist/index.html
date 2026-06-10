@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Picklist — TomahawkTools</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Times New Roman', Times, serif;
+    background: #f0ede8;
+    color: #111;
+    font-size: 16px;
+  }
+
+  /* ── UPLOAD ── */
+  #upload-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    gap: 12px;
+  }
+
+  #upload-screen h1 {
+    font-size: 24px;
+    font-weight: 700;
+  }
+
+  #upload-screen p {
+    color: #666;
+    font-size: 16px;
+  }
+
+  .drop-zone {
+    width: 380px;
+    border: 2px dashed #bbb;
+    border-radius: 10px;
+    padding: 40px 24px;
+    text-align: center;
+    cursor: pointer;
+    background: #fff;
+    transition: border-color 0.2s;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: #c8410a;
+    background: #fdf5f2;
+  }
+  .drop-zone .icon { font-size: 36px; margin-bottom: 10px; }
+  .drop-zone .label { font-size: 17px; color: #444; margin-bottom: 14px; }
+  #file-input { display: none; }
+
+  .btn {
+    padding: 8px 20px;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    border: none;
+    font-family: inherit;
+  }
+  .btn-dark { background: #111; color: #fff; }
+  .btn-dark:hover { background: #333; }
+  .btn-outline { background: #fff; border: 1.5px solid #ccc; color: #111; }
+  .btn-outline:hover { background: #f5f5f5; }
+
+  /* ── PICKLIST ── */
+  #picklist-screen { display: none; }
+
+  .topbar {
+    background: #111;
+    color: #fff;
+    padding: 7px 16px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    position: sticky;
+    top: 0;
+    z-index: 99;
+  }
+  .topbar-title { font-size: 17px; font-weight: 700; flex: 1; }
+  .topbar-meta { font-size: 13px; color: #aaa; }
+
+  .combo-flag {
+    background: #fffbeb;
+    border: 1px solid #f0c040;
+    color: #7a5500;
+    border-radius: 5px;
+    padding: 4px 10px;
+    font-size: 14px;
+    font-weight: 600;
+    margin-left: auto;
+  }
+
+  .actionbar {
+    padding: 6px 16px;
+    display: flex;
+    gap: 10px;
+  }
+
+  /* ── TABLE ── */
+  .tbl-wrap {
+    padding: 0 16px 16px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid #ddd;
+  }
+
+  th {
+    background: #111;
+    color: #fff;
+    text-align: left;
+    padding: 9px 12px;
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 9px 12px;
+    border-bottom: 1px solid #eee;
+    vertical-align: middle;
+    font-size: 16px;
+  }
+
+  tr:last-child td { border-bottom: none; }
+  tr:nth-child(even) td { background: #fafafa; }
+  tr.combo-row td { background: #fffbeb !important; }
+
+  .sku { font-family: 'Times New Roman', Times, serif; font-size: 13px; font-weight: 700; color: #111; }
+  .sku-sell { font-family: 'Times New Roman', Times, serif; font-size: 13px; color: #444; }
+
+  .combo-chip {
+    display: inline-block;
+    background: #fffbeb;
+    border: 1px solid #f0c040;
+    color: #7a5500;
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-family: 'Times New Roman', Times, serif;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .qty {
+    font-size: 19px;
+    font-weight: 700;
+    text-align: center;
+  }
+
+  .print-date { display: none; }
+  .check-col { width: 36px; text-align: center; }
+    .img-cell { width: 60px; text-align: center; padding: 3px 5px !important; }
+  .img-cell img { width: 46px; height: 46px; object-fit: contain; border-radius: 3px; border: 1px solid #e0e0e0; background: #fafafa; display: block; margin: 0 auto; }
+  input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor: pointer; }
+
+  /* ── PRINT ── */
+  @media print {
+    .topbar .btn-outline, .actionbar { display: none !important; }
+    body { background: #fff; font-size: 13px; }
+    .topbar { position: static; background: #fff; color: #000; border-bottom: 2px solid #000; }
+    .topbar-title { color: #000; }
+    .topbar-meta { color: #555; }
+    .tbl-wrap { padding: 12px; }
+    table { border: 1px solid #ccc; }
+    th { background: #222 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    tr.combo-row td { background: #fffbeb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    #upload-screen { display: none !important; }
+    #picklist-screen { display: block !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- UPLOAD -->
+<div id="upload-screen">
+  <div style="font-size: 13px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#c8410a;">TomahawkTools &bull; E3 Warehouse</div>
+  <h1>Picklist Generator</h1>
+  <p>Upload the Uniware shipments CSV export</p>
+
+  <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+    <div class="icon">&#128230;</div>
+    <div class="label"><strong>Drop CSV here</strong> or click to browse</div>
+    <input type="file" id="file-input" accept=".csv">
+    <button class="btn btn-dark" onclick="event.stopPropagation();document.getElementById('file-input').click()">Choose File</button>
+  </div>
+  <p style="font-size: 13px;color:#999;max-width:340px;text-align:center;line-height:1.6;">
+    Shipments &rarr; New tab &rarr; Export CSV.<br>Combo SKUs auto-detected.
+  </p>
+</div>
+
+<!-- PICKLIST -->
+<div id="picklist-screen">
+  <div class="topbar">
+    <div class="topbar-title" id="topbar-title">&#128203; TomahawkTools Picklist</div>
+    <span class="topbar-meta" id="gen-time"></span>
+    <button class="btn btn-outline" onclick="resetApp()">&#8617; New CSV</button>
+  </div>
+
+
+  <div class="actionbar no-print">
+    <button class="btn btn-dark" onclick="window.print()">&#128424; Print / Save PDF</button>
+    <span class="combo-flag" id="combo-flag" style="display:none"></span>
+  </div>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th class="check-col" style="width:32px">&#10003;</th>
+          <th style="width:28px">#</th>
+          <th style="width:160px">UC SKU</th>
+          <th style="width:150px">Seller SKU</th>
+          <th>Combo</th>
+          <th style="width:70px;text-align:center">Image</th>
+          <th style="width:42px;text-align:center">Qty</th>
+        </tr>
+      </thead>
+      <tbody id="tbl-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+function parseCSVLine(line) {
+  const res = []; let cur = '', q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') { if (q && line[i+1] === '"') { cur += '"'; i++; } else q = !q; }
+    else if (c === ',' && !q) { res.push(cur); cur = ''; }
+    else cur += c;
+  }
+  res.push(cur); return res;
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  const hraw = parseCSVLine(lines[0]);
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const vals = parseCSVLine(lines[i]);
+    const obj = {};
+    hraw.forEach((h, idx) => {
+      const k = h.trim();
+      if (k === 'Shipment' && idx === 24) obj['SPCode'] = (vals[idx]||'').trim();
+      else if (obj[k] === undefined) obj[k] = (vals[idx]||'').trim();
+    });
+    rows.push(obj);
+  }
+  return rows;
+}
+
+function buildSummary(rows) {
+  const map = {};
+  rows.forEach(r => {
+    const imgRaw = (r['Channel Product Images']||'');
+    const imgUrl = imgRaw.includes('~') ? imgRaw.split('~')[1].trim() : '';
+    const uc  = (r['Item Type SKUs']||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const sel = (r['Seller SKUs']||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const qty = parseInt(r['Shipment SKU Quantity']||'1', 10);
+    const key = uc.slice().sort().join('|');
+    if (!map[key]) map[key] = { uc, sel, isCombo: uc.length > 1, qty: 0, imgUrl: imgUrl };
+    map[key].qty += qty;
+  });
+  return Object.values(map).sort((a,b) => b.qty - a.qty);
+}
+
+function render(rows) {
+  const summary = buildSummary(rows);
+  const combos  = rows.filter(r => (r['Item Type SKUs']||'').split(',').filter(s=>s.trim()).length > 1);
+  const totalQty = summary.reduce((a,r) => a+r.qty, 0);
+
+  // Channel + order count in headline
+  const channel = (rows[0]['Channel'] || 'UNKNOWN').trim().toUpperCase();
+  document.getElementById('topbar-title').textContent = channel + ' — ' + rows.length + ' Orders';
+  const cf = document.getElementById('combo-flag');
+  if (combos.length) { cf.textContent = '⚠ ' + combos.length + ' combo order' + (combos.length>1?'s':'') + ' — highlighted'; cf.style.display='inline-block'; }
+  else { cf.style.display='none'; }
+
+  document.getElementById('gen-time').textContent =
+    new Date().toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+
+  const tbody = document.getElementById('tbl-body');
+  tbody.innerHTML = '';
+  summary.forEach((row, i) => {
+    const tr = document.createElement('tr');
+    if (row.isCombo) tr.className = 'combo-row';
+    const combo = row.isCombo
+      ? '<span class="combo-chip">' + row.uc.join(' + ') + '</span>'
+      : '<span style="color:#bbb">—</span>';
+    tr.innerHTML =
+      '<td class="check-col"><input type="checkbox"></td>' +
+      '<td style="color:#999;font-size: 13px">' + (i+1) + '</td>' +
+      '<td>' + row.uc.map(s => '<div class="sku">' + s + '</div>').join('') + '</td>' +
+      '<td>' + row.sel.map(s => '<div class="sku-sell">' + s + '</div>').join('') + '</td>' +
+      '<td>' + combo + '</td>' +
+      '<td class="img-cell">' + (row.imgUrl ? '<img src="' + row.imgUrl + '" alt="">' : '') + '</td>' +
+      '<td class="qty">' + row.qty + '</td>';
+    tbody.appendChild(tr);
+  });
+
+  document.getElementById('upload-screen').style.display = 'none';
+  document.getElementById('picklist-screen').style.display = 'block';
+}
+
+
+// file handling
+document.getElementById('file-input').addEventListener('change', e => { if (e.target.files[0]) load(e.target.files[0]); });
+const dz = document.getElementById('drop-zone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('drag-over'); if (e.dataTransfer.files[0]) load(e.dataTransfer.files[0]); });
+
+function load(file) {
+  const r = new FileReader();
+  r.onload = e => {
+    try {
+      const rows = parseCSV(e.target.result);
+      if (!rows.length) { alert('No data found. Make sure this is the Uniware shipments CSV.'); return; }
+      render(rows);
+    } catch(err) { alert('Error: ' + err.message); }
+  };
+  r.readAsText(file);
+}
+
+function resetApp() {
+  document.getElementById('upload-screen').style.display = 'flex';
+  document.getElementById('picklist-screen').style.display = 'none';
+  document.getElementById('file-input').value = '';
+}
+</script>
+</body>
+</html>
