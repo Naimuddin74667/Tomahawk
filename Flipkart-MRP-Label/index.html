@@ -932,28 +932,76 @@ function parseBulkCSV(file) {
 }
 function buildBulkRows(skuQtyMap) {
   var lib=loadLib();
+  var libChanged=false;
+
   _bulkRows=Object.values(skuQtyMap).map(function(item){
+
+    // 1. Exact FK SKU match in library
     var model=findModelByFkSku(item.skuId);
-    if(model) return {skuId:item.skuId,qty:item.qty,status:'saved',model:model};
-    model=findModelByPrefix(item.skuId);
     if(model){
-      if(lib[model.model]&&lib[model.model].fkSkus.indexOf(item.skuId)===-1){
-        lib[model.model].fkSkus.push(item.skuId);
-        saveLib(lib);
+      // Auto-fill FNSKU from GSheet if not already stored
+      var m=lib[model.model];
+      if(m && !(m.fnskuMap&&m.fnskuMap[item.skuId])){
+        var gRow=lookupGSheetSKU(item.skuId);
+        if(gRow&&gRow.f){
+          if(!m.fnskuMap) m.fnskuMap={};
+          m.fnskuMap[item.skuId]=gRow.f;
+          libChanged=true;
+        }
       }
       return {skuId:item.skuId,qty:item.qty,status:'saved',model:lib[model.model]||model};
     }
+
+    // 2. Prefix match (e.g. TLL 05... matches TLL-05 model)
+    model=findModelByPrefix(item.skuId);
+    if(model){
+      var m=lib[model.model];
+      if(m){
+        // Add fkSku to model
+        if(m.fkSkus.indexOf(item.skuId)===-1){
+          m.fkSkus.push(item.skuId);
+          libChanged=true;
+        }
+        // Auto-fill FNSKU from GSheet if not already stored
+        if(!(m.fnskuMap&&m.fnskuMap[item.skuId])){
+          var gRow=lookupGSheetSKU(item.skuId);
+          if(gRow&&gRow.f){
+            if(!m.fnskuMap) m.fnskuMap={};
+            m.fnskuMap[item.skuId]=gRow.f;
+            libChanged=true;
+          }
+        }
+        if(libChanged) saveLib(lib);
+        // Check if now complete for this skuId
+        var hasFnsku=m.fnskuMap&&m.fnskuMap[item.skuId]&&m.fnskuMap[item.skuId].trim();
+        if(m.mrp&&m.colors&&m.colors.length&&hasFnsku){
+          return {skuId:item.skuId,qty:item.qty,status:'saved',model:m};
+        }
+        // Data exists but FNSKU missing — show as gsheet to let user confirm
+        var gRow2=lookupGSheetSKU(item.skuId);
+        var suggested={model:m.model,category:m.category,mrp:m.mrp,sales:m.sales,
+          dims:m.dims,mfgdate:m.mfgdate,brand:m.brand,colors:m.colors,
+          fkSkus:m.fkSkus,f:gRow2?gRow2.f:''};
+        return {skuId:item.skuId,qty:item.qty,status:'gsheet',model:null,suggested:suggested};
+      }
+    }
+
+    // 3. Not in library — check GSheet
     var gRow=lookupGSheetSKU(item.skuId);
     if(gRow){
       var settings=loadSettings();
       var suggested={model:item.skuId,category:subCatToCategory(gRow.c),mrp:String(gRow.m||''),
         sales:extractSalesPackage(gRow.t),dims:buildDims(gRow),mfgdate:settings.mfgdate||'01/01/2026',
         brand:gRow.br||'tomahawk',colors:detectColor(gRow.t)?[detectColor(gRow.t)]:[],
-        fkSkus:[item.skuId],_fsn:gRow.f};
+        fkSkus:[item.skuId],f:gRow.f};
       return {skuId:item.skuId,qty:item.qty,status:'gsheet',model:null,suggested:suggested};
     }
+
+    // 4. Not found anywhere
     return {skuId:item.skuId,qty:item.qty,status:'missing',model:null,suggested:null};
   });
+
+  if(libChanged) saveLib(lib);
   renderBulkTable();
 }
 function renderBulkTable() {
