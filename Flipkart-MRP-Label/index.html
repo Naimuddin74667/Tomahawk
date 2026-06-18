@@ -203,7 +203,7 @@
           <div id="previewLabelWrap" style="display:none;flex-direction:column;align-items:center;gap:.5rem;flex-shrink:0">
             <div style="display:flex;gap:.3rem;align-items:center;flex-wrap:wrap;justify-content:center">
               <button class="zoom-btn" onclick="zoom(-0.5)">&#8722;</button>
-              <span class="zoom-label" id="zoomLabel">1&times;</span>
+              <span class="zoom-label" id="zoomLabel">2&times;</span>
               <button class="zoom-btn" onclick="zoom(0.5)">+</button>
               <span style="font-size:10px;color:var(--muted)">75&times;50mm</span>
               <button onclick="hideLabelPreview()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);cursor:pointer;font-size:10px;padding:2px 6px">&#10005;</button>
@@ -668,23 +668,27 @@ function setBrandLogo(brand) {
 }
 
 // ── ZOOM ──
-var currentZoom = 3;
+var currentZoom = 2;      // bulk tab zoom
+var libZoom = 3;          // library tab zoom
 function zoom(delta) {
-  currentZoom = Math.min(4, Math.max(0.5, parseFloat((currentZoom+delta).toFixed(1))));
-  var scaledH=Math.round(189*currentZoom)+'px';
-  var scaledW=Math.round(283*currentZoom)+'px';
-  // Bulk label
-  var lbl=document.getElementById('label');
-  if(lbl){ lbl.style.transform='scale('+currentZoom+')'; lbl.style.transformOrigin='top center'; }
-  var wrap=document.getElementById('labelScaleWrap');
-  if(wrap) wrap.style.height=scaledH;
-  // Library label
-  var libLbl=document.getElementById('lib-label');
-  if(libLbl){ libLbl.style.transform='scale('+currentZoom+')'; libLbl.style.transformOrigin='top center'; }
-  var libCont=document.getElementById('lib-label-container');
-  if(libCont){ libCont.style.height=scaledH; libCont.style.width=scaledW; }
-  // Update all zoom labels
-  document.querySelectorAll('[id="zoomLabel"]').forEach(function(el){el.textContent=currentZoom+'×';});
+  var onLib = document.getElementById('tab-library') && document.getElementById('tab-library').style.display !== 'none';
+  if(onLib){
+    libZoom = Math.min(4, Math.max(0.5, parseFloat((libZoom+delta).toFixed(1))));
+    var lz=libZoom;
+    var libLbl=document.getElementById('lib-label');
+    if(libLbl){ libLbl.style.transform='scale('+lz+')'; libLbl.style.transformOrigin='top center'; }
+    var libCont=document.getElementById('lib-label-container');
+    if(libCont){ libCont.style.height=Math.round(189*lz)+'px'; libCont.style.width=Math.round(283*lz)+'px'; }
+    document.querySelectorAll('[id="zoomLabel"]').forEach(function(el){el.textContent=lz+'×';});
+  } else {
+    currentZoom = Math.min(4, Math.max(0.5, parseFloat((currentZoom+delta).toFixed(1))));
+    var cz=currentZoom;
+    var lbl=document.getElementById('label');
+    if(lbl){ lbl.style.transform='scale('+cz+')'; lbl.style.transformOrigin='top center'; }
+    var wrap=document.getElementById('labelScaleWrap');
+    if(wrap) wrap.style.height=Math.round(189*cz)+'px';
+    document.querySelectorAll('[id="zoomLabel"]').forEach(function(el){el.textContent=cz+'×';});
+  }
 }
 zoom(0);
 
@@ -774,13 +778,33 @@ function showLabelPreview(data, meta) {
 
 // ── LIBRARY preview (right panel, permanent lib-label) ──
 function showLibPreview(data, meta) {
-  _renderLabel('lib-', data);
-  var lbl=document.getElementById('lib-label');
-  if(lbl){ lbl.style.transform='scale('+currentZoom+')'; lbl.style.transformOrigin='top center'; }
-  var cont=document.getElementById('lib-label-container');
-  if(cont){ cont.style.height=Math.round(189*currentZoom)+'px'; cont.style.width=Math.round(283*currentZoom)+'px'; }
-  if(meta && document.getElementById('previewMeta')) document.getElementById('previewMeta').textContent=meta;
+  // Directly set all lib-label fields
+  var logoEl=document.getElementById('lib-logoImg');
+  if(logoEl) logoEl.src='data:image/png;base64,'+(data.brand==='oxford'?OXFORD_B64:LOGO_B64);
+  var _s=function(id,v){var e=document.getElementById('lib-'+id);if(e)e.textContent=v||'';};
+  _s('pv-mrp', data.mrp||'0.00');
+  _s('pv-generic', data.generic||'');
+  _s('pv-model', data.model||'');
+  _s('pv-sales', data.sales||'');
+  _s('pv-dims', data.dims||'');
+  _s('pv-mfgdate', data.mfgdate||'');
+  _s('pv-bcnum', data.fsn||'');
+  var cr=document.getElementById('lib-pv-color-row');
+  var ce=document.getElementById('lib-pv-color');
+  if(cr&&ce){if(data.color){cr.style.display='';ce.textContent=data.color;}else{cr.style.display='none';}}
+  var svgEl=document.getElementById('lib-pv-barcode-svg');
+  if(svgEl){
+    if(data.fsn){try{JsBarcode(svgEl,data.fsn,{format:'CODE128',displayValue:false,margin:0,width:1.2,height:28,background:'#ffffff',lineColor:'#000000'});svgEl.setAttribute('width','100%');svgEl.setAttribute('preserveAspectRatio','none');}catch(e){svgEl.innerHTML='';}}
+    else{svgEl.innerHTML='';}
+  }
+  // Apply lib zoom
+  var libLbl=document.getElementById('lib-label');
+  if(libLbl){ libLbl.style.transform='scale('+libZoom+')'; libLbl.style.transformOrigin='top center'; }
+  var libCont=document.getElementById('lib-label-container');
+  if(libCont){ libCont.style.height=Math.round(189*libZoom)+'px'; libCont.style.width=Math.round(283*libZoom)+'px'; }
+  if(meta) { var pm=document.getElementById('previewMeta'); if(pm) pm.textContent=meta; }
 }
+
 
 // ── OFF-SCREEN label (for PDF generation — never affected by tab/UI state) ──
 function showOffPreview(data) {
