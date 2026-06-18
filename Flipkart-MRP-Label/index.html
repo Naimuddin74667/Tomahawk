@@ -26,7 +26,7 @@
   .tab-content.active{display:flex;flex-direction:column;height:100%}
   .app-body{display:flex;flex:1;min-height:0;overflow:hidden;height:0}
   .left-panel{width:40%;max-width:40%;min-width:300px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
-  .left-inner{padding:1.2rem;overflow-y:auto;flex:1}
+  .left-inner{padding:1.2rem;flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden}
   .preview-panel{flex:1;background:var(--bg);display:flex;flex-direction:column;align-items:stretch;min-width:0;overflow:hidden;min-height:0}
   .preview-empty{text-align:center;color:var(--muted);font-size:12px;font-family:'DM Mono',monospace;letter-spacing:.06em;text-transform:uppercase}
   .preview-empty-icon{font-size:32px;margin-bottom:.6rem;opacity:.3}
@@ -262,7 +262,7 @@
           </label>
           <button class="btn btn-secondary btn-sm" style="flex:1" onclick="exportLibraryCSV()">&#8595; Export</button>
         </div>
-        <div id="libList" class="sku-list" style="flex:1;overflow-y:auto;min-height:0"></div>
+        <div id="libList" class="sku-list" style="flex:1;overflow-y:auto;min-height:0;padding-right:4px"></div>
       </div>
     </div>
 
@@ -306,7 +306,7 @@
         <div id="lib-preview-section" style="display:none;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:1.2rem;padding:2rem;overflow-y:auto">
           <div style="display:flex;gap:.5rem;align-items:center">
             <button class="zoom-btn" onclick="zoom(-0.5)">&#8722;</button>
-            <span class="zoom-label" id="zoomLabel">2&times;</span>
+            <span class="zoom-label" id="zoomLabel">3&times;</span>
             <button class="zoom-btn" onclick="zoom(0.5)">+</button>
             <span style="font-size:11px;color:var(--muted);margin-left:.4rem">75mm &times; 50mm</span>
           </div>
@@ -379,14 +379,7 @@
               <span style="font-size:11px;color:var(--muted)">cm</span>
             </div>
           </div>
-          <div class="field" style="margin:0">
-            <label class="field-lbl">Colors</label>
-            <div style="display:flex;gap:4px">
-              <input type="text" id="lib-color-input" placeholder="e.g. Black" style="flex:1;font-size:12px" onkeydown="if(event.key==='Enter'){event.preventDefault();addLibColorTag()}">
-              <button class="btn btn-secondary btn-sm" style="width:auto" onclick="addLibColorTag()">+ Add</button>
-            </div>
-            <div class="color-tags" id="lib-color-tags" style="margin-top:4px"></div>
-          </div>
+
           <div class="field" style="margin:0">
             <label class="field-lbl">Mapped FK SKU IDs &amp; FNSKUs</label>
             <div style="display:flex;gap:4px">
@@ -675,7 +668,7 @@ function setBrandLogo(brand) {
 }
 
 // ── ZOOM ──
-var currentZoom = 1.5;
+var currentZoom = 3;
 function zoom(delta) {
   currentZoom = Math.min(4, Math.max(0.5, parseFloat((currentZoom+delta).toFixed(1))));
   var scaledH=Math.round(189*currentZoom)+'px';
@@ -753,7 +746,25 @@ function showLabelPreview(data, meta) {
   document.getElementById('previewEmpty').style.display='none';
   var wrap=document.getElementById('previewLabelWrap');
   wrap.style.display='flex'; wrap.style.flexDirection='column';
-  _renderLabel('', data);
+  // Directly set all bulk label fields (most reliable)
+  var logoEl=document.getElementById('logoImg');
+  if(logoEl) logoEl.src='data:image/png;base64,'+(data.brand==='oxford'?OXFORD_B64:LOGO_B64);
+  var _s=function(id,v){var e=document.getElementById(id);if(e)e.textContent=v||'';};
+  _s('pv-mrp',data.mrp||'0.00');
+  _s('pv-generic',data.generic||'');
+  _s('pv-model',data.model||'');
+  _s('pv-sales',data.sales||'');
+  _s('pv-dims',data.dims||'');
+  _s('pv-mfgdate',data.mfgdate||'');
+  _s('pv-bcnum',data.fsn||'');
+  var cr=document.getElementById('pv-color-row');
+  var ce=document.getElementById('pv-color');
+  if(cr&&ce){if(data.color){cr.style.display='';ce.textContent=data.color;}else{cr.style.display='none';}}
+  var svgEl=document.getElementById('pv-barcode-svg');
+  if(svgEl){
+    if(data.fsn){try{JsBarcode(svgEl,data.fsn,{format:'CODE128',displayValue:false,margin:0,width:1.2,height:28,background:'#ffffff',lineColor:'#000000'});svgEl.setAttribute('width','100%');svgEl.setAttribute('preserveAspectRatio','none');}catch(e){svgEl.innerHTML='';}}
+    else{svgEl.innerHTML='';}
+  }
   var lbl=document.getElementById('label');
   if(lbl){ lbl.style.transform='scale('+currentZoom+')'; lbl.style.transformOrigin='top center'; }
   var scaleWrap=document.getElementById('labelScaleWrap');
@@ -945,7 +956,8 @@ function buildBulkRows(skuQtyMap) {
         var gRow=lookupGSheetSKU(item.skuId);
         if(gRow&&gRow.f){
           if(!m.fnskuMap) m.fnskuMap={};
-          m.fnskuMap[item.skuId]=gRow.f;
+          var autoColor=detectColor(gRow.t)||'';
+          m.fnskuMap[item.skuId]={f:gRow.f, color:autoColor};
           libChanged=true;
         }
       }
@@ -967,7 +979,8 @@ function buildBulkRows(skuQtyMap) {
           var gRow=lookupGSheetSKU(item.skuId);
           if(gRow&&gRow.f){
             if(!m.fnskuMap) m.fnskuMap={};
-            m.fnskuMap[item.skuId]=gRow.f;
+            var prefixColor=detectColor(gRow.t)||'';
+            m.fnskuMap[item.skuId]={f:gRow.f, color:prefixColor};
             libChanged=true;
           }
         }
@@ -1175,7 +1188,7 @@ function confirmInlineRow(i) {
   // Build fnskuMap - merge with existing if model already exists
   var existing=lib[modelName]||null;
   var fnskuMap=existing?Object.assign({},existing.fnskuMap||{}):{};
-  fnskuMap[r.skuId]=fnsku;
+  fnskuMap[r.skuId]={f:fnsku, color:color};
 
   // Build fkSkus list
   var fkSkus=existing?(existing.fkSkus||[]).slice():[];
@@ -1211,9 +1224,12 @@ function previewRow(i) {
   document.querySelectorAll('.bulk-table tr').forEach(function(tr){ tr.classList.remove('active-preview'); });
   var rowEl=document.getElementById('bulk-row-'+i);
   if(rowEl) rowEl.classList.add('active-preview');
-  var fsn=(r.model.fnskuMap&&r.model.fnskuMap[r.skuId])||'';
+  var _pe=r.model.fnskuMap&&r.model.fnskuMap[r.skuId];
+  var fsn=typeof _pe==='object'?_pe.f||'':_pe||'';
   if(!fsn){ var gRow=lookupGSheetSKU(r.skuId); fsn=gRow?gRow.f:''; }
-  var color=r.model.colors&&r.model.colors.length?r.model.colors[0]:'';
+  var fnskuEntry=r.model.fnskuMap&&r.model.fnskuMap[r.skuId];
+  var color=fnskuEntry&&typeof fnskuEntry==='object'?fnskuEntry.color||'':
+            (r.model.colors&&r.model.colors.length?r.model.colors[0]:'');
   showLabelPreview({mrp:r.model.mrp,generic:r.model.category,model:r.model.model,
     sales:r.model.sales,color:color,dims:r.model.dims,mfgdate:r.model.mfgdate,
     fsn:fsn,brand:r.model.brand},r.skuId+' \u00b7 '+r.qty+' labels');
@@ -1248,8 +1264,11 @@ function openPrintConfirm() {
   var incomplete=printable.filter(function(r){
     if(!r.model.mrp||!r.model.mrp.toString().trim()) return true;
     if(!r.model.colors||!r.model.colors.length||!r.model.colors[0].trim()) return true;
-    var fnsku=(r.model.fnskuMap&&r.model.fnskuMap[r.skuId])||'';
+    var pe=r.model.fnskuMap&&r.model.fnskuMap[r.skuId];
+    var fnsku=typeof pe==='object'?pe.f||'':pe||'';
+    var pcolor=typeof pe==='object'?pe.color||'':'';
     if(!fnsku.trim()) return true;
+    if(!pcolor.trim()) return true;
     return false;
   });
   if(incomplete.length){
@@ -1291,9 +1310,12 @@ function generateBulkPDF() {
   printable.forEach(function(r,i){
     var el=document.getElementById('cqty-'+i);
     var qty=el?(parseInt(el.value)||r.qty):r.qty;
-    var fsn=(r.model.fnskuMap&&r.model.fnskuMap[r.skuId])||'';
-    if(!fsn){ var gRow=lookupGSheetSKU(r.skuId); fsn=gRow?gRow.f:''; }
-    var color=r.model.colors&&r.model.colors.length?r.model.colors[0]:'';
+    var _pe2=r.model.fnskuMap&&r.model.fnskuMap[r.skuId];
+    var fsn=typeof _pe2==='object'?_pe2.f||'':_pe2||'';
+    if(!fsn){ var gRow2b=lookupGSheetSKU(r.skuId); fsn=gRow2b?gRow2b.f:''; }
+    var fnskuEntry2=r.model.fnskuMap&&r.model.fnskuMap[r.skuId];
+    var color=fnskuEntry2&&typeof fnskuEntry2==='object'?fnskuEntry2.color||'':
+              (r.model.colors&&r.model.colors.length?r.model.colors[0]:'');
     for(var j=0;j<qty;j++) queue.push({mrp:r.model.mrp,generic:r.model.category,model:r.model.model,
       sales:r.model.sales,color:color,dims:r.model.dims,mfgdate:r.model.mfgdate,fsn:fsn,brand:r.model.brand});
   });
@@ -1342,8 +1364,11 @@ function isModelComplete(m) {
   if(!m.colors||!m.colors.length||!m.colors[0].trim()) return false;
   if(!m.fkSkus||!m.fkSkus.length) return false;
   for(var i=0;i<m.fkSkus.length;i++){
-    var fnsku=(m.fnskuMap&&m.fnskuMap[m.fkSkus[i]])||'';
+    var entry=m.fnskuMap&&m.fnskuMap[m.fkSkus[i]];
+    var fnsku=typeof entry==='object'?entry.f||'':entry||'';
+    var entryColor=typeof entry==='object'?entry.color||'':'';
     if(!fnsku.trim()) return false;
+    if(!entryColor.trim()) return false;
   }
   return true;
 }
@@ -1418,7 +1443,11 @@ function openLibDetail(modelName) {
   _activeLibModel=modelName;
   _libColors=(m.colors||[]).slice();
   _libFkSkus=(m.fkSkus||[]).map(function(s){
-    return {skuId:s, fnsku:(m.fnskuMap&&m.fnskuMap[s])||''};
+    var entry=m.fnskuMap&&m.fnskuMap[s];
+    var fnsku=typeof entry==='object'?entry.f||'':entry||'';
+    var color=typeof entry==='object'?entry.color||'':
+              (m.colors&&m.colors.length?m.colors[0]:'');
+    return {skuId:s, fnsku:fnsku, color:color};
   });
   // Ensure library right panel is visible
   var lpa=document.getElementById('libraryPreviewArea');
@@ -1461,11 +1490,12 @@ function openLibDetail(modelName) {
   renderLibColorTags(); renderLibFkSkuTags();
   // lib-label is a separate permanent element
   // Show label preview using first FK SKU's FNSKU
-  var color=_libColors.length?_libColors[0]:'';
+  var color=_libFkSkus.length?(_libFkSkus[0].color||''):'';
   var fsn='';
   if(m.fkSkus&&m.fkSkus.length){
-    fsn=(m.fnskuMap&&m.fnskuMap[m.fkSkus[0]])||'';
-    if(!fsn){ var gRow=lookupGSheetSKU(m.fkSkus[0]); if(gRow) fsn=gRow.f; }
+    var _e0=m.fnskuMap&&m.fnskuMap[m.fkSkus[0]];
+    fsn=typeof _e0==='object'?_e0.f||'':_e0||'';
+    if(!fsn){ var gRow0=lookupGSheetSKU(m.fkSkus[0]); if(gRow0) fsn=gRow0.f; }
   }
   showLibPreview({mrp:m.mrp,generic:m.category,model:m.model,sales:m.sales,
     color:color,dims:m.dims,mfgdate:m.mfgdate,fsn:fsn,brand:m.brand},null);
@@ -1474,15 +1504,24 @@ function openLibDetail(modelName) {
   var skuInfoEl=document.getElementById('lib-sku-info');
   if(skuInfoEl){
     skuInfoEl.innerHTML=(m.fkSkus||[]).map(function(s){
-      var fn=(m.fnskuMap&&m.fnskuMap[s])||'';
+      var entry=m.fnskuMap&&m.fnskuMap[s];
+      var fn=typeof entry==='object'?entry.f||'':entry||'';
+      var col=typeof entry==='object'?entry.color||'':'';
       var ok=fn&&fn.trim();
-      return '<div style="background:#111;border:1px solid '+(ok?'var(--border)':'#e05555')+';border-radius:6px;padding:8px 12px;display:flex;align-items:center;gap:1rem">'
-        +'<div style="flex:1">'
-          +'<div style="font-size:10px;color:var(--muted);font-family:\'DM Mono\',monospace;margin-bottom:2px">FK SKU</div>'
-          +'<div style="font-size:12px;color:#4a90d9;font-family:\'DM Mono\',monospace;font-weight:600">'+s+'</div>'
+      var colorOk=col&&col.trim();
+      return '<div style="background:#111;border:1px solid '+(ok&&colorOk?'var(--border)':'#e05555')+';border-radius:6px;padding:8px 12px">'
+        +'<div style="display:flex;gap:1rem;margin-bottom:4px">'
+          +'<div style="flex:2">'
+            +'<div style="font-size:9px;color:var(--muted);font-family:\'DM Mono\',monospace;margin-bottom:2px">FK SKU</div>'
+            +'<div style="font-size:11px;color:#4a90d9;font-family:\'DM Mono\',monospace;font-weight:600">'+s+'</div>'
+          +'</div>'
+          +'<div style="flex:1">'
+            +'<div style="font-size:9px;color:var(--muted);margin-bottom:2px">COLOR</div>'
+            +'<div style="font-size:12px;color:'+(colorOk?'var(--text)':'#e05555')+';font-weight:600">'+(col||'MISSING')+'</div>'
+          +'</div>'
         +'</div>'
-        +'<div style="flex:1">'
-          +'<div style="font-size:10px;color:var(--muted);font-family:\'DM Mono\',monospace;margin-bottom:2px">FNSKU</div>'
+        +'<div>'
+          +'<div style="font-size:9px;color:var(--muted);font-family:\'DM Mono\',monospace;margin-bottom:2px">FNSKU</div>'
           +'<div style="font-size:13px;color:'+(ok?'var(--text)':'#e05555')+';font-family:\'DM Mono\',monospace;font-weight:700;letter-spacing:.05em">'+(fn||'MISSING')+'</div>'
         +'</div>'
       +'</div>';
@@ -1500,7 +1539,7 @@ function updateLibPreview() {
     generic:document.getElementById('lib-category').value.trim(),
     model:_activeLibModel,
     sales:document.getElementById('lib-sales').value.trim(),
-    color:_libColors.length?_libColors[0]:'',
+    color:_libFkSkus.length?(_libFkSkus[0].color||''):'',
     dims:(l&&b&&h)?l+'x'+b+'x'+h+'cm':'',
     mfgdate:document.getElementById('lib-mfgdate').value.trim(),
     fsn:_libFkSkus.length?(_libFkSkus[0].fnsku||''):'',
@@ -1525,7 +1564,7 @@ function addLibFkSkuTag(){
   var val=document.getElementById('lib-fksku-input').value.trim();
   if(!val||_libFkSkus.some(function(s){return s.skuId===val;})) return;
   var gRow=lookupGSheetSKU(val);
-  _libFkSkus.push({skuId:val,fnsku:gRow?gRow.f:''});
+  _libFkSkus.push({skuId:val,fnsku:gRow?gRow.f:'',color:''});
   document.getElementById('lib-fksku-input').value='';
   renderLibFkSkuTags();
 }
@@ -1534,7 +1573,23 @@ function renderLibFkSkuTags(){
   document.getElementById('lib-fksku-tags').innerHTML=_libFkSkus.map(function(item,i){
     var ok=item.fnsku&&item.fnsku.trim();
     var bc=ok?'var(--border)':'#e05555', tc=ok?'var(--text)':'#e05555';
-    return '<div style="background:#0d0d0d;border:1px solid '+bc+';border-radius:6px;padding:6px 10px;margin-bottom:4px">'      +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">'        +'<span style="font-size:11px;color:#4a90d9;font-family:monospace;flex:1;font-weight:600">'+item.skuId+'</span>'        +'<button onclick="removeLibFkSkuTag('+i+')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px">×</button>'      +'</div>'      +'<div style="display:flex;align-items:center;gap:8px">'        +'<span style="font-size:10px;color:var(--accent);font-weight:700;white-space:nowrap">FNSKU</span>'        +'<input id="lib-fnsku-'+i+'" type="text" value="'+item.fnsku+'" placeholder="Enter FNSKU" oninput="updateLibFnsku('+i+',this.value)" style="flex:1;font-size:13px;padding:4px 8px;background:#111;border:1px solid '+bc+';border-radius:4px;color:'+tc+';font-family:monospace;font-weight:600;letter-spacing:.05em">'      +'</div>'    +'</div>';
+    var hasColor=item.color&&item.color.trim();
+    return '<div style="background:#0d0d0d;border:1px solid '+bc+';border-radius:6px;padding:6px 10px;margin-bottom:4px">'
+      +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'
+        +'<span style="font-size:11px;color:#4a90d9;font-family:monospace;flex:1;font-weight:600">'+item.skuId+'</span>'
+        +'<button onclick="removeLibFkSkuTag('+i+')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px">×</button>'
+      +'</div>'
+      +'<div style="display:flex;gap:8px">'
+        +'<div style="flex:2">'
+          +'<div style="font-size:9px;color:var(--accent);font-weight:700;letter-spacing:.06em;margin-bottom:3px">FNSKU <span style=\"color:#e05555\">*</span></div>'
+          +'<input id="lib-fnsku-'+i+'" type="text" value="'+item.fnsku+'" placeholder="Enter FNSKU" oninput="updateLibFnsku('+i+',this.value)" style="width:100%;font-size:12px;padding:4px 8px;background:#111;border:1px solid '+bc+';border-radius:4px;color:'+tc+';font-family:monospace;font-weight:600;letter-spacing:.04em">'
+        +'</div>'
+        +'<div style="flex:1">'
+          +'<div style="font-size:9px;color:var(--accent);font-weight:700;letter-spacing:.06em;margin-bottom:3px">COLOR <span style=\"color:#e05555\">*</span></div>'
+          +'<input id="lib-color-'+i+'" type="text" value="'+(item.color||'')+'" placeholder="e.g. Black" oninput="updateLibColor('+i+',this.value)" style="width:100%;font-size:12px;padding:4px 8px;background:#111;border:1px solid '+(hasColor?'var(--border)':'#e05555')+';border-radius:4px;color:'+(hasColor?'var(--text)':'#e05555')+'">'
+        +'</div>'
+      +'</div>'
+    +'</div>';
   }).join('');
 }
 function updateLibFnsku(i,val){
@@ -1542,20 +1597,31 @@ function updateLibFnsku(i,val){
   var inp=document.getElementById('lib-fnsku-'+i);
   if(inp){ inp.style.borderColor=val?'var(--border)':'#e05555'; inp.style.color=val?'var(--text)':'#e05555'; }
 }
+function updateLibColor(i,val){
+  _libFkSkus[i].color=val;
+  var inp=document.getElementById('lib-color-'+i);
+  if(inp){ inp.style.borderColor=val?'var(--border)':'#e05555'; inp.style.color=val?'var(--text)':'#e05555'; }
+}
+
 
 function saveLibInlineEdit(){
   if(!_activeLibModel) return;
   if(!document.getElementById('lib-mrp').value.trim()){ toast('MRP is required','err'); return; }
   if(!_libColors.length){ toast('Color is required','err'); return; }
   for(var i=0;i<_libFkSkus.length;i++){
-    if(!_libFkSkus[i].fnsku.trim()){ toast('FNSKU required for: '+_libFkSkus[i].skuId,'err'); return; }
+    if(!_libFkSkus[i].fnsku||!_libFkSkus[i].fnsku.trim()){ toast('FNSKU required for: '+_libFkSkus[i].skuId,'err'); return; }
+    if(!_libFkSkus[i].color||!_libFkSkus[i].color.trim()){ toast('Color required for: '+_libFkSkus[i].skuId,'err'); return; }
   }
   var l=document.getElementById('lib-dim-l').value.trim();
   var b=document.getElementById('lib-dim-b').value.trim();
   var h=document.getElementById('lib-dim-h').value.trim();
   var fnskuMap={};
-  _libFkSkus.forEach(function(s){ if(s.fnsku) fnskuMap[s.skuId]=s.fnsku; });
+  _libFkSkus.forEach(function(s){ 
+    if(s.fnsku) fnskuMap[s.skuId]={f:s.fnsku, color:s.color||''};
+  });
   var lib=loadLib();
+  // Keep backward compat: colors array = first color from fnskuMap for display
+  var displayColors=_libFkSkus.map(function(s){return s.color||'';}).filter(Boolean);
   lib[_activeLibModel]={
     model:_activeLibModel,
     category:document.getElementById('lib-category').value.trim(),
@@ -1564,7 +1630,7 @@ function saveLibInlineEdit(){
     dims:(l&&b&&h)?l+'x'+b+'x'+h+'cm':'',
     mfgdate:document.getElementById('lib-mfgdate').value.trim(),
     brand:document.getElementById('lib-brand').value,
-    colors:_libColors.slice(),
+    colors:displayColors.length?[...new Set(displayColors)]:_libColors.slice(),
     fkSkus:_libFkSkus.map(function(s){return s.skuId;}),
     fnskuMap:fnskuMap
   };
