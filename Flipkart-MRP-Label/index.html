@@ -1045,7 +1045,11 @@ function confirmInlineRow(i) {
   if(!modelName){ toast('Model name is required','err'); return; }
   if(!mrp){ toast('MRP is required','err'); return; }
   if(!color){ toast('Color is required','err'); return; }
-  if(!fnsku){ toast('FNSKU is required','err'); return; }
+  if(!fnsku){
+    var fnskuEl=document.getElementById('if-fnsku-'+i);
+    toast('FNSKU is required — field '+(fnskuEl?'found':'NOT FOUND in DOM'),'err');
+    return;
+  }
 
   var dims=(diml&&dimb&&dimh)?diml+'x'+dimb+'x'+dimh+'cm':'';
 
@@ -1079,7 +1083,7 @@ function confirmInlineRow(i) {
   _openInlineRow=-1;
 
   renderBulkTable();
-  toast(modelName+' saved \u2713','ok');
+  toast(modelName+' ✓ saved to library','ok');
 }
 
 function previewRow(i) {
@@ -1121,13 +1125,17 @@ function openPrintConfirm() {
     return;
   }
   if(!printable.length){ toast('No SKUs to print','err'); return; }
-  // Validate all matched rows have complete model data
+  // Validate each row has MRP, color, and FNSKU for its specific SKU
   var incomplete=printable.filter(function(r){
-    return !isModelComplete(r.model);
+    if(!r.model.mrp||!r.model.mrp.toString().trim()) return true;
+    if(!r.model.colors||!r.model.colors.length||!r.model.colors[0].trim()) return true;
+    var fnsku=(r.model.fnskuMap&&r.model.fnskuMap[r.skuId])||'';
+    if(!fnsku.trim()) return true;
+    return false;
   });
   if(incomplete.length){
-    var names=incomplete.map(function(r){ return r.model.model; }).join(', ');
-    toast('Incomplete model data: '+names+' — edit in SKU Library','err');
+    var names=incomplete.map(function(r){ return r.model.model+' ('+r.skuId+')'; }).join(', ');
+    toast('Missing data for: '+names,'err');
     incomplete.forEach(function(r){
       var idx=_bulkRows.indexOf(r);
       var rowEl=document.getElementById('bulk-row-'+idx);
