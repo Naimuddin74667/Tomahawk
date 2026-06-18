@@ -310,7 +310,41 @@
             <button class="zoom-btn" onclick="zoom(0.5)">+</button>
             <span style="font-size:11px;color:var(--muted);margin-left:.4rem">75mm &times; 50mm</span>
           </div>
-          <div id="lib-label-container" style="display:flex;justify-content:center;align-items:flex-start;overflow:visible"></div>
+          <div id="lib-label-container" style="display:flex;justify-content:center;align-items:flex-start;overflow:visible">
+              <div id="lib-label" style="width:283px;height:189px;background:#fff;position:relative;overflow:hidden;font-family:Arial,Helvetica,sans-serif;color:#000;flex-shrink:0;transform-origin:top center">
+                <div class="label-inner">
+                  <div class="s1">
+                    <div class="s1-logo"><img id="lib-logoImg" src="" alt="TOMAHAWK"></div>
+                    <div class="mfg-head">Manufactured by / Marketed by:</div>
+                    <div class="mfg-addr">Block E3,Unit No.3 &amp; 4,Parasnath Complex Near Pipeline Valpada BHIWANDI,421302,Maharastra</div>
+                    <div class="country"><b>Country Of Origin : PRC</b></div>
+                    <div class="mrp">MRP Rs. <span id="lib-pv-mrp">0.00</span></div>
+                    <div class="tax">(Inclusive of all taxes)</div>
+                    <div class="contact"><b>Contact Us:</b><br>onlinesales@bullet.co.in<br>+91 8928949415</div>
+                  </div>
+                  <div class="s2">
+                    <div class="s2-top"></div>
+                    <div class="s2-row">Generic Name : <b id="lib-pv-generic"></b></div>
+                    <div class="s2-row">Model Name (SKU) : <b id="lib-pv-model"></b></div>
+                    <div class="s2-row">Sales Package :</div>
+                    <div class="s2-row" id="lib-pv-sales"></div>
+                    <div class="s2-spacer"></div>
+                    <div class="s2-bottom">
+                      <div class="s2-row-sm" id="lib-pv-color-row">Color : <b id="lib-pv-color"></b></div>
+                      <div class="s2-row-sm">Net Quantity : <span class="qty-val" id="lib-pv-qty">1U</span></div>
+                      <div class="s2-row-sm">Dimensions (in cm) :</div>
+                      <div class="s2-row-sm"><b id="lib-pv-dims"></b></div>
+                      <div class="s2-row-sm">Month &amp; Year of Manufacturing:</div>
+                      <div class="s2-row-sm"><b id="lib-pv-mfgdate"></b></div>
+                    </div>
+                  </div>
+                  <div class="s3">
+                    <svg id="lib-pv-barcode-svg" style="width:100%;height:28px;display:block"></svg>
+                    <div class="bc-num" id="lib-pv-bcnum"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
           <div id="previewMeta" class="preview-meta"></div>
           <!-- FK SKUs & FNSKUs info -->
           <div id="lib-sku-info" style="width:100%;max-width:500px;display:flex;flex-direction:column;gap:.4rem"></div>
@@ -616,12 +650,7 @@ function switchTab(name, btn) {
     // Reset label preview to empty state
     hideLabelPreview();
   } else {
-    // Move #label back to bulk left panel container
-    var bulkContainer=document.getElementById('labelScaleWrap');
-    var labelEl=document.getElementById('label');
-    if(bulkContainer&&labelEl&&labelEl.parentNode!==bulkContainer){
-      bulkContainer.appendChild(labelEl);
-    }
+      // Labels are separate
     // Right panel: hide library preview, restore bulk state
     document.getElementById('libraryPreviewArea').style.display='none';
     // Restore bulk state - show table if loaded, else empty state
@@ -639,27 +668,30 @@ function switchTab(name, btn) {
 // ── LOGOS ──
 document.getElementById('logoImg').src = 'data:image/png;base64,' + LOGO_B64;
 function setBrandLogo(brand) {
-  document.getElementById('logoImg').src = 'data:image/png;base64,' + (brand==='oxford' ? OXFORD_B64 : LOGO_B64);
+  var src = 'data:image/png;base64,' + (brand==='oxford' ? OXFORD_B64 : LOGO_B64);
+  ['logoImg','lib-logoImg','off-logoImg'].forEach(function(id){
+    var el=document.getElementById(id); if(el) el.src=src;
+  });
 }
 
 // ── ZOOM ──
 var currentZoom = 1.5;
 function zoom(delta) {
   currentZoom = Math.min(4, Math.max(0.5, parseFloat((currentZoom+delta).toFixed(1))));
-  var lbl=document.getElementById('label');
-  if(lbl){
-    lbl.style.transform='scale('+currentZoom+')';
-    lbl.style.transformOrigin='top center';
-  }
   var scaledH=Math.round(189*currentZoom)+'px';
   var scaledW=Math.round(283*currentZoom)+'px';
-  // Bulk tab wrapper
+  // Bulk label
+  var lbl=document.getElementById('label');
+  if(lbl){ lbl.style.transform='scale('+currentZoom+')'; lbl.style.transformOrigin='top center'; }
   var wrap=document.getElementById('labelScaleWrap');
   if(wrap) wrap.style.height=scaledH;
-  // Library tab container
+  // Library label
+  var libLbl=document.getElementById('lib-label');
+  if(libLbl){ libLbl.style.transform='scale('+currentZoom+')'; libLbl.style.transformOrigin='top center'; }
   var libCont=document.getElementById('lib-label-container');
   if(libCont){ libCont.style.height=scaledH; libCont.style.width=scaledW; }
-  document.querySelectorAll('[id="zoomLabel"]').forEach(function(el){el.textContent=currentZoom+'\u00d7';});
+  // Update all zoom labels
+  document.querySelectorAll('[id="zoomLabel"]').forEach(function(el){el.textContent=currentZoom+'×';});
 }
 zoom(0);
 
@@ -684,28 +716,67 @@ function generateBarcode(value) {
 }
 
 // ── LABEL PREVIEW ──
+function _renderLabel(pfx, data) {
+  // Set logo
+  var logoEl = document.getElementById(pfx+'logoImg');
+  if(logoEl) logoEl.src = 'data:image/png;base64,' + (data.brand==='oxford' ? OXFORD_B64 : LOGO_B64);
+  // Fill fields
+  var set = function(id, val){ var el=document.getElementById(pfx+id); if(el) el.textContent=val||''; };
+  set('pv-mrp', data.mrp||'0.00');
+  set('pv-generic', data.generic||'');
+  set('pv-model', data.model||'');
+  set('pv-sales', data.sales||'');
+  set('pv-dims', data.dims||'');
+  set('pv-mfgdate', data.mfgdate||'');
+  set('pv-bcnum', data.fsn||'');
+  // Color row
+  var colorRow = document.getElementById(pfx+'pv-color-row');
+  var colorEl  = document.getElementById(pfx+'pv-color');
+  if(colorRow && colorEl){
+    if(data.color){ colorRow.style.display=''; colorEl.textContent=data.color; }
+    else { colorRow.style.display='none'; }
+  }
+  // Barcode
+  var svgEl = document.getElementById(pfx+'pv-barcode-svg');
+  if(svgEl){
+    if(data.fsn){
+      try{
+        JsBarcode(svgEl, data.fsn, {format:'CODE128',displayValue:false,margin:0,width:1.2,height:28,background:'#ffffff',lineColor:'#000000'});
+        svgEl.setAttribute('width','100%'); svgEl.setAttribute('preserveAspectRatio','none');
+      } catch(e){ svgEl.innerHTML=''; }
+    } else { svgEl.innerHTML=''; }
+  }
+}
+
+// ── BULK preview (left panel, visible label) ──
 function showLabelPreview(data, meta) {
   document.getElementById('previewEmpty').style.display='none';
   var wrap=document.getElementById('previewLabelWrap');
   wrap.style.display='flex'; wrap.style.flexDirection='column';
-  setBrandLogo(data.brand||'tomahawk');
-  document.getElementById('pv-mrp').textContent = data.mrp||'0.00';
-  document.getElementById('pv-generic').textContent = data.generic||'';
-  document.getElementById('pv-model').textContent = data.model||'';
-  document.getElementById('pv-sales').textContent = data.sales||'';
-  var color = data.color||'';
-  var colorRow = document.getElementById('pv-color-row');
-  if(color){ colorRow.style.display=''; document.getElementById('pv-color').textContent=color; }
-  else { colorRow.style.display='none'; }
-  document.getElementById('pv-qty').textContent='1U';
-  document.getElementById('pv-dims').textContent=data.dims||'';
-  document.getElementById('pv-mfgdate').textContent=data.mfgdate||'';
-  document.getElementById('pv-bcnum').textContent=data.fsn||'';
-  generateBarcode(data.fsn||'');
+  _renderLabel('', data);
+  var lbl=document.getElementById('label');
+  if(lbl){ lbl.style.transform='scale('+currentZoom+')'; lbl.style.transformOrigin='top center'; }
+  var scaleWrap=document.getElementById('labelScaleWrap');
+  if(scaleWrap) scaleWrap.style.height=Math.round(189*currentZoom)+'px';
   if(meta) document.getElementById('previewMeta').textContent=meta;
-  // Reset label transform for correct display
-  document.getElementById('label').style.transform='scale('+currentZoom+')';
 }
+
+// ── LIBRARY preview (right panel, permanent lib-label) ──
+function showLibPreview(data, meta) {
+  _renderLabel('lib-', data);
+  var lbl=document.getElementById('lib-label');
+  if(lbl){ lbl.style.transform='scale('+currentZoom+')'; lbl.style.transformOrigin='top center'; }
+  var cont=document.getElementById('lib-label-container');
+  if(cont){ cont.style.height=Math.round(189*currentZoom)+'px'; cont.style.width=Math.round(283*currentZoom)+'px'; }
+  if(meta && document.getElementById('previewMeta')) document.getElementById('previewMeta').textContent=meta;
+}
+
+// ── OFF-SCREEN label (for PDF generation — never affected by tab/UI state) ──
+function showOffPreview(data) {
+  _renderLabel('off-', data);
+}
+
+
 function hideLabelPreview() {
   document.getElementById('previewEmpty').style.display='flex';
   document.getElementById('previewLabelWrap').style.display='none';
@@ -1195,18 +1266,15 @@ function generateBulkPDF() {
       pdf.save(filename);
       prog.classList.remove('show');
       fill.style.width='0%';
-      toast('PDF saved \u2014 '+queue.length+' labels','ok');
-      var lbl=document.getElementById('label');
-      lbl.style.transform='scale('+currentZoom+')';
-      hideLabelPreview();
+      toast('PDF saved \u2014 '+queue.length+' labels ✓','ok');
       return;
     }
     var s=queue[current];
-    showLabelPreview(s,'');
+    showOffPreview(s); // use off-screen label, unaffected by tab
     fill.style.width=Math.round((current/queue.length)*100)+'%';
     progText.textContent='Label '+(current+1)+' of '+queue.length+'...';
     setTimeout(function(){
-      var label=document.getElementById('label');
+      var label=document.getElementById('off-label');
       label.style.transform='none';
       html2canvas(label,{scale:10,useCORS:true,backgroundColor:'#ffffff',
         width:label.offsetWidth,height:label.offsetHeight,logging:false,imageTimeout:0,allowTaint:false})
@@ -1343,12 +1411,7 @@ function openLibDetail(modelName) {
   document.getElementById('lib-color-input').value='';
   document.getElementById('lib-fksku-input').value='';
   renderLibColorTags(); renderLibFkSkuTags();
-  // Move #label into library container
-  var libContainer=document.getElementById('lib-label-container');
-  var labelEl=document.getElementById('label');
-  if(libContainer&&labelEl&&labelEl.parentNode!==libContainer){
-    libContainer.appendChild(labelEl);
-  }
+  // lib-label is a separate permanent element
   // Show label preview using first FK SKU's FNSKU
   var color=_libColors.length?_libColors[0]:'';
   var fsn='';
@@ -1356,7 +1419,7 @@ function openLibDetail(modelName) {
     fsn=(m.fnskuMap&&m.fnskuMap[m.fkSkus[0]])||'';
     if(!fsn){ var gRow=lookupGSheetSKU(m.fkSkus[0]); if(gRow) fsn=gRow.f; }
   }
-  showLabelPreview({mrp:m.mrp,generic:m.category,model:m.model,sales:m.sales,
+  showLibPreview({mrp:m.mrp,generic:m.category,model:m.model,sales:m.sales,
     color:color,dims:m.dims,mfgdate:m.mfgdate,fsn:fsn,brand:m.brand},null);
   if(libContainer){ libContainer.style.height=Math.round(189*currentZoom)+'px'; libContainer.style.width=Math.round(283*currentZoom)+'px'; }
   // Populate FK SKU info panel
@@ -1384,7 +1447,7 @@ function updateLibPreview() {
   var l=document.getElementById('lib-dim-l').value.trim();
   var b=document.getElementById('lib-dim-b').value.trim();
   var h=document.getElementById('lib-dim-h').value.trim();
-  showLabelPreview({
+  showLibPreview({
     mrp:document.getElementById('lib-mrp').value.trim(),
     generic:document.getElementById('lib-category').value.trim(),
     model:_activeLibModel,
@@ -1800,5 +1863,41 @@ loadGSheetLookup();
 
 
 </script>
+<!-- OFF-SCREEN LABEL for PDF generation — never moves, never affected by tab switching -->
+<div style="position:fixed;left:-9999px;top:-9999px;opacity:0;pointer-events:none;z-index:-1">
+  <div id="off-label" style="width:283px;height:189px;background:#fff;position:relative;overflow:hidden;font-family:Arial,Helvetica,sans-serif;color:#000;flex-shrink:0">
+    <div class="label-inner">
+                  <div class="s1">
+                    <div class="s1-logo"><img id="off-logoImg" src="" alt="TOMAHAWK"></div>
+                    <div class="mfg-head">Manufactured by / Marketed by:</div>
+                    <div class="mfg-addr">Block E3,Unit No.3 &amp; 4,Parasnath Complex Near Pipeline Valpada BHIWANDI,421302,Maharastra</div>
+                    <div class="country"><b>Country Of Origin : PRC</b></div>
+                    <div class="mrp">MRP Rs. <span id="off-pv-mrp">0.00</span></div>
+                    <div class="tax">(Inclusive of all taxes)</div>
+                    <div class="contact"><b>Contact Us:</b><br>onlinesales@bullet.co.in<br>+91 8928949415</div>
+                  </div>
+                  <div class="s2">
+                    <div class="s2-top"></div>
+                    <div class="s2-row">Generic Name : <b id="off-pv-generic"></b></div>
+                    <div class="s2-row">Model Name (SKU) : <b id="off-pv-model"></b></div>
+                    <div class="s2-row">Sales Package :</div>
+                    <div class="s2-row" id="off-pv-sales"></div>
+                    <div class="s2-spacer"></div>
+                    <div class="s2-bottom">
+                      <div class="s2-row-sm" id="off-pv-color-row">Color : <b id="off-pv-color"></b></div>
+                      <div class="s2-row-sm">Net Quantity : <span class="qty-val" id="off-pv-qty">1U</span></div>
+                      <div class="s2-row-sm">Dimensions (in cm) :</div>
+                      <div class="s2-row-sm"><b id="off-pv-dims"></b></div>
+                      <div class="s2-row-sm">Month &amp; Year of Manufacturing:</div>
+                      <div class="s2-row-sm"><b id="off-pv-mfgdate"></b></div>
+                    </div>
+                  </div>
+                  <div class="s3">
+                    <svg id="off-pv-barcode-svg" style="width:100%;height:28px;display:block"></svg>
+                    <div class="bc-num" id="off-pv-bcnum"></div>
+                  </div>
+    </div>
+  </div>
+</div>
 </body>
 </html>
