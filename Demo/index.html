@@ -69,11 +69,7 @@
   .status-gsheet{background:rgba(74,144,217,.15);color:#4a90d9}
   .status-missing{background:rgba(224,85,85,.15);color:#e05555}
   .bulk-footer{display:flex;justify-content:space-between;align-items:center;margin-top:.6rem;padding:.6rem .8rem;background:#111;border-radius:7px;border:1px solid var(--border);font-size:11px;color:var(--muted);flex-shrink:0}
-  .sku-list{display:flex;flex-direction:column;gap:.4rem;margin-top:.6rem;flex:1;overflow-y:auto;min-height:0;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
-  .sku-list::-webkit-scrollbar{width:4px}
-  .sku-list::-webkit-scrollbar-track{background:transparent}
-  .sku-list::-webkit-scrollbar-thumb{background:var(--border);border-radius:99px}
-  .sku-list::-webkit-scrollbar-thumb:hover{background:#555}
+  .sku-list{display:flex;flex-direction:column;gap:.4rem;margin-top:.6rem;flex:1;overflow-y:auto;min-height:0}
   .sku-item{background:#111;border:1px solid var(--border);border-radius:7px;padding:.6rem .8rem;display:flex;align-items:center;gap:.5rem;transition:border-color .15s}
   .sku-item:hover{border-color:#555}
   .sku-info{flex:1;min-width:0;cursor:pointer}
@@ -255,7 +251,7 @@
     </div>
 
     <div id="tab-library" class="tab-content" style="display:none">
-      <div class="left-inner" style="display:flex;flex-direction:column;gap:.6rem;padding-bottom:0;height:calc(100vh - 120px);max-height:calc(100vh - 120px)">
+      <div class="left-inner" style="display:flex;flex-direction:column;gap:.6rem;padding-bottom:0">
         <div style="display:flex;gap:.4rem;flex-shrink:0">
           <input type="text" id="libSearch" placeholder="Search model / category..." style="flex:1;font-size:12px" oninput="renderLibrary()">
           <button class="btn btn-primary btn-sm" onclick="openModelModal(null)" style="white-space:nowrap">+ New</button>
@@ -350,7 +346,7 @@
               </div>
             </div>
           <div id="previewMeta" class="preview-meta"></div>
-          <!-- FK SKUs & FNSKUs info -->
+          <!-- FK SKUs & FSN IDs info -->
           <div id="lib-sku-info" style="width:100%;max-width:500px;display:flex;flex-direction:column;gap:.4rem"></div>
         </div>
 
@@ -385,7 +381,7 @@
           </div>
 
           <div class="field" style="margin:0">
-            <label class="field-lbl">Mapped FK SKU IDs &amp; FNSKUs</label>
+            <label class="field-lbl">Mapped FK SKU IDs &amp; FSN IDs</label>
             <div style="display:flex;gap:4px">
               <input type="text" id="lib-fksku-input" placeholder="FK SKU ID" style="flex:1;font-size:12px" onkeydown="if(event.key==='Enter'){event.preventDefault();addLibFkSkuTag()}">
               <button class="btn btn-secondary btn-sm" style="width:auto" onclick="addLibFkSkuTag()">+ Add</button>
@@ -564,8 +560,8 @@
     </div>
 
     <div class="field" style="margin:.7rem 0 0">
-      <label class="field-lbl">FNSKU <span style="color:#e05555">*</span> <span style="color:var(--muted);font-size:9px">(for barcode)</span></label>
-      <input type="text" id="nf-fnsku" placeholder="Required — enter FNSKU" style="font-size:13px;font-family:'DM Mono',monospace;font-weight:600;letter-spacing:.05em">
+      <label class="field-lbl">FSN ID <span style="color:#e05555">*</span> <span style="color:var(--muted);font-size:9px">(for barcode)</span></label>
+      <input type="text" id="nf-fnsku" placeholder="Required — enter FSN ID" style="font-size:13px;font-family:'DM Mono',monospace;font-weight:600;letter-spacing:.05em">
     </div>
 
     <div id="nf-similar-warn" style="display:none" class="warn-box"></div>
@@ -978,15 +974,27 @@ function buildBulkRows(skuQtyMap) {
     // 1. Exact FK SKU match in library
     var model=findModelByFkSku(item.skuId);
     if(model){
-      // Auto-fill FNSKU from GSheet if not already stored
       var m=lib[model.model];
-      if(m && !(m.fnskuMap&&m.fnskuMap[item.skuId])){
+      if(m){
         var gRow=lookupGSheetSKU(item.skuId);
-        if(gRow&&gRow.f){
-          if(!m.fnskuMap) m.fnskuMap={};
-          var autoColor=detectColor(gRow.t)||'';
-          m.fnskuMap[item.skuId]={f:gRow.f, color:autoColor};
-          libChanged=true;
+        // Auto-fill FSN ID+color from GSheet if not already stored
+        if(!(m.fnskuMap&&m.fnskuMap[item.skuId])){
+          if(gRow&&gRow.f){
+            if(!m.fnskuMap) m.fnskuMap={};
+            var autoColor=detectColor(gRow.t)||'';
+            m.fnskuMap[item.skuId]={f:gRow.f, color:autoColor};
+            libChanged=true;
+          }
+        }
+        // Backfill shared fields from GSheet if missing on model
+        if(gRow){
+          var settings=loadSettings();
+          if(!m.mrp&&gRow.m){ m.mrp=String(gRow.m); libChanged=true; }
+          if(!m.category&&gRow.c){ m.category=subCatToCategory(gRow.c); libChanged=true; }
+          if(!m.sales&&gRow.t){ m.sales=extractSalesPackage(gRow.t); libChanged=true; }
+          if(!m.dims){ var d=buildDims(gRow); if(d){ m.dims=d; libChanged=true; } }
+          if(!m.mfgdate){ m.mfgdate=settings.mfgdate||'01/01/2026'; libChanged=true; }
+          if(!m.brand&&gRow.br){ m.brand=gRow.br; libChanged=true; }
         }
       }
       return {skuId:item.skuId,qty:item.qty,status:'saved',model:lib[model.model]||model};
@@ -1002,15 +1010,25 @@ function buildBulkRows(skuQtyMap) {
           m.fkSkus.push(item.skuId);
           libChanged=true;
         }
-        // Auto-fill FNSKU from GSheet if not already stored
+        // Auto-fill FSN ID+color from GSheet if not already stored
+        var gRowP=lookupGSheetSKU(item.skuId);
         if(!(m.fnskuMap&&m.fnskuMap[item.skuId])){
-          var gRow=lookupGSheetSKU(item.skuId);
-          if(gRow&&gRow.f){
+          if(gRowP&&gRowP.f){
             if(!m.fnskuMap) m.fnskuMap={};
-            var prefixColor=detectColor(gRow.t)||'';
-            m.fnskuMap[item.skuId]={f:gRow.f, color:prefixColor};
+            var prefixColor=detectColor(gRowP.t)||'';
+            m.fnskuMap[item.skuId]={f:gRowP.f, color:prefixColor};
             libChanged=true;
           }
+        }
+        // Backfill shared fields from GSheet if missing on model
+        if(gRowP){
+          var settingsP=loadSettings();
+          if(!m.mrp&&gRowP.m){ m.mrp=String(gRowP.m); libChanged=true; }
+          if(!m.category&&gRowP.c){ m.category=subCatToCategory(gRowP.c); libChanged=true; }
+          if(!m.sales&&gRowP.t){ m.sales=extractSalesPackage(gRowP.t); libChanged=true; }
+          if(!m.dims){ var dP=buildDims(gRowP); if(dP){ m.dims=dP; libChanged=true; } }
+          if(!m.mfgdate){ m.mfgdate=settingsP.mfgdate||'01/01/2026'; libChanged=true; }
+          if(!m.brand&&gRowP.br){ m.brand=gRowP.br; libChanged=true; }
         }
         if(libChanged) saveLib(lib);
         // Check if now complete for this skuId
@@ -1019,7 +1037,7 @@ function buildBulkRows(skuQtyMap) {
         if(m.mrp&&m.colors&&m.colors.length&&hasFnsku){
           return {skuId:item.skuId,qty:item.qty,status:'saved',model:m};
         }
-        // Data exists but FNSKU missing — show as gsheet to let user confirm
+        // Data exists but FSN ID missing — show as gsheet to let user confirm
         var gRow2=lookupGSheetSKU(item.skuId);
         var suggested={model:m.model,category:m.category,mrp:m.mrp,sales:m.sales,
           dims:m.dims,mfgdate:m.mfgdate,brand:m.brand,colors:m.colors,
@@ -1136,7 +1154,7 @@ function toggleInlineForm(i) {
   var mcolor=_mfnsEntry&&typeof _mfnsEntry==='object'&&_mfnsEntry.color
     ?_mfnsEntry.color
     :(existingModel&&existingModel.colors&&existingModel.colors.length?existingModel.colors[0]:'');
-  // Try GSheet for FNSKU if not in model
+  // Try GSheet for FSN ID if not in model
   if(!mfnsku){ var gRow=lookupGSheetSKU(r.skuId); if(gRow) mfnsku=gRow.f||''; }
 
   var dimParts=(mdims||'').replace('cm','').split('x');
@@ -1173,8 +1191,8 @@ function toggleInlineForm(i) {
       +'<div><label class="field-lbl">Brand</label><select id="if-brand-'+i+'" style="font-size:12px"><option value="tomahawk"'+((!existingModel||existingModel.brand!=='oxford')?' selected':'')+'>Tomahawk</option><option value="oxford"'+((existingModel&&existingModel.brand==='oxford')?' selected':'')+'>Oxford</option></select></div>'
     +'</div>'
     +'<div style="margin-bottom:.8rem">'
-      +'<label class="field-lbl">FNSKU <span style="color:#e05555">*</span> <span style="color:var(--muted);font-size:9px">(for barcode)</span></label>'
-      +'<input type="text" id="if-fnsku-'+i+'" value="'+mfnsku+'" placeholder="Enter FNSKU — required" style="font-size:13px;font-family:monospace;font-weight:600;letter-spacing:.05em;border-color:'+(mfnsku?'var(--border)':'#e05555')+';color:'+(mfnsku?'var(--text)':'#e05555')+'">'
+      +'<label class="field-lbl">FSN ID <span style="color:#e05555">*</span> <span style="color:var(--muted);font-size:9px">(for barcode)</span></label>'
+      +'<input type="text" id="if-fnsku-'+i+'" value="'+mfnsku+'" placeholder="Enter FSN ID — required" style="font-size:13px;font-family:monospace;font-weight:600;letter-spacing:.05em;border-color:'+(mfnsku?'var(--border)':'#e05555')+';color:'+(mfnsku?'var(--text)':'#e05555')+'">'
     +'</div>'
     +'<div style="display:flex;gap:.5rem;justify-content:flex-end">'
       +'<button onclick="toggleInlineForm('+i+')" class="btn btn-secondary" style="width:auto;padding:8px 16px">Cancel</button>'
@@ -1211,13 +1229,13 @@ function confirmInlineRow(i) {
   if(!color){ toast('Color is required','err'); return; }
   if(!fnsku){
     var fnskuEl=document.getElementById('if-fnsku-'+i);
-    toast('FNSKU is required — field '+(fnskuEl?'found':'NOT FOUND in DOM'),'err');
+    toast('FSN ID is required — field '+(fnskuEl?'found':'NOT FOUND in DOM'),'err');
     return;
   }
 
   var dims=(diml&&dimb&&dimh)?diml+'x'+dimb+'x'+dimh+'cm':'';
 
-  // Build fnskuMap - merge with existing if model already exists
+  // Build fsnMap - merge with existing if model already exists
   var existing=lib[modelName]||null;
   var fnskuMap=existing?Object.assign({},existing.fnskuMap||{}):{};
   fnskuMap[r.skuId]={f:fnsku, color:color};
@@ -1292,7 +1310,7 @@ function openPrintConfirm() {
     return;
   }
   if(!printable.length){ toast('No SKUs to print','err'); return; }
-  // Validate each row has MRP, color, and FNSKU for its specific SKU
+  // Validate each row has MRP, color, and FSN ID for its specific SKU
   var incomplete=printable.filter(function(r){
     if(!r.model.mrp||!r.model.mrp.toString().trim()) return true;
     if(!r.model.colors||!r.model.colors.length||!r.model.colors[0].trim()) return true;
@@ -1521,7 +1539,7 @@ function openLibDetail(modelName) {
   document.getElementById('lib-fksku-input').value='';
   renderLibColorTags(); renderLibFkSkuTags();
   // lib-label is a separate permanent element
-  // Show label preview using first FK SKU's FNSKU
+  // Show label preview using first FK SKU's FSN ID
   var color=_libFkSkus.length?(_libFkSkus[0].color||''):'';
   var fsn='';
   if(m.fkSkus&&m.fkSkus.length){
@@ -1553,7 +1571,7 @@ function openLibDetail(modelName) {
           +'</div>'
         +'</div>'
         +'<div>'
-          +'<div style="font-size:9px;color:var(--muted);font-family:\'DM Mono\',monospace;margin-bottom:2px">FNSKU</div>'
+          +'<div style="font-size:9px;color:var(--muted);font-family:\'DM Mono\',monospace;margin-bottom:2px">FSN ID</div>'
           +'<div style="font-size:13px;color:'+(ok?'var(--text)':'#e05555')+';font-family:\'DM Mono\',monospace;font-weight:700;letter-spacing:.05em">'+(fn||'MISSING')+'</div>'
         +'</div>'
       +'</div>';
@@ -1613,8 +1631,8 @@ function renderLibFkSkuTags(){
       +'</div>'
       +'<div style="display:flex;gap:8px">'
         +'<div style="flex:2">'
-          +'<div style="font-size:9px;color:var(--accent);font-weight:700;letter-spacing:.06em;margin-bottom:3px">FNSKU <span style=\"color:#e05555\">*</span></div>'
-          +'<input id="lib-fnsku-'+i+'" type="text" value="'+item.fnsku+'" placeholder="Enter FNSKU" oninput="updateLibFnsku('+i+',this.value)" style="width:100%;font-size:12px;padding:4px 8px;background:#111;border:1px solid '+bc+';border-radius:4px;color:'+tc+';font-family:monospace;font-weight:600;letter-spacing:.04em">'
+          +'<div style="font-size:9px;color:var(--accent);font-weight:700;letter-spacing:.06em;margin-bottom:3px">FSN ID <span style=\"color:#e05555\">*</span></div>'
+          +'<input id="lib-fnsku-'+i+'" type="text" value="'+item.fnsku+'" placeholder="Enter FSN ID" oninput="updateLibFnsku('+i+',this.value)" style="width:100%;font-size:12px;padding:4px 8px;background:#111;border:1px solid '+bc+';border-radius:4px;color:'+tc+';font-family:monospace;font-weight:600;letter-spacing:.04em">'
         +'</div>'
         +'<div style="flex:1">'
           +'<div style="font-size:9px;color:var(--accent);font-weight:700;letter-spacing:.06em;margin-bottom:3px">COLOR <span style=\"color:#e05555\">*</span></div>'
@@ -1641,7 +1659,7 @@ function saveLibInlineEdit(){
   if(!document.getElementById('lib-mrp').value.trim()){ toast('MRP is required','err'); return; }
   if(!_libColors.length){ toast('Color is required','err'); return; }
   for(var i=0;i<_libFkSkus.length;i++){
-    if(!_libFkSkus[i].fnsku||!_libFkSkus[i].fnsku.trim()){ toast('FNSKU required for: '+_libFkSkus[i].skuId,'err'); return; }
+    if(!_libFkSkus[i].fnsku||!_libFkSkus[i].fnsku.trim()){ toast('FSN ID required for: '+_libFkSkus[i].skuId,'err'); return; }
     if(!_libFkSkus[i].color||!_libFkSkus[i].color.trim()){ toast('Color required for: '+_libFkSkus[i].skuId,'err'); return; }
   }
   var l=document.getElementById('lib-dim-l').value.trim();
@@ -1799,8 +1817,8 @@ function renderFkSkuTags(){
         +'<button onclick="removeFkSkuTag('+i+')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;line-height:1;padding:0">×</button>'
       +'</div>'
       +'<div style="display:flex;align-items:center;gap:8px">'
-        +'<span style="font-size:10px;color:var(--accent);font-weight:700;letter-spacing:.06em;white-space:nowrap">FNSKU</span>'
-        +'<input id="fnsku-inp-'+i+'" type="text" value="'+fnsku+'" placeholder="Required — enter FNSKU" '
+        +'<span style="font-size:10px;color:var(--accent);font-weight:700;letter-spacing:.06em;white-space:nowrap">FSN ID</span>'
+        +'<input id="fnsku-inp-'+i+'" type="text" value="'+fnsku+'" placeholder="Required — enter FSN ID" '
           +'oninput="updateFnsku('+i+',this.value)" '
           +'style="flex:1;font-size:13px;padding:5px 8px;background:#111;border:1px solid '+borderCol+';border-radius:5px;color:'+textCol+';font-family:monospace;font-weight:600;letter-spacing:.06em">'
       +'</div>'
@@ -1816,12 +1834,12 @@ function saveModel() {
   if(!document.getElementById('mm-mrp').value.trim()){ toast('MRP is required','err'); return; }
   if(!_modalColors.length||!_modalColors[0].trim()){ toast('At least one Color is required','err'); return; }
   if(!_modalFkSkus.length){ toast('At least one FK SKU ID is required','err'); return; }
-  // Validate FNSKU for every FK SKU
+  // Validate FSN ID for every FK SKU
   for(var fi=0;fi<_modalFkSkus.length;fi++){
     var fitem=_modalFkSkus[fi];
     var fsku=typeof fitem==='object'?fitem.skuId:fitem;
     var ffnsku=typeof fitem==='object'?fitem.fnsku:'';
-    if(!ffnsku||!ffnsku.trim()){ toast('FNSKU is required for: '+fsku,'err'); return; }
+    if(!ffnsku||!ffnsku.trim()){ toast('FSN ID is required for: '+fsku,'err'); return; }
   }
   var l=document.getElementById('mm-dim-l').value.trim();
   var b=document.getElementById('mm-dim-b').value.trim();
@@ -1967,7 +1985,7 @@ function saveNotFoundModal() {
   if(!sales)    { toast('Sales Package is required','err'); return; }
   if(!diml||!dimb||!dimh){ toast('All dimensions (L, B, H) are required','err'); return; }
   if(!mfgdate)  { toast('Mfg Date is required','err'); return; }
-  if(!fnsku)    { toast('FNSKU is required','err'); return; }
+  if(!fnsku)    { toast('FSN ID is required','err'); return; }
 
   var i = _notFoundRowIndex;
   var r = _bulkRows[i];
