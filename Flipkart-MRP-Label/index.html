@@ -1998,6 +1998,25 @@ function saveNotFoundModal() {
 }
 
 // ── INIT ──
+
+// Migrate legacy bare-string fnskuMap entries → {f, color} format
+(function migrateLib() {
+  var lib = loadLib();
+  var changed = false;
+  Object.values(lib).forEach(function(m) {
+    if (!m.fnskuMap) return;
+    Object.keys(m.fnskuMap).forEach(function(skuId) {
+      var entry = m.fnskuMap[skuId];
+      if (typeof entry === 'string') {
+        var col = (m.colors && m.colors.length) ? m.colors[0] : '';
+        m.fnskuMap[skuId] = { f: entry, color: col };
+        changed = true;
+      }
+    });
+  });
+  if (changed) saveLib(lib);
+})();
+
 loadGSheetLookup();
 
 
