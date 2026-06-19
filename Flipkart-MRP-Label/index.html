@@ -158,7 +158,7 @@
 </header>
 
 <div class="tabs">
-  <button class="tab-btn active" onclick="switchTab('bulk',this)">Bulk Print</button>
+  <button class="tab-btn active" onclick="switchTab('bulk',this)">Label Print</button>
   <button class="tab-btn" onclick="switchTab('library',this)">SKU Library</button>
 </div>
 
@@ -396,7 +396,7 @@
 
     <!-- SKU Table (after file loaded) -->
     <div id="bulkTableArea" style="display:none;flex-direction:column;padding:1.2rem 1.5rem 0;overflow:hidden">
-      <div style="font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:.8rem;font-family:'DM Mono',monospace;flex-shrink:0">Bulk Print &mdash; SKU List</div>
+      <div style="font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:.8rem;font-family:'DM Mono',monospace;flex-shrink:0">Label Print &mdash; SKU List</div>
       <div class="bulk-header" style="flex-shrink:0">
         <span class="bulk-summary" id="bulkSummary"></span>
         <div style="display:flex;gap:.4rem">
@@ -1127,8 +1127,11 @@ function toggleInlineForm(i) {
   var msales=existingModel?existingModel.sales:(s.sales||'');
   var mdims=existingModel?existingModel.dims:(s.dims||'');
   var mmfg=existingModel?existingModel.mfgdate:(loadSettings().mfgdate||'01/01/2026');
-  var mcolor=existingModel?(existingModel.colors&&existingModel.colors.length?existingModel.colors[0]:''):'';
-  var mfnsku=existingModel?(existingModel.fnskuMap&&existingModel.fnskuMap[r.skuId]?existingModel.fnskuMap[r.skuId]:''):'';
+  var _mfnsEntry=existingModel&&existingModel.fnskuMap&&existingModel.fnskuMap[r.skuId];
+  var mfnsku=_mfnsEntry?(typeof _mfnsEntry==='object'?_mfnsEntry.f||'':_mfnsEntry):'';
+  var mcolor=_mfnsEntry&&typeof _mfnsEntry==='object'&&_mfnsEntry.color
+    ?_mfnsEntry.color
+    :(existingModel&&existingModel.colors&&existingModel.colors.length?existingModel.colors[0]:'');
   // Try GSheet for FNSKU if not in model
   if(!mfnsku){ var gRow=lookupGSheetSKU(r.skuId); if(gRow) mfnsku=gRow.f||''; }
 
@@ -1824,7 +1827,7 @@ function saveModel() {
   var fkSkuStrings=_modalFkSkus.map(function(s){ return typeof s==='object'?s.skuId:s; });
   var fnskuMap={};
   _modalFkSkus.forEach(function(s){
-    if(typeof s==='object'&&s.fnsku) fnskuMap[s.skuId]=s.fnsku;
+    if(typeof s==='object'&&s.fnsku) fnskuMap[s.skuId]={f:s.fnsku, color:s.color||''};
   });
   lib[modelName]={model:modelName,category:document.getElementById('mm-category').value.trim(),
     mrp:document.getElementById('mm-mrp').value.trim(),sales:document.getElementById('mm-sales').value.trim(),
