@@ -513,6 +513,25 @@ const IMAGE_MAP = {
   "YRH-7865-Rotary-Hammer-26": "https://m.media-amazon.com/images/I/51muCwnjDYL._SS40_.jpg"
 };
 
+// Check if two SKUs are totally different
+function skusDiffer(ucSku, chSku) {
+  if (!ucSku || !chSku) return false;
+  const clean = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const tokenize = s => s.toLowerCase().replace(/[_\s]/g, '-').split('-').filter(Boolean);
+  const a = clean(ucSku);
+  const b = clean(chSku);
+  const aToks = tokenize(ucSku);
+  const bToks = tokenize(chSku);
+  // Either contains the other (after cleaning)
+  if (a.includes(b) || b.includes(a)) return false;
+  // First token matches
+  if (aToks[0] === bToks[0]) return false;
+  // First token of one starts with digits stripped from first token of other
+  // e.g. T80 vs T-80A -> both start with 't'
+  if (aToks[0][0] === bToks[0][0] && (aToks[0].replace(/\d/g,'') === bToks[0].replace(/\d/g,''))) return false;
+  return true;
+}
+
 function parseCSVLine(line) {
   const res = []; let cur = '', q = false;
   for (let i = 0; i < line.length; i++) {
@@ -575,11 +594,14 @@ function processRows(rows) {
     }
 
     // qty = number of sets = how many times the first unique SKU appears
-    const sets = skuList.filter(s => s === uniqueSkus[0]).length;
-    // skuCounts = how many of each SKU in ONE set of this combo
+    // sets = appearances of the most-common SKU (defines how many combo sets in this shipment)
     const skuCounts = {};
-    uniqueSkus.forEach(s => { skuCounts[s] = skuList.filter(x => x === s).length / sets; });
-    sections[comboSize][key].skuCounts = skuCounts;
+    uniqueSkus.forEach(s => { skuCounts[s] = skuList.filter(x => x === s).length; });
+    const sets = Math.min(...uniqueSkus.map(s => skuCounts[s]));
+    // normalise: how many of each SKU per 1 set
+    const normCounts = {};
+    uniqueSkus.forEach(s => { normCounts[s] = skuCounts[s] / sets; });
+    sections[comboSize][key].skuCounts = normCounts;
     sections[comboSize][key].qty = (sections[comboSize][key].qty||0) + sets;
     sections[comboSize][key].orderCount += 1;
     if (!sections[comboSize][key].imgUrl && imgUrl) sections[comboSize][key].imgUrl = imgUrl;
@@ -638,9 +660,10 @@ function renderSection(groups, comboSize, rowNumStart) {
       group.uniqueSkus.forEach((sku, idx) => {
         const isFirst = idx === 0;
         const rowspan = group.uniqueSkus.length;
+        const selDiff = skusDiffer(sku, group.selMap[sku]||'');
         const selCell = allSameSel
-          ? (isFirst ? `<td rowspan="${rowspan}"><div class="sku-sell">${selVals[0]}</div></td>` : '')
-          : `<td><div class="sku-sell">${group.selMap[sku]||''}</div></td>`;
+          ? (isFirst ? `<td rowspan="${rowspan}"><div class="sku-sell${skusDiffer(group.uniqueSkus[0], selVals[0]) ? ' diff' : ''}">${selVals[0]}</div></td>` : '')
+          : `<td><div class="sku-sell${selDiff ? ' diff' : ''}">${group.selMap[sku]||''}</div></td>`;
         html += `<tr class="combo-row">
           ${isFirst ? `<td rowspan="${rowspan}" class="check-col"><input type="checkbox"></td>` : ''}
           ${isFirst ? `<td rowspan="${rowspan}" style="color:#999;font-size:11px">${rowNum}</td>` : ''}
@@ -657,7 +680,7 @@ function renderSection(groups, comboSize, rowNumStart) {
         <td class="check-col"><input type="checkbox"></td>
         <td style="color:#999;font-size:11px">${rowNum}</td>
         <td><div class="sku">${sku}</div></td>
-        <td><div class="sku-sell">${group.selMap[sku]||''}</div></td>
+        <td><div class="sku-sell${skusDiffer(sku, group.selMap[sku]||'') ? ' diff' : ''}">${group.selMap[sku]||''}</div></td>
         ${isCombo ? `<td>${comboHtml}</td>` : ''}
         <td class="img-cell">${imgUrl ? `<img src="${imgUrl}" alt="">` : ''}</td>
         <td class="qty">${group.qty||group.qtyPerSku[sku]}</td>
