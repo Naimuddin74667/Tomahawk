@@ -2373,26 +2373,80 @@ function invExtractData(text, words, filename) {
     addr2 = addrFull.substring(sp).trim();
   }
 
-  // ── Items: column-position based (works for any RO format) ──
-  // Columns (approximate x positions):
-  //   #: ~36  ItemCode: ~60  HSN: ~108  UPC: ~144  Desc: ~192
-  //   Landing: ~396  Qty: ~438  MRP: ~474  Total: ~517
+  // ── Items: header-anchored column detection ──
+  // Step 1: find the header row (#) and read x-positions of key column headers.
+  // Step 2: use those x-positions to extract values from item rows.
+  // This works for both CGST (14-col) and IGST (13-col) layouts automatically.
   var items = [];
   if (words && words.length) {
-    // Find header row (#)
+    // Find header row y (row containing '#' at x<50)
     var headerY = null;
     for (var wi = 0; wi < words.length; wi++) {
       if (words[wi].str === '#' && words[wi].x < 50) { headerY = words[wi].y; break; }
     }
-    // Find "Total Quantity" row to stop parsing
+    // Find stopY: first 'Total' at x<50 after header (= "Total Quantity:" row)
     var stopY = 9999;
     for (var wi = 0; wi < words.length; wi++) {
       if (words[wi].str === 'Total' && words[wi].x < 50 && words[wi].y > (headerY||0)) {
         stopY = words[wi].y; break;
       }
     }
+
     if (headerY !== null) {
-      // Group words by y-bucket (8px rows)
+      // ── Step 1: Read column x-positions from the header row ──
+      // Header words appear within ~25px below headerY.
+      // We look for: 'Landin'/'Landing' → xLanding, 'Qty.'/'Qty' → xQty, 'MRP' → xMrp
+      // 'Product' appears twice — first = UPC column, second = Description column.
+      var xLanding = -1, xQty = -1, xMrp = -1, xTotal = -1;
+      var xItemCode = -1, xHsn = -1, xUpc = -1, xDesc = -1;
+      var xTaxStart = 9999;
+      var productCount = 0;
+
+      // Collect header words in x-order so we can count 'Product' occurrences correctly
+      var headerWords = [];
+      for (var wi = 0; wi < words.length; wi++) {
+        var hw = words[wi];
+        if (hw.y >= headerY - 2 && hw.y <= headerY + 25) headerWords.push(hw);
+      }
+      headerWords.sort(function(a,b){ return a.x - b.x; });
+
+      for (var hi = 0; hi < headerWords.length; hi++) {
+        var hw = headerWords[hi]; var s = hw.str, x = hw.x;
+        if (s === 'Item')    { xItemCode = x; }
+        if (s === 'HSN')     { xHsn = x; }
+        if (s === 'Product') {
+          productCount++;
+          if (productCount === 1) xUpc  = x;   // first "Product" header = UPC column
+          else                    xDesc = x;   // second "Product" header = Description column
+        }
+        if (s === 'Landin' || s === 'Landing') { xLanding = x; }
+        if (s === 'Qty.' || s === 'Qty')       { xQty = x; }
+        if (s === 'MRP')                        { xMrp = x; }
+        if (s === 'Total')                      { xTotal = x; }
+      }
+      // xTaxStart = first column after Description (= first tax% column x)
+      if (xDesc > 0 && xLanding > 0) {
+        // Scan header words between xDesc and xLanding to find tax col start
+        for (var hi = 0; hi < headerWords.length; hi++) {
+          var x = headerWords[hi].x;
+          if (x > xDesc + 20 && x < xLanding && x < xTaxStart) xTaxStart = x;
+        }
+      }
+
+      // Fallback column positions if header detection missed anything
+      if (xLanding < 0) xLanding = 390;
+      if (xQty     < 0) xQty     = 434;
+      if (xMrp     < 0) xMrp     = 470;
+      if (xTotal   < 0) xTotal   = 514;
+      if (xItemCode < 0) xItemCode = 58;
+      if (xHsn     < 0) xHsn     = 106;
+      if (xUpc     < 0) xUpc     = 143;
+      if (xDesc    < 0) xDesc    = 190;
+
+      // Column slot width tolerance (half the gap between adjacent columns)
+      var TOL = 18;
+
+      // ── Step 2: Group words by y-bucket and extract item rows ──
       var byY = {};
       for (var wi = 0; wi < words.length; wi++) {
         var w = words[wi];
@@ -2401,64 +2455,57 @@ function invExtractData(text, words, filename) {
         if (!byY[bucket]) byY[bucket] = [];
         byY[bucket].push(w);
       }
+
       var sortedY = Object.keys(byY).map(Number).sort(function(a,b){return a-b;});
       var currentItem = null;
+
       sortedY.forEach(function(y) {
         var ws = byY[y].slice().sort(function(a,b){return a.x-b.x;});
-        // Check if new item row (first word is row number at x<50)
+        // Skip rows where all content is right of centre (footer summary rows)
+        if (ws.length > 0 && ws[0].x > 300) return;
+
+        // New item row: leftmost word is a row-number digit at x<50
         if (ws[0].x < 50 && /^\d{1,2}$/.test(ws[0].str)) {
-          currentItem = {
-            row: parseInt(ws[0].str),
-            item_parts:[], hsn_parts:[], upc_parts:[], desc_parts:[], prices:[]
-          };
+          currentItem = { item_parts:[], hsn_parts:[], upc_parts:[], desc_parts:[],
+                          landing:0, qty:0, mrp:0 };
           items.push(currentItem);
         }
         if (!currentItem) return;
+
         ws.forEach(function(w) {
           var x = w.x, s = w.str;
           if (x < 50) return; // skip row number
-          else if (x >= 55  && x <= 95)  currentItem.item_parts.push(s);
-          else if (x >= 100 && x <= 138) currentItem.hsn_parts.push(s);
-          else if (x >= 139 && x <= 178) currentItem.upc_parts.push(s);
-          else if (x >= 180 && x <= 342) { if (!/^\d+\.?\d*$/.test(s) && s !== '&') currentItem.desc_parts.push(s); }
-          else if (x >= 380)             currentItem.prices.push({x:x, v:s});
+
+          // Assign to column by proximity to known header x-positions
+          if (Math.abs(x - xItemCode) <= TOL)  { currentItem.item_parts.push(s); return; }
+          if (Math.abs(x - xHsn)      <= TOL)  { currentItem.hsn_parts.push(s);  return; }
+          if (Math.abs(x - xUpc)      <= TOL)  { currentItem.upc_parts.push(s);  return; }
+          if (x >= xDesc - TOL && x < xTaxStart - TOL) {
+            if (!/^\d+\.?\d*$/.test(s) && s !== '&') currentItem.desc_parts.push(s);
+            return;
+          }
+          // Numeric price columns — assign by proximity to header x
+          var v = parseFloat(s);
+          if (isNaN(v)) return;
+          if (Math.abs(x - xLanding) <= TOL) { currentItem.landing = v; }
+          else if (Math.abs(x - xQty) <= TOL) { currentItem.qty = Math.round(v); }
+          else if (Math.abs(x - xMrp) <= TOL) { currentItem.mrp = v; }
         });
       });
-      // Convert to final item objects
-      var rawItems = items;
-      items = [];
+
+      // Build final item objects
+      var rawItems = items; items = [];
       rawItems.forEach(function(d) {
         var item_id = d.item_parts.join('');
         var hsn     = d.hsn_parts.join('');
         var upc     = d.upc_parts.join('');
         var desc    = d.desc_parts.join(' ').replace(/\(\d+\s+(?:unit|set)[s]?\)/gi,'').trim();
-        var landing = 0, qty = 0, mrp = 0;
-        d.prices.forEach(function(p) {
-          try {
-            var v = parseFloat(p.v);
-            if (isNaN(v)) return;
-            if (p.x >= 380 && p.x <= 430) landing = v;
-            else if (p.x >= 431 && p.x <= 465) qty = Math.round(v);
-            else if (p.x >= 466 && p.x <= 510) mrp = v;
-          } catch(e){}
-        });
-        if (item_id && upc && qty > 0) {
+        if (item_id && upc && d.qty > 0) {
           items.push({item_id:item_id, hsn:hsn, upc:upc, description:desc,
-            landing:Math.round(landing), qty:qty, mrp:Math.round(mrp), uom:hsnToUom(hsn)});
+            landing:Math.round(d.landing), qty:d.qty, mrp:Math.round(d.mrp),
+            uom:hsnToUom(hsn)});
         }
       });
-    }
-  }
-  // Fallback: regex if column parsing failed
-  if (!items.length) {
-    var reB = /\b(\d{1,2})\s+(\d{6,8})\s+(\d{4,6})\s+(\d{6,8})\s+(.*?)\s+\d+\.\d{2}\s+\d+\.\d{2}\s+\d+\.\d{2}(?:\s+[\d.]+)+\s+([\d.]+)\s+(\d{1,4})\s+([\d.]+)\s+[\d.]+\s+(\d{1,2})\s+(\d{2,4})\s+(\d{5,7})\b/g;
-    var m;
-    while ((m = reB.exec(t)) !== null) {
-      var l=parseFloat(m[6]),q=parseInt(m[7]),r=parseFloat(m[8]);
-      if(l>r){var tmp=l;l=r;r=tmp;}
-      items.push({item_id:m[2]+m[9],hsn:m[3]+m[10],upc:m[4]+m[11],
-        description:m[5].replace(/\s+/g,' ').trim().replace(/\(\d+\s+(?:unit|set)[s]?\)/i,'').trim(),
-        landing:Math.round(l),qty:q,mrp:Math.round(r),uom:hsnToUom(m[3]+m[10])});
     }
   }
 
