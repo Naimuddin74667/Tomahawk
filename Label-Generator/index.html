@@ -1,1 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Label Generator · Tomahawk Operations</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%231a1a1a'/%3E%3Ctext x='32' y='48' font-family='Arial Black,sans-serif' font-weight='900' font-size='52' text-anchor='middle' fill='%23F5A800'%3ET%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 
+<!-- BLOCK 1 — CSS VARIABLES -->
+<style>
+:root {
+  --bg-base:        #0c0c14;
+  --bg-surface:     #13131e;
+  --bg-raised:      #1a1a28;
+  --border-subtle:  #1f1f2e;
+  --border-default: #2a2a38;
+  --text-primary:   #e8e8f0;
+  --text-secondary: #888899;
+  --text-muted:     #44445a;
+  --text-faint:     #2a2a40;
+  --accent:         #F5A800;
+  --accent-dim:     #F5A80018;
+  --accent-border:  #F5A80044;
+  --c-blue:         #60a5fa;
+  --c-blue-dim:     #60a5fa15;
+  --c-blue-border:  #60a5fa40;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --font-display: 'Syne', sans-serif;
+  --font-body:    'DM Sans', sans-serif;
+  --sidebar-w: 260px;
+}
+html[data-theme="light"] {
+  --bg-base:        #f4f4f7;
+  --bg-surface:     #ffffff;
+  --bg-raised:      #ededf3;
+  --border-subtle:  #e0e0ea;
+  --border-default: #d0d0dd;
+  --text-primary:   #111118;
+  --text-secondary: #555566;
+  --text-muted:     #888899;
+  --text-faint:     #bbbbcc;
+  --accent:         #c98a00;
+  --accent-dim:     #F5A80014;
+  --accent-border:  #F5A80055;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  transition: background .2s, color .2s;
+}
+</style>
+
+<!-- BLOCK 2 — LAYOUT STYLES -->
+<style>
+.page { display: flex; min-height: 100vh; }
+
+/* ── Sidebar ── */
+.sidebar {
+  width: var(--sidebar-w);
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0; left: 0;
+  height: 100vh;
+  z-index: 50;
+  transition: transform .25s ease, background .2s;
+}
+
+.sidebar-header {
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.back-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-decoration: none;
+  margin-bottom: 18px;
+  transition: color .12s;
+}
+.back-btn:hover { color: var(--accent); }
+.back-btn svg { flex-shrink: 0; }
+
+.sidebar-title {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 15px;
+  color: var(--text-primary);
+  margin-bottom: 3px;
+}
+.sidebar-subtitle {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.sidebar-nav {
+  flex: 1;
+  padding: 16px 12px;
+  overflow-y: auto;
+}
+.nav-label {
+  font-size: 9px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  font-weight: 600;
+  padding: 0 8px;
+  margin-bottom: 8px;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-decoration: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background .12s, color .12s;
+  border: 1px solid transparent;
+  margin-bottom: 4px;
+}
+.nav-item:hover {
+  background: var(--bg-raised);
+  color: var(--text-primary);
+}
+.nav-item.active {
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+.nav-item-icon {
+  width: 32px; height: 32px;
+  border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.nav-item-info { flex: 1; min-width: 0; }
+.nav-item-name { font-weight: 600; font-size: 13px; }
+.nav-item-sub  { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
+.nav-item.active .nav-item-sub { color: var(--accent); opacity: .7; }
+
+.sidebar-footer {
+  padding: 14px 20px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* ── Main content ── */
+.main {
+  margin-left: var(--sidebar-w);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* ── Topbar ── */
+.topbar {
+  height: 60px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  padding: 0 28px;
+  justify-content: space-between;
+  position: sticky; top: 0; z-index: 40;
+}
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+/* Hamburger — mobile only */
+.hamburger {
+  display: none;
+  width: 36px; height: 36px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  cursor: pointer;
+  align-items: center; justify-content: center;
+  color: var(--text-muted);
+}
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.breadcrumb a {
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: color .12s;
+}
+.breadcrumb a:hover { color: var(--accent); }
+.breadcrumb .sep { color: var(--text-faint); }
+.breadcrumb .current { color: var(--text-primary); font-weight: 600; }
+
+.topbar-right { display: flex; align-items: center; gap: 10px; }
+.theme-toggle {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted);
+  transition: border-color .12s, color .12s;
+}
+.theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+html:not([data-theme="light"]) .icon-sun  { display: none; }
+html[data-theme="light"]       .icon-moon { display: none; }
+
+/* ── Content area ── */
+.content {
+  flex: 1;
+  padding: 40px 40px;
+  max-width: 900px;
+}
+
+.content-eyebrow {
+  font-size: 10px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.content-eyebrow::before {
+  content: '';
+  display: block;
+  width: 14px; height: 1px;
+  background: var(--accent);
+}
+.content-title {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 28px;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+  letter-spacing: -.01em;
+}
+.content-desc {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 36px;
+  max-width: 480px;
+  line-height: 1.65;
+}
+
+/* ── App option cards ── */
+.option-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.option-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  cursor: pointer;
+  text-decoration: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
+  overflow: hidden;
+  transition: border-color .15s, background .15s, transform .15s;
+}
+.option-card:hover {
+  border-color: var(--card-color);
+  background: var(--bg-raised);
+  transform: translateY(-2px);
+}
+.option-glow {
+  position: absolute;
+  top: -1px; right: -1px;
+  width: 100px; height: 100px;
+  border-radius: 0 var(--radius-lg) 0 100px;
+  background: var(--card-color);
+  opacity: .06;
+  pointer-events: none;
+}
+.option-icon {
+  width: 48px; height: 48px;
+  border-radius: var(--radius-md);
+  background: var(--card-color-dim);
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 18px;
+}
+.option-platform {
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--card-color);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.option-name {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 20px;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  letter-spacing: -.01em;
+}
+.option-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-bottom: 24px;
+  flex: 1;
+}
+.option-chips {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.chip {
+  font-size: 9px; padding: 2px 8px;
+  border-radius: var(--radius-xl);
+  border: 1px solid;
+  font-weight: 500;
+  color: var(--card-color);
+  border-color: var(--card-color-border);
+  background: var(--card-color-dim);
+}
+.chip-gray {
+  color: var(--text-muted);
+  border-color: var(--border-default);
+  background: transparent;
+}
+.option-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 16px;
+}
+.option-cta {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--card-color);
+}
+.option-arrow {
+  width: 28px; height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--card-color-dim);
+  color: var(--card-color);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px;
+  transition: transform .15s;
+}
+.option-card:hover .option-arrow { transform: translateX(3px); }
+
+/* Mobile sidebar overlay */
+.sidebar-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.5);
+  z-index: 49;
+}
+
+/* ── MOBILE ── */
+@media (max-width: 768px) {
+  :root { --sidebar-w: 240px; }
+  .sidebar {
+    transform: translateX(-100%);
+  }
+  .sidebar.open {
+    transform: translateX(0);
+  }
+  .sidebar-overlay.open { display: block; }
+  .main { margin-left: 0; }
+  .hamburger { display: flex; }
+  .content { padding: 24px 16px; }
+  .option-grid { grid-template-columns: 1fr; }
+  .content-title { font-size: 22px; }
+  .topbar { padding: 0 16px; }
+}
+@media (min-width: 769px) and (max-width: 1024px) {
+  .content { padding: 32px 28px; }
+}
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <!-- Sidebar overlay (mobile) -->
+  <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+  <!-- ============================================================
+       SIDEBAR
+  ============================================================ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <a href="../index.html" class="back-btn">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M9 2L4 7l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Back to portal
+      </a>
+      <div class="sidebar-title">Label Generator</div>
+      <div class="sidebar-subtitle">Choose a platform below</div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-label">Platforms</div>
+
+      <a href="./Flipkart/" class="nav-item" id="nav-flipkart">
+        <div class="nav-item-icon" style="background:#F5A80018;">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <rect x="1" y="3" width="16" height="12" rx="2" stroke="#F5A800" stroke-width="1.4"/>
+            <path d="M4 7h10M4 10h6" stroke="#F5A800" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="nav-item-info">
+          <div class="nav-item-name">Flipkart</div>
+          <div class="nav-item-sub">MRP stickers · FBA</div>
+        </div>
+      </a>
+
+      <a href="./Blinkit/" class="nav-item" id="nav-blinkit">
+        <div class="nav-item-icon" style="background:#4ade8018;">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <path d="M9 2l2 5h5l-4 3 1.5 5L9 12l-4.5 3L6 10 2 7h5L9 2z" stroke="#4ade80" stroke-width="1.4" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div class="nav-item-info">
+          <div class="nav-item-name">Blinkit</div>
+          <div class="nav-item-sub">Quick commerce</div>
+        </div>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      Tomahawk Operations · ITH Team
+    </div>
+  </aside>
+
+  <!-- ============================================================
+       MAIN
+  ============================================================ -->
+  <div class="main">
+
+    <!-- Topbar -->
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="hamburger" id="hamburger" aria-label="Toggle menu">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <path d="M2 4h14M2 9h14M2 14h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <div class="breadcrumb">
+          <a href="../index.html">Portal</a>
+          <span class="sep">/</span>
+          <span class="current">Label Generator</span>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <button class="theme-toggle" id="theme-toggle">
+          <svg class="icon-moon" width="15" height="15" viewBox="0 0 15 15" fill="none">
+            <path d="M13 9A6 6 0 016 2a6 6 0 000 11 6 6 0 007-4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+          </svg>
+          <svg class="icon-sun" width="15" height="15" viewBox="0 0 15 15" fill="none">
+            <circle cx="7.5" cy="7.5" r="3" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M7.5 1v2M7.5 12v2M1 7.5h2M12 7.5h2M3 3l1.5 1.5M10.5 10.5L12 12M3 12l1.5-1.5M10.5 4.5L12 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+      <div class="content-eyebrow">Label Generator</div>
+      <h1 class="content-title">Which platform?</h1>
+      <p class="content-desc">Select a platform to open the right label generator. Each is configured for its marketplace's label spec.</p>
+
+      <div class="option-grid">
+
+        <!-- Flipkart -->
+        <a href="./Flipkart/" class="option-card"
+           style="--card-color:var(--accent);--card-color-dim:var(--accent-dim);--card-color-border:var(--accent-border);">
+          <div class="option-glow"></div>
+          <div class="option-icon">
+            <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+              <rect x="1" y="4" width="24" height="18" rx="3" stroke="var(--accent)" stroke-width="1.6"/>
+              <path d="M5 10h16M5 15h10" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div class="option-platform">Flipkart</div>
+          <div class="option-name">Flipkart Label Generator</div>
+          <div class="option-desc">MRP sticker labels for Flipkart FBA shipments · Code128 barcode · bulk PDF from consignment CSV · 354 SKUs in library</div>
+          <div class="option-chips">
+            <span class="chip">75×50mm</span>
+            <span class="chip">Code128</span>
+            <span class="chip chip-gray">jsPDF</span>
+          </div>
+          <div class="option-footer">
+            <span class="option-cta">Open</span>
+            <div class="option-arrow">→</div>
+          </div>
+        </a>
+
+        <!-- Blinkit -->
+        <a href="./Blinkit/" class="option-card"
+           style="--card-color:#4ade80;--card-color-dim:#4ade8015;--card-color-border:#4ade8040;">
+          <div class="option-glow"></div>
+          <div class="option-icon">
+            <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+              <path d="M13 2l3 7h7l-5.5 4 2 7L13 16l-6.5 4 2-7L3 9h7L13 2z" stroke="#4ade80" stroke-width="1.6" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div class="option-platform">Blinkit</div>
+          <div class="option-name">Blinkit Label Generator</div>
+          <div class="option-desc">Labels for Blinkit quick commerce · UPC barcode · Release Order PDF parsing · invoice generation with IGST/CGST support</div>
+          <div class="option-chips">
+            <span class="chip">UPC barcode</span>
+            <span class="chip">RO invoice</span>
+            <span class="chip chip-gray">PDF.js</span>
+          </div>
+          <div class="option-footer">
+            <span class="option-cta">Open</span>
+            <div class="option-arrow">→</div>
+          </div>
+        </a>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- BLOCK 3 — JS -->
+<script>
+(function () {
+  /* Theme */
+  const html   = document.documentElement;
+  const toggle = document.getElementById('theme-toggle');
+  const saved  = localStorage.getItem('tm_theme');
+  if (saved === 'light') html.setAttribute('data-theme', 'light');
+  if (toggle) {
+    toggle.addEventListener('click', function () {
+      const isLight = html.getAttribute('data-theme') === 'light';
+      if (isLight) { html.removeAttribute('data-theme'); localStorage.setItem('tm_theme', 'dark'); }
+      else          { html.setAttribute('data-theme', 'light'); localStorage.setItem('tm_theme', 'light'); }
+    });
+  }
+
+  /* Mobile sidebar */
+  const sidebar  = document.getElementById('sidebar');
+  const overlay  = document.getElementById('sidebar-overlay');
+  const hamburger = document.getElementById('hamburger');
+  function openSidebar()  { sidebar.classList.add('open'); overlay.classList.add('open'); }
+  function closeSidebar() { sidebar.classList.remove('open'); overlay.classList.remove('open'); }
+  if (hamburger) hamburger.addEventListener('click', openSidebar);
+  if (overlay)   overlay.addEventListener('click', closeSidebar);
+
+  /* Sidebar active state — highlight whichever platform we came from */
+  (function () {
+    const ref = document.referrer;
+    const navMap = [
+      { id: 'nav-flipkart', keyword: 'Flipkart' },
+      { id: 'nav-blinkit',  keyword: 'Blinkit'  },
+    ];
+    navMap.forEach(function (entry) {
+      if (ref.indexOf(entry.keyword) !== -1) {
+        const el = document.getElementById(entry.id);
+        if (el) el.classList.add('active');
+      }
+    });
+  })();
+})();
+</script>
+
+</body>
+</html>
