@@ -663,6 +663,7 @@
   <button class="nav-close-btn" onclick="closeNav()">✕ Close</button>
   <div class="tab active"  onclick="switchTab('import')">📄 Stock Transfer</div>
   <div class="tab"         onclick="switchTab('factory')">🏭 Factory Labels</div>
+  <div class="tab"         onclick="switchTab('wh')">📦 Warehouse Label</div>
   <div class="tab"         onclick="switchTab('skumap')">🔗 Mapped SKUs</div>
   <div class="tab"         onclick="switchTab('labels')">🏷 Generated Labels</div>
 </nav>
@@ -771,6 +772,129 @@
         </div>
       </div>
     </div>
+  </div>
+</div>
+
+
+<!-- TAB 3: WAREHOUSE LABEL -->
+<div id="tab-wh" class="page">
+  <div class="main">
+
+    <!-- LEFT PANEL: SKU selector -->
+    <div class="left-panel panel">
+      <div class="section-title">📦 Warehouse Label</div>
+      <p style="font-size:14.4px;color:var(--text2);line-height:1.7;margin-bottom:20px;">Label boxes already in warehouse. Each box gets its own qty.</p>
+
+      <!-- SKU Selector -->
+      <div class="form-group">
+        <label>Internal SKU</label>
+        <select id="wh-sku-select" onchange="whSkuSelected(this.value)" style="width:100%;padding:8px 10px;font-size:15px;">
+          <option value="">— Select SKU —</option>
+          <option value="__manual__">+ Enter manually…</option>
+        </select>
+        <!-- Manual entry form — shown when user picks "+ Enter manually…" -->
+        <div id="wh-manual-form" style="display:none;margin-top:10px;padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;">
+          <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--accent);letter-spacing:.5px;text-transform:uppercase;margin-bottom:10px;">New SKU Details</div>
+          <div class="form-group" style="margin-bottom:10px;">
+            <label>Internal SKU <span style="color:var(--accent2);">*</span></label>
+            <input type="text" id="wh-manual-internal" placeholder="e.g. TLL-16" style="width:100%;"
+              oninput="whState.internalSku=this.value.trim()">
+          </div>
+          <div class="form-group" style="margin-bottom:10px;">
+            <label>UC SKU <span style="color:var(--accent2);">*</span></label>
+            <!-- Combo: searchable text + dropdown populated from ucCache + UC_IMAGE_MAP -->
+            <input type="text" id="wh-manual-ucsku" placeholder="Type to search UC SKU…" style="width:100%;margin-bottom:4px;"
+              oninput="whFilterUcSkuList(this.value)" autocomplete="off">
+            <select id="wh-ucsku-list" size="5"
+              style="width:100%;display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--mono);font-size:12px;padding:4px;"
+              onchange="whUcSkuPicked(this.value)">
+            </select>
+            <div id="wh-ucsku-hint" style="font-size:11px;color:var(--text2);margin-top:3px;display:none;">↑ Select from list or keep typing</div>
+          </div>
+          <div class="form-group" style="margin-bottom:10px;">
+            <label>Image URL <span style="font-weight:400;color:var(--text2);font-size:11px;">(auto-filled · editable)</span></label>
+            <input type="text" id="wh-manual-img" placeholder="https://m.media-amazon.com/…" style="width:100%;"
+              oninput="whState.imageUrl=this.value.trim()">
+          </div>
+          <div class="form-group" style="margin-bottom:10px;">
+            <label>Category <span style="font-weight:400;color:var(--text2);font-size:11px;">(auto-filled · editable)</span></label>
+            <select id="wh-cat-sel" onchange="whCatSelectChanged(this.value)"
+              style="width:100%;padding:6px 8px;font-size:14px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+              <option value="">— Select —</option>
+            </select>
+            <input type="text" id="wh-cat-new" placeholder="Type new category…"
+              style="width:100%;display:none;margin-top:6px;"
+              onblur="whCatNewBlur(this.value)"
+              onkeydown="if(event.key==='Enter')whCatNewBlur(this.value)">
+            <!-- hidden field carries the resolved value for save functions to read -->
+            <input type="hidden" id="wh-manual-category">
+          </div>
+          <div class="form-group" style="margin-bottom:12px;">
+            <label>Pcs/Box <span style="font-weight:400;color:var(--text2);font-size:11px;">(auto-filled · editable)</span></label>
+            <input type="number" id="wh-manual-ppc" min="1" placeholder="e.g. 1" style="width:100%;">
+          </div>
+          <button class="btn btn-ghost btn-full" onclick="whSaveManualMapping()"
+            style="color:var(--accent);border-color:var(--accent);">🔗 Save to Mapped SKUs &amp; Continue</button>
+          <button class="btn btn-ghost btn-full" onclick="whUseManualWithoutSaving()"
+            style="margin-top:6px;font-size:12px;opacity:0.7;">Skip — generate labels without saving</button>
+        </div>
+      </div>
+
+      <!-- Auto-filled from mapping -->
+      <div id="wh-sku-meta" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:16px;font-family:var(--mono);font-size:12px;line-height:2;">
+        <span id="wh-meta-category" style="color:var(--text2);"></span><br>
+        <span id="wh-meta-ppc" style="color:var(--text2);"></span>
+      </div>
+
+      <!-- Number of boxes -->
+      <div class="form-group" id="wh-num-boxes-wrap" style="display:none;">
+        <label>Number of Boxes</label>
+        <input type="number" id="wh-num-boxes" min="1" max="99" placeholder="e.g. 3"
+          style="width:100%;"
+          oninput="whState.numBoxes=parseInt(this.value)||0;whRenderBoxFields()">
+      </div>
+
+      <button id="wh-generate-btn" class="btn btn-primary btn-full" style="display:none;margin-top:8px;"
+        onclick="generateWhLabels()">🏷 Generate Labels →</button>
+    </div>
+
+    <!-- RIGHT PANEL: per-box qty inputs -->
+    <div class="right-panel panel">
+      <div class="section-title">📋 Box Quantities
+        <span style="font-size:12px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--text2);">M-series • one field per box</span>
+      </div>
+
+      <div id="wh-boxes-empty" class="empty-state">
+        <div class="empty-state-icon">📦</div>
+        Select a SKU and enter number of boxes.
+      </div>
+
+      <div id="wh-boxes-wrap" style="display:none;">
+        <!-- Summary row -->
+        <div id="wh-boxes-summary" style="font-family:var(--mono);font-size:12px;color:var(--text2);margin-bottom:14px;padding:8px 12px;background:var(--surface2);border-radius:6px;border:1px solid var(--border);"></div>
+
+        <div style="overflow-x:auto;">
+          <table class="gp-table" id="wh-boxes-table">
+            <colgroup>
+              <col style="width:60px;">
+              <col style="width:100%;">
+              <col style="width:80px;">
+            </colgroup>
+            <thead><tr>
+              <th>#</th>
+              <th>Qty in Box</th>
+              <th>Total</th>
+            </tr></thead>
+            <tbody id="wh-boxes-tbody"></tbody>
+          </table>
+        </div>
+
+        <div style="margin-top:16px;">
+          <button class="btn btn-primary" onclick="generateWhLabels()">🏷 Generate Labels →</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -1305,6 +1429,44 @@ let skuMap       = JSON.parse(localStorage.getItem('gp_sku_map_v1')    || '[]');
 // key: ucSku → { bwImageUrl, bwSourceUrl }
 let bwStore      = JSON.parse(localStorage.getItem('gp_bw_store_v1')   || '{}');
 function saveBwStore() { try { localStorage.setItem('gp_bw_store_v1', JSON.stringify(bwStore)); } catch(e) { console.warn('bwStore save failed:', e); } }
+
+// ── BW IMAGE D1 SYNC ───────────────────────────────────────────────────
+// Saves a single B&W image entry to D1. Called after every successful Gemini generation
+// or manual upload. Runs silently — localStorage is the source of truth for this session.
+async function saveBwImageToD1(ucSku) {
+  if (!IS_LIVE) return;
+  const entry = bwStore[ucSku];
+  if (!entry || !entry.bwImageUrl) return;
+  try {
+    await apiPost('saveBwImage', { ucSku, bwImageUrl: entry.bwImageUrl, bwSourceUrl: entry.bwSourceUrl || '' });
+  } catch(e) { console.warn('D1 bwImage save failed for', ucSku, e); }
+}
+
+// Removes a B&W image from D1 when a mapping is deleted or its image URL changes.
+async function deleteBwImageFromD1(ucSku) {
+  if (!IS_LIVE) return;
+  try {
+    await apiPost('deleteBwImage', { ucSku });
+  } catch(e) { console.warn('D1 bwImage delete failed for', ucSku, e); }
+}
+
+// Called once on page load — pulls all B&W images from D1 into bwStore.
+// Only fills in entries missing locally (localStorage wins over D1 for same ucSku).
+async function loadBwImagesFromD1() {
+  try {
+    const res = await fetch(`${WORKER}?action=getBwImages`);
+    const data = await res.json();
+    if (!data.ok || !data.images || !data.images.length) return;
+    let changed = false;
+    data.images.forEach(function(row) {
+      if (!bwStore[row.uc_sku] && row.bw_image_url) {
+        bwStore[row.uc_sku] = { bwImageUrl: row.bw_image_url, bwSourceUrl: row.bw_source_url || '' };
+        changed = true;
+      }
+    });
+    if (changed) { saveBwStore(); renderMapTable(); }
+  } catch(e) { /* silent — offline is fine */ }
+}
 // On load: migrate any bwImageUrl already embedded in skuMap into bwStore, then strip from skuMap
 (function migrateBwFromSkuMap() {
   let changed = false;
@@ -1347,11 +1509,13 @@ window.onload = () => {
     localStorage.setItem('gp_uc_cache_version', '3');
   }
   renderMapTable();
+  whPopulateSkuDropdown();
   if (localStorage.getItem('gp_theme') === 'light') { document.body.classList.add('light-mode'); document.getElementById('theme-btn').textContent = '☀'; }
   // Silently enrich mapping images from embedded map
   enrichMappingImages();
   // Fetch D1 image cache in background (live only)
   if (IS_LIVE) loadGpImagesFromD1();
+  if (IS_LIVE) loadBwImagesFromD1();
 };
 
 function toggleTheme() { const l = document.body.classList.toggle('light-mode'); document.getElementById('theme-btn').textContent = l?'☀':'🌙'; localStorage.setItem('gp_theme', l?'light':'dark'); }
@@ -1361,7 +1525,7 @@ function switchTab(tab) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.getElementById('tab-'+tab).classList.add('active');
-  const idx = ['import','factory','skumap','labels'].indexOf(tab);
+  const idx = ['import','factory','wh','skumap','labels'].indexOf(tab);
   document.querySelectorAll('.tab')[idx]?.classList.add('active');
   closeNav();
 }
@@ -2164,6 +2328,7 @@ async function processBwQueue() {
       const bwDataUrl = await callGeminiForBw(skuMap[idx].imageUrl);
       bwStore[ucSku] = { bwImageUrl: bwDataUrl, bwSourceUrl: skuMap[idx].imageUrl };
       saveBwStore();
+      saveBwImageToD1(ucSku);   // persist to D1 (silent, non-blocking)
       renderMapTable();
     } catch(e) {
       const msg = e.message || '';
@@ -2335,6 +2500,7 @@ function renderMapTable() {
       </td>
     </tr>`;
   }).join('');
+  whPopulateSkuDropdown(); // keep Warehouse Label dropdown in sync
 }
 
 // ── EDIT MAPPING MODAL ─────────────────────────────────────────────────
@@ -2395,10 +2561,12 @@ function saveEditMapping() {
   if (bwBase64) {
     bwStore[skuMap[idx].ucSku] = { bwImageUrl: bwBase64, bwSourceUrl: newImgUrl };
     saveBwStore();
+    saveBwImageToD1(skuMap[idx].ucSku);   // persist to D1
   } else if (newImgUrl && newImgUrl !== prevImgUrl) {
     // Image URL changed — clear stale B&W so it re-generates
     delete bwStore[skuMap[idx].ucSku];
     saveBwStore();
+    deleteBwImageFromD1(skuMap[idx].ucSku);   // remove stale entry from D1
   }
 
   saveSkuMapToStorage();
@@ -2421,10 +2589,11 @@ function openDeleteModal(idx) {
 function confirmDeleteMapping() {
   const idx = parseInt(document.getElementById('delete-map-modal').dataset.idx);
   const removed = skuMap.splice(idx, 1)[0];
-  // Also remove B&W image from bwStore
+  // Also remove B&W image from bwStore and D1
   if (removed && bwStore[removed.ucSku]) {
     delete bwStore[removed.ucSku];
     saveBwStore();
+    deleteBwImageFromD1(removed.ucSku);   // remove from D1
   }
   saveSkuMapToStorage();
   renderMapTable();
@@ -2480,6 +2649,424 @@ function refreshMappingImages() {
     showToast('All images already up to date');
   }
 }
+
+// ══════════════════════════════════════════════════════════════════
+// WAREHOUSE LABEL — State & Logic
+// SKU: select from skuMap or type manually
+// Boxes: N fields, each with its own qty
+// BOX ID type: 'manual' → M-series  (same as Stock Transfer)
+// ══════════════════════════════════════════════════════════════════
+
+// ── State ─────────────────────────────────────────────────────────
+const whState = {
+  internalSku:  '',
+  ucSku:        '',
+  category:     '',
+  imageUrl:     '',
+  numBoxes:     0,
+  boxQtys:      [],   // array of per-box qty values
+  isManual:     false // true when user typed SKU instead of selecting
+};
+
+// Populate the SKU dropdown from skuMap — called on load + after skuMap changes
+function whPopulateSkuDropdown() {
+  const sel = document.getElementById('wh-sku-select');
+  if (!sel) return;
+  // Preserve current selection
+  const current = sel.value;
+  // Rebuild options
+  sel.innerHTML = '<option value="">— Select SKU —</option>';
+  // Group by internalSku (skuMap may have multiple UC SKUs per internal SKU)
+  const seen = new Set();
+  skuMap.forEach(function(m) {
+    if (!m.internalSku || seen.has(m.internalSku)) return;
+    seen.add(m.internalSku);
+    const opt = document.createElement('option');
+    opt.value = m.internalSku;
+    opt.textContent = m.internalSku + (m.category ? '  ·  ' + m.category : '');
+    sel.appendChild(opt);
+  });
+  const manOpt = document.createElement('option');
+  manOpt.value = '__manual__'; manOpt.textContent = '+ Enter manually…';
+  sel.appendChild(manOpt);
+  // Restore selection if still valid
+  if (current) sel.value = current;
+}
+
+// Called when SKU dropdown changes
+function whSkuSelected(val) {
+  const metaBox = document.getElementById('wh-sku-meta');
+
+  if (val === '__manual__') {
+    // Show manual entry form, hide meta
+    document.getElementById('wh-manual-form').style.display = 'block';
+    document.getElementById('wh-manual-internal').value = '';
+    document.getElementById('wh-manual-ucsku').value = '';
+    document.getElementById('wh-manual-img').value = '';
+    document.getElementById('wh-manual-category').value = '';
+    document.getElementById('wh-manual-ppc').value = '';
+    // Reset category select & hide new-input
+    document.getElementById('wh-cat-new').style.display = 'none';
+    document.getElementById('wh-cat-sel').style.display = 'block';
+    whRebuildCatSelect('');
+    whState.category = '';
+    document.getElementById('wh-manual-internal').focus();
+    metaBox.style.display = 'none';
+    whState.internalSku = ''; whState.ucSku = '';
+    whState.category = ''; whState.imageUrl = '';
+    whState.isManual = true;
+    document.getElementById('wh-num-boxes-wrap').style.display = 'none';
+    document.getElementById('wh-generate-btn').style.display = 'none';
+    whState.numBoxes = 0;
+    document.getElementById('wh-num-boxes').value = '';
+    whRenderBoxFields();
+    return;
+  }
+
+  document.getElementById('wh-manual-form').style.display = 'none';
+  whState.isManual = false;
+
+  if (!val) {
+    // No selection
+    whState.internalSku = ''; whState.ucSku = '';
+    whState.category = ''; whState.imageUrl = '';
+    metaBox.style.display = 'none';
+    document.getElementById('wh-num-boxes-wrap').style.display = 'none';
+    document.getElementById('wh-generate-btn').style.display = 'none';
+    whState.numBoxes = 0;
+    document.getElementById('wh-num-boxes').value = '';
+    whRenderBoxFields();
+    return;
+  }
+
+  // Look up from skuMap — find first matching entry by internalSku
+  const map = skuMap.find(function(m) { return m.internalSku === val; });
+  whState.internalSku = val;
+  whState.ucSku       = map ? map.ucSku : '';
+  whState.category    = map ? (map.category || '') : '';
+  whState.imageUrl    = map ? (map.imageUrl || '') : '';
+
+  // Show meta info
+  const catEl = document.getElementById('wh-meta-category');
+  const ppcEl = document.getElementById('wh-meta-ppc');
+  catEl.textContent = 'Category: ' + (whState.category || '—');
+  ppcEl.textContent = 'Pcs/Box (mapping): ' + (map && map.pcsPerCarton ? map.pcsPerCarton : '—');
+  metaBox.style.display = 'block';
+
+  // Show num-boxes field
+  document.getElementById('wh-num-boxes-wrap').style.display = 'block';
+  document.getElementById('wh-generate-btn').style.display = 'block';
+  whRenderBoxFields();
+}
+
+// Renders per-box qty input rows whenever SKU or numBoxes changes
+function whRenderBoxFields() {
+  const n        = whState.numBoxes;
+  const skuReady = whState.internalSku.length > 0;
+  const tbody    = document.getElementById('wh-boxes-tbody');
+  const wrap     = document.getElementById('wh-boxes-wrap');
+  const emptyEl  = document.getElementById('wh-boxes-empty');
+  const summary  = document.getElementById('wh-boxes-summary');
+
+  if (!skuReady || n <= 0) {
+    tbody.innerHTML = '';
+    wrap.style.display = 'none';
+    emptyEl.style.display = 'flex';
+    // Show num-boxes + generate only when SKU is set
+    if (skuReady) {
+      document.getElementById('wh-num-boxes-wrap').style.display = 'block';
+      document.getElementById('wh-generate-btn').style.display = 'block';
+    }
+    return;
+  }
+
+  // Grow/shrink boxQtys array to match n — preserve existing values
+  while (whState.boxQtys.length < n) whState.boxQtys.push(0);
+  whState.boxQtys.length = n;
+
+  emptyEl.style.display = 'none';
+  wrap.style.display = 'block';
+
+  // Render rows
+  const rows = [];
+  for (let i = 0; i < n; i++) {
+    const v = whState.boxQtys[i] || '';
+    rows.push(`
+      <tr>
+        <td style="font-family:var(--mono);font-weight:700;color:var(--text2);text-align:center;">${i + 1}</td>
+        <td>
+          <input type="number" min="1" value="${v}" placeholder="qty…"
+            style="width:100%;padding:6px 10px;font-size:15px;"
+            oninput="whState.boxQtys[${i}]=parseInt(this.value)||0;whUpdateSummary()">
+        </td>
+        <td style="font-family:var(--mono);font-size:13px;color:var(--text2);text-align:right;" id="wh-rowtotal-${i}">
+          ${(whState.boxQtys[i] || 0)}
+        </td>
+      </tr>`);
+  }
+  tbody.innerHTML = rows.join('');
+  whUpdateSummary();
+}
+
+// Updates the summary line and per-row totals (live as user types)
+function whUpdateSummary() {
+  const total = whState.boxQtys.reduce(function(s, v) { return s + (v || 0); }, 0);
+  const filled = whState.boxQtys.filter(function(v) { return v > 0; }).length;
+  const n = whState.numBoxes;
+  const summaryEl = document.getElementById('wh-boxes-summary');
+  if (summaryEl) {
+    summaryEl.innerHTML =
+      '<span style="color:var(--text);">' + whState.internalSku + '</span>' +
+      ' &nbsp;·&nbsp; ' + n + ' box' + (n !== 1 ? 'es' : '') +
+      ' &nbsp;·&nbsp; Total: <span style="color:var(--accent);font-weight:700;">' + total + ' pcs</span>' +
+      (filled < n ? ' &nbsp;<span style="color:var(--accent2);">(' + (n - filled) + ' box' + (n - filled !== 1 ? 'es' : '') + ' empty)</span>' : '');
+  }
+  // Update per-row total column
+  for (let i = 0; i < n; i++) {
+    const el = document.getElementById('wh-rowtotal-' + i);
+    if (el) el.textContent = whState.boxQtys[i] || 0;
+  }
+}
+
+// ── UC SKU searchable combo ───────────────────────────────────────
+// Builds the full UC SKU list: ucCache keys + UC_IMAGE_MAP keys, deduped, sorted
+function whGetAllUcSkus() {
+  const all = new Set();
+  Object.keys(ucCache).forEach(function(k) { if (k) all.add(k); });
+  Object.keys(UC_IMAGE_MAP).forEach(function(k) { if (k) all.add(k); });
+  return Array.from(all).sort();
+}
+
+// Filters the dropdown list as user types into the UC SKU input
+function whFilterUcSkuList(query) {
+  whState.ucSku = query.trim();
+  const list  = document.getElementById('wh-ucsku-list');
+  const hint  = document.getElementById('wh-ucsku-hint');
+  const q     = query.trim().toLowerCase();
+  if (!q) { list.style.display = 'none'; hint.style.display = 'none'; return; }
+  const all     = whGetAllUcSkus();
+  const matches = all.filter(function(s) { return s.toLowerCase().includes(q); }).slice(0, 20);
+  if (!matches.length) { list.style.display = 'none'; hint.style.display = 'none'; return; }
+  list.innerHTML = matches.map(function(s) {
+    const data = ucCache[s] || {};
+    const cat  = data.categoryName && data.categoryName !== 'Default' ? '  ·  ' + data.categoryName : '';
+    return '<option value="' + s + '">' + s + cat + '</option>';
+  }).join('');
+  list.style.display = 'block';
+  hint.style.display = 'block';
+}
+
+// Called when user picks a UC SKU from the dropdown list — auto-fills image + category
+function whUcSkuPicked(val) {
+  if (!val) return;
+  // Set the text input
+  document.getElementById('wh-manual-ucsku').value = val;
+  whState.ucSku = val;
+  document.getElementById('wh-ucsku-list').style.display = 'none';
+  document.getElementById('wh-ucsku-hint').style.display = 'none';
+
+  // Auto-fill from ucCache first, then UC_IMAGE_MAP fallback
+  const data = ucCache[val] || {};
+  const img  = (data.imageUrl && data.imageUrl.length > 5) ? data.imageUrl : (UC_IMAGE_MAP[val] || '');
+  const cat  = (data.categoryName && data.categoryName !== 'Default') ? data.categoryName : '';
+  const ppc  = data.pcsPerCarton || null;
+
+  if (img) {
+    document.getElementById('wh-manual-img').value = img;
+    whState.imageUrl = img;
+  }
+  if (cat) {
+    document.getElementById('wh-manual-category').value = cat;
+    whState.category = cat;
+    whRebuildCatSelect(cat);  // pre-select in dropdown (adds if not yet in list)
+  }
+  if (ppc) {
+    document.getElementById('wh-manual-ppc').value = ppc;
+  }
+}
+
+// ── WH Manual form — category select helpers ─────────────────────
+// Rebuilds the category <select> from the global categories array.
+// Call whenever the form opens or a new category is added.
+function whRebuildCatSelect(selectedVal) {
+  const sel = document.getElementById('wh-cat-sel');
+  if (!sel) return;
+  const opts = categories.map(function(c) {
+    return '<option value="' + c + '"' + (c === selectedVal ? ' selected' : '') + '>' + c + '</option>';
+  }).join('');
+  sel.innerHTML = '<option value="">— Select —</option>' + opts + '<option value="__new__">+ Add new…</option>';
+  if (selectedVal) sel.value = selectedVal;
+}
+
+function whCatSelectChanged(val) {
+  const sel    = document.getElementById('wh-cat-sel');
+  const newInp = document.getElementById('wh-cat-new');
+  const hidden = document.getElementById('wh-manual-category');
+  if (val === '__new__') {
+    sel.style.display    = 'none';
+    newInp.style.display = 'block';
+    newInp.value = '';
+    newInp.focus();
+    hidden.value = '';
+    whState.category = '';
+  } else {
+    hidden.value     = val;
+    whState.category = val;
+  }
+}
+
+function whCatNewBlur(val) {
+  val = val.trim();
+  const sel    = document.getElementById('wh-cat-sel');
+  const newInp = document.getElementById('wh-cat-new');
+  const hidden = document.getElementById('wh-manual-category');
+  if (!val) {
+    // Cancelled — go back to select
+    newInp.style.display = 'none';
+    sel.style.display    = 'block';
+    sel.value = hidden.value || '';
+    return;
+  }
+  addCategoryIfNew(val);
+  hidden.value     = val;
+  whState.category = val;
+  // Rebuild select with new option pre-selected, hide new-input
+  newInp.style.display = 'none';
+  sel.style.display    = 'block';
+  whRebuildCatSelect(val);
+}
+
+// Called when user clicks "Save to Mapped SKUs & Continue" in manual form
+function whSaveManualMapping() {
+  const internalSku = document.getElementById('wh-manual-internal').value.trim();
+  // Always read final typed value — user may have typed without picking from dropdown
+  const ucSku       = document.getElementById('wh-manual-ucsku').value.trim();
+  const imageUrl    = document.getElementById('wh-manual-img').value.trim();
+  const category    = document.getElementById('wh-manual-category').value.trim();
+  const ppc         = parseInt(document.getElementById('wh-manual-ppc').value) || null;
+  // Close dropdown list if still open
+  document.getElementById('wh-ucsku-list').style.display = 'none';
+  document.getElementById('wh-ucsku-hint').style.display = 'none';
+
+  if (!internalSku) { showToast('Internal SKU is required', true); return; }
+  if (!ucSku)       { showToast('UC SKU is required', true); return; }
+
+  // Save to skuMap (same pattern as linkSkuInline)
+  const entry = { ucSku, internalSku, pcsPerCarton: ppc, imageUrl: imageUrl || '', category: category || '', source: 'inline' };
+  const existingIdx = skuMap.findIndex(function(m) { return m.ucSku === ucSku; });
+  if (existingIdx >= 0) skuMap[existingIdx] = entry; else skuMap.push(entry);
+  if (category) addCategoryIfNew(category);
+  saveSkuMapToStorage(); // saves to localStorage + D1, does NOT call renderMapTable
+
+  // Update whState with saved data
+  whState.internalSku = internalSku;
+  whState.ucSku       = ucSku;
+  whState.category    = category;
+  whState.imageUrl    = imageUrl;
+  whState.isManual    = false; // now it's saved
+
+  // Update category select + WH SKU dropdown immediately (no full table re-render)
+  if (category) whRebuildCatSelect(category);
+  whPopulateSkuDropdown();
+  document.getElementById('wh-sku-select').value = internalSku;
+
+  // Hide form, show meta + num-boxes — user can proceed immediately
+  document.getElementById('wh-manual-form').style.display = 'none';
+  const metaBox = document.getElementById('wh-sku-meta');
+  document.getElementById('wh-meta-category').textContent = 'Category: ' + (category || '—');
+  document.getElementById('wh-meta-ppc').textContent = 'Pcs/Box (mapping): ' + (ppc || '—');
+  metaBox.style.display = 'block';
+  document.getElementById('wh-num-boxes-wrap').style.display = 'block';
+  document.getElementById('wh-generate-btn').style.display = 'block';
+
+  showToast('✓ Saved: ' + ucSku + ' → ' + internalSku + '. Now enter number of boxes.');
+  document.getElementById('wh-num-boxes').focus();
+
+  // Defer B&W generation + Mapped SKUs table refresh — runs after UI is ready,
+  // silently in background. User is already on num-boxes by the time this fires.
+  setTimeout(function() {
+    renderMapTable();
+    const newIdx = skuMap.findIndex(function(m) { return m.ucSku === ucSku; });
+    if (newIdx >= 0) scheduleBwIfNeeded(newIdx);
+  }, 200);
+}
+
+// Called when user wants to skip saving and just generate labels for this session
+function whUseManualWithoutSaving() {
+  const internalSku = document.getElementById('wh-manual-internal').value.trim();
+  const imageUrl    = document.getElementById('wh-manual-img').value.trim();
+  const category    = document.getElementById('wh-manual-category').value.trim();
+
+  if (!internalSku) { showToast('Enter Internal SKU at minimum', true); return; }
+
+  // Close dropdown list if still open
+  document.getElementById('wh-ucsku-list').style.display = 'none';
+  document.getElementById('wh-ucsku-hint').style.display = 'none';
+  whState.internalSku = internalSku;
+  whState.ucSku       = document.getElementById('wh-manual-ucsku').value.trim();
+  whState.category    = category;
+  whState.imageUrl    = imageUrl;
+
+  // Hide form, show num-boxes
+  document.getElementById('wh-manual-form').style.display = 'none';
+  const metaBox = document.getElementById('wh-sku-meta');
+  document.getElementById('wh-meta-category').textContent = 'Category: ' + (category || '—');
+  document.getElementById('wh-meta-ppc').textContent = 'Not saved to mappings';
+  metaBox.style.display = 'block';
+  document.getElementById('wh-num-boxes-wrap').style.display = 'block';
+  document.getElementById('wh-generate-btn').style.display = 'block';
+
+  showToast('SKU set to ' + internalSku + ' (not saved). Enter number of boxes.');
+  document.getElementById('wh-num-boxes').focus();
+}
+
+// Generate labels — one per box, each with its own qty
+async function generateWhLabels() {
+  const sku = whState.internalSku.trim();
+  if (!sku) { showToast('Select or enter a SKU first', true); return; }
+  const n = whState.numBoxes;
+  if (!n || n <= 0) { showToast('Enter number of boxes', true); return; }
+
+  // Validate — every box must have qty > 0
+  const emptyBoxes = whState.boxQtys.slice(0, n).filter(function(v) { return !v || v <= 0; });
+  if (emptyBoxes.length) {
+    showToast('⚠ ' + emptyBoxes.length + ' box' + (emptyBoxes.length !== 1 ? 'es' : '') + ' missing qty — fill all fields', true);
+    return;
+  }
+
+  const mmyy = getMmyy();
+  // Look up image from bwStore / skuMap / caches
+  const map = skuMap.find(function(m) { return m.internalSku === sku; });
+  const ucSku = whState.ucSku || (map ? map.ucSku : '');
+  const bwEntry = bwStore[ucSku] || {};
+  const imgSrc = bwEntry.bwImageUrl || (map ? map.imageUrl : '') || UC_IMAGE_MAP[ucSku] || gpImageCache[ucSku] || '';
+
+  setSyncPill('⏳ Generating…', '');
+  generatedLabels = [];
+
+  for (let b = 0; b < n; b++) {
+    const boxQty = whState.boxQtys[b];
+    const seq    = await getNextSeq(sku, mmyy, 'manual');   // M-series, same as Stock Transfer
+    const bid    = formatBid(sku, mmyy, seq, 'manual');
+    generatedLabels.push({
+      ucSku:       ucSku,
+      internalSku: sku,
+      category:    whState.category,
+      qty:         boxQty,
+      bid,
+      type:        'manual',
+      imageUrl:    imgSrc,
+      gpNum:       '',
+      dateStr:     ''
+    });
+  }
+
+  setSyncPill('☁ Saved', 'ok');
+  renderGeneratedLabels();
+  switchTab('labels');
+  showToast('✓ ' + generatedLabels.length + ' label(s) generated');
+}
+
 
 </script>
 </body>
