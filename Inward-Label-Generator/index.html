@@ -2166,7 +2166,16 @@ async function processBwQueue() {
       saveBwStore();
       renderMapTable();
     } catch(e) {
-      console.warn('Gemini B&W failed for ' + ucSku + ':', e.message);
+      const msg = e.message || '';
+      if (msg === 'NO_KEY' || msg.startsWith('API_KEY_INVALID')) {
+        // Bad key — stop the whole queue, alert the user
+        bwQueue.clear();
+        bwProcessing = false;
+        renderMapTable();
+        showToast('Gemini key missing or invalid — enter a valid key in the Gemini Key field', true);
+        return;
+      }
+      console.warn('Gemini B&W failed for ' + ucSku + ':', msg);
     }
     if (bwQueue.size > 0) await new Promise(function(r) { setTimeout(r, 800); });
   }
@@ -2175,54 +2184,30 @@ async function processBwQueue() {
 
 async function callGeminiForBw(imageUrl) {
   const apiKey = getGeminiKey();
-  if (!apiKey) throw new Error('No Gemini API key');
+  if (!apiKey) throw new Error('NO_KEY');
 
-  // Send URL directly to Gemini — no browser fetch/proxy needed.
-  // Gemini fetches the image server-side (works with Amazon CDN URLs).
-  const payload = {
-    contents: [{ parts: [
-      { image_url: { url: imageUrl } },
-      { text: GEMINI_PROMPT }
-    ]}],
-    generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
-  };
-
-  let lastErr;
-  for (let mi = 0; mi < GEMINI_MODELS.length; mi++) {
-    try {
-      const res = await fetch(
-        'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODELS[mi] + ':generateContent?key=' + apiKey,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
-      );
-      if (!res.ok) { const err = await res.json().catch(function(){return{};}); throw new Error((err.error&&err.error.message)||('HTTP '+res.status)); }
-      const data = await res.json();
-      const parts = (data.candidates&&data.candidates[0]&&data.candidates[0].content&&data.candidates[0].content.parts)||[];
-      const imgPart = parts.find(function(p){return p.inlineData||p.inline_data;});
-      if (!imgPart) throw new Error('No image in response');
-      const id = imgPart.inlineData||imgPart.inline_data;
-      return 'data:'+(id.mimeType||id.mime_type)+';base64,'+id.data;
-    } catch(e) { lastErr = e; }
-  }
-  // Fallback: if URL fetch fails (e.g. Gemini can't reach it), try base64 via proxy
-  console.warn('URL method failed, trying base64 fallback:', lastErr?.message);
-  return callGeminiForBwBase64(imageUrl);
-}
-
-// Fallback: fetch image as base64 then send inline
-async function callGeminiForBwBase64(imageUrl) {
-  const apiKey = getGeminiKey();
+  // Fetch image as base64 — try direct first, then allorigins proxy for CORS
   let base64, mime;
-  let resp;
-  try { resp = await fetch(imageUrl); if (!resp.ok) throw new Error('direct'); }
-  catch(e) { resp = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(imageUrl)); }
-  const blob = await resp.blob();
-  mime = blob.type || 'image/jpeg';
-  base64 = await new Promise(function(resolve, reject) {
-    const reader = new FileReader();
-    reader.onload  = function(e) { resolve(e.target.result.split(',')[1]); };
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
+  try {
+    let resp;
+    try {
+      resp = await fetch(imageUrl);
+      if (!resp.ok) throw new Error('non-200');
+    } catch(e) {
+      resp = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(imageUrl));
+    }
+    const blob = await resp.blob();
+    mime = blob.type || 'image/jpeg';
+    base64 = await new Promise(function(resolve, reject) {
+      const reader = new FileReader();
+      reader.onload  = function(e) { resolve(e.target.result.split(',')[1]); };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch(e) {
+    throw new Error('Image fetch failed: ' + e.message);
+  }
+
   const payload = {
     contents: [{ parts: [
       { inline_data: { mime_type: mime, data: base64 } },
@@ -2230,6 +2215,7 @@ async function callGeminiForBwBase64(imageUrl) {
     ]}],
     generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
   };
+
   let lastErr;
   for (let mi = 0; mi < GEMINI_MODELS.length; mi++) {
     try {
@@ -2237,16 +2223,26 @@ async function callGeminiForBwBase64(imageUrl) {
         'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODELS[mi] + ':generateContent?key=' + apiKey,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
       );
-      if (!res.ok) { const err = await res.json().catch(function(){return{};}); throw new Error((err.error&&err.error.message)||('HTTP '+res.status)); }
+      if (!res.ok) {
+        const err = await res.json().catch(function(){return{};});
+        const msg = (err.error && err.error.message) || ('HTTP ' + res.status);
+        // API key errors — no point retrying other models
+        if (res.status === 400 || res.status === 403) throw new Error('API_KEY_INVALID: ' + msg);
+        throw new Error(msg);
+      }
       const data = await res.json();
       const parts = (data.candidates&&data.candidates[0]&&data.candidates[0].content&&data.candidates[0].content.parts)||[];
       const imgPart = parts.find(function(p){return p.inlineData||p.inline_data;});
       if (!imgPart) throw new Error('No image in response');
       const id = imgPart.inlineData||imgPart.inline_data;
       return 'data:'+(id.mimeType||id.mime_type)+';base64,'+id.data;
-    } catch(e) { lastErr = e; }
+    } catch(e) {
+      lastErr = e;
+      // Stop trying other models on key errors
+      if (e.message && e.message.startsWith('API_KEY_INVALID')) break;
+    }
   }
-  throw lastErr||new Error('All Gemini models failed');
+  throw lastErr || new Error('All Gemini models failed');
 }
 
 function triggerBwForEntry(tableIdx) {
