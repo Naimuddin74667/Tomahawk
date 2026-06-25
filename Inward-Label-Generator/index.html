@@ -640,6 +640,7 @@
   .gp-table tr:hover td{background:var(--surface2);} .gp-table tr td{padding-top:10px;padding-bottom:10px;}
   .gp-table input,.gp-table select{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:15.6px;padding:7px 9px;outline:none;}
   .gp-table input:focus,.gp-table select:focus{border-color:var(--accent);}
+  @keyframes spin{to{transform:rotate(360deg);}}
 </style>
 </head>
 <body>
@@ -786,14 +787,13 @@
         <button class="btn btn-ghost" onclick="exportMappings()">⬇ Export CSV</button>
       </div>
     </div>
-    <!-- Gemini key + bulk B&W row -->
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
       <label style="font-size:11px;font-weight:600;color:var(--text2);letter-spacing:.5px;text-transform:uppercase;white-space:nowrap;margin:0;">Gemini Key</label>
       <input type="password" id="gemini-key-input" placeholder="AIzaSy… (saved locally)"
         style="flex:1;min-width:180px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--mono);font-size:12px;padding:7px 12px;outline:none;"
         onfocus="this.type='text'" onblur="this.type='password';saveGeminiKey(false)">
       <button class="btn btn-ghost" style="padding:6px 12px;font-size:11px;white-space:nowrap;" onclick="saveGeminiKey(true)">Save Key</button>
-      <button class="btn btn-ghost" style="padding:6px 12px;font-size:11px;white-space:nowrap;color:var(--accent);border-color:var(--accent);" onclick="generateBwForAll()">✨ B&amp;W All</button>
+      <button class="btn btn-ghost" style="padding:6px 12px;font-size:11px;white-space:nowrap;color:var(--accent);border-color:var(--accent);" onclick="generateBwForAll()">&#10024; B&amp;W All</button>
     </div>
     <div id="img-sync-result" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px 16px;margin-bottom:16px;font-family:var(--mono);font-size:13px;"></div>
     <div id="map-empty" class="empty-state">
@@ -875,7 +875,7 @@
         <img id="edit-bw-preview" style="width:48px;height:48px;object-fit:contain;border:1px solid var(--border);border-radius:4px;background:#fff;display:none;flex-shrink:0;">
       </div>
       <div style="margin-top:6px;">
-        <button class="btn btn-ghost" id="gemini-gen-btn" style="padding:6px 12px;font-size:11px;color:var(--accent);border-color:var(--accent);width:100%;" onclick="generateBwForEditModal()">✨ Generate B&amp;W with Gemini</button>
+        <button class="btn btn-ghost" id="gemini-gen-btn" style="padding:6px 12px;font-size:11px;color:var(--accent);border-color:var(--accent);width:100%;" onclick="generateBwForEditModal()">&#10024; Generate B&amp;W with Gemini</button>
       </div>
       <div style="font-size:11px;color:var(--accent3);margin-top:4px;" id="edit-bw-status"></div>
     </div>
@@ -1301,6 +1301,21 @@ const UC_IMAGE_MAP = {
 };
 // ── STATE ──────────────────────────────────────────────────────────────
 let skuMap       = JSON.parse(localStorage.getItem('gp_sku_map_v1')    || '[]');
+// B&W images stored separately (base64 is too large for skuMap)
+// key: ucSku → { bwImageUrl, bwSourceUrl }
+let bwStore      = JSON.parse(localStorage.getItem('gp_bw_store_v1')   || '{}');
+function saveBwStore() { try { localStorage.setItem('gp_bw_store_v1', JSON.stringify(bwStore)); } catch(e) { console.warn('bwStore save failed:', e); } }
+// On load: migrate any bwImageUrl already embedded in skuMap into bwStore, then strip from skuMap
+(function migrateBwFromSkuMap() {
+  let changed = false;
+  skuMap.forEach(function(m) {
+    if (m.bwImageUrl) {
+      bwStore[m.ucSku] = { bwImageUrl: m.bwImageUrl, bwSourceUrl: m.bwSourceUrl || m.imageUrl || '' };
+      delete m.bwImageUrl; delete m.bwSourceUrl; changed = true;
+    }
+  });
+  if (changed) { saveBwStore(); localStorage.setItem('gp_sku_map_v1', JSON.stringify(skuMap)); }
+})();
 let importItems  = [];
 let factoryItems = [];
 let generatedLabels = [];
@@ -1311,7 +1326,16 @@ let gpImageCache = JSON.parse(localStorage.getItem('gp_image_d1_v1')   || '{}');
 
 function saveCategories() { localStorage.setItem('gp_categories_v1', JSON.stringify(categories)); }
 function addCategoryIfNew(cat) { if (cat && cat !== 'Default' && !categories.includes(cat)) { categories.push(cat); saveCategories(); } }
-function saveSkuMapToStorage() { localStorage.setItem('gp_sku_map_v1', JSON.stringify(skuMap)); if (IS_LIVE) apiPost('saveSkuMapBulk', { map: skuMap }).catch(()=>{}); }
+function saveSkuMapToStorage() {
+  // Strip bwImageUrl/bwSourceUrl before saving — those live in bwStore
+  const lean = skuMap.map(function(m) {
+    const copy = Object.assign({}, m);
+    delete copy.bwImageUrl; delete copy.bwSourceUrl;
+    return copy;
+  });
+  try { localStorage.setItem('gp_sku_map_v1', JSON.stringify(lean)); } catch(e) { console.warn('skuMap save failed:', e); }
+  if (IS_LIVE) apiPost('saveSkuMapBulk', { map: lean }).catch(function(){});
+}
 
 // ── INIT ───────────────────────────────────────────────────────────────
 window.onload = () => {
@@ -1654,7 +1678,6 @@ function saveUpdatedMapping(ctx, i) {
   if (st) { st.textContent='✓ mapping saved'; st.style.color='var(--accent3)'; }
   showToast(`✓ Updated: ${it.ucSku} → ${it.internalSku}`);
   enrichMappingImages();
-  // Auto-trigger B&W if imageUrl is new or changed
   const savedIdx = skuMap.findIndex(m=>m.ucSku===it.ucSku);
   if (savedIdx>=0) scheduleBwIfNeeded(savedIdx);
 }
@@ -1675,7 +1698,6 @@ function linkSkuInline(ctx, i) {
   renderItemsTable(ctx); renderMapTable();
   showToast(`✓ Linked: ${it.ucSku} → ${internalSku}`);
   enrichMappingImages();
-  // Auto-trigger B&W for newly linked SKU
   const newIdx = skuMap.findIndex(m=>m.ucSku===it.ucSku);
   if (newIdx>=0) scheduleBwIfNeeded(newIdx);
 }
@@ -1792,7 +1814,8 @@ function buildLabelHtml(lbl) {
   // Use B&W image if available, otherwise fall back to color
   const _map  = skuMap.find(m => m.internalSku === lbl.internalSku || m.ucSku === lbl.ucSku);
   const _ucSku = _map?.ucSku || lbl.ucSku;
-  const imgSrc = _map?.bwImageUrl || _map?.imageUrl || lbl.imageUrl || gpImageCache[_ucSku] || UC_IMAGE_MAP[_ucSku] || gpImageCache[lbl.ucSku] || UC_IMAGE_MAP[lbl.ucSku] || ucCache[_ucSku]?.imageUrl || '';
+  const _bw    = (bwStore[_ucSku] || bwStore[lbl.ucSku] || {}).bwImageUrl || '';
+  const imgSrc = _bw || _map?.imageUrl || lbl.imageUrl || gpImageCache[_ucSku] || UC_IMAGE_MAP[_ucSku] || gpImageCache[lbl.ucSku] || UC_IMAGE_MAP[lbl.ucSku] || ucCache[_ucSku]?.imageUrl || '';
   const qrData = `SKU:${lbl.internalSku}|QTY:${lbl.qty}|BID:${lbl.bid}`;
   const qrUrl  = `https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(qrData)}`;
   // Full logo inline — both paths (Tomahawk wordmark + AWK circle)
@@ -1892,7 +1915,8 @@ function printAllLabels() {
     const isManual = lbl.type === 'manual';
     const _m    = skuMap.find(m => m.internalSku === lbl.internalSku || m.ucSku === lbl.ucSku);
     const _ucSku = _m?.ucSku || lbl.ucSku;
-    const imgSrc = _m?.bwImageUrl || _m?.imageUrl || lbl.imageUrl || gpImageCache[_ucSku] || UC_IMAGE_MAP[_ucSku] || gpImageCache[lbl.ucSku] || UC_IMAGE_MAP[lbl.ucSku] || ucCache[_ucSku]?.imageUrl || '';
+    const _bw2   = (bwStore[_ucSku] || bwStore[lbl.ucSku] || {}).bwImageUrl || '';
+    const imgSrc = _bw2 || _m?.imageUrl || lbl.imageUrl || gpImageCache[_ucSku] || UC_IMAGE_MAP[_ucSku] || gpImageCache[lbl.ucSku] || UC_IMAGE_MAP[lbl.ucSku] || ucCache[_ucSku]?.imageUrl || '';
     const qrData = `SKU:${lbl.internalSku}|QTY:${lbl.qty}|BID:${lbl.bid}`;
     const qrUrl  = `https://api.qrserver.com/v1/create-qr-code/?size=130x130&data=${encodeURIComponent(qrData)}`;
     const logo   = `<svg height="9mm" viewBox="490 530 7280 1260" xmlns="http://www.w3.org/2000/svg"><path fill="#1a1a1a" d="M796.6 803.57l625.42 0c4.17,0.55 6.71,2.65 7.48,6.14l-84.8 151.21 -181.47 0c-16.1,25.18 -100.16,178.13 -252.2,458.77l-203.52 0 -0.67 -3.08c109.72,-202.64 190.86,-354.55 243.59,-455.69l-240.46 0 -0.77 -3.7c47.6,-91.52 76.61,-142.78 87.4,-153.65zm-14.19 821.74l-287.36 153.05 187.35 -278.86 1362.49 0 -8.53 5.99 -1253.95 119.82zm6102.31 -1005.2l131.69 -113.42 0 215.51 -960.53 0 8.48 -6 820.36 -96.09zm-574.92 183.46l298.9 0 1.32 6.14c-45.66,84.33 -70.46,131.58 -74.1,141.4 160.29,-96.44 243.35,-144.55 249.31,-144.55l224.51 0 1.32 6.11c-3.09,0.39 -163.87,96.95 -482.4,289.8l215.31 314.14 -5.44 3.08 -212.81 0c-5.17,-3.62 -50.38,-70.48 -135.48,-200.49l-3.14 0c-57.01,115.32 -92.82,182.15 -107.4,200.49l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.77,-24.7l-1.96 -9.09c-2.91,-13.47 -17.46,-33.95 -43.92,-61.58l5.47 -2.99zm-900.24 0.38l295.21 0 0.67 3.13 -177.4 332.67 0.7 3.15 3.15 0 281.78 -191.3c5.47,6.84 8.72,12.09 9.42,15.42l50.56 191.26 2.97 0c-0.06,-5.07 62.84,-123.21 188.62,-354.33l199.85 0 7 3.13c-2.97,8.9 -110.79,213.14 -323.65,612.64l-212.28 0c-4.01,0 -6.55,-2.09 -7.43,-6.09l-8.67 -40.1c-6.4,-29.71 -17.38,-75.75 -32.99,-138.44l-289.68 184.63 -221.52 0 -0.69 -3.12 276.81 -529.56 -3.98 -18.37c-2.88,-13.46 -17.46,-33.93 -43.89,-61.59l5.44 -3.13zm-792.78 -0.38l758.24 0 0.66 2.99c-195.43,377.28 -303.39,581.65 -323.9,613.13l-197.37 0c-4.22,0 -6.58,-2.06 -7.45,-6.06 5.76,-4.89 46.12,-79.83 121.01,-225.06l-249.55 0c-5.54,7.52 -48.45,84.55 -128.62,231.12l-203.51 0 -0.67 -3.08c178.19,-329 269.43,-500.66 273.89,-514.68 2.75,-6.83 3.49,-17.15 2.64,-30.81 -2.41,-11.19 -17.16,-31.67 -44.05,-61.41l-1.32 -6.14zm185.18 228.04l249.02 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.73 0c-2.8,0 -16.07,23.62 -40.03,70.69zm-991.54 -228.04l298.86 0 1.32 6.14 -118.16 221.9 0.69 3.15 249.5 0c81.88,-151.73 124.55,-228.88 128.62,-231.19l191.28 0c4.13,0.55 6.7,2.65 7.45,6.14 -213.25,402.5 -322.44,606 -327.72,609.98l-196.86 0 -0.67 -3.08 112.7 -218.93 -252.85 0c-6.07,5.96 -41.47,70.68 -105.58,194.4 -11.11,18.37 -17.29,27.61 -18.72,27.61l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.79,-24.7l-1.98 -9.09c-2.9,-13.47 -17.45,-33.95 -43.92,-61.58l5.51 -2.99zm-792.75 0l758.27 0 0.64 2.99c-195.44,377.28 -303.38,581.65 -323.89,613.13l-197.37 0c-4.24,0 -6.6,-2.06 -7.45,-6.06 5.75,-4.89 46.12,-79.83 120.97,-225.06l-249.51 0c-5.56,7.52 -48.47,84.55 -128.62,231.12l-203.49 0 -0.69 -3.08c178.16,-329 269.38,-500.66 273.91,-514.68 2.71,-6.83 3.45,-17.15 2.6,-30.81 -2.39,-11.19 -17.15,-31.67 -44.05,-61.41l-1.32 -6.14zm185.2 228.04l249 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.72 0c-2.81,0 -16.06,23.62 -40.02,70.69zm-1103.91 -228.04l298.89 0c4.16,0.55 6.74,2.81 7.57,6.66l9.27 43.04c6.44,29.76 17.44,75.82 32.88,138.45 190.96,-123.03 291.13,-185.84 300.97,-188.15l206.5 0c4.3,0.55 6.73,2.81 7.55,6.66 -212.8,402.15 -321.84,605.48 -327.27,609.46l-203.52 0 -0.69 -3.08 175.45 -329.54 -0.68 -3.15 -2.97 0 -282.28 191.28c-5.52,-6.84 -8.76,-12.07 -9.47,-15.4l-50.55 -191.26 -2.98 0c-112.09,216.6 -175.21,333.7 -189.29,351.15l-202.99 0 -0.71 -3.08 274.04 -514.16c2.58,-7.52 2.71,-15.74 0.78,-24.65l-1.95 -9.11c-2.91,-13.47 -17.46,-33.95 -43.93,-61.59l5.38 -3.53zm-496.95 0l400.37 0c23.26,0 40.99,20.47 53.34,61.46 5.96,27.63 -9.61,69.81 -46.53,126.69 -44.77,80.33 -115.53,214.7 -211.82,403.33 -9.73,16.45 -24.43,24.64 -43.84,24.64l-517.82 0c-14.01,-8.19 -22.34,-17.45 -24.49,-27.61 -6.2,-28.7 27.81,-103.76 102.25,-225.02 91.52,-179.21 152.8,-290.15 184.01,-332.87 24.3,-20.48 59.21,-30.62 104.53,-30.62zm-137.63 461.82l203.51 0c1.89,-7.52 54.92,-107.99 159.41,-301.53l-0.63 -2.94 -196.86 0c-5.24,4 -60.32,105.51 -165.43,304.47z"/><path fill="#1a1a1a" d="M7160.73 529.99c52.95,0 95.89,42.94 95.89,95.95 0,52.95 -42.94,95.89 -95.89,95.89 -53,0 -95.97,-42.94 -95.97,-95.89 0,-53.01 42.97,-95.95 95.97,-95.95zm-42.35 149.95l0 -110.28 46.91 0c11.77,0 20.35,1.01 25.65,3.01 5.34,1.97 9.65,5.52 12.86,10.57 3.22,5.05 4.8,10.81 4.8,17.39 0,8.2 -2.44,15.09 -7.3,20.45 -4.85,5.38 -12.16,8.8 -21.83,10.2 4.84,2.81 8.84,5.9 11.95,9.27 3.13,3.36 7.34,9.3 12.66,17.89l13.46 21.5 -26.6 0 -16.09 -23.99c-5.74,-8.56 -9.67,-13.99 -11.76,-16.2 -2.1,-2.26 -4.33,-3.73 -6.7,-4.58 -2.37,-0.83 -6.08,-1.25 -11.2,-1.25l-4.5 0 0 46.02 -22.31 0zm22.31 -63.65l16.45 0c10.69,0 17.35,-0.44 20.02,-1.32 2.65,-0.87 4.74,-2.48 6.23,-4.68 1.53,-2.18 2.3,-4.96 2.3,-8.25 0,-3.76 -1.01,-6.69 -3,-8.99 -1.97,-2.32 -4.75,-3.73 -8.39,-4.34 -1.8,-0.25 -7.21,-0.37 -16.25,-0.37l-17.36 0 0 27.95zm20.04 -72.89c45.53,0 82.45,36.94 82.45,82.54 0,45.52 -36.92,82.49 -82.45,82.49 -45.59,0 -82.53,-36.97 -82.53,-82.49 0,-45.6 36.94,-82.54 82.53,-82.54z"/></svg>`;
@@ -2084,32 +2108,25 @@ function handleImageCsvUpload(event) {
 
 
 // ── GEMINI B&W AUTO-GENERATION ─────────────────────────────────────────
-// Token-efficient rules:
-//   1. Only call Gemini if imageUrl exists AND (bwImageUrl missing OR imageUrl changed)
-//   2. Track which imageUrl produced the current bwImageUrl via bwSourceUrl field
-//   3. Serial queue — one API call at a time, 800ms gap between calls
-//   4. Skip if already queued or processing
+// B&W images live in bwStore (separate localStorage key), never in skuMap.
+// Token-efficiency: only call Gemini when imageUrl exists AND
+//   bwStore has no entry OR bwSourceUrl !== imageUrl (image changed).
 
-const GEMINI_MODELS  = ['gemini-3.1-flash-image-preview', 'gemini-2.5-flash-image'];
-const GEMINI_PROMPT  = 'Convert the uploaded source image into a high-contrast, binary black-and-white vector line art illustration. ' +
+const GEMINI_MODELS = ['gemini-3.1-flash-image-preview', 'gemini-2.5-flash-image'];
+const GEMINI_PROMPT = 'Convert the uploaded source image into a high-contrast, binary black-and-white vector line art illustration. ' +
   'Line Quality: Use thick, bold, clean, and distinct solid black outlines. Every line must be sharp and well-spaced with completely empty white space in between to prevent bleeding. ' +
   'Detailing: Capture all key structural components, joints, contours, shapes, and boundaries using crisp internal line work. ' +
   'Any visible text or branding must be translated into clean, solid black vector lines. ' +
   'Strict binary output: pure solid black lines on a solid white background. Zero gradients, zero gray tones, zero stippling. ' +
   'Output: 500x500 pixels, pure white background, optimized for thermal printing.';
 
-let bwQueue      = new Set();   // ucSkus waiting to be processed
-let bwProcessing = false;       // true while a Gemini call is in flight
+let bwQueue      = new Set();
+let bwProcessing = false;
 
-function getGeminiKey() {
-  return (localStorage.getItem('gp_gemini_key_v1') || '').trim();
-}
+function getGeminiKey() { return (localStorage.getItem('gp_gemini_key_v1') || '').trim(); }
 function saveGeminiKey(showMsg) {
-  const val = (document.getElementById('gemini-key-input') || {}).value || '';
-  if (val.trim()) {
-    localStorage.setItem('gp_gemini_key_v1', val.trim());
-    if (showMsg) showToast('Gemini API key saved');
-  }
+  const val = ((document.getElementById('gemini-key-input') || {}).value || '').trim();
+  if (val) { localStorage.setItem('gp_gemini_key_v1', val); if (showMsg) showToast('Gemini API key saved'); }
 }
 function initGeminiKey() {
   const k = getGeminiKey();
@@ -2117,88 +2134,54 @@ function initGeminiKey() {
   if (k && inp) inp.value = k;
 }
 
-// Decide if a skuMap entry needs B&W generated
 function needsBw(m) {
-  if (!m.imageUrl || m.imageUrl.length < 5) return false;  // no source image
-  if (!m.bwImageUrl) return true;                           // never generated
-  if (m.bwSourceUrl !== m.imageUrl) return true;            // imageUrl changed
+  if (!m.imageUrl || m.imageUrl.length < 5) return false;
+  const entry = bwStore[m.ucSku] || {};
+  if (!entry.bwImageUrl) return true;
+  if (entry.bwSourceUrl !== m.imageUrl) return true;
   return false;
 }
 
-// Add a skuMap index to queue and kick off processing
 function scheduleBwIfNeeded(idx) {
   const m = skuMap[idx];
-  if (!m || !needsBw(m)) return;
-  if (!getGeminiKey()) return;   // no key — silently skip
+  if (!m || !needsBw(m) || !getGeminiKey()) return;
   bwQueue.add(m.ucSku);
-  renderMapTable();              // show spinner immediately
+  renderMapTable();
   processBwQueue();
 }
 
-// Drain the queue serially
 async function processBwQueue() {
   if (bwProcessing || !bwQueue.size) return;
   if (!getGeminiKey()) { bwQueue.clear(); return; }
-
   bwProcessing = true;
   while (bwQueue.size > 0) {
     const ucSku = bwQueue.values().next().value;
     bwQueue.delete(ucSku);
-
     const idx = skuMap.findIndex(function(m) { return m.ucSku === ucSku; });
     if (idx < 0) continue;
-    const m = skuMap[idx];
-    if (!needsBw(m)) continue;   // may have been satisfied while queued
-
+    if (!needsBw(skuMap[idx])) continue;
     try {
-      const bwDataUrl = await callGeminiForBw(m.imageUrl);
-      skuMap[idx].bwImageUrl  = bwDataUrl;
-      skuMap[idx].bwSourceUrl = m.imageUrl;  // remember which color URL this came from
-      saveSkuMapToStorage();
+      const bwDataUrl = await callGeminiForBw(skuMap[idx].imageUrl);
+      bwStore[ucSku] = { bwImageUrl: bwDataUrl, bwSourceUrl: skuMap[idx].imageUrl };
+      saveBwStore();
       renderMapTable();
     } catch(e) {
       console.warn('Gemini B&W failed for ' + ucSku + ':', e.message);
-      // Don't retry automatically — let user click "gen" to retry
     }
-
-    // Gap between calls to stay within rate limits
-    if (bwQueue.size > 0) {
-      await new Promise(function(r) { setTimeout(r, 800); });
-    }
+    if (bwQueue.size > 0) await new Promise(function(r) { setTimeout(r, 800); });
   }
   bwProcessing = false;
 }
 
-// Core Gemini call — returns B&W data URL
 async function callGeminiForBw(imageUrl) {
   const apiKey = getGeminiKey();
   if (!apiKey) throw new Error('No Gemini API key');
 
-  // Fetch image as base64 — try direct then allorigins proxy
-  let base64, mime;
-  try {
-    let resp;
-    try {
-      resp = await fetch(imageUrl);
-      if (!resp.ok) throw new Error('direct');
-    } catch(e) {
-      resp = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(imageUrl));
-    }
-    const blob = await resp.blob();
-    mime = blob.type || 'image/jpeg';
-    base64 = await new Promise(function(resolve, reject) {
-      const reader = new FileReader();
-      reader.onload  = function(e) { resolve(e.target.result.split(',')[1]); };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  } catch(e) {
-    throw new Error('Image fetch failed: ' + e.message);
-  }
-
+  // Send URL directly to Gemini — no browser fetch/proxy needed.
+  // Gemini fetches the image server-side (works with Amazon CDN URLs).
   const payload = {
     contents: [{ parts: [
-      { inline_data: { mime_type: mime, data: base64 } },
+      { image_url: { url: imageUrl } },
       { text: GEMINI_PROMPT }
     ]}],
     generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
@@ -2211,24 +2194,61 @@ async function callGeminiForBw(imageUrl) {
         'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODELS[mi] + ':generateContent?key=' + apiKey,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
       );
-      if (!res.ok) {
-        const err = await res.json().catch(function() { return {}; });
-        throw new Error((err.error && err.error.message) || ('HTTP ' + res.status));
-      }
+      if (!res.ok) { const err = await res.json().catch(function(){return{};}); throw new Error((err.error&&err.error.message)||('HTTP '+res.status)); }
       const data = await res.json();
-      const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
-      const imgPart = parts.find(function(p) { return p.inlineData || p.inline_data; });
+      const parts = (data.candidates&&data.candidates[0]&&data.candidates[0].content&&data.candidates[0].content.parts)||[];
+      const imgPart = parts.find(function(p){return p.inlineData||p.inline_data;});
       if (!imgPart) throw new Error('No image in response');
-      const id = imgPart.inlineData || imgPart.inline_data;
-      return 'data:' + (id.mimeType || id.mime_type) + ';base64,' + id.data;
-    } catch(e) {
-      lastErr = e;
-    }
+      const id = imgPart.inlineData||imgPart.inline_data;
+      return 'data:'+(id.mimeType||id.mime_type)+';base64,'+id.data;
+    } catch(e) { lastErr = e; }
   }
-  throw lastErr || new Error('All Gemini models failed');
+  // Fallback: if URL fetch fails (e.g. Gemini can't reach it), try base64 via proxy
+  console.warn('URL method failed, trying base64 fallback:', lastErr?.message);
+  return callGeminiForBwBase64(imageUrl);
 }
 
-// Manual single-entry trigger from "gen" link in table
+// Fallback: fetch image as base64 then send inline
+async function callGeminiForBwBase64(imageUrl) {
+  const apiKey = getGeminiKey();
+  let base64, mime;
+  let resp;
+  try { resp = await fetch(imageUrl); if (!resp.ok) throw new Error('direct'); }
+  catch(e) { resp = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(imageUrl)); }
+  const blob = await resp.blob();
+  mime = blob.type || 'image/jpeg';
+  base64 = await new Promise(function(resolve, reject) {
+    const reader = new FileReader();
+    reader.onload  = function(e) { resolve(e.target.result.split(',')[1]); };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+  const payload = {
+    contents: [{ parts: [
+      { inline_data: { mime_type: mime, data: base64 } },
+      { text: GEMINI_PROMPT }
+    ]}],
+    generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
+  };
+  let lastErr;
+  for (let mi = 0; mi < GEMINI_MODELS.length; mi++) {
+    try {
+      const res = await fetch(
+        'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODELS[mi] + ':generateContent?key=' + apiKey,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
+      );
+      if (!res.ok) { const err = await res.json().catch(function(){return{};}); throw new Error((err.error&&err.error.message)||('HTTP '+res.status)); }
+      const data = await res.json();
+      const parts = (data.candidates&&data.candidates[0]&&data.candidates[0].content&&data.candidates[0].content.parts)||[];
+      const imgPart = parts.find(function(p){return p.inlineData||p.inline_data;});
+      if (!imgPart) throw new Error('No image in response');
+      const id = imgPart.inlineData||imgPart.inline_data;
+      return 'data:'+(id.mimeType||id.mime_type)+';base64,'+id.data;
+    } catch(e) { lastErr = e; }
+  }
+  throw lastErr||new Error('All Gemini models failed');
+}
+
 function triggerBwForEntry(tableIdx) {
   if (!getGeminiKey()) { showToast('Enter Gemini API key first', true); return; }
   const m = skuMap[tableIdx];
@@ -2238,47 +2258,36 @@ function triggerBwForEntry(tableIdx) {
   processBwQueue();
 }
 
-// Bulk: queue all SKUs that need B&W
 function generateBwForAll() {
   if (!getGeminiKey()) { showToast('Enter Gemini API key first', true); return; }
   let added = 0;
-  skuMap.forEach(function(m) {
-    if (needsBw(m) && !bwQueue.has(m.ucSku)) { bwQueue.add(m.ucSku); added++; }
-  });
+  skuMap.forEach(function(m) { if (needsBw(m) && !bwQueue.has(m.ucSku)) { bwQueue.add(m.ucSku); added++; } });
   if (!added) { showToast('All mapped SKUs already have up-to-date B&W images'); return; }
   showToast('Queued ' + added + ' SKU(s) for B&W generation…');
   renderMapTable();
   processBwQueue();
 }
 
-// Edit modal: generate B&W for the currently open mapping
 async function generateBwForEditModal() {
-  const imgUrl   = document.getElementById('edit-img-url').value.trim() ||
-                   skuMap[parseInt(document.getElementById('edit-map-idx').value)]?.imageUrl || '';
+  const idx      = parseInt(document.getElementById('edit-map-idx').value);
+  const imgUrl   = (document.getElementById('edit-img-url').value || '').trim() || (skuMap[idx] || {}).imageUrl || '';
   const statusEl = document.getElementById('edit-bw-status');
   const btn      = document.getElementById('gemini-gen-btn');
   if (!imgUrl)         { showToast('Enter a Product Image URL first', true); return; }
   if (!getGeminiKey()) { showToast('Enter Gemini API key in Mapped SKUs tab first', true); return; }
-
-  btn.disabled = true;
-  btn.textContent = 'Generating…';
-  statusEl.style.color = 'var(--text2)';
-  statusEl.textContent = 'Calling Gemini…';
-
+  btn.disabled = true; btn.textContent = 'Generating…';
+  statusEl.style.color = 'var(--text2)'; statusEl.textContent = 'Calling Gemini…';
   try {
     const bwDataUrl = await callGeminiForBw(imgUrl);
     document.getElementById('edit-bw-preview').src = bwDataUrl;
     document.getElementById('edit-bw-preview').style.display = 'block';
     document.getElementById('edit-bw-upload')._base64 = bwDataUrl;
-    statusEl.style.color   = 'var(--accent3)';
-    statusEl.textContent   = 'Done — click Save Changes to apply';
+    statusEl.style.color = 'var(--accent3)'; statusEl.textContent = 'Done — click Save Changes to apply';
   } catch(e) {
-    statusEl.style.color   = 'var(--accent2)';
-    statusEl.textContent   = 'Error: ' + e.message;
+    statusEl.style.color = 'var(--accent2)'; statusEl.textContent = 'Error: ' + e.message;
     showToast('Gemini error: ' + e.message, true);
   }
-  btn.disabled    = false;
-  btn.textContent = 'Re-generate B&W';
+  btn.disabled = false; btn.textContent = 'Re-generate B&W';
 }
 
 
@@ -2298,17 +2307,18 @@ function renderMapTable() {
   if (counter) counter.textContent = `(${skuMap.length})`;
   const mmyy = getMmyy();
   tbody.innerHTML = skuMap.map((m, i) => {
-    const lastBox   = getCurrentBoxNum(m.internalSku);
-    const colorSrc  = m.imageUrl || UC_IMAGE_MAP[m.ucSku] || '';
-    const bwSrc     = m.bwImageUrl || '';
-    const isQueued  = bwQueue.has(m.ucSku);
-    // B&W cell: show image, or spinner if queued, or dash
+    const lastBox  = getCurrentBoxNum(m.internalSku);
+    const bwEntry  = bwStore[m.ucSku] || {};
+    const bwSrc    = bwEntry.bwImageUrl || '';
+    const colorSrc = m.imageUrl || UC_IMAGE_MAP[m.ucSku] || '';
+    const isQueued = typeof bwQueue !== 'undefined' && bwQueue.has(m.ucSku);
+    // B&W cell
     const bwHtml = bwSrc
       ? `<img src="${bwSrc}" style="width:36px;height:36px;object-fit:contain;border:1px solid #ddd;border-radius:3px;background:#fff;" onerror="this.style.display='none'">`
       : isQueued
-        ? `<span id="bw-spin-${i}" style="font-size:14px;" title="Generating…">⏳</span>`
+        ? `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;border:2px solid var(--accent);border-top-color:transparent;animation:spin .7s linear infinite;" title="Generating B&W…"></span>`
         : colorSrc
-          ? `<span style="color:var(--text2);font-size:10px;cursor:pointer;" title="Generate B&W" onclick="triggerBwForEntry(${i})">gen</span>`
+          ? `<button onclick="triggerBwForEntry(${i})" title="Generate B&W" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--text2);font-size:10px;padding:2px 6px;cursor:pointer;font-family:var(--mono);">gen</button>`
           : `<span style="color:var(--text2);font-size:11px;">—</span>`;
     // Color cell
     const imgHtml = colorSrc
@@ -2347,10 +2357,11 @@ function openEditModal(idx) {
   // Image preview
   const prev = document.getElementById('edit-img-preview');
   if (m.imageUrl) { prev.src = m.imageUrl; prev.style.display = 'block'; } else { prev.style.display = 'none'; }
-  // B&W preview
-  const bwPrev = document.getElementById('edit-bw-preview');
+  // B&W preview — read from bwStore, not skuMap
+  const bwPrev   = document.getElementById('edit-bw-preview');
   const bwStatus = document.getElementById('edit-bw-status');
-  if (m.bwImageUrl) { bwPrev.src = m.bwImageUrl; bwPrev.style.display = 'block'; bwStatus.textContent = '✓ B&W image saved'; }
+  const bwEntry  = bwStore[m.ucSku] || {};
+  if (bwEntry.bwImageUrl) { bwPrev.src = bwEntry.bwImageUrl; bwPrev.style.display = 'block'; bwStatus.textContent = '✓ B&W image saved'; }
   else { bwPrev.style.display = 'none'; bwStatus.textContent = ''; }
   // Clear file input
   const bwInput = document.getElementById('edit-bw-upload');
@@ -2367,31 +2378,37 @@ function saveEditMapping() {
   const catNew      = document.getElementById('edit-category-new').value.trim();
   const category    = catNew || (catSel === '__new__' ? '' : catSel);
   const bwInput     = document.getElementById('edit-bw-upload');
-  const bwBase64    = bwInput._base64 || skuMap[idx]?.bwImageUrl || null;
+  const existingBw  = (bwStore[skuMap[idx]?.ucSku] || {}).bwImageUrl || null;
+  const bwBase64    = bwInput._base64 || existingBw || null;
 
   if (!internalSku) { showToast('Internal SKU is required', true); return; }
   if (category) addCategoryIfNew(category);
 
   const prevImgUrl = skuMap[idx].imageUrl || '';
   const newImgUrl  = imgUrl || prevImgUrl;
+
   skuMap[idx] = {
     ...skuMap[idx],
     internalSku,
     pcsPerCarton: ppc,
     imageUrl: newImgUrl,
     category,
-    bwImageUrl: bwBase64,
   };
-  // If imageUrl changed and no manual B&W was uploaded, clear stale bwImageUrl so it re-generates
-  if (newImgUrl && newImgUrl !== prevImgUrl && !bwInput._base64) {
-    skuMap[idx].bwImageUrl = null;
-    skuMap[idx].bwSourceUrl = null;
+
+  // Save B&W to bwStore (separate from skuMap to avoid localStorage bloat)
+  if (bwBase64) {
+    bwStore[skuMap[idx].ucSku] = { bwImageUrl: bwBase64, bwSourceUrl: newImgUrl };
+    saveBwStore();
+  } else if (newImgUrl && newImgUrl !== prevImgUrl) {
+    // Image URL changed — clear stale B&W so it re-generates
+    delete bwStore[skuMap[idx].ucSku];
+    saveBwStore();
   }
+
   saveSkuMapToStorage();
   renderMapTable();
   document.getElementById('edit-map-modal').style.display = 'none';
-  showToast(`✓ Updated: ${skuMap[idx].ucSku} → ${internalSku}`);
-  // Auto-trigger B&W if image changed or missing
+  showToast('✓ Updated: ' + skuMap[idx].ucSku + ' → ' + internalSku);
   scheduleBwIfNeeded(idx);
 }
 
@@ -2408,10 +2425,15 @@ function openDeleteModal(idx) {
 function confirmDeleteMapping() {
   const idx = parseInt(document.getElementById('delete-map-modal').dataset.idx);
   const removed = skuMap.splice(idx, 1)[0];
+  // Also remove B&W image from bwStore
+  if (removed && bwStore[removed.ucSku]) {
+    delete bwStore[removed.ucSku];
+    saveBwStore();
+  }
   saveSkuMapToStorage();
   renderMapTable();
   document.getElementById('delete-map-modal').style.display = 'none';
-  showToast(`Deleted: ${removed.ucSku}`);
+  showToast('Deleted: ' + removed.ucSku);
 }
 
 // ── EXPORT MAPPINGS CSV ────────────────────────────────────────────────
