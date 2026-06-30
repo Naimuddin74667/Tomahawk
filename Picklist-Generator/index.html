@@ -136,9 +136,9 @@ tr:last-child td { border-bottom: none; }
 tr:nth-child(even) td { background: #fafafa; }
 tr.combo-row td { background: #fffbeb !important; }
 
-.sku { font-family: var(--font-body); font-size: 13px; font-weight: 700; color: var(--text); }
-.sku-sell { font-family: var(--font-body); font-size: 12px; color: var(--text2); }
-.qty { font-size: 16px; font-weight: 700; text-align: center; }
+.sku { font-family: var(--font-body); font-size: 13px; font-weight: 700; color: #111118; }
+.sku-sell { font-family: var(--font-body); font-size: 12px; color: #555566; }
+.qty { font-size: 16px; font-weight: 700; text-align: center; color: #111118; }
 .check-col { width: 32px; text-align: center; }
 input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor: pointer; }
 .img-cell { width: 60px; text-align: center; padding: 3px 5px !important; }
@@ -150,12 +150,24 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
 .combo-line .cx { font-weight: 700; color: #c8410a; font-size: 12px; min-width: 20px; }
 .combo-line .cname { font-weight: 600; color: #111; }
 
+#print-header { display: none; }
+
 @media print {
-  .actionbar, .topbar .btn-outline { display: none !important; }
+  .actionbar, .topbar .btn-outline, .site-header, #gen-time { display: none !important; }
   body { background: #fff; font-size: 12px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .topbar { position: static; background: #fff !important; color: #000 !important; border-bottom: 2px solid #000; }
   .topbar-title { color: #000 !important; font-size: 15px; }
   .topbar-meta { color: #333 !important; }
+  #print-header {
+    display: flex !important;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 8px 8px;
+    margin-bottom: 4px;
+    border-bottom: 2px solid #000;
+  }
+  #print-header .ph-channel { font-family: var(--font-display); font-weight: 800; font-size: 16px; color: #000; }
+  #print-header .ph-meta { display: flex; gap: 18px; font-size: 15px; color: #000; font-weight: 700; }
   .tbl-wrap { padding: 4px 8px; }
   table { border: 1px solid #999; }
   th { background: #111 !important; color: #fff !important; font-size: 11px !important; padding: 6px 8px !important; }
@@ -164,8 +176,9 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
   .sku-sell { font-size: 11px !important; color: #333 !important; }
   .qty { font-size: 14px !important; color: #000 !important; }
   .img-cell img { width: 40px !important; height: 40px !important; }
-  tr.combo-row td { background: #fffbeb !important; }
-  tr:nth-child(even) td { background: #f5f5f5 !important; }
+  tr.combo-row td { background: #fff !important; }
+  tr:nth-child(even) td { background: #fff !important; }
+  .combo-box { background: #fff !important; border: 1px solid #999 !important; }
   .section-divider { padding: 6px 8px 3px; }
   .section-divider-label { font-size: 10px !important; }
   #upload-screen { display: none !important; }
@@ -230,6 +243,13 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
   <div class="actionbar no-print">
     <button class="btn btn-dark" onclick="window.print()">&#128424; Print / Save PDF</button>
     <span id="combo-flag" style="display:none;background:#fffbeb;border:1px solid #f0c040;color:#7a5500;border-radius:5px;padding:4px 10px;font-size:12px;font-weight:600;"></span>
+  </div>
+  <div id="print-header">
+    <span class="ph-channel" id="ph-channel"></span>
+    <span class="ph-meta">
+      <span id="ph-date"></span>
+      <span id="ph-qty"></span>
+    </span>
   </div>
   <div id="picklist-content"></div>
 </div>
@@ -813,6 +833,12 @@ function render(rows) {
   const channel = (rows[0]['Channel']||'UNKNOWN').trim().toUpperCase();
   document.getElementById('topbar-title').textContent = `\u{1F4CB} ${channel} \u2014 ${rows.length} Orders`;
   document.getElementById('gen-time').textContent = new Date().toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+
+  // print-only header: channel, date, total order qty
+  document.getElementById('ph-channel').textContent = channel;
+  document.getElementById('ph-date').textContent = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  document.getElementById('ph-qty').textContent = `Total Order Qty: ${rows.length}`;
+  document.title = `${channel.charAt(0) + channel.slice(1).toLowerCase()}-${rows.length} Orders`;
 
   // combo count
   const comboOrders = rows.filter(r => {
