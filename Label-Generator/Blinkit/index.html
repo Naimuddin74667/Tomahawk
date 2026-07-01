@@ -2713,34 +2713,48 @@ function invBuildHTML(d) {
   var fmt      = function(n){ return Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); };
   var gstRate  = d.igst ? '18%' : '9% + 9%';
 
+  var rate = d.igst ? 0.18 : 0.18; // landing is always tax-inclusive at 18%
+  var sumTaxable = d.items.reduce(function(s,it){ return s + it.landing*it.qty/1.18; }, 0);
   var itemRows = d.items.map(function(it,i) {
+    var rowTotal   = it.landing * it.qty;
+    var rowTaxable = rowTotal / 1.18;
     return '<tr>'
       +'<td class="tc" style="width:4%">'+(i+1)+'</td>'
       +'<td style="width:10%"><span class="mono">'+it.item_id+'</span></td>'
-      +'<td style="width:25%"><strong>'+it.description.replace(/&/g,'&amp;')+'</strong>'
+      +'<td style="width:22%"><strong>'+it.description.replace(/&/g,'&amp;')+'</strong>'
         +'<div class="sub">UPC / EAN: <span class="mono">'+it.upc+'</span></div></td>'
       +'<td class="tc" style="width:7%"><span class="mono">'+it.hsn+'</span></td>'
-      +'<td class="tr" style="width:7%">'+fmt(it.mrp)+'</td>'
-      +'<td class="tc" style="width:4%">1</td>'
+      +'<td class="tr" style="width:8%">'+fmt(it.mrp)+'</td>'
+      +'<td class="tr" style="width:8%">'+fmt(it.landing)+'</td>'
       +'<td class="tc" style="width:5%">'+it.qty+'</td>'
-      +'<td class="tc" style="width:5%">'+it.qty+'</td>'
-      +'<td class="tc" style="width:6%">'+gstRate+'</td>'
-      +'<td class="tr" style="width:9%">'+fmt(it.landing)+'</td>'
-      +'<td class="tr" style="width:9%"><strong>'+fmt(it.landing*it.qty)+'</strong></td>'
+      +'<td class="tr" style="width:12%">'+fmt(rowTaxable)+'</td>'
+      +'<td class="tc" style="width:8%">'+gstRate+'</td>'
+      +'<td class="tr" style="width:10%"><strong>'+fmt(rowTotal)+'</strong></td>'
     +'</tr>';
   }).join('');
 
-  var span9 = '<td colspan="9" style="border:none;background:transparent"></td>';
+  var span7 = '<td colspan="7" style="border:none;background:transparent"></td>';
+  // Per-row summed taxable/tax (slight rounding vs. grand/1.18 is acceptable)
+  var sumCGST = sumTaxable * 0.09;
+  var sumSGST = sumTaxable * 0.09;
+  var sumIGST = sumTaxable * 0.18;
   var taxRows;
   if (d.igst) {
-    taxRows = '<tr class="tsum">'+span9+'<td>Taxable Value</td><td class="tr">'+fmt(tax.basic)+'</td></tr>'
-      +'<tr class="tsum">'+span9+'<td>IGST @ 18%</td><td class="tr">'+fmt(tax.igst_amt)+'</td></tr>'
-      +'<tr class="tgrand">'+span9+'<td>GRAND TOTAL</td><td class="tr">'+fmt(tax.grand)+'</td></tr>';
+    taxRows = '<tr class="tsum">'
+      +'<td colspan="7" class="tsum-label">Total</td>'
+      +'<td class="tr tsum-val">'+fmt(sumTaxable)+'</td>'
+      +'<td class="tc tsum-gst">IGST: '+fmt(sumIGST)+'</td>'
+      +'<td class="tr tsum-val">'+fmt(tax.grand)+'</td>'
+      +'</tr>'
+      +'<tr class="tgrand"><td colspan="9">GRAND TOTAL</td><td class="tr">'+fmt(tax.grand)+'</td></tr>';
   } else {
-    taxRows = '<tr class="tsum">'+span9+'<td>Taxable Value</td><td class="tr">'+fmt(tax.basic)+'</td></tr>'
-      +'<tr class="tsum">'+span9+'<td>CGST @ 9%</td><td class="tr">'+fmt(tax.cgst)+'</td></tr>'
-      +'<tr class="tsum">'+span9+'<td>SGST @ 9%</td><td class="tr">'+fmt(tax.sgst)+'</td></tr>'
-      +'<tr class="tgrand">'+span9+'<td>GRAND TOTAL</td><td class="tr">'+fmt(tax.grand)+'</td></tr>';
+    taxRows = '<tr class="tsum">'
+      +'<td colspan="7" class="tsum-label">Total</td>'
+      +'<td class="tr tsum-val">'+fmt(sumTaxable)+'</td>'
+      +'<td class="tc tsum-gst">CGST: '+fmt(sumCGST)+'<br>SGST: '+fmt(sumSGST)+'</td>'
+      +'<td class="tr tsum-val">'+fmt(tax.grand)+'</td>'
+      +'</tr>'
+      +'<tr class="tgrand"><td colspan="9">GRAND TOTAL</td><td class="tr">'+fmt(tax.grand)+'</td></tr>';
   }
 
   var css = [
@@ -2789,10 +2803,11 @@ function invBuildHTML(d) {
     '.sub{font-size:9px;color:#555;margin-top:1px}',
 
     /* ── TAX SUMMARY ── */
-    '.tsum td{border-top:0.5px solid #ddd;border-right:0.5px solid #ddd;padding:1.8mm 1.5mm;font-size:11px}',
+    '.tsum td{border-top:1px solid #bbb;border-right:0.5px solid #ddd;padding:2mm 1.5mm;font-size:11px;background:#f5f5f5}',
     '.tsum td:last-child{border-right:none}',
-    '.tsum td:nth-last-child(2){text-align:right;color:#333;font-size:10px}',
-    '.tsum td:last-child{text-align:right}',
+    '.tsum-label{text-align:right;font-size:10px;color:#555;font-style:italic}',
+    '.tsum-val{text-align:right;font-weight:700}',
+    '.tsum-gst{text-align:center;font-size:9.5px;line-height:1.7;color:#333}',
     '.tgrand td{background:#000!important;color:#fff!important;padding:2.5mm 1.5mm;font-size:12px;font-weight:900;border:none}',
     '.tgrand td:nth-last-child(2){text-align:right}',
     '.tgrand td:last-child{text-align:right}',
@@ -2858,12 +2873,11 @@ function invBuildHTML(d) {
       +'<th>Description of Goods</th>'
       +'<th class="tc">HSN</th>'
       +'<th class="tr">MRP (Rs.)</th>'
-      +'<th class="tc">Box</th>'
-      +'<th class="tc">Units / Box</th>'
-      +'<th class="tc">Total Units</th>'
-      +'<th class="tc">GST Rate</th>'
       +'<th class="tr">Landing (Rs.)</th>'
-      +'<th class="tr">Amount (Rs.)</th>'
+      +'<th class="tc">Qty</th>'
+      +'<th class="tr">Taxable Amt (Rs.)</th>'
+      +'<th class="tc">GST Rate</th>'
+      +'<th class="tr">Total Amt (Rs.)</th>'
     +'</tr></thead>'
     +'<tbody>'+itemRows+'</tbody>'
     +taxRows
