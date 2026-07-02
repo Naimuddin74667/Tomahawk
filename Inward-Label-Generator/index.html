@@ -3,39 +3,27 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Inward Label Generator — Tomahawk</title>
+<title>Gate Pass Label Generator — Tomahawk</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600;700&family=Roboto+Slab:wght@400;600&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
 
   :root {
-    --bg: #0c0c14;
-    --surface: #13131e;
-    --surface2: #1a1a28;
-    --border: #1f1f2e;
-    --accent: #F5A800;
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --border: #2e3352;
+    --accent: #f0b429;
     --accent2: #e05c5c;
     --accent3: #4ade80;
     --text: #e8eaf0;
     --text2: #8b90a7;
     --logo-fill: #ffffff;
-    --font-display: 'Syne', sans-serif;
-    --font-body: 'DM Sans', sans-serif;
-    --font-slab: 'Roboto Slab', serif;
-    --mono: var(--font-body);
-    --sans: var(--font-body);
-    --bg-surface: var(--surface);
-    --bg-raised: var(--surface2);
-    --bg-hover: var(--surface2);
-    --border-subtle: var(--border);
-    --border-default: var(--border);
-    --text-secondary: var(--text2);
-    --text-muted: var(--text2);
-    --c-green: var(--accent3);
-    --radius-xl: 20px;
+    --mono: 'IBM Plex Mono', monospace;
+    --sans: 'IBM Plex Sans', sans-serif;
   }
 
-  html[data-theme="light"] {
+  body.light-mode {
     --bg: #f4f5f7;
     --surface: #ffffff;
     --surface2: #f0f1f4;
@@ -60,102 +48,23 @@
     transition: background 0.2s, color 0.2s;
   }
 
-  /* SITE HEADER — matches portal exactly */
-  .site-header {
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    height: 62px;
-    background: var(--bg-surface);
-    border-bottom: 1px solid var(--border-subtle);
+  /* TOP BAR */
+  .topbar {
+    background: var(--surface);
+    border-bottom: 2px solid var(--accent);
+    padding: 10px 28px;
     display: flex;
     align-items: center;
-    padding: 0 36px;
-    justify-content: space-between;
-    gap: 20px;
-    transition: background .2s ease, border-color .2s ease;
+    gap: 0;
   }
-  .header-logo {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    text-decoration: none;
+  .topbar-logo {
+    height: 38px;
+    width: auto;
+    fill: var(--logo-fill);
     flex-shrink: 0;
   }
-  .logo-svg-wrap { display: flex; align-items: center; color: var(--accent); }
-  .logo-divider {
-    width: 2px;
-    height: 36px;
-    background: rgba(255,255,255,0.5);
-    border-radius: 2px;
-  }
-  html[data-theme="light"] .logo-divider { background: rgba(0,0,0,0.25); }
-  .logo-tagline {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    letter-spacing: .04em;
-  }
-  .header-right { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
-  .sys-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
-  .status-dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--c-green); flex-shrink: 0;
-    animation: header-pulse 2.5s ease-in-out infinite;
-  }
-  @keyframes header-pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
-  .theme-toggle {
-    width: 36px; height: 36px;
-    border-radius: 50%;
-    background: var(--bg-raised);
-    border: 1px solid var(--border-default);
-    cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    color: var(--text-muted);
-    transition: background .15s, border-color .15s, color .15s;
-    flex-shrink: 0;
-  }
-  .theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
-  .theme-toggle svg { display: block; }
-  html:not([data-theme="light"]) .icon-sun  { display: none; }
-  html[data-theme="light"]       .icon-moon { display: none; }
-  .header-user {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    background: var(--bg-raised);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-xl);
-    padding: 6px 14px 6px 6px;
-    cursor: pointer;
-    transition: background .15s, border-color .15s;
-  }
-  .header-user:hover { background: var(--bg-hover); }
-  .user-avatar {
-    width: 30px; height: 30px; border-radius: 50%;
-    background: var(--accent);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 10px; font-weight: 800; color: #111;
-  }
-  .user-name { font-size: 13px; color: var(--text-secondary); }
-  @media (max-width: 640px) {
-    .site-header { height: auto; padding: 14px 16px; flex-wrap: wrap; gap: 12px; }
-    .header-logo { gap: 10px; }
-    .logo-svg-wrap svg { height: 32px !important; }
-    .logo-divider { height: 16px; }
-    .logo-tagline { font-size: 11px; }
-    .header-right { gap: 10px; }
-    .sys-status span { display: none; }
-    .status-dot { width: 9px; height: 9px; }
-    .user-name { display: none; }
-    .header-user { padding: 5px; }
-    .theme-toggle { width: 32px; height: 32px; }
-  }
-  @media (min-width: 641px) and (max-width: 900px) {
-    .site-header { padding: 0 20px; height: 54px; }
-    .logo-svg-wrap svg { height: 40px !important; }
-    .sys-status { font-size: 11px; }
-  }
+  .topbar-sub { font-size: 11px; color: var(--text2); }
+  .topbar-right { margin-left: auto; display: flex; gap: 10px; align-items: center; }
 
   /* TABS */
   .tabs {
@@ -515,12 +424,11 @@
     background: none;
     border: none;
     color: var(--text);
-    font-size: 20px;
+    font-size: 22px;
     cursor: pointer;
-    padding: 4px;
+    padding: 4px 10px 4px 0;
     flex-shrink: 0;
     line-height: 1;
-    order: -1;
   }
 
   /* Nav close button — hidden on desktop */
@@ -553,10 +461,15 @@
 
   @media (max-width: 768px) {
 
-    /* HEADER mobile already handled by .site-header media rules above */
-    .header-right .sync-pill { font-size: 10px; padding: 4px 8px; }
+    /* TOPBAR */
+    .topbar { padding: 10px 14px; gap: 8px; }
+    .topbar-sub { font-size: 10px; }
+    .topbar-right { gap: 4px; }
+    .topbar-right .btn { font-size: 10px; padding: 6px 8px; }
     /* Sync button — icon only on mobile */
     .sync-label { display: none; }
+    /* Theme button — tighter */
+    #theme-btn { padding: 6px 8px; }
     #sync-status { font-size: 10px; max-width: 70px; overflow: hidden; white-space: nowrap; }
     .hamburger-btn { display: block; }
 
@@ -677,7 +590,7 @@
   }
 
   @media (max-width: 400px) {
-    .logo-tagline { display: none; }
+    .topbar-sub { display: none; }
     .stat-row { grid-template-columns: 1fr 1fr; }
     .stat-num { font-size: 18px; }
   }
@@ -731,40 +644,19 @@
 </style>
 </head>
 <body>
-<script>(function(){var t=localStorage.getItem('tm_theme');if(t==='light'){document.documentElement.setAttribute('data-theme','light');}})();</script>
 
-<header class="site-header">
-
-  <a href="/Tomahawk/" class="header-logo">
-    <div class="logo-svg-wrap">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="474 509 6803 1270" style="height:54px;width:auto;display:block;fill:currentColor;">
-        <path d="M796.6 803.57l625.42 0c4.17,0.55 6.71,2.65 7.48,6.14l-84.8 151.21 -181.47 0c-16.1,25.18 -100.16,178.13 -252.2,458.77l-203.52 0 -0.67 -3.08c109.72,-202.64 190.86,-354.55 243.59,-455.69l-240.46 0 -0.77 -3.7c47.6,-91.52 76.61,-142.78 87.4,-153.65zm-14.19 821.74l-287.36 153.05 187.35 -278.86 1362.49 0 -8.53 5.99 -1253.95 119.82zm6102.31 -1005.2l131.69 -113.42 0 215.51 -960.53 0 8.48 -6 820.36 -96.09zm-574.92 183.46l298.9 0 1.32 6.14c-45.66,84.33 -70.46,131.58 -74.1,141.4 160.29,-96.44 243.35,-144.55 249.31,-144.55l224.51 0 1.32 6.11c-3.09,0.39 -163.87,96.95 -482.4,289.8l215.31 314.14 -5.44 3.08 -212.81 0c-5.17,-3.62 -50.38,-70.48 -135.48,-200.49l-3.14 0c-57.01,115.32 -92.82,182.15 -107.4,200.49l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.77,-24.7l-1.96 -9.09c-2.91,-13.47 -17.46,-33.95 -43.92,-61.58l5.47 -2.99zm-900.24 0.38l295.21 0 0.67 3.13 -177.4 332.67 0.7 3.15 3.15 0 281.78 -191.3c5.47,6.84 8.72,12.09 9.42,15.42l50.56 191.26 2.97 0c-0.06,-5.07 62.84,-123.21 188.62,-354.33l199.85 0 7 3.13c-2.97,8.9 -110.79,213.14 -323.65,612.64l-212.28 0c-4.01,0 -6.55,-2.09 -7.43,-6.09l-8.67 -40.1c-6.4,-29.71 -17.38,-75.75 -32.99,-138.44l-289.68 184.63 -221.52 0 -0.69 -3.12 276.81 -529.56 -3.98 -18.37c-2.88,-13.46 -17.46,-33.93 -43.89,-61.59l5.44 -3.13zm-792.78 -0.38l758.24 0 0.66 2.99c-195.43,377.28 -303.39,581.65 -323.9,613.13l-197.37 0c-4.22,0 -6.58,-2.06 -7.45,-6.06 5.76,-4.89 46.12,-79.83 121.01,-225.06l-249.55 0c-5.54,7.52 -48.45,84.55 -128.62,231.12l-203.51 0 -0.67 -3.08c178.19,-329 269.43,-500.66 273.89,-514.68 2.75,-6.83 3.49,-17.15 2.64,-30.81 -2.41,-11.19 -17.16,-31.67 -44.05,-61.41l-1.32 -6.14zm185.18 228.04l249.02 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.73 0c-2.8,0 -16.07,23.62 -40.03,70.69zm-991.54 -228.04l298.86 0 1.32 6.14 -118.16 221.9 0.69 3.15 249.5 0c81.88,-151.73 124.55,-228.88 128.62,-231.19l191.28 0c4.13,0.55 6.7,2.65 7.45,6.14 -213.25,402.5 -322.44,606 -327.72,609.98l-196.86 0 -0.67 -3.08 112.7 -218.93 -252.85 0c-6.07,5.96 -41.47,70.68 -105.58,194.4 -11.11,18.37 -17.29,27.61 -18.72,27.61l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.79,-24.7l-1.98 -9.09c-2.9,-13.47 -17.45,-33.95 -43.92,-61.58l5.51 -2.99zm-792.75 0l758.27 0 0.64 2.99c-195.44,377.28 -303.38,581.65 -323.89,613.13l-197.37 0c-4.24,0 -6.6,-2.06 -7.45,-6.06 5.75,-4.89 46.12,-79.83 120.97,-225.06l-249.51 0c-5.56,7.52 -48.47,84.55 -128.62,231.12l-203.49 0 -0.69 -3.08c178.16,-329 269.38,-500.66 273.91,-514.68 2.71,-6.83 3.45,-17.15 2.6,-30.81 -2.39,-11.19 -17.15,-31.67 -44.05,-61.41l-1.32 -6.14zm185.2 228.04l249 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.72 0c-2.81,0 -16.06,23.62 -40.02,70.69zm-1103.91 -228.04l298.89 0c4.16,0.55 6.74,2.81 7.57,6.66l9.27 43.04c6.44,29.76 17.44,75.82 32.88,138.45 190.96,-123.03 291.13,-185.84 300.97,-188.15l206.5 0c4.3,0.55 6.73,2.81 7.55,6.66 -212.8,402.15 -321.84,605.48 -327.27,609.46l-203.52 0 -0.69 -3.08 175.45 -329.54 -0.68 -3.15 -2.97 0 -282.28 191.28c-5.52,-6.84 -8.76,-12.07 -9.47,-15.4l-50.55 -191.26 -2.98 0c-112.09,216.6 -175.21,333.7 -189.29,351.15l-202.99 0 -0.71 -3.08 274.04 -514.16c2.58,-7.52 2.71,-15.74 0.78,-24.65l-1.95 -9.11c-2.91,-13.47 -17.46,-33.95 -43.93,-61.59l5.38 -3.53zm-496.95 0l400.37 0c23.26,0 40.99,20.47 53.34,61.46 5.96,27.63 -9.61,69.81 -46.53,126.69 -44.77,80.33 -115.53,214.7 -211.82,403.33 -9.73,16.45 -24.43,24.64 -43.84,24.64l-517.82 0c-14.01,-8.19 -22.34,-17.45 -24.49,-27.61 -6.2,-28.7 27.81,-103.76 102.25,-225.02 91.52,-179.21 152.8,-290.15 184.01,-332.87 24.3,-20.48 59.21,-30.62 104.53,-30.62zm-137.63 461.82l203.51 0c1.89,-7.52 54.92,-107.99 159.41,-301.53l-0.63 -2.94 -196.86 0c-5.24,4 -60.32,105.51 -165.43,304.47z"/>
-        <path d="M7160.73 529.99c52.95,0 95.89,42.94 95.89,95.95 0,52.95 -42.94,95.89 -95.89,95.89 -53,0 -95.97,-42.94 -95.97,-95.89 0,-53.01 42.97,-95.95 95.97,-95.95zm-42.35 149.95l0 -110.28 46.91 0c11.77,0 20.35,1.01 25.65,3.01 5.34,1.97 9.65,5.52 12.86,10.57 3.22,5.05 4.8,10.81 4.8,17.39 0,8.2 -2.44,15.09 -7.3,20.45 -4.85,5.38 -12.16,8.8 -21.83,10.2 4.84,2.81 8.84,5.9 11.95,9.27 3.13,3.36 7.34,9.3 12.66,17.89l13.46 21.5 -26.6 0 -16.09 -23.99c-5.74,-8.56 -9.67,-13.99 -11.76,-16.2 -2.1,-2.26 -4.33,-3.73 -6.7,-4.58 -2.37,-0.83 -6.08,-1.25 -11.2,-1.25l-4.5 0 0 46.02 -22.31 0zm22.31 -63.65l16.45 0c10.69,0 17.35,-0.44 20.02,-1.32 2.65,-0.87 4.74,-2.48 6.23,-4.68 1.53,-2.18 2.3,-4.96 2.3,-8.25 0,-3.76 -1.01,-6.69 -3,-8.99 -1.97,-2.32 -4.75,-3.73 -8.39,-4.34 -1.8,-0.25 -7.21,-0.37 -16.25,-0.37l-17.36 0 0 27.95zm20.04 -72.89c45.53,0 82.45,36.94 82.45,82.54 0,45.52 -36.92,82.49 -82.45,82.49 -45.59,0 -82.53,-36.97 -82.53,-82.49 0,-45.6 36.94,-82.54 82.53,-82.54z"/>
-      </svg>
-    </div>
-    <div class="logo-divider"></div>
-    <span class="logo-tagline">Inward Label Generator</span>
-  </a>
-
-  <div class="header-right">
-    <button class="hamburger-btn" id="hamburger-btn" onclick="toggleNav()">☰</button>
+<div class="topbar">
+  <button class="hamburger-btn" id="hamburger-btn" onclick="toggleNav()">☰</button>
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="490 530 7280 1260" class="topbar-logo">
+    <path d="M796.6 803.57l625.42 0c4.17,0.55 6.71,2.65 7.48,6.14l-84.8 151.21 -181.47 0c-16.1,25.18 -100.16,178.13 -252.2,458.77l-203.52 0 -0.67 -3.08c109.72,-202.64 190.86,-354.55 243.59,-455.69l-240.46 0 -0.77 -3.7c47.6,-91.52 76.61,-142.78 87.4,-153.65zm-14.19 821.74l-287.36 153.05 187.35 -278.86 1362.49 0 -8.53 5.99 -1253.95 119.82zm6102.31 -1005.2l131.69 -113.42 0 215.51 -960.53 0 8.48 -6 820.36 -96.09zm-574.92 183.46l298.9 0 1.32 6.14c-45.66,84.33 -70.46,131.58 -74.1,141.4 160.29,-96.44 243.35,-144.55 249.31,-144.55l224.51 0 1.32 6.11c-3.09,0.39 -163.87,96.95 -482.4,289.8l215.31 314.14 -5.44 3.08 -212.81 0c-5.17,-3.62 -50.38,-70.48 -135.48,-200.49l-3.14 0c-57.01,115.32 -92.82,182.15 -107.4,200.49l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.77,-24.7l-1.96 -9.09c-2.91,-13.47 -17.46,-33.95 -43.92,-61.58l5.47 -2.99zm-900.24 0.38l295.21 0 0.67 3.13 -177.4 332.67 0.7 3.15 3.15 0 281.78 -191.3c5.47,6.84 8.72,12.09 9.42,15.42l50.56 191.26 2.97 0c-0.06,-5.07 62.84,-123.21 188.62,-354.33l199.85 0 7 3.13c-2.97,8.9 -110.79,213.14 -323.65,612.64l-212.28 0c-4.01,0 -6.55,-2.09 -7.43,-6.09l-8.67 -40.1c-6.4,-29.71 -17.38,-75.75 -32.99,-138.44l-289.68 184.63 -221.52 0 -0.69 -3.12 276.81 -529.56 -3.98 -18.37c-2.88,-13.46 -17.46,-33.93 -43.89,-61.59l5.44 -3.13zm-792.78 -0.38l758.24 0 0.66 2.99c-195.43,377.28 -303.39,581.65 -323.9,613.13l-197.37 0c-4.22,0 -6.58,-2.06 -7.45,-6.06 5.76,-4.89 46.12,-79.83 121.01,-225.06l-249.55 0c-5.54,7.52 -48.45,84.55 -128.62,231.12l-203.51 0 -0.67 -3.08c178.19,-329 269.43,-500.66 273.89,-514.68 2.75,-6.83 3.49,-17.15 2.64,-30.81 -2.41,-11.19 -17.16,-31.67 -44.05,-61.41l-1.32 -6.14zm185.18 228.04l249.02 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.73 0c-2.8,0 -16.07,23.62 -40.03,70.69zm-991.54 -228.04l298.86 0 1.32 6.14 -118.16 221.9 0.69 3.15 249.5 0c81.88,-151.73 124.55,-228.88 128.62,-231.19l191.28 0c4.13,0.55 6.7,2.65 7.45,6.14 -213.25,402.5 -322.44,606 -327.72,609.98l-196.86 0 -0.67 -3.08 112.7 -218.93 -252.85 0c-6.07,5.96 -41.47,70.68 -105.58,194.4 -11.11,18.37 -17.29,27.61 -18.72,27.61l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.79,-24.7l-1.98 -9.09c-2.9,-13.47 -17.45,-33.95 -43.92,-61.58l5.51 -2.99zm-792.75 0l758.27 0 0.64 2.99c-195.44,377.28 -303.38,581.65 -323.89,613.13l-197.37 0c-4.24,0 -6.6,-2.06 -7.45,-6.06 5.75,-4.89 46.12,-79.83 120.97,-225.06l-249.51 0c-5.56,7.52 -48.47,84.55 -128.62,231.12l-203.49 0 -0.69 -3.08c178.16,-329 269.38,-500.66 273.91,-514.68 2.71,-6.83 3.45,-17.15 2.6,-30.81 -2.39,-11.19 -17.15,-31.67 -44.05,-61.41l-1.32 -6.14zm185.2 228.04l249 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.72 0c-2.81,0 -16.06,23.62 -40.02,70.69zm-1103.91 -228.04l298.89 0c4.16,0.55 6.74,2.81 7.57,6.66l9.27 43.04c6.44,29.76 17.44,75.82 32.88,138.45 190.96,-123.03 291.13,-185.84 300.97,-188.15l206.5 0c4.3,0.55 6.73,2.81 7.55,6.66 -212.8,402.15 -321.84,605.48 -327.27,609.46l-203.52 0 -0.69 -3.08 175.45 -329.54 -0.68 -3.15 -2.97 0 -282.28 191.28c-5.52,-6.84 -8.76,-12.07 -9.47,-15.4l-50.55 -191.26 -2.98 0c-112.09,216.6 -175.21,333.7 -189.29,351.15l-202.99 0 -0.71 -3.08 274.04 -514.16c2.58,-7.52 2.71,-15.74 0.78,-24.65l-1.95 -9.11c-2.91,-13.47 -17.46,-33.95 -43.93,-61.59l5.38 -3.53zm-496.95 0l400.37 0c23.26,0 40.99,20.47 53.34,61.46 5.96,27.63 -9.61,69.81 -46.53,126.69 -44.77,80.33 -115.53,214.7 -211.82,403.33 -9.73,16.45 -24.43,24.64 -43.84,24.64l-517.82 0c-14.01,-8.19 -22.34,-17.45 -24.49,-27.61 -6.2,-28.7 27.81,-103.76 102.25,-225.02 91.52,-179.21 152.8,-290.15 184.01,-332.87 24.3,-20.48 59.21,-30.62 104.53,-30.62zm-137.63 461.82l203.51 0c1.89,-7.52 54.92,-107.99 159.41,-301.53l-0.63 -2.94 -196.86 0c-5.24,4 -60.32,105.51 -165.43,304.47z"/>
+    <path d="M7160.73 529.99c52.95,0 95.89,42.94 95.89,95.95 0,52.95 -42.94,95.89 -95.89,95.89 -53,0 -95.97,-42.94 -95.97,-95.89 0,-53.01 42.97,-95.95 95.97,-95.95zm-42.35 149.95l0 -110.28 46.91 0c11.77,0 20.35,1.01 25.65,3.01 5.34,1.97 9.65,5.52 12.86,10.57 3.22,5.05 4.8,10.81 4.8,17.39 0,8.2 -2.44,15.09 -7.3,20.45 -4.85,5.38 -12.16,8.8 -21.83,10.2 4.84,2.81 8.84,5.9 11.95,9.27 3.13,3.36 7.34,9.3 12.66,17.89l13.46 21.5 -26.6 0 -16.09 -23.99c-5.74,-8.56 -9.67,-13.99 -11.76,-16.2 -2.1,-2.26 -4.33,-3.73 -6.7,-4.58 -2.37,-0.83 -6.08,-1.25 -11.2,-1.25l-4.5 0 0 46.02 -22.31 0zm22.31 -63.65l16.45 0c10.69,0 17.35,-0.44 20.02,-1.32 2.65,-0.87 4.74,-2.48 6.23,-4.68 1.53,-2.18 2.3,-4.96 2.3,-8.25 0,-3.76 -1.01,-6.69 -3,-8.99 -1.97,-2.32 -4.75,-3.73 -8.39,-4.34 -1.8,-0.25 -7.21,-0.37 -16.25,-0.37l-17.36 0 0 27.95zm20.04 -72.89c45.53,0 82.45,36.94 82.45,82.54 0,45.52 -36.92,82.49 -82.45,82.49 -45.59,0 -82.53,-36.97 -82.53,-82.49 0,-45.6 36.94,-82.54 82.53,-82.54z"/>
+  </svg>
+  <div class="topbar-sub" style="margin-left:12px;">Gate Pass Label Generator</div>
+  <div class="topbar-right">
     <span id="sync-pill" class="sync-pill" style="display:none;"></span>
-    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle light/dark mode" onclick="toggleTheme()">
-      <svg class="icon-moon" width="18" height="18" viewBox="0 0 18 18" fill="none">
-        <path d="M15.5 10.5A7 7 0 017.5 2.5a7 7 0 000 13 7 7 0 008-5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-      </svg>
-      <svg class="icon-sun" width="18" height="18" viewBox="0 0 18 18" fill="none">
-        <circle cx="9" cy="9" r="3.5" stroke="currentColor" stroke-width="1.4"/>
-        <path d="M9 1v2M9 15v2M1 9h2M15 9h2M3.22 3.22l1.42 1.42M13.36 13.36l1.42 1.42M3.22 14.78l1.42-1.42M13.36 4.64l1.42-1.42" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-      </svg>
-    </button>
-    <div class="header-user">
-      <div class="user-avatar">IT</div>
-      <span class="user-name">ITH Team</span>
-    </div>
+    <button class="btn btn-ghost" onclick="toggleTheme()" id="theme-btn">🌙</button>
   </div>
-
-</header>
+</div>
 
 <div class="nav-overlay" id="nav-overlay" onclick="closeNav()"></div>
 <nav class="tabs" id="main-nav">
@@ -896,9 +788,15 @@
       <!-- SKU Selector -->
       <div class="form-group">
         <label>Internal SKU</label>
-        <select id="wh-sku-select" onchange="whSkuSelected(this.value)" style="width:100%;padding:8px 10px;font-size:15px;">
-          <option value="">— Select SKU —</option>
-          <option value="__manual__">+ Enter manually…</option>
+        <!-- Searchable combo: text filter + dropdown list -->
+        <input type="text" id="wh-sku-search" placeholder="Search SKU…"
+          autocomplete="off"
+          style="width:100%;padding:8px 10px;font-size:15px;"
+          oninput="whFilterSkuList(this.value)"
+          onfocus="whFilterSkuList(this.value)"
+          onkeydown="whSkuSearchKey(event)">
+        <select id="wh-sku-select" size="6" onchange="whSkuSelected(this.value)"
+          style="width:100%;margin-top:4px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--mono);font-size:13px;padding:4px;display:none;">
         </select>
         <!-- Manual entry form — shown when user picks "+ Enter manually…" -->
         <div id="wh-manual-form" style="display:none;margin-top:10px;padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;">
@@ -906,7 +804,8 @@
           <div class="form-group" style="margin-bottom:10px;">
             <label>Internal SKU <span style="color:var(--accent2);">*</span></label>
             <input type="text" id="wh-manual-internal" placeholder="e.g. TLL-16" style="width:100%;"
-              oninput="whState.internalSku=this.value.trim()">
+              oninput="whState.internalSku=this.value.trim();whCheckSkuInline(this.value)">
+            <div id="wh-sku-warn" style="display:none;margin-top:5px;padding:6px 10px;border-radius:5px;font-size:12px;line-height:1.5;font-family:var(--font-body);"></div>
           </div>
           <div class="form-group" style="margin-bottom:10px;">
             <label>UC SKU <span style="color:var(--accent2);">*</span></label>
@@ -1618,7 +1517,7 @@ window.onload = () => {
   }
   renderMapTable();
   whPopulateSkuDropdown();
-  // theme icon handled via CSS based on html[data-theme]
+  if (localStorage.getItem('gp_theme') === 'light') { document.body.classList.add('light-mode'); document.getElementById('theme-btn').textContent = '☀'; }
   // Silently enrich mapping images from embedded map
   enrichMappingImages();
   // Fetch D1 image cache in background (live only)
@@ -1626,7 +1525,7 @@ window.onload = () => {
   if (IS_LIVE) loadBwImagesFromD1();
 };
 
-function toggleTheme() { const isLight = document.documentElement.getAttribute('data-theme') === 'light'; if (isLight) { document.documentElement.removeAttribute('data-theme'); localStorage.setItem('tm_theme', 'dark'); } else { document.documentElement.setAttribute('data-theme', 'light'); localStorage.setItem('tm_theme', 'light'); } }
+function toggleTheme() { const l = document.body.classList.toggle('light-mode'); document.getElementById('theme-btn').textContent = l?'☀':'🌙'; localStorage.setItem('gp_theme', l?'light':'dark'); }
 function toggleNav() { document.getElementById('main-nav').classList.toggle('open'); document.getElementById('nav-overlay').classList.toggle('open'); }
 function closeNav()  { document.getElementById('main-nav').classList.remove('open'); document.getElementById('nav-overlay').classList.remove('open'); }
 function switchTab(tab) {
@@ -2041,6 +1940,45 @@ function catNewBlur(ctx, i, val) {
 }
 
 // ── GENERATE LABELS ────────────────────────────────────────────────────
+// Waits for all B&W images in ucSkuSet to be generated (or no Gemini key / no imageUrl).
+// Shows a toast progress indicator. Resolves when bwQueue is empty and bwProcessing is false.
+// Times out after 90s to avoid hanging forever.
+async function waitForBw(ucSkuSet) {
+  if (!getGeminiKey()) return; // no key — no B&W, proceed immediately
+  // Only wait for SKUs that actually need B&W
+  const needWait = Array.from(ucSkuSet).filter(function(u) {
+    const m = skuMap.find(function(m) { return m.ucSku === u; });
+    return m && needsBw(m);
+  });
+  if (!needWait.length) return; // all already have B&W or no image
+  // Kick off generation for any not yet queued
+  needWait.forEach(function(u) {
+    if (!bwQueue.has(u)) {
+      const idx = skuMap.findIndex(function(m) { return m.ucSku === u; });
+      if (idx >= 0) { bwQueue.add(u); }
+    }
+  });
+  if (!bwProcessing) processBwQueue();
+  // Poll with timeout
+  const start   = Date.now();
+  const timeout = 90000;
+  let   dots    = 0;
+  while (true) {
+    const remaining = needWait.filter(function(u) {
+      const m = skuMap.find(function(m) { return m.ucSku === u; });
+      return m && needsBw(m);
+    });
+    if (!remaining.length) break;
+    if (Date.now() - start > timeout) {
+      showToast('⚠ B&W timed out for ' + remaining.length + ' SKU(s) — generating without image', true);
+      break;
+    }
+    dots = (dots + 1) % 4;
+    setSyncPill('🎨 Generating B&W' + '.'.repeat(dots), '');
+    await new Promise(function(r) { setTimeout(r, 600); });
+  }
+}
+
 async function generateLabels(type) {
   const ctx    = type==='manual'?'import':'factory';
   const items  = getItems(ctx);
@@ -2061,6 +1999,10 @@ async function generateLabels(type) {
   }
   const valid = items.filter(it=>it.internalSku&&it.boxes>0&&it.qtyPerBox>0);
   if (!valid.length) { showToast('No valid items to generate labels for',true); return; }
+  // Wait for B&W images before generating labels
+  const ucSkusNeeded = new Set(valid.map(function(it) { return it.ucSku; }).filter(Boolean));
+  await waitForBw(ucSkusNeeded);
+
   setSyncPill('⏳ Generating…','');
   generatedLabels = [];
   for (const it of valid) {
@@ -2223,7 +2165,8 @@ function printAllLabels() {
   win.document.write(`<!DOCTYPE html><html><head><title>Labels</title><style>
     *{box-sizing:border-box;margin:0;padding:0;}body{background:#fff;}
     @page{size:150mm 100mm;margin:0;}
-    .gp-label{background:#fff;width:150mm;height:100mm;display:grid;grid-template-columns:2fr 1fr;grid-template-rows:14mm 1fr 1fr;page-break-after:always;overflow:hidden;font-family:Arial,Helvetica,sans-serif;box-sizing:border-box;}
+    .gp-label{background:#fff;width:150mm;height:100mm;display:grid;grid-template-columns:2fr 1fr;grid-template-rows:14mm 1fr 1fr;overflow:hidden;font-family:Arial,Helvetica,sans-serif;box-sizing:border-box;}
+    .gp-label:not(:last-child){page-break-after:always;}
     .lbl-header{grid-column:1/3;display:flex;justify-content:space-between;align-items:center;border-bottom:.5mm solid #000;padding:0 3.5mm;}
     .lbl-header.centered{justify-content:center;}
     .lbl-header-left{display:flex;align-items:center;gap:2.5mm;}
@@ -2777,32 +2720,65 @@ const whState = {
 };
 
 // Populate the SKU dropdown from skuMap — called on load + after skuMap changes
+// Builds the full sorted option list from skuMap for the WH searchable combo.
+// Called on load and whenever skuMap changes.
 function whPopulateSkuDropdown() {
+  // Re-run the filter with current search text to refresh visible options
+  const search = document.getElementById('wh-sku-search');
+  whFilterSkuList(search ? search.value : '');
+}
+
+// Core filter — called on every keystroke and on focus
+function whFilterSkuList(query) {
   const sel = document.getElementById('wh-sku-select');
   if (!sel) return;
-  // Preserve current selection
-  const current = sel.value;
-  // Rebuild options
-  sel.innerHTML = '<option value="">— Select SKU —</option>';
-  // Group by internalSku (skuMap may have multiple UC SKUs per internal SKU)
+  const q = (query || '').trim().toLowerCase();
+
+  // Build deduped sorted list from skuMap
   const seen = new Set();
+  const all  = [];
   skuMap.forEach(function(m) {
     if (!m.internalSku || seen.has(m.internalSku)) return;
     seen.add(m.internalSku);
-    const opt = document.createElement('option');
-    opt.value = m.internalSku;
-    opt.textContent = m.internalSku + (m.category ? '  ·  ' + m.category : '');
-    sel.appendChild(opt);
+    all.push({ val: m.internalSku, label: m.internalSku + (m.category ? '  ·  ' + m.category : '') });
   });
-  const manOpt = document.createElement('option');
-  manOpt.value = '__manual__'; manOpt.textContent = '+ Enter manually…';
-  sel.appendChild(manOpt);
-  // Restore selection if still valid
-  if (current) sel.value = current;
+  all.sort(function(a, b) { return a.val.localeCompare(b.val); });
+
+  // Filter
+  const matches = q
+    ? all.filter(function(x) { return x.val.toLowerCase().includes(q) || x.label.toLowerCase().includes(q); })
+    : all;
+
+  // Rebuild options
+  let html = '';
+  matches.forEach(function(x) {
+    html += '<option value="' + x.val + '">' + x.label + '</option>';
+  });
+  html += '<option value="__manual__">+ Enter manually…</option>';
+  sel.innerHTML = html;
+
+  // Show list only when there's something to show or user is searching
+  sel.style.display = (matches.length || q) ? 'block' : 'none';
 }
 
-// Called when SKU dropdown changes
+// Keyboard: Enter picks first match; Escape hides list
+function whSkuSearchKey(e) {
+  const sel = document.getElementById('wh-sku-select');
+  if (e.key === 'ArrowDown') { sel.focus(); e.preventDefault(); return; }
+  if (e.key === 'Escape')    { sel.style.display = 'none'; return; }
+  if (e.key === 'Enter' && sel.options.length) {
+    whSkuSelected(sel.options[0].value);
+    e.preventDefault();
+  }
+}
+
+// Called when an option is picked from the searchable list
 function whSkuSelected(val) {
+  // Fill search box with picked value and hide list
+  const searchInp = document.getElementById('wh-sku-search');
+  const sel       = document.getElementById('wh-sku-select');
+  if (sel) sel.style.display = 'none';
+  if (searchInp && val && val !== '__manual__') searchInp.value = val;
   const metaBox = document.getElementById('wh-sku-meta');
 
   if (val === '__manual__') {
@@ -2819,6 +2795,7 @@ function whSkuSelected(val) {
     whRebuildCatSelect('');
     whState.category = '';
     document.getElementById('wh-manual-internal').focus();
+    whShowSkuWarn(null);
     metaBox.style.display = 'none';
     whState.internalSku = ''; whState.ucSku = '';
     whState.category = ''; whState.imageUrl = '';
@@ -2835,7 +2812,7 @@ function whSkuSelected(val) {
   whState.isManual = false;
 
   if (!val) {
-    // No selection
+    // No selection — reset
     whState.internalSku = ''; whState.ucSku = '';
     whState.category = ''; whState.imageUrl = '';
     metaBox.style.display = 'none';
@@ -2843,6 +2820,7 @@ function whSkuSelected(val) {
     document.getElementById('wh-generate-btn').style.display = 'none';
     whState.numBoxes = 0;
     document.getElementById('wh-num-boxes').value = '';
+    const si = document.getElementById('wh-sku-search'); if (si) si.value = '';
     whRenderBoxFields();
     return;
   }
@@ -3044,6 +3022,72 @@ function whCatNewBlur(val) {
   whRebuildCatSelect(val);
 }
 
+// ── Levenshtein distance (for similar SKU detection) ─────────────
+function levenshtein(a, b) {
+  a = a.toLowerCase(); b = b.toLowerCase();
+  const m = a.length, n = b.length;
+  const dp = Array.from({length: m+1}, function(_, i) {
+    return Array.from({length: n+1}, function(_, j) { return i === 0 ? j : j === 0 ? i : 0; });
+  });
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i-1] === b[j-1]
+        ? dp[i-1][j-1]
+        : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+  return dp[m][n];
+}
+
+// Returns { exact: bool, similar: string[] }
+// exact   — internalSku already exists in skuMap (hard block)
+// similar — other internalSkus within Levenshtein ≤ 2 (warning)
+function whCheckInternalSkuDuplicate(internalSku) {
+  const existing = skuMap.map(function(m) { return m.internalSku; });
+  const exact    = existing.some(function(s) { return s.toLowerCase() === internalSku.toLowerCase(); });
+  const similar  = existing.filter(function(s) {
+    return s.toLowerCase() !== internalSku.toLowerCase() && levenshtein(s, internalSku) <= 2;
+  });
+  return { exact, similar };
+}
+
+// Shows/hides inline warning below Internal SKU field
+function whShowSkuWarn(msg, type) {
+  const el = document.getElementById('wh-sku-warn');
+  const inp = document.getElementById('wh-manual-internal');
+  if (!msg) {
+    el.style.display = 'none';
+    el.textContent = '';
+    inp.style.borderColor = '';
+    return;
+  }
+  el.textContent = msg;
+  el.style.display = 'block';
+  if (type === 'error') {
+    el.style.background   = 'rgba(220,50,50,0.12)';
+    el.style.color        = '#ff6b6b';
+    el.style.border       = '1px solid rgba(220,50,50,0.3)';
+    inp.style.borderColor = '#ff6b6b';
+  } else {
+    el.style.background   = 'rgba(245,168,0,0.12)';
+    el.style.color        = 'var(--accent)';
+    el.style.border       = '1px solid rgba(245,168,0,0.35)';
+    inp.style.borderColor = 'var(--accent)';
+  }
+}
+
+// Called live on every keystroke in Internal SKU field
+function whCheckSkuInline(val) {
+  val = val.trim();
+  if (!val) { whShowSkuWarn(null); return; }
+  const dupCheck = whCheckInternalSkuDuplicate(val);
+  if (dupCheck.exact) {
+    whShowSkuWarn('⛔ Already exists in Mapped SKUs — edit it instead.', 'error');
+  } else if (dupCheck.similar.length) {
+    whShowSkuWarn('⚠ Similar SKU(s) exist: ' + dupCheck.similar.slice(0, 3).join(', '), 'warn');
+  } else {
+    whShowSkuWarn(null);
+  }
+}
+
 // Called when user clicks "Save to Mapped SKUs & Continue" in manual form
 function whSaveManualMapping() {
   const internalSku = document.getElementById('wh-manual-internal').value.trim();
@@ -3058,6 +3102,15 @@ function whSaveManualMapping() {
 
   if (!internalSku) { showToast('Internal SKU is required', true); return; }
   if (!ucSku)       { showToast('UC SKU is required', true); return; }
+
+  // ── Duplicate / similarity check ──────────────────────────────
+  const dupCheck = whCheckInternalSkuDuplicate(internalSku);
+  if (dupCheck.exact) {
+    whShowSkuWarn('⛔ "' + internalSku + '" already exists in Mapped SKUs. Edit it instead.', 'error');
+    return;
+  }
+  // If similar warning is showing (user typed and saw it), they already know —
+  // allow save but keep warning visible until field changes.
 
   // Save to skuMap (same pattern as linkSkuInline)
   const entry = { ucSku, internalSku, pcsPerCarton: ppc, imageUrl: imageUrl || '', category: category || '', source: 'inline' };
@@ -3143,11 +3196,16 @@ async function generateWhLabels() {
   }
 
   const mmyy = getMmyy();
-  // Look up image from bwStore / skuMap / caches
-  const map = skuMap.find(function(m) { return m.internalSku === sku; });
+  // Look up ucSku for B&W wait
+  const map   = skuMap.find(function(m) { return m.internalSku === sku; });
   const ucSku = whState.ucSku || (map ? map.ucSku : '');
+
+  // Wait for B&W image before generating labels
+  if (ucSku) await waitForBw(new Set([ucSku]));
+
+  // Resolve final image after wait
   const bwEntry = bwStore[ucSku] || {};
-  const imgSrc = bwEntry.bwImageUrl || (map ? map.imageUrl : '') || UC_IMAGE_MAP[ucSku] || gpImageCache[ucSku] || '';
+  const imgSrc  = bwEntry.bwImageUrl || (map ? map.imageUrl : '') || UC_IMAGE_MAP[ucSku] || gpImageCache[ucSku] || '';
 
   setSyncPill('⏳ Generating…', '');
   generatedLabels = [];
