@@ -737,8 +737,65 @@ function loadGSheetLookup() { /* no-op for Blinkit */ }
 var LIB_KEY = 'blinkit_sku_lib_v1';
 var SETTINGS_KEY = 'blinkit_settings_v1';
 
-function loadLib() { try { return JSON.parse(localStorage.getItem(LIB_KEY)) || {}; } catch(e) { return {}; } }
-function saveLib(lib) { localStorage.setItem(LIB_KEY, JSON.stringify(lib)); }
+// ── SKU Library: in-memory cache backed by D1 on live, localStorage in dev ──
+// All existing call sites use loadLib()/saveLib() synchronously via the cache.
+// On app init, initLib() populates _libCache from D1 (or localStorage).
+// saveLib() writes to cache + persists async (D1 on live, localStorage in dev).
+var _libCache = null; // null = not yet loaded
+
+function loadLib() {
+  if (_libCache === null) {
+    // Fallback: read from localStorage (covers edge cases before initLib completes)
+    try { _libCache = JSON.parse(localStorage.getItem(LIB_KEY)) || {}; } catch(e) { _libCache = {}; }
+  }
+  return _libCache;
+}
+
+function saveLib(lib) {
+  _libCache = lib;
+  // Always mirror to localStorage for offline/dev fallback
+  try { localStorage.setItem(LIB_KEY, JSON.stringify(lib)); } catch(e) {}
+  // On live: persist to D1 asynchronously (fire-and-forget with error toast)
+  if (IS_LIVE) {
+    fetch(WORKER_URL + '?action=bk_libSave', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: JSON.stringify(lib) })
+    })
+    .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); })
+    .catch(function() { toast('Library sync failed — changes saved locally only', 'err'); });
+  }
+}
+
+// Call once at startup: loads lib from D1 into cache, then re-renders library tab
+function initLib() {
+  if (!IS_LIVE) {
+    try { _libCache = JSON.parse(localStorage.getItem(LIB_KEY)) || {}; } catch(e) { _libCache = {}; }
+    renderLibrary();
+    return;
+  }
+  fetch(WORKER_URL + '?action=bk_libLoad')
+    .then(function(r) { return r.json(); })
+    .then(function(j) {
+      try { _libCache = JSON.parse(j.data || '{}'); } catch(e) { _libCache = {}; }
+      // Merge with any locally-saved data (handles offline edits made before sync)
+      try {
+        var local = JSON.parse(localStorage.getItem(LIB_KEY) || '{}');
+        var merged = Object.assign({}, local, _libCache);
+        // If merged differs from D1, push the merge back up
+        if (JSON.stringify(merged) !== JSON.stringify(_libCache)) {
+          _libCache = merged;
+          saveLib(_libCache);
+        }
+      } catch(e) {}
+      renderLibrary();
+    })
+    .catch(function() {
+      // D1 unreachable — fall back to localStorage silently
+      try { _libCache = JSON.parse(localStorage.getItem(LIB_KEY)) || {}; } catch(e) { _libCache = {}; }
+      renderLibrary();
+    });
+}
 function loadSettings() { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {mfgdate:'01/01/2026'}; } catch(e) { return {mfgdate:'01/01/2026'}; } }
 
 function saveSettings() {
@@ -2093,7 +2150,15 @@ function closeSettings(){ document.getElementById('settingsModal').classList.rem
 document.getElementById('settingsModal').addEventListener('click',function(e){if(e.target===this)closeSettings();});
 function clearLibraryConfirm(){
   if(!confirm('Delete ALL models from library?')) return;
-  localStorage.removeItem(LIB_KEY); renderLibrary(); toast('Library cleared','err'); closeSettings();
+  _libCache = {};
+  localStorage.removeItem(LIB_KEY);
+  if (IS_LIVE) {
+    fetch(WORKER_URL + '?action=bk_libSave', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ data: '{}' })
+    }).catch(function(){});
+  }
+  renderLibrary(); toast('Library cleared','err'); closeSettings();
 }
 
 // ── UTIL ──
@@ -3155,6 +3220,7 @@ function _ledgerRenderPDF(invNum, html) {
 }
 
 loadGSheetLookup();
+initLib(); // load SKU library from D1 (live) or localStorage (dev)
 
 
 </script>
