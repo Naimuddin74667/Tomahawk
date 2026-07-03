@@ -3378,137 +3378,92 @@ function cnUpdateAmt(input) {
 }
 
 function cnGenerate() {
-  var cnNum  = document.getElementById('cn-number').value.trim();
-  var cnDate = document.getElementById('cn-date').value.trim();
-  var reason = document.getElementById('cn-reason').value;
-  var other  = document.getElementById('cn-other').value.trim();
-  if (!cnNum)   { toast('Credit Note number required', 'err'); return; }
-  if (!cnDate)  { toast('Credit Note date required', 'err'); return; }
-  if (!reason)  { toast('Select a reason', 'err'); return; }
+  var cnNum    = document.getElementById('cn-number').value.trim();
+  var cnDate   = document.getElementById('cn-date').value.trim();
+  var reason   = document.getElementById('cn-reason').value;
+  var other    = document.getElementById('cn-other').value.trim();
+  if (!cnNum)  { toast('Credit Note number required', 'err'); return; }
+  if (!cnDate) { toast('Credit Note date required', 'err'); return; }
+  if (!reason) { toast('Select a reason', 'err'); return; }
   if (reason === 'Other' && !other) { toast('Please specify reason', 'err'); return; }
   var finalReason = reason === 'Other' ? other : reason;
 
-  // Collect items from table
+  // Collect cancelled items from modal table
   var inputs = document.querySelectorAll('#cn-items-tbody input[type=number]');
-  var items = [];
+  if (!inputs.length) { toast('No items loaded — cannot generate Credit Note', 'err'); return; }
+
+  var cnItems = [];
   inputs.forEach(function(inp) {
-    var qty = parseInt(inp.value) || 0;
+    var qty  = parseInt(inp.value) || 0;
     if (qty <= 0) return;
     var land = parseFloat(inp.dataset.landing) || 0;
     var tr   = inp.closest('tr');
     var desc = tr ? tr.querySelector('td').textContent.trim() : '';
-    items.push({ description: desc, qty: qty, landing: land, amount: land * qty });
+    // Build item object that matches what invBuildHTML expects
+    cnItems.push({
+      item_id:     '—',
+      upc:         '—',
+      hsn:         '—',
+      mrp:         land,
+      description: desc,
+      qty:         qty,
+      landing:     land
+    });
   });
-  if (!items.length) { toast('No items selected for Credit Note', 'err'); return; }
+  if (!cnItems.length) { toast('No items selected for Credit Note', 'err'); return; }
 
-  var grand = items.reduce(function(s,it){ return s + it.amount; }, 0);
-  var igst  = (_cnRecord && (_cnRecord.warehouse||'').toLowerCase().match(/hyderabad|bengaluru|delhi|haryana|karnataka|telangana/)) ? true : false;
-  var rate  = 0.18;
-  var basic = grand / (1 + rate);
-  var cgst  = igst ? 0 : basic * 0.09;
-  var sgst  = igst ? 0 : basic * 0.09;
-  var igst_amt = igst ? basic * rate : 0;
+  var r = _cnRecord || {};
+  var igst = (r.warehouse || '').toLowerCase().match(/hyderabad|telangana|bengaluru|karnataka|delhi|haryana|gujarat|rajasthan/) ? true : false;
 
-  var fmt = function(n){ return Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); };
-  var itemRows = items.map(function(it,i){
-    return '<tr>'
-      + '<td style="text-align:center">'+(i+1)+'</td>'
-      + '<td>'+it.description+'</td>'
-      + '<td style="text-align:center">'+it.qty+'</td>'
-      + '<td style="text-align:right">Rs. '+fmt(it.landing)+'</td>'
-      + '<td style="text-align:right;font-weight:700">Rs. '+fmt(it.amount)+'</td>'
-    + '</tr>';
-  }).join('');
+  // Build a data object identical to what invBuildHTML receives — with CN overrides
+  var cnData = {
+    inv_number: cnNum,
+    inv_date:   cnDate,
+    ro_number:  r.ro_number  || '—',
+    expiry:     '—',
+    warehouse:  (r.warehouse || 'Blinkit Feeder Warehouse').replace(/^Blinkit\s*/i,'').trim(),
+    addr1:      '',
+    addr2:      '',
+    gstin:      r.gstin || '—',
+    igst:       igst,
+    items:      cnItems
+  };
 
-  var taxRows = igst
-    ? '<tr style="background:#f7f7f7"><td colspan="4" style="text-align:right;padding:2mm 1.5mm">Taxable Value</td><td style="text-align:right">Rs. '+fmt(basic)+'</td></tr>'
-      + '<tr style="background:#f7f7f7"><td colspan="4" style="text-align:right;padding:2mm 1.5mm">IGST @ 18%</td><td style="text-align:right">Rs. '+fmt(igst_amt)+'</td></tr>'
-    : '<tr style="background:#f7f7f7"><td colspan="4" style="text-align:right;padding:2mm 1.5mm">Taxable Value</td><td style="text-align:right">Rs. '+fmt(basic)+'</td></tr>'
-      + '<tr style="background:#f7f7f7"><td colspan="4" style="text-align:right;padding:2mm 1.5mm">CGST @ 9%</td><td style="text-align:right">Rs. '+fmt(cgst)+'</td></tr>'
-      + '<tr style="background:#f7f7f7"><td colspan="4" style="text-align:right;padding:2mm 1.5mm">SGST @ 9%</td><td style="text-align:right">Rs. '+fmt(sgst)+'</td></tr>';
+  // Generate the HTML using invBuildHTML, then do string replacements to make it a Credit Note
+  var html = invBuildHTML(cnData);
 
-  var css = [
-    '*{box-sizing:border-box;margin:0;padding:0;color:#000;border-color:#ccc}',
-    'body{font-family:"Arial",Helvetica,sans-serif;font-size:10px;color:#000;background:#fff;padding:8mm 10mm}',
-    '.page{border:1.5px solid #000}',
-    '.banner{border-bottom:1px solid #000;padding:3.5mm 4mm 3mm;position:relative}',
-    '.co-name{font-size:16px;font-weight:900;letter-spacing:.02em}',
-    '.co-sub{font-size:9px;color:#333;margin-top:2px;line-height:1.6}',
-    '.cn-tag{position:absolute;right:4mm;top:50%;transform:translateY(-50%);text-align:right}',
-    '.cn-tag-text{font-size:13px;font-weight:900;letter-spacing:.08em;border:1.5px solid #000;padding:2mm 3mm;display:inline-block}',
-    '.meta{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid #000}',
-    '.mc{padding:2.5mm 3mm;border-right:1px solid #000} .mc:last-child{border-right:none}',
-    '.ml{font-size:7px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#555;margin-bottom:1.5px}',
-    '.mv{font-size:9px;font-weight:700}',
-    '.parties{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #000}',
-    '.party{padding:2.5mm 3mm} .party:first-child{border-right:1px solid #000}',
-    '.pl{font-size:7px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#555;border-bottom:.5px solid #ccc;padding-bottom:1mm;margin-bottom:2mm}',
-    '.pn{font-size:10px;font-weight:700;margin-bottom:1.5px} .pa{font-size:8px;color:#444;line-height:1.65} .pg{font-size:8px;font-weight:700;margin-top:2px}',
-    '.reason{border-bottom:1px solid #000;padding:2.5mm 3mm;font-size:9px;background:#fff9ee}',
-    '.reason b{color:#b05000}',
-    'table{width:100%;border-collapse:collapse}',
-    'thead th{background:#000;color:#fff;padding:2mm 1.5mm;font-size:7.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;border-right:.5px solid #444;vertical-align:bottom} thead th:last-child{border-right:none}',
-    'tbody td{border:.5px solid #ccc;padding:1.8mm 1.5mm;vertical-align:middle} tbody tr:nth-child(even) td{background:#f9f9f9}',
-    '.grand-row td{background:#000;color:#fff;padding:2mm 1.5mm;font-size:10px;font-weight:900;border:none}',
-    '.words{border-top:1px solid #000;border-bottom:1px solid #000;padding:2mm 3mm;font-size:8.5px;background:#f5f5f5;font-style:italic;font-weight:700}',
-    '.bottom{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid #000}',
-    '.decl{padding:3mm 4mm;border-right:1px solid #000;font-size:8.5px;line-height:1.7;color:#333}',
-    '.decl-hd{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#000;margin-bottom:2mm}',
-    '.sign{padding:3mm 4mm;text-align:right;display:flex;flex-direction:column;justify-content:space-between}',
-    '.sign-for{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}',
-    '.sign-line{border-top:.6px solid #000;width:140px;margin:0 0 1.5mm auto} .sign-lbl{font-size:7px;color:#555}',
-    '.footer{border-top:1px solid #000;padding:2mm 4mm;font-size:7px;color:#888;text-align:center}'
-  ].join('');
+  // Replace document labels only — keep all CSS, layout, numbers identical
+  html = html
+    .replace(/>TAX INVOICE</g,     '>CREDIT NOTE<')
+    .replace(/>Original for Recipient</g, '>Against Tax Invoice<')
+    .replace(/>Invoice No\.</g,    '>Credit Note No.<')
+    .replace(/>Invoice Date</g,    '>Credit Note Date<')
+    .replace(/>RO Number</g,       '>Ref. Invoice No.<')
+    .replace(new RegExp('>' + (cnData.ro_number || '').replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '<'), '>' + (r.inv_number || cnData.ro_number) + '<')
+    .replace(/>RO Expiry</g,       '>Against RO<')
+    .replace(/>—</g,               '>' + (r.ro_number || '—') + '<') // fill expiry cell with RO number
+    .replace(/>Seller \/ Shipped From</g,   '>Supplier / Seller<')
+    .replace(/>Consignee \/ Billed To</g,   '>Buyer / Consignee<')
+    .replace(/>Declaration</g,     '>Declaration<')
+    .replace(/We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct\./g,
+             'We declare that this credit note is issued against the cancellation/rejection of the shipment and that all particulars are true and correct.')
+    .replace(/>GRAND TOTAL</g,     '>CREDIT TOTAL<')
+    .replace(/>Amount in Words:/g, '>Amount in Words:')
+    // Add reason row after the parties section
+    .replace('</div>\n\n  /* ── ITEMS TABLE ── */', '</div>') // noop guard
+    ;
 
-  var wh = (_cnRecord && _cnRecord.warehouse) ? _cnRecord.warehouse.replace(/^Blinkit\s*/i,'').trim() : '';
-
-  var cnHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>'+css+'</style></head><body><div class="page">'
-  + '<div class="banner">'
-    + '<div class="co-name">INDUSTRIAL TOOLS &amp; HARDWARE</div>'
-    + '<div class="co-sub">GSTIN: 27AAAFI9717N1ZV &nbsp;|&nbsp; PAN: AAAFI9717N &nbsp;|&nbsp; Block No. E3, Unit No. 4, Ground Floor, Parasnath Complex, Dapode, Bhiwandi – 421302, Maharashtra</div>'
-    + '<div class="cn-tag"><div class="cn-tag-text">CREDIT NOTE</div><div style="font-size:7.5px;color:#555;margin-top:2px;text-align:right">Against Tax Invoice</div></div>'
-  + '</div>'
-  + '<div class="meta">'
-    + '<div class="mc"><div class="ml">Credit Note No.</div><div class="mv">'+cnNum+'</div></div>'
-    + '<div class="mc"><div class="ml">Credit Note Date</div><div class="mv">'+cnDate+'</div></div>'
-    + '<div class="mc"><div class="ml">Ref. Invoice No.</div><div class="mv">' + ((_cnRecord&&_cnRecord.inv_number)||'—') + '</div></div>'
-  + '</div>'
-  + '<div class="parties">'
-    + '<div class="party"><div class="pl">Supplier / Seller</div>'
-      + '<div class="pn">INDUSTRIAL TOOLS &amp; HARDWARE</div>'
-      + '<div class="pa">Block No. E3, Unit No. 4, Ground Floor,<br>Parasnath Complex, Dapode, Bhiwandi – 421302, Maharashtra</div>'
-      + '<div class="pg">GSTIN: 27AAAFI9717N1ZV</div></div>'
-    + '<div class="party"><div class="pl">Buyer / Consignee</div>'
-      + '<div class="pn">Blink Commerce Private Limited</div>'
-      + '<div class="pa">' + (wh || 'Blinkit Feeder Warehouse') + '</div>'
-      + '<div class="pg">GSTIN: ' + ((_cnRecord&&_cnRecord.gstin)||'—') + '</div></div>'
-  + '</div>'
-  + '<div class="reason"><b>Reason:</b> ' + finalReason + ' &nbsp;|&nbsp; <b>Against RO:</b> ' + ((_cnRecord&&_cnRecord.ro_number)||'—') + '</div>'
-  + '<table><thead><tr>'
-    + '<th style="width:4%;text-align:center">#</th>'
-    + '<th style="width:42%">Description of Goods</th>'
-    + '<th style="width:8%;text-align:center">Qty</th>'
-    + '<th style="width:12%;text-align:right">Landing (Rs.)</th>'
-    + '<th style="width:12%;text-align:right">Amount (Rs.)</th>'
-  + '</tr></thead><tbody>'
-    + itemRows
-    + taxRows
-    + '<tr class="grand-row"><td colspan="4" style="text-align:right">CREDIT TOTAL</td><td style="text-align:right">Rs. '+fmt(grand)+'</td></tr>'
-  + '</tbody></table>'
-  + '<div class="words">Amount in Words: ' + invAmountWords(grand) + '</div>'
-  + '<div class="bottom">'
-    + '<div class="decl"><div class="decl-hd">Declaration</div>We declare that this credit note is issued against the cancellation/rejection of the above-mentioned shipment and that all particulars are true and correct.</div>'
-    + '<div class="sign"><div class="sign-for">For Industrial Tools &amp; Hardware</div>'
-      + '<div><div class="sign-line"></div><div class="sign-lbl">Authorised Signatory — Shikhar Kampani</div></div></div>'
-  + '</div>'
-  + '<div class="footer">INDUSTRIAL TOOLS &amp; HARDWARE &nbsp;|&nbsp; GSTIN: 27AAAFI9717N1ZV &nbsp;|&nbsp; This is a computer-generated Credit Note.</div>'
-  + '</div></body></html>';
+  // Inject reason row before the table — find the <table> tag and insert before it
+  var reasonBand = '<div style="border-bottom:1px solid #000;padding:2.5mm 3mm;font-size:10px;background:#fff9ee">'
+    + '<strong>Reason:</strong> ' + finalReason
+    + ' &nbsp;|&nbsp; <strong>Against RO:</strong> ' + (r.ro_number || '—')
+    + '</div>';
+  html = html.replace('<table>', reasonBand + '<table>');
 
   closeCnModal();
   toast('Generating Credit Note PDF…', 'info');
-  _ledgerRenderPDF(cnNum.replace(/\//g,'-'), cnHtml);
+  _ledgerRenderPDF(cnNum.replace(/\//g, '-'), html);
 }
-
 loadGSheetLookup();
 
 
