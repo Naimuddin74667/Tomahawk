@@ -3591,11 +3591,21 @@ function cnRenderItems(items) {
       + '</div>'
       + '<div style="width:110px">'
         + '<label class="field-lbl">Cancel Qty</label>'
-        + '<input type="number" id="cn-item-qty-' + i + '" min="0" max="' + it.qty + '" value="0" oninput="cnUpdateTotals()" style="font-size:11px;text-align:center">'
+        + '<input type="number" id="cn-item-qty-' + i + '" min="0" max="' + it.qty + '" value="0" oninput="cnClampQty(this,' + it.qty + ');cnUpdateTotals()" style="font-size:11px;text-align:center">'
       + '</div>'
     + '</div>';
   }).join('');
   cnUpdateTotals();
+}
+
+// Hard-clamps a cancel-qty input to [0, sentQty] on every keystroke — the `max` HTML
+// attribute is only a soft hint browsers don't always enforce (e.g. typing over it),
+// so we clamp explicitly to make sure a Credit Note can never cancel more than was sent.
+function cnClampQty(el, sentQty) {
+  var v = parseInt(el.value);
+  if (isNaN(v) || v < 0) v = 0;
+  if (v > sentQty) v = sentQty;
+  el.value = v;
 }
 
 function cnUpdateTotals() {
@@ -3624,7 +3634,7 @@ function cnDeriveNumber(invNumber) {
 
 function cnGenerate() {
   if (!_cnCurrentInv || !_cnCurrentInv.items.length) { toast('No items loaded', 'err'); return; }
-  // Belt-and-braces: block if a CN already exists for this invoice (also checked on open)
+  // Local guard: block if a CN already exists for this invoice per what we last loaded
   if (_cnByInv[_cnCurrentInv.inv_number] && _cnByInv[_cnCurrentInv.inv_number].length) {
     toast('Credit Note already exists for this invoice', 'err');
     closeCnModal();
@@ -3635,17 +3645,45 @@ function cnGenerate() {
   if (!reason) { toast('Select or enter a reason', 'err'); return; }
 
   var cancelledItems = [];
+  var qtyError = null;
   _cnCurrentInv.items.forEach(function(it, i) {
     var el = document.getElementById('cn-item-qty-' + i);
     var q = el ? (parseInt(el.value) || 0) : 0;
+    // Hard validation (defense in depth — the input is clamped live, but re-check here
+    // in case of stale DOM state): cancelled qty can never exceed what was actually sent.
+    if (q < 0) q = 0;
+    if (q > it.qty) { qtyError = it.description + ' (' + it.item_id + '): cancel qty ' + q + ' exceeds sent qty ' + it.qty; q = it.qty; }
     if (q > 0) cancelledItems.push({ item_id: it.item_id, upc: it.upc, hsn: it.hsn, description: it.description, mrp: it.mrp, landing: it.landing, qty: q });
   });
+  if (qtyError) { toast(qtyError, 'err'); cnRenderItems(_cnCurrentInv.items); return; }
   if (!cancelledItems.length) { toast('Enter a cancelled quantity for at least one item', 'err'); return; }
 
   var btn = document.getElementById('cnGenerateBtn');
   btn.disabled = true;
-  btn.textContent = 'Generating...';
+  btn.textContent = 'Checking...';
 
+  // Live check against D1 right before generating — closes any race where the ledger's
+  // cached CN list is stale (e.g. this invoice was just created in another tab/session).
+  var proceed = function() { _cnGenerateProceed(reason, cancelledItems, btn); };
+  if (!IS_LIVE) { proceed(); return; }
+  fetch(WORKER_URL + '?action=blinkitCheckCN&inv=' + encodeURIComponent(_cnCurrentInv.inv_number))
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d.cn_number) {
+        toast('Credit Note ' + d.cn_number + ' already exists for this invoice', 'err');
+        btn.disabled = false;
+        btn.innerHTML = '&#10003; Generate Credit Note';
+        closeCnModal();
+        ledgerLoad();
+        return;
+      }
+      proceed();
+    })
+    .catch(proceed); // if the check itself fails, fall through rather than block the user
+}
+
+function _cnGenerateProceed(reason, cancelledItems, btn) {
+  btn.textContent = 'Generating...';
   var cnNumber = cnDeriveNumber(_cnCurrentInv.inv_number);
   var totalQty = cancelledItems.reduce(function(s,it){ return s+it.qty; },0);
   var totalAmt = cancelledItems.reduce(function(s,it){ return s+it.qty*it.landing; },0);
@@ -3671,12 +3709,20 @@ function cnGenerate() {
     }).catch(function(){});
   }
 
+  // Optimistic local update — reflect the new CN in the ledger immediately rather than
+  // waiting on a full reload (which previously required a manual page refresh to show up).
+  if (!_cnByInv[_cnCurrentInv.inv_number]) _cnByInv[_cnCurrentInv.inv_number] = [];
+  _cnByInv[_cnCurrentInv.inv_number].push({
+    cn_number: cnNumber, inv_number: _cnCurrentInv.inv_number, ro_number: _cnCurrentInv.ro_number,
+    reason: reason, total_qty: totalQty, amount: totalAmt, created_at: new Date().toISOString()
+  });
+
   toast('Credit Note ' + cnNumber + ' generated', 'ok');
   btn.disabled = false;
   btn.innerHTML = '&#10003; Generate Credit Note';
   closeCnModal();
   _docRenderPDF(cnNumber, html, 'CreditNote');
-  ledgerLoad();
+  ledgerRender(); // instant — no network round-trip needed to see the new badge
 }
 
 function cnBuildHTML(d) {
