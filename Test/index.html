@@ -532,6 +532,8 @@
     <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128203; Invoice Ledger</div>
     <input type="text" id="ledgerSearch" placeholder="Search RO or Invoice No..." oninput="ledgerRender()" style="width:220px;font-size:11px;padding:5px 10px">
     <button class="btn btn-secondary btn-sm" onclick="ledgerLoad()" style="width:auto">&#8635; Refresh</button>
+    <!-- TEMP — dev/testing only. Remove this button (and ledgerDeleteAllPrompt() below) once app is out of active development. -->
+    <button class="btn btn-sm" onclick="ledgerDeleteAllPrompt()" style="width:auto;background:#3a1414;border:1px solid #6b2020;color:#ff8080">&#128465; Delete All (Temp)</button>
   </div>
 
   <!-- Stats strip -->
@@ -559,14 +561,15 @@
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Number</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Date Created</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Warehouse</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Items</th>
+          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">No. of SKU</th>
+          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Total Qty</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Received Qty</th>
           <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Invoice</th>
           <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Credit Note</th>
         </tr>
       </thead>
       <tbody id="ledgerTbody">
-        <tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+        <tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -2445,10 +2448,23 @@ function invExtractData(text, words, filename) {
   // RO Number
   var roNum = (t.match(/R\.?O\.?\s*Number\s*[:\-]?\s*(\d{10,20})/i) || t.match(/(\d{13,16})/)||[])[1] || '';
 
-  // Expiry date — "R.O. expiry date : July 22, 2026" or "expiry.*?(\w+ \d+, \d{4})"
-  var expiryRaw = '';
-  var em = t.match(/expiry\s*date\s*[:\-]?\s*([A-Za-z]+ \d{1,2},\s*\d{4})/i);
-  if (em) expiryRaw = em[1];
+  // Expiry date — actual Blinkit ROs use "DD-MM-YYYY" (e.g. "15-07-2026"), but also
+  // support "Month DD, YYYY" and "YYYY-MM-DD" in case the format varies by RO source.
+  // Built directly as DD-MM-YYYY here (not via `new Date()`, which misparses ambiguous
+  // numeric formats like "15-07-2026" in most browsers).
+  var expiryFmt = '';
+  var MONTHS = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+  var emWord = t.match(/expiry\s*date\s*[:\-]?\s*([A-Za-z]+)\s+(\d{1,2}),?\s*(\d{4})/i);
+  var emNumDMY = t.match(/expiry\s*date\s*[:\-]?\s*(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/i);
+  var emNumYMD = t.match(/expiry\s*date\s*[:\-]?\s*(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/i);
+  if (emWord && MONTHS[emWord[1].slice(0,3).toLowerCase()]) {
+    var mo = MONTHS[emWord[1].slice(0,3).toLowerCase()];
+    expiryFmt = String(emWord[2]).padStart(2,'0') + '-' + String(mo).padStart(2,'0') + '-' + emWord[3];
+  } else if (emNumDMY) {
+    expiryFmt = emNumDMY[1].padStart(2,'0') + '-' + emNumDMY[2].padStart(2,'0') + '-' + emNumDMY[3];
+  } else if (emNumYMD) {
+    expiryFmt = emNumYMD[3].padStart(2,'0') + '-' + emNumYMD[2].padStart(2,'0') + '-' + emNumYMD[1];
+  }
 
   // Consignee GSTIN — always sits right next to "Delivered To" address block
   var gstin = '';
@@ -2638,15 +2654,6 @@ function invExtractData(text, words, filename) {
     var mm = String(now.getMonth()+1).padStart(2,'0');
     var yyyy = now.getFullYear();
     var today = dd + '-' + mm + '-' + yyyy;
-
-    // Format expiry
-    var expiryFmt = '';
-    if (expiryRaw) {
-      try {
-        var d = new Date(expiryRaw);
-        expiryFmt = String(d.getDate()).padStart(2,'0') + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + d.getFullYear();
-      } catch(e) { expiryFmt = expiryRaw; }
-    }
 
     _invData = { roNum:roNum, expiry:expiryFmt, gstin:gstin, warehouse:warehouse,
                  addr1:addr1, addr2:addr2, items:items };
@@ -3143,6 +3150,42 @@ function invReset() {
 
 
 // ═══════════════════════════════════════════════════════════════
+// [TEMP] DELETE ALL INVOICES — dev/testing only.
+// Remove this whole function (and its button in the ledger toolbar)
+// once the app is out of active development.
+// ═══════════════════════════════════════════════════════════════
+function ledgerDeleteAllPrompt() {
+  var pw = prompt('This is a TEMPORARY testing tool.\nEnter admin password to delete ALL invoices & credit notes:');
+  if (pw === null) return; // cancelled
+  if (pw !== 'Admin@8411') { toast('Incorrect password', 'err'); return; }
+  if (!confirm('This will PERMANENTLY delete ALL invoices and credit notes (cloud + local) and reset invoice/CN numbering to 001. This cannot be undone. Continue?')) return;
+
+  // Clear every Blinkit-prefixed localStorage key (records, sequences, cached HTML/items)
+  Object.keys(localStorage)
+    .filter(function(k){
+      return k === 'blinkit_inv_records' || k === 'blinkit_inv_seq' || k === 'blinkit_cn_seq'
+          || k.indexOf('blinkit_inv_html_') === 0 || k.indexOf('blinkit_cn_html_') === 0
+          || k.indexOf('blinkit_inv_items_') === 0;
+    })
+    .forEach(function(k){ localStorage.removeItem(k); });
+
+  if (!IS_LIVE) {
+    toast('All local invoice/CN test data cleared', 'ok');
+    ledgerLoad();
+    return;
+  }
+
+  fetch(WORKER_URL + '?action=blinkitDeleteAllInvoices', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d.ok) { toast('All invoices & credit notes deleted (cloud + local)', 'ok'); }
+      else { toast('Cloud delete failed — local data was still cleared', 'err'); }
+      ledgerLoad();
+    })
+    .catch(function(){ toast('Network error — local data cleared, but cloud delete may have failed', 'err'); ledgerLoad(); });
+}
+
+// ═══════════════════════════════════════════════════════════════
 // INVOICE LEDGER
 // ═══════════════════════════════════════════════════════════════
 var _ledgerRecords = [];
@@ -3150,7 +3193,7 @@ var _cnByInv = {}; // inv_number -> array of credit note records
 
 function ledgerLoad() {
   document.getElementById('ledgerTbody').innerHTML =
-    '<tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+    '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
 
   if (!IS_LIVE) {
     var saved = JSON.parse(localStorage.getItem('blinkit_inv_records') || '{}');
@@ -3209,7 +3252,7 @@ function ledgerRender() {
 
   if (!rows.length) {
     document.getElementById('ledgerTbody').innerHTML =
-      '<tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">' +
+      '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">' +
       (q ? 'No results for "' + q + '"' : 'No invoices generated yet') + '</td></tr>';
     return;
   }
@@ -3223,8 +3266,8 @@ function ledgerRender() {
     var rSafe = JSON.stringify(r).replace(/"/g,'&quot;');
 
     // ── Items cell ──
-    var itemsCell = r.sku_count ? (r.sku_count + ' SKU' + (r.sku_count===1?'':'s') + ' &middot; ' + (r.total_qty||0) + ' Units')
-      : '<span style="color:var(--muted)">\u2014</span>';
+    var skuCountCell = r.sku_count ? r.sku_count : '<span style="color:var(--muted)">\u2014</span>';
+    var totalQtyCell = r.sku_count ? (r.total_qty||0) : '<span style="color:var(--muted)">\u2014</span>';
 
     // ── Received qty cell ──
     var sentQty = r.total_qty || 0;
@@ -3257,7 +3300,8 @@ function ledgerRender() {
       + '<td style="padding:.6rem 1rem;font-family:\'DM Mono\',monospace;font-size:11px;color:var(--text)">' + (r.ro_number||'\u2014') + '</td>'
       + '<td style="padding:.6rem 1rem;font-size:11px;color:var(--muted)">' + dateDisplay + '</td>'
       + '<td style="padding:.6rem 1rem;font-size:11px;color:var(--text)">' + wh + '</td>'
-      + '<td style="padding:.6rem 1rem;font-size:11px;color:var(--text);text-align:center">' + itemsCell + '</td>'
+      + '<td style="padding:.6rem 1rem;font-size:11px;color:var(--text);text-align:center">' + skuCountCell + '</td>'
+      + '<td style="padding:.6rem 1rem;font-size:11px;color:var(--text);text-align:center">' + totalQtyCell + '</td>'
       + '<td style="padding:.6rem 1rem;font-size:11px;text-align:center;white-space:nowrap">' + recvCell + '</td>'
       + '<td style="padding:.6rem 1rem;text-align:right">'
         + '<button class="btn btn-secondary btn-sm" onclick="ledgerDownload(' + rSafe + ')" style="width:auto;font-size:10px">&#8595; Download</button>'
