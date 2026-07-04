@@ -566,10 +566,11 @@
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Received Qty</th>
           <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Invoice</th>
           <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Credit Note</th>
+          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Status</th>
         </tr>
       </thead>
       <tbody id="ledgerTbody">
-        <tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+        <tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -3194,7 +3195,7 @@ var _cnByInv = {}; // inv_number -> array of credit note records
 
 function ledgerLoad() {
   document.getElementById('ledgerTbody').innerHTML =
-    '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+    '<tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
 
   if (!IS_LIVE) {
     var saved = JSON.parse(localStorage.getItem('blinkit_inv_records') || '{}');
@@ -3253,7 +3254,7 @@ function ledgerRender() {
 
   if (!rows.length) {
     document.getElementById('ledgerTbody').innerHTML =
-      '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">' +
+      '<tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">' +
       (q ? 'No results for "' + q + '"' : 'No invoices generated yet') + '</td></tr>';
     return;
   }
@@ -3270,31 +3271,45 @@ function ledgerRender() {
     var skuCountCell = r.sku_count ? r.sku_count : '<span style="color:var(--muted)">\u2014</span>';
     var totalQtyCell = r.sku_count ? (r.total_qty||0) : '<span style="color:var(--muted)">\u2014</span>';
 
-    // ── Received qty cell ──
+    // ── Received qty cell ── (hard-capped at sent qty — can't receive more than was sent)
     var sentQty = r.total_qty || 0;
     var recvCell;
     if (r.received_qty === null || r.received_qty === undefined || r.received_qty === '') {
-      recvCell = '<input type="number" id="recv-inp-' + i + '" placeholder="Recv qty" style="width:70px;font-size:11px;padding:3px 6px;text-align:center">'
-        + ' <button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:3px 8px" onclick="ledgerSaveReceived(\'' + (r.inv_number||'') + '\', document.getElementById(\'recv-inp-' + i + '\').value)">&#10003;</button>';
+      recvCell = '<input type="number" id="recv-inp-' + i + '" placeholder="Recv qty" min="0" max="' + sentQty + '" oninput="ledgerClampRecv(this,' + sentQty + ')" style="width:70px;font-size:11px;padding:3px 6px;text-align:center">'
+        + ' <button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:3px 8px" onclick="ledgerSaveReceived(\'' + (r.inv_number||'') + '\', document.getElementById(\'recv-inp-' + i + '\').value, ' + sentQty + ')">&#10003;</button>';
     } else if (parseInt(r.received_qty) === sentQty) {
       recvCell = '<span style="color:#6dc87a;font-size:11px;font-weight:700">&#10003; ' + r.received_qty + '</span>'
-        + ' <span style="cursor:pointer;color:var(--muted);font-size:10px" title="Edit" onclick="ledgerEditReceived(this,\'' + (r.inv_number||'') + '\',' + JSON.stringify(r.received_qty) + ')">&#9998;</span>';
+        + ' <span style="cursor:pointer;color:var(--muted);font-size:10px" title="Edit" onclick="ledgerEditReceived(this,\'' + (r.inv_number||'') + '\',' + JSON.stringify(r.received_qty) + ',' + sentQty + ')">&#9998;</span>';
     } else {
       var diff = parseInt(r.received_qty) - sentQty;
       recvCell = '<span style="color:#e05555;font-size:11px;font-weight:700">&#9888; ' + r.received_qty + ' (sent ' + sentQty + ', &Delta;' + (diff>0?'+':'') + diff + ')</span>'
-        + ' <span style="cursor:pointer;color:var(--muted);font-size:10px" title="Edit" onclick="ledgerEditReceived(this,\'' + (r.inv_number||'') + '\',' + JSON.stringify(r.received_qty) + ')">&#9998;</span>';
+        + ' <span style="cursor:pointer;color:var(--muted);font-size:10px" title="Edit" onclick="ledgerEditReceived(this,\'' + (r.inv_number||'') + '\',' + JSON.stringify(r.received_qty) + ',' + sentQty + ')">&#9998;</span>';
     }
 
     // ── Credit Note cell ──
     var cns = _cnByInv[r.inv_number] || [];
-    var cnBadges = cns.map(function(cn){
+    var cn = cns.length ? cns[0] : null; // only one CN allowed per invoice
+    var cnBadges = cns.map(function(cnRec){
       return '<div style="display:inline-flex;align-items:center;gap:4px;background:#111;border:1px solid var(--border);border-radius:5px;padding:2px 6px;margin:1px;font-size:10px;font-family:\'DM Mono\',monospace">'
-        + '<span style="color:var(--accent)">' + cn.cn_number + '</span>'
-        + '<span style="cursor:pointer;color:var(--muted)" title="Download" onclick="cnDownload(\'' + cn.cn_number + '\')">&#8595;</span>'
+        + '<span style="color:var(--accent)">' + cnRec.cn_number + '</span>'
+        + '<span style="cursor:pointer;color:var(--muted)" title="Download" onclick="cnDownload(\'' + cnRec.cn_number + '\')">&#8595;</span>'
       + '</div>';
     }).join('');
     var cnCell = cnBadges
       + (cns.length ? '' : '<button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:3px 8px;margin-top:2px" onclick="openCnModal(\'' + (r.inv_number||'') + '\', \'' + (r.ro_number||'') + '\', ' + sentQty + ')">+ Create</button>');
+
+    // ── RO Status cell — derived from received qty + CN state (see roStatusDerive) ──
+    var statusInfo = roStatusDerive(r, cn, sentQty);
+    var statusCell = '<span style="display:inline-block;padding:3px 9px;border-radius:11px;font-size:10px;font-weight:700;letter-spacing:.03em;background:' + statusInfo.bg + ';color:' + statusInfo.fg + '">' + statusInfo.label + '</span>';
+    if (statusInfo.key === 'mismatch') {
+      var noteVal = (r.status_note || '').replace(/"/g,'&quot;');
+      statusCell += '<div style="margin-top:3px;display:flex;gap:3px;align-items:center">'
+        + '<input type="text" id="status-note-' + i + '" value="' + noteVal + '" placeholder="Why? (remark)" style="width:110px;font-size:10px;padding:2px 5px">'
+        + '<button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:2px 6px" onclick="ledgerSaveStatusNote(\'' + (r.inv_number||'') + '\', document.getElementById(\'status-note-' + i + '\').value)">&#10003;</button>'
+      + '</div>';
+    } else if ((statusInfo.key === 'rejected' || statusInfo.key === 'cancelled') && cn && cn.reason) {
+      statusCell += '<div style="margin-top:3px;font-size:9.5px;color:var(--muted);max-width:130px">' + cn.reason.replace(/&/g,'&amp;') + '</div>';
+    }
 
     return '<tr style="' + bg + ';border-bottom:1px solid var(--border)">'
       + '<td style="padding:.6rem 1rem;font-family:\'DM Mono\',monospace;font-size:11px;color:var(--accent);font-weight:700">' + (r.inv_number||'\u2014') + '</td>'
@@ -3308,21 +3323,79 @@ function ledgerRender() {
         + '<button class="btn btn-secondary btn-sm" onclick="ledgerDownload(' + rSafe + ')" style="width:auto;font-size:10px">&#8595; Download</button>'
       + '</td>'
       + '<td style="padding:.6rem 1rem;text-align:right;white-space:nowrap">' + cnCell + '</td>'
+      + '<td style="padding:.6rem 1rem;text-align:center;white-space:nowrap">' + statusCell + '</td>'
     + '</tr>';
   }).join('');
 }
 
-function ledgerEditReceived(el, invNumber, currentVal) {
-  var td = el.closest('td');
-  var uid = 'recv-edit-' + Math.random().toString(36).slice(2,8);
-  td.innerHTML = '<input type="number" id="' + uid + '" value="' + currentVal + '" style="width:70px;font-size:11px;padding:3px 6px;text-align:center">'
-    + ' <button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:3px 8px" onclick="ledgerSaveReceived(\'' + invNumber + '\', document.getElementById(\'' + uid + '\').value)">&#10003;</button>';
+// Hard-clamps the received-qty input to [0, sentQty] on every keystroke — can never
+// record more received than was actually sent.
+function ledgerClampRecv(el, sentQty) {
+  var v = parseInt(el.value);
+  if (isNaN(v)) return; // let them clear the field without forcing a value
+  if (v < 0) v = 0;
+  if (v > sentQty) v = sentQty;
+  el.value = v;
 }
 
-function ledgerSaveReceived(invNumber, value) {
+// Derives the RO Status badge for a ledger row.
+//   Cancelled          — CN exists, cancelled qty covers the full sent qty (red)
+//   Rejected           — CN exists, received qty matches sent qty anyway, e.g. rate correction (red)
+//   Partially Received — CN exists, received qty doesn't match sent qty, not a full cancellation (orange)
+//   Mismatch           — no CN yet, received qty entered but doesn't match sent qty (amber)
+//   Fulfilled          — no CN, received qty matches sent qty (green)
+//   In Transit         — no CN, received qty not entered yet (blue)
+function roStatusDerive(r, cn, sentQty) {
+  var recvQty = (r.received_qty === null || r.received_qty === undefined || r.received_qty === '') ? null : parseInt(r.received_qty);
+  if (cn) {
+    var cnQty = cn.total_qty || 0;
+    if (sentQty > 0 && cnQty >= sentQty) {
+      return { key:'cancelled', label:'CANCELLED', bg:'#3a1414', fg:'#ff6b6b' };
+    }
+    if (recvQty !== null && recvQty === sentQty) {
+      return { key:'rejected', label:'REJECTED', bg:'#3a1a24', fg:'#ff8fa3' };
+    }
+    return { key:'partial', label:'PARTIALLY RECEIVED', bg:'#3a2a10', fg:'#ffb74d' };
+  }
+  if (recvQty === null) {
+    return { key:'transit', label:'IN TRANSIT', bg:'#122a3a', fg:'#64b5f6' };
+  }
+  if (recvQty === sentQty) {
+    return { key:'fulfilled', label:'FULFILLED', bg:'#123a1a', fg:'#6dc87a' };
+  }
+  return { key:'mismatch', label:'MISMATCH', bg:'#3a3210', fg:'#e8c547' };
+}
+
+function ledgerSaveStatusNote(invNumber, note) {
+  if (!invNumber) return;
+  var rec = _ledgerRecords.find(function(r){ return r.inv_number === invNumber; });
+  if (rec) rec.status_note = note;
+  if (!IS_LIVE) { ledgerRender(); toast('Remark saved (local)', 'ok'); return; }
+  fetch(WORKER_URL + '?action=blinkitSaveStatusNote', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ inv_number: invNumber, status_note: note })
+  }).then(function(r){ return r.json(); })
+    .then(function(d){ if (d.ok) toast('Remark saved', 'ok'); else toast('Save failed', 'err'); })
+    .catch(function(){ toast('Network error saving remark', 'err'); });
+}
+
+function ledgerEditReceived(el, invNumber, currentVal, sentQty) {
+  var td = el.closest('td');
+  var uid = 'recv-edit-' + Math.random().toString(36).slice(2,8);
+  td.innerHTML = '<input type="number" id="' + uid + '" value="' + currentVal + '" min="0" max="' + sentQty + '" oninput="ledgerClampRecv(this,' + sentQty + ')" style="width:70px;font-size:11px;padding:3px 6px;text-align:center">'
+    + ' <button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:3px 8px" onclick="ledgerSaveReceived(\'' + invNumber + '\', document.getElementById(\'' + uid + '\').value, ' + sentQty + ')">&#10003;</button>';
+}
+
+function ledgerSaveReceived(invNumber, value, sentQty) {
   if (!invNumber) { toast('Missing invoice number', 'err'); return; }
   var qty = parseInt(value);
   if (isNaN(qty) || qty < 0) { toast('Enter a valid received qty', 'err'); return; }
+  // Hard validation — received qty can never exceed what was actually sent (the input
+  // is clamped live, but re-check here in case of stale DOM state)
+  if (sentQty !== undefined && qty > sentQty) {
+    toast('Received qty (' + qty + ') cannot exceed sent qty (' + sentQty + ')', 'err');
+    qty = sentQty;
+  }
 
   var rec = _ledgerRecords.find(function(r){ return r.inv_number === invNumber; });
   if (rec) rec.received_qty = qty;
@@ -3687,6 +3760,8 @@ function _cnGenerateProceed(reason, cancelledItems, btn) {
   var cnNumber = cnDeriveNumber(_cnCurrentInv.inv_number);
   var totalQty = cancelledItems.reduce(function(s,it){ return s+it.qty; },0);
   var totalAmt = cancelledItems.reduce(function(s,it){ return s+it.qty*it.landing; },0);
+  var sentQty = _cnCurrentInv.sentQty || 0;
+  var isFullCancel = sentQty > 0 && totalQty >= sentQty;
   var cnData = {
     cn_number: cnNumber,
     inv_number: _cnCurrentInv.inv_number,
@@ -3704,18 +3779,25 @@ function _cnGenerateProceed(reason, cancelledItems, btn) {
       body: JSON.stringify({
         cn_number: cnNumber, inv_number: _cnCurrentInv.inv_number, ro_number: _cnCurrentInv.ro_number,
         reason: reason, items_json: JSON.stringify(cancelledItems), total_qty: totalQty, amount: totalAmt,
-        cn_html: html
+        cn_html: html, sent_qty: sentQty
       })
     }).catch(function(){});
+    // Full cancellation also needs received qty explicitly zeroed for local dev parity —
+    // the worker does this server-side for the live path already (see sent_qty above).
   }
 
-  // Optimistic local update — reflect the new CN in the ledger immediately rather than
-  // waiting on a full reload (which previously required a manual page refresh to show up).
+  // Optimistic local update — reflect the new CN (and, if a full cancellation, the
+  // auto-zeroed received qty) in the ledger immediately rather than waiting on a full
+  // reload, which previously required a manual page refresh to show up.
   if (!_cnByInv[_cnCurrentInv.inv_number]) _cnByInv[_cnCurrentInv.inv_number] = [];
   _cnByInv[_cnCurrentInv.inv_number].push({
     cn_number: cnNumber, inv_number: _cnCurrentInv.inv_number, ro_number: _cnCurrentInv.ro_number,
     reason: reason, total_qty: totalQty, amount: totalAmt, created_at: new Date().toISOString()
   });
+  if (isFullCancel) {
+    var rec = _ledgerRecords.find(function(r){ return r.inv_number === _cnCurrentInv.inv_number; });
+    if (rec) rec.received_qty = 0;
+  }
 
   toast('Credit Note ' + cnNumber + ' generated', 'ok');
   btn.disabled = false;
