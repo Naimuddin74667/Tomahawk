@@ -238,11 +238,14 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
 <div id="picklist-screen">
   <div class="actionbar no-print" style="display:flex;align-items:center;gap:10px;padding:8px 16px;background:var(--surface);border-bottom:1px solid var(--border);">
     <span id="topbar-title" style="font-family:var(--font-display);font-weight:700;font-size:14px;color:var(--text);flex:1;"></span>
+    <input type="file" id="file-input-add" accept=".csv" style="display:none;">
+    <button class="btn btn-outline" onclick="document.getElementById('file-input-add').click()">&#10133; Add More</button>
     <button class="btn btn-outline" onclick="resetApp()">&#8617; New CSV</button>
   </div>
   <div class="actionbar no-print">
     <button class="btn btn-dark" onclick="window.print()">&#128424; Print / Save PDF</button>
     <span id="combo-flag" style="display:none;background:#fffbeb;border:1px solid #f0c040;color:#7a5500;border-radius:5px;padding:4px 10px;font-size:12px;font-weight:600;"></span>
+    <span id="add-toast" style="display:none;background:#eafaf0;border:1px solid #3fae5e;color:#1a6b35;border-radius:5px;padding:4px 10px;font-size:12px;font-weight:600;"></span>
   </div>
   <div id="print-header">
     <span class="ph-channel" id="ph-channel"></span>
@@ -830,7 +833,8 @@ function renderSection(groups, comboSize, rowNumStart) {
 
 function render(rows) {
   const sections = processRows(rows);
-  const channel = (rows[0]['Channel']||'UNKNOWN').trim().toUpperCase();
+  const channels = [...new Set(rows.map(r => (r['Channel']||'UNKNOWN').trim().toUpperCase()))];
+  const channel = channels.length > 1 ? `${channels.length} CHANNELS MERGED` : channels[0];
   document.getElementById('topbar-title').textContent = `\u{1F4CB} ${channel} \u2014 ${rows.length} Orders`;
   document.getElementById('gen-time').textContent = new Date().toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
 
@@ -865,11 +869,16 @@ function render(rows) {
 }
 
 // file handling
+// allRows holds every row across all CSVs merged into the current picklist
+let allRows = [];
+
 document.getElementById('file-input').addEventListener('change', e => { if (e.target.files[0]) load(e.target.files[0]); });
 const dz = document.getElementById('drop-zone');
 dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
 dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
 dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('drag-over'); if (e.dataTransfer.files[0]) load(e.dataTransfer.files[0]); });
+
+document.getElementById('file-input-add').addEventListener('change', e => { if (e.target.files[0]) loadMore(e.target.files[0]); e.target.value = ''; });
 
 function load(file) {
   const r = new FileReader();
@@ -877,16 +886,57 @@ function load(file) {
     try {
       const rows = parseCSV(e.target.result);
       if (!rows.length) { alert('No data found.'); return; }
-      render(rows);
+      allRows = rows;
+      render(allRows);
     } catch(err) { alert('Error: ' + err.message); console.error(err); }
   };
   r.readAsText(file);
 }
 
+// Adds another CSV's orders into the currently displayed picklist,
+// skipping any row that's an exact duplicate of one already loaded
+// (guards against accidentally uploading the same export twice).
+function loadMore(file) {
+  const r = new FileReader();
+  r.onload = e => {
+    try {
+      const newRows = parseCSV(e.target.result);
+      if (!newRows.length) { alert('No data found in that CSV.'); return; }
+
+      const seen = new Set(allRows.map(row => JSON.stringify(row)));
+      const uniqueNew = newRows.filter(row => {
+        const fp = JSON.stringify(row);
+        if (seen.has(fp)) return false;
+        seen.add(fp);
+        return true;
+      });
+      const dupeCount = newRows.length - uniqueNew.length;
+
+      allRows = allRows.concat(uniqueNew);
+      render(allRows);
+
+      let msg = `\u2714 Added ${uniqueNew.length} orders (${allRows.length} total)`;
+      if (dupeCount) msg += ` \u2014 skipped ${dupeCount} duplicate${dupeCount>1?'s':''}`;
+      showToast(msg);
+    } catch(err) { alert('Error: ' + err.message); console.error(err); }
+  };
+  r.readAsText(file);
+}
+
+function showToast(msg) {
+  const t = document.getElementById('add-toast');
+  t.textContent = msg;
+  t.style.display = 'inline-block';
+  clearTimeout(showToast._timer);
+  showToast._timer = setTimeout(() => { t.style.display = 'none'; }, 4000);
+}
+
 function resetApp() {
+  allRows = [];
   document.getElementById('upload-screen').style.display = 'flex';
   document.getElementById('picklist-screen').style.display = 'none';
   document.getElementById('file-input').value = '';
+  document.getElementById('add-toast').style.display = 'none';
 }
 
 // ── Theme ──
