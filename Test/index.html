@@ -566,11 +566,12 @@
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Received Qty</th>
           <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Invoice</th>
           <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Credit Note</th>
+          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Cr. Note Qty</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Status</th>
         </tr>
       </thead>
       <tbody id="ledgerTbody">
-        <tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+        <tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -3195,7 +3196,7 @@ var _cnByInv = {}; // inv_number -> array of credit note records
 
 function ledgerLoad() {
   document.getElementById('ledgerTbody').innerHTML =
-    '<tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+    '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
 
   if (!IS_LIVE) {
     var saved = JSON.parse(localStorage.getItem('blinkit_inv_records') || '{}');
@@ -3254,7 +3255,7 @@ function ledgerRender() {
 
   if (!rows.length) {
     document.getElementById('ledgerTbody').innerHTML =
-      '<tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">' +
+      '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">' +
       (q ? 'No results for "' + q + '"' : 'No invoices generated yet') + '</td></tr>';
     return;
   }
@@ -3271,10 +3272,21 @@ function ledgerRender() {
     var skuCountCell = r.sku_count ? r.sku_count : '<span style="color:var(--muted)">\u2014</span>';
     var totalQtyCell = r.sku_count ? (r.total_qty||0) : '<span style="color:var(--muted)">\u2014</span>';
 
-    // ── Received qty cell ── (hard-capped at sent qty — can't receive more than was sent)
     var sentQty = r.total_qty || 0;
+
+    // ── Credit Note lookup (needed before Received Qty, since a full cancellation
+    // overrides how Received Qty is displayed) ──
+    var cns = _cnByInv[r.inv_number] || [];
+    var cn = cns.length ? cns[0] : null; // only one CN allowed per invoice
+    var cnQty = cn ? (cn.total_qty || 0) : 0;
+    var isFullCancel = !!(cn && sentQty > 0 && cnQty >= sentQty);
+
+    // ── Received qty cell ── (hard-capped at sent qty — can't receive more than was sent)
     var recvCell;
-    if (r.received_qty === null || r.received_qty === undefined || r.received_qty === '') {
+    if (isFullCancel) {
+      // Full cancellation makes "received qty" not meaningful — show NA instead of 0
+      recvCell = '<span style="color:#ffb74d;font-size:11px;font-weight:700">NA</span>';
+    } else if (r.received_qty === null || r.received_qty === undefined || r.received_qty === '') {
       recvCell = '<input type="number" id="recv-inp-' + i + '" placeholder="Recv qty" min="0" max="' + sentQty + '" oninput="ledgerClampRecv(this,' + sentQty + ')" style="width:70px;font-size:11px;padding:3px 6px;text-align:center">'
         + ' <button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:3px 8px" onclick="ledgerSaveReceived(\'' + (r.inv_number||'') + '\', document.getElementById(\'recv-inp-' + i + '\').value, ' + sentQty + ')">&#10003;</button>';
     } else if (parseInt(r.received_qty) === sentQty) {
@@ -3287,8 +3299,6 @@ function ledgerRender() {
     }
 
     // ── Credit Note cell ──
-    var cns = _cnByInv[r.inv_number] || [];
-    var cn = cns.length ? cns[0] : null; // only one CN allowed per invoice
     var cnBadges = cns.map(function(cnRec){
       return '<div style="display:inline-flex;align-items:center;gap:4px;background:#111;border:1px solid var(--border);border-radius:5px;padding:2px 6px;margin:1px;font-size:10px;font-family:\'DM Mono\',monospace">'
         + '<span style="color:var(--accent)">' + cnRec.cn_number + '</span>'
@@ -3298,8 +3308,11 @@ function ledgerRender() {
     var cnCell = cnBadges
       + (cns.length ? '' : '<button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:3px 8px;margin-top:2px" onclick="openCnModal(\'' + (r.inv_number||'') + '\', \'' + (r.ro_number||'') + '\', ' + sentQty + ')">+ Create</button>');
 
+    // ── Cr. Note Qty cell ──
+    var cnQtyCell = cn ? cnQty : '<span style="color:var(--muted)">\u2014</span>';
+
     // ── RO Status cell — derived from received qty + CN state (see roStatusDerive) ──
-    var statusInfo = roStatusDerive(r, cn, sentQty);
+    var statusInfo = roStatusDerive(r, cn, cnQty, isFullCancel, sentQty);
     var statusCell = '<span style="display:inline-block;padding:3px 9px;border-radius:11px;font-size:10px;font-weight:700;letter-spacing:.03em;background:' + statusInfo.bg + ';color:' + statusInfo.fg + '">' + statusInfo.label + '</span>';
     if (statusInfo.key === 'mismatch') {
       var noteVal = (r.status_note || '').replace(/"/g,'&quot;');
@@ -3307,7 +3320,7 @@ function ledgerRender() {
         + '<input type="text" id="status-note-' + i + '" value="' + noteVal + '" placeholder="Why? (remark)" style="width:110px;font-size:10px;padding:2px 5px">'
         + '<button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:2px 6px" onclick="ledgerSaveStatusNote(\'' + (r.inv_number||'') + '\', document.getElementById(\'status-note-' + i + '\').value)">&#10003;</button>'
       + '</div>';
-    } else if ((statusInfo.key === 'rejected' || statusInfo.key === 'cancelled') && cn && cn.reason) {
+    } else if ((statusInfo.key === 'rejected' || statusInfo.key === 'cancelled' || statusInfo.key === 'partial' || statusInfo.key === 'partial-check') && cn && cn.reason) {
       statusCell += '<div style="margin-top:3px;font-size:9.5px;color:var(--muted);max-width:130px">' + cn.reason.replace(/&/g,'&amp;') + '</div>';
     }
 
@@ -3323,6 +3336,7 @@ function ledgerRender() {
         + '<button class="btn btn-secondary btn-sm" onclick="ledgerDownload(' + rSafe + ')" style="width:auto;font-size:10px">&#8595; Download</button>'
       + '</td>'
       + '<td style="padding:.6rem 1rem;text-align:right;white-space:nowrap">' + cnCell + '</td>'
+      + '<td style="padding:.6rem 1rem;font-size:11px;color:var(--text);text-align:center">' + cnQtyCell + '</td>'
       + '<td style="padding:.6rem 1rem;text-align:center;white-space:nowrap">' + statusCell + '</td>'
     + '</tr>';
   }).join('');
@@ -3339,23 +3353,29 @@ function ledgerClampRecv(el, sentQty) {
 }
 
 // Derives the RO Status badge for a ledger row.
-//   Cancelled          — CN exists, cancelled qty covers the full sent qty (red)
-//   Rejected           — CN exists, received qty matches sent qty anyway, e.g. rate correction (red)
-//   Partially Received — CN exists, received qty doesn't match sent qty, not a full cancellation (orange)
-//   Mismatch           — no CN yet, received qty entered but doesn't match sent qty (amber)
-//   Fulfilled          — no CN, received qty matches sent qty (green)
-//   In Transit         — no CN, received qty not entered yet (blue)
-function roStatusDerive(r, cn, sentQty) {
+//   Cancelled            — CN's cancelled qty alone covers the full sent qty (orange; Received Qty shows NA)
+//   Rejected             — CN exists, received qty matches sent qty anyway, e.g. rate correction (red)
+//   Partially Received   — CN exists, received qty + CN qty reconciles to sent qty (green — fully accounted for)
+//   Partially Received*  — CN exists but the numbers don't reconcile, or received qty not yet entered (orange — needs a look)
+//   Mismatch             — no CN yet, received qty entered but doesn't match sent qty (amber, needs a remark)
+//   Fulfilled             — no CN, received qty matches sent qty (green)
+//   In Transit            — no CN, received qty not entered yet (blue)
+function roStatusDerive(r, cn, cnQty, isFullCancel, sentQty) {
   var recvQty = (r.received_qty === null || r.received_qty === undefined || r.received_qty === '') ? null : parseInt(r.received_qty);
   if (cn) {
-    var cnQty = cn.total_qty || 0;
-    if (sentQty > 0 && cnQty >= sentQty) {
+    if (isFullCancel) {
       return { key:'cancelled', label:'CANCELLED', bg:'#3a1414', fg:'#ff6b6b' };
     }
     if (recvQty !== null && recvQty === sentQty) {
       return { key:'rejected', label:'REJECTED', bg:'#3a1a24', fg:'#ff8fa3' };
     }
-    return { key:'partial', label:'PARTIALLY RECEIVED', bg:'#3a2a10', fg:'#ffb74d' };
+    if (recvQty !== null && (recvQty + cnQty) === sentQty) {
+      // Received + credited fully reconciles with what was sent — nothing's actually missing
+      return { key:'partial', label:'PARTIALLY RECEIVED', bg:'#123a1a', fg:'#6dc87a' };
+    }
+    // CN exists but either received qty isn't in yet, or the numbers still don't add up —
+    // flagged distinctly from the reconciled (green) case so it doesn't look falsely resolved
+    return { key:'partial-check', label:'PARTIALLY RECEIVED \u2014 CHECK', bg:'#3a2a10', fg:'#ffb74d' };
   }
   if (recvQty === null) {
     return { key:'transit', label:'IN TRANSIT', bg:'#122a3a', fg:'#64b5f6' };
