@@ -531,6 +531,13 @@
   <div style="flex-shrink:0;padding:.7rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.8rem;background:var(--surface)">
     <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128203; Invoice Ledger</div>
     <input type="text" id="ledgerSearch" placeholder="Search RO or Invoice No..." oninput="_ledgerPage=1;ledgerRender()" style="width:220px;font-size:11px;padding:5px 10px">
+    <!-- Pagination controls — live in the top bar (always visible, never clipped) rather than
+         below the table, since table height can vary with row count/zoom/viewport. -->
+    <div id="ledgerPagerControls" style="display:none;align-items:center;gap:.5rem">
+      <button class="btn btn-secondary btn-sm" id="ledgerPrevBtn" style="width:auto" onclick="ledgerGoToPage(_ledgerPage-1)">&#8592; Prev</button>
+      <span id="ledgerPageIndicator" style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap"></span>
+      <button class="btn btn-secondary btn-sm" id="ledgerNextBtn" style="width:auto" onclick="ledgerGoToPage(_ledgerPage+1)">Next &#8594;</button>
+    </div>
     <button class="btn btn-secondary btn-sm" onclick="ledgerLoad()" style="width:auto">&#8635; Refresh</button>
     <!-- TEMP — dev/testing only. Remove this button (and ledgerDeleteAllPrompt() below) once app is out of active development. -->
     <button class="btn btn-sm" onclick="ledgerDeleteAllPrompt()" style="width:auto;background:#3a1414;border:1px solid #6b2020;color:#ff8080">&#128465; Delete All (Temp)</button>
@@ -573,11 +580,6 @@
       <tbody id="ledgerTbody">
         <tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
-      <tfoot>
-        <tr>
-          <td colspan="11" id="ledgerPagination" style="padding:.8rem 1.4rem;border-top:1px solid var(--border);text-align:center;background:var(--surface)"></td>
-        </tr>
-      </tfoot>
     </table>
   </div>
 
@@ -3273,7 +3275,7 @@ function ledgerRender() {
     document.getElementById('ledgerTbody').innerHTML =
       '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">' +
       (q ? 'No results for "' + q + '"' : 'No invoices generated yet') + '</td></tr>';
-    document.getElementById('ledgerPagination').innerHTML = '';
+    document.getElementById('ledgerPagerControls').style.display = 'none';
     return;
   }
 
@@ -3368,18 +3370,23 @@ function ledgerRender() {
   }).join('');
 }
 
-// Renders the Prev/Next + page indicator footer for the ledger table.
+// Updates the Prev/Next + page indicator controls in the top bar. Deliberately does NOT
+// rebuild any HTML — the buttons and span already exist in the page; we just toggle
+// visibility, update the label text, and set disabled state on the two buttons directly.
 function ledgerRenderPagination(totalRows, totalPages) {
-  var el = document.getElementById('ledgerPagination');
-  if (totalRows <= _ledgerPageSize) { el.innerHTML = ''; return; } // no pagination needed for a single page
+  var wrap = document.getElementById('ledgerPagerControls');
+  if (totalRows <= _ledgerPageSize) { wrap.style.display = 'none'; return; } // single page — nothing to paginate
+  wrap.style.display = 'flex';
+
   var startRow = (_ledgerPage - 1) * _ledgerPageSize + 1;
   var endRow = Math.min(_ledgerPage * _ledgerPageSize, totalRows);
-  el.innerHTML =
-    '<div style="display:inline-flex;align-items:center;gap:1rem">'
-    + '<button class="btn btn-secondary btn-sm" style="width:auto" ' + (_ledgerPage<=1?'disabled':'') + ' onclick="ledgerGoToPage(' + (_ledgerPage-1) + ')">&#8592; Prev</button>'
-    + '<span style="font-size:11px;color:var(--muted);font-family:\'DM Mono\',monospace">' + startRow + '\u2013' + endRow + ' of ' + totalRows + ' &middot; Page ' + _ledgerPage + ' of ' + totalPages + '</span>'
-    + '<button class="btn btn-secondary btn-sm" style="width:auto" ' + (_ledgerPage>=totalPages?'disabled':'') + ' onclick="ledgerGoToPage(' + (_ledgerPage+1) + ')">Next &#8594;</button>'
-    + '</div>';
+  document.getElementById('ledgerPageIndicator').textContent =
+    startRow + '\u2013' + endRow + ' of ' + totalRows + ' \u00b7 Page ' + _ledgerPage + ' of ' + totalPages;
+
+  var prevBtn = document.getElementById('ledgerPrevBtn');
+  var nextBtn = document.getElementById('ledgerNextBtn');
+  prevBtn.disabled = (_ledgerPage <= 1);
+  nextBtn.disabled = (_ledgerPage >= totalPages);
 }
 
 function ledgerGoToPage(p) {
