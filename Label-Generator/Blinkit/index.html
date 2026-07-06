@@ -14,7 +14,7 @@
     --accent:#e8c547;--accent2:#c8a832;--text:#f0f0f0;--muted:#888;
     --label-w:283px;--label-h:189px;
   }
-  body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden;zoom:1.12}
   header{padding:.6rem 1.2rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:1rem;background:var(--surface)}
   .brand{font-family:'DM Mono',monospace;font-size:13px;color:var(--accent);letter-spacing:.08em;text-transform:uppercase}
   .brand span{color:var(--muted)}
@@ -131,7 +131,7 @@
   @media print{
     @page{size:75mm 50mm;margin:0}
     *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-    html,body{margin:0!important;padding:0!important;width:75mm!important;height:50mm!important;overflow:hidden!important;background:#fff!important}
+    html,body{margin:0!important;padding:0!important;width:75mm!important;height:50mm!important;overflow:hidden!important;background:#fff!important;zoom:1!important}
     header,.left-panel,.zoom-row,.preview-meta{display:none!important}
     .app-body{display:block!important;width:75mm!important;height:50mm!important}
     .preview-panel{display:block!important;width:75mm!important;height:50mm!important;padding:0!important}
@@ -530,7 +530,7 @@
   <!-- Top bar -->
   <div style="flex-shrink:0;padding:.7rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.8rem;background:var(--surface)">
     <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128203; Invoice Ledger</div>
-    <input type="text" id="ledgerSearch" placeholder="Search RO or Invoice No..." oninput="ledgerRender()" style="width:220px;font-size:11px;padding:5px 10px">
+    <input type="text" id="ledgerSearch" placeholder="Search RO or Invoice No..." oninput="_ledgerPage=1;ledgerRender()" style="width:220px;font-size:11px;padding:5px 10px">
     <button class="btn btn-secondary btn-sm" onclick="ledgerLoad()" style="width:auto">&#8635; Refresh</button>
     <!-- TEMP — dev/testing only. Remove this button (and ledgerDeleteAllPrompt() below) once app is out of active development. -->
     <button class="btn btn-sm" onclick="ledgerDeleteAllPrompt()" style="width:auto;background:#3a1414;border:1px solid #6b2020;color:#ff8080">&#128465; Delete All (Temp)</button>
@@ -575,6 +575,9 @@
       </tbody>
     </table>
   </div>
+
+  <!-- Pagination footer -->
+  <div id="ledgerPagination" style="flex-shrink:0;padding:.6rem 1.4rem;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:center;gap:1rem;background:var(--surface)"></div>
 
 </div>
 
@@ -3193,8 +3196,11 @@ function ledgerDeleteAllPrompt() {
 // ═══════════════════════════════════════════════════════════════
 var _ledgerRecords = [];
 var _cnByInv = {}; // inv_number -> array of credit note records
+var _ledgerPage = 1;
+var _ledgerPageSize = 10;
 
 function ledgerLoad() {
+  _ledgerPage = 1;
   document.getElementById('ledgerTbody').innerHTML =
     '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
 
@@ -3241,6 +3247,14 @@ function ledgerRender() {
            (r.warehouse||'').toLowerCase().includes(q);
   });
 
+  // Explicit descending order by invoice sequence number (latest first), regardless of
+  // what order the data arrived in from D1/localStorage.
+  rows.sort(function(a, b) {
+    var na = parseInt(((a.inv_number||'').match(/(\d+)$/)||[])[0]) || 0;
+    var nb = parseInt(((b.inv_number||'').match(/(\d+)$/)||[])[0]) || 0;
+    return nb - na;
+  });
+
   // Stats
   document.getElementById('ledgerStatTotal').textContent = _ledgerRecords.length;
   var now = new Date();
@@ -3257,10 +3271,20 @@ function ledgerRender() {
     document.getElementById('ledgerTbody').innerHTML =
       '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">' +
       (q ? 'No results for "' + q + '"' : 'No invoices generated yet') + '</td></tr>';
+    document.getElementById('ledgerPagination').innerHTML = '';
     return;
   }
 
-  document.getElementById('ledgerTbody').innerHTML = rows.map(function(r, i) {
+  // ── Pagination — 10 per page ──
+  var totalPages = Math.max(1, Math.ceil(rows.length / _ledgerPageSize));
+  if (_ledgerPage > totalPages) _ledgerPage = totalPages;
+  if (_ledgerPage < 1) _ledgerPage = 1;
+  var startIdx = (_ledgerPage - 1) * _ledgerPageSize;
+  var pageRows = rows.slice(startIdx, startIdx + _ledgerPageSize);
+
+  ledgerRenderPagination(rows.length, totalPages);
+
+  document.getElementById('ledgerTbody').innerHTML = pageRows.map(function(r, i) {
     var dateStr = r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) : '—';
     var bg = i % 2 === 0 ? '' : 'background:#0a0a0a';
         // Show inv_date as date created; warehouse trimmed
@@ -3340,6 +3364,23 @@ function ledgerRender() {
       + '<td style="padding:.6rem 1rem;text-align:center;white-space:nowrap">' + statusCell + '</td>'
     + '</tr>';
   }).join('');
+}
+
+// Renders the Prev/Next + page indicator footer for the ledger table.
+function ledgerRenderPagination(totalRows, totalPages) {
+  var el = document.getElementById('ledgerPagination');
+  if (totalRows <= _ledgerPageSize) { el.innerHTML = ''; return; } // no pagination needed for a single page
+  var startRow = (_ledgerPage - 1) * _ledgerPageSize + 1;
+  var endRow = Math.min(_ledgerPage * _ledgerPageSize, totalRows);
+  el.innerHTML =
+    '<button class="btn btn-secondary btn-sm" style="width:auto" ' + (_ledgerPage<=1?'disabled':'') + ' onclick="ledgerGoToPage(' + (_ledgerPage-1) + ')">&#8592; Prev</button>'
+    + '<span style="font-size:11px;color:var(--muted);font-family:\'DM Mono\',monospace">' + startRow + '\u2013' + endRow + ' of ' + totalRows + ' &middot; Page ' + _ledgerPage + ' of ' + totalPages + '</span>'
+    + '<button class="btn btn-secondary btn-sm" style="width:auto" ' + (_ledgerPage>=totalPages?'disabled':'') + ' onclick="ledgerGoToPage(' + (_ledgerPage+1) + ')">Next &#8594;</button>';
+}
+
+function ledgerGoToPage(p) {
+  _ledgerPage = p;
+  ledgerRender();
 }
 
 // Hard-clamps the received-qty input to [0, sentQty] on every keystroke — can never
