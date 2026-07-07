@@ -1,1 +1,1279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&family=Roboto+Slab:wght@700&display=swap" rel="stylesheet">
+<title>Picklist Generator — Tomahawk</title>
+<style>
+/* ── Design tokens ── */
+:root {
+  --bg:       #0c0c14;
+  --surface:  #13131e;
+  --surface2: #1a1a28;
+  --border:   #1f1f2e;
+  --accent:   #F5A800;
+  --text:     #e8e8f0;
+  --text2:    #888899;
+  --font-display: 'Syne', sans-serif;
+  --font-body:    'DM Sans', sans-serif;
+  --font-slab:    'Roboto Slab', serif;
+}
+html[data-theme="light"] {
+  --bg:       #f4f5f7;
+  --surface:  #ffffff;
+  --surface2: #f0f1f4;
+  --border:   #d0d4e0;
+  --accent:   #c98a00;
+  --text:     #111118;
+  --text2:    #555566;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-body); background: var(--bg); color: var(--text); font-size: 13px; transition: background .2s, color .2s; }
 
+/* UPLOAD */
+#upload-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: calc(100vh - 62px); gap: 12px; }
+#upload-screen h1 { font-size: 20px; font-weight: 700; font-family: var(--font-display); color: var(--text); }
+#upload-screen p { color: var(--text2); font-size: 13px; }
+.drop-zone { width: 380px; border: 2px dashed var(--border); border-radius: 10px; padding: 40px 24px; text-align: center; cursor: pointer; background: var(--surface); transition: border-color 0.2s; }
+.drop-zone:hover, .drop-zone.drag-over { border-color: var(--accent); background: var(--surface2); }
+.drop-zone .icon { font-size: 36px; margin-bottom: 10px; }
+.drop-zone .label { font-size: 14px; color: var(--text2); margin-bottom: 14px; }
+#file-input { display: none; }
+.btn { padding: 8px 20px; border-radius: 6px; font-size: 13px; font-weight: 700; cursor: pointer; border: none; font-family: inherit; }
+.btn-dark { background: var(--accent); color: #111; font-family: var(--font-body); }
+.btn-dark:hover { opacity: 0.88; }
+.btn-outline { background: var(--surface2); border: 1.5px solid var(--border); color: var(--text); font-family: var(--font-body); }
+
+/* PICKLIST */
+#picklist-screen { display: none; }
+/* ── Portal header ── */
+.site-header {
+  position: sticky; top: 0; z-index: 100;
+  height: 62px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center;
+  padding: 0 36px;
+  justify-content: space-between; gap: 20px;
+  transition: background .2s, border-color .2s;
+}
+.header-logo {
+  display: flex; align-items: center; gap: 14px;
+  text-decoration: none; flex-shrink: 0;
+}
+.logo-svg-wrap { display: flex; align-items: center; color: var(--accent); }
+.logo-divider {
+  width: 2px; height: 36px;
+  background: rgba(255,255,255,0.5); border-radius: 2px;
+}
+html[data-theme="light"] .logo-divider { background: rgba(0,0,0,0.25); }
+.logo-tagline { font-size: 16px; font-weight: 600; color: var(--text2); letter-spacing: .04em; font-family: var(--font-body); }
+.header-right { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
+.sys-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); }
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #4ade80; flex-shrink: 0;
+  animation: hpulse 2.5s ease-in-out infinite;
+}
+@keyframes hpulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+.header-theme-toggle {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--surface2); border: 1px solid var(--border);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  color: var(--text2); transition: border-color .15s, color .15s;
+}
+.header-theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+html:not([data-theme="light"]) .icon-sun  { display: none; }
+html[data-theme="light"]       .icon-moon { display: none; }
+.header-user {
+  display: flex; align-items: center; gap: 9px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 6px 14px 6px 6px;
+}
+.user-avatar {
+  width: 30px; height: 30px; border-radius: 50%;
+  background: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 800; color: #111;
+}
+.user-name { font-size: 13px; color: var(--text2); font-family: var(--font-body); }
+/* topbar-meta kept for JS compat (hidden visually, id still updated) */
+#gen-time { display: none; }
+@media (max-width: 640px) {
+  .site-header { padding: 12px 16px; height: auto; flex-wrap: wrap; gap: 10px; }
+  .logo-tagline { font-size: 11px; }
+  .sys-status span { display: none; }
+  .user-name { display: none; }
+  .header-user { padding: 5px; }
+  .header-theme-toggle { width: 32px; height: 32px; }
+}
+.actionbar { padding: 6px 16px; display: flex; gap: 10px; align-items: center; background: var(--surface); border-bottom: 1px solid var(--border); }
+
+/* SECTION DIVIDER */
+.section-divider {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px 6px;
+}
+.section-divider-line { flex: 1; height: 1px; background: #bbb; }
+.section-divider-label {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.1em; color: #fff;
+  background: #444; padding: 3px 12px; border-radius: 20px;
+  white-space: nowrap;
+}
+.section-divider.combo-3 .section-divider-label { background: #c8410a; }
+.section-divider.combo-2 .section-divider-label { background: #7a5500; }
+.section-divider.single .section-divider-label { background: #1a4a1a; }
+
+/* TABLE */
+.tbl-wrap { padding: 0 16px 16px; }
+table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; border: 1px solid #ddd; margin-bottom: 0; }
+th { background: #111; color: #fff; text-align: left; padding: 7px 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; }
+td { padding: 6px 10px; border-bottom: 1px solid #eee; vertical-align: middle; font-size: 13px; }
+tr:last-child td { border-bottom: none; }
+tr:nth-child(even) td { background: #fafafa; }
+tr.combo-row td { background: #fffbeb !important; }
+
+.sku { font-family: var(--font-body); font-size: 13px; font-weight: 700; color: #111118; }
+.sku-sell { font-family: var(--font-body); font-size: 12px; color: #555566; }
+.qty { font-size: 16px; font-weight: 700; text-align: center; color: #111118; }
+.check-col { width: 32px; text-align: center; }
+input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor: pointer; }
+.img-cell { width: 60px; text-align: center; padding: 3px 5px !important; }
+.img-cell img { width: 46px; height: 46px; object-fit: contain; border-radius: 3px; border: 1px solid #e0e0e0; background: #fafafa; display: block; margin: 0 auto; }
+
+/* COMBO BOX */
+.combo-box { background: #fffbeb; border: 1px solid #f0c040; border-radius: 4px; padding: 4px 8px; display: inline-flex; flex-direction: column; gap: 2px; }
+.combo-line { display: flex; align-items: baseline; gap: 5px; font-size: 12px; }
+.combo-line .cx { font-weight: 700; color: #c8410a; font-size: 12px; min-width: 20px; }
+.combo-line .cname { font-weight: 600; color: #111; }
+
+#print-header { display: none; }
+
+/* ── Tabs (shared pattern with other Tomahawk apps) ── */
+.tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); }
+.tab-btn { padding: .7rem 1.4rem; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; border-bottom: 2px solid transparent; color: var(--text2); transition: all .15s; font-family: var(--font-body); background: none; border-top: none; border-left: none; border-right: none; }
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+@media print {
+  .actionbar, .topbar .btn-outline, .site-header, #gen-time, .tabs { display: none !important; }
+  #tab-picklist { display: block !important; }
+  #tab-cropper { display: none !important; }
+  body { background: #fff; font-size: 12px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .topbar { position: static; background: #fff !important; color: #000 !important; border-bottom: 2px solid #000; }
+  .topbar-title { color: #000 !important; font-size: 15px; }
+  .topbar-meta { color: #333 !important; }
+  #print-header {
+    display: flex !important;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 8px 8px;
+    margin-bottom: 4px;
+    border-bottom: 2px solid #000;
+  }
+  #print-header .ph-channel { font-family: var(--font-display); font-weight: 800; font-size: 16px; color: #000; }
+  #print-header .ph-meta { display: flex; gap: 18px; font-size: 15px; color: #000; font-weight: 700; }
+  .tbl-wrap { padding: 4px 8px; }
+  table { border: 1px solid #999; }
+  th { background: #111 !important; color: #fff !important; font-size: 11px !important; padding: 6px 8px !important; }
+  td { font-size: 12px !important; padding: 5px 8px !important; border-bottom: 1px solid #ccc !important; color: #000 !important; }
+  .sku { font-size: 12px !important; color: #000 !important; }
+  .sku-sell { font-size: 11px !important; color: #333 !important; }
+  .qty { font-size: 14px !important; color: #000 !important; }
+  .img-cell img { width: 40px !important; height: 40px !important; }
+  tr.combo-row td { background: #fff !important; }
+  tr:nth-child(even) td { background: #fff !important; }
+  .combo-box { background: #fff !important; border: 1px solid #999 !important; }
+  .section-divider { padding: 6px 8px 3px; }
+  .section-divider-label { font-size: 10px !important; }
+  #upload-screen { display: none !important; }
+  #picklist-screen { display: block !important; }
+}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-logo">
+    <a href="/Tomahawk/" class="logo-svg-wrap" style="text-decoration:none">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="474 509 6803 1270" style="height:54px;width:auto;display:block;fill:currentColor;">
+        <path d="M796.6 803.57l625.42 0c4.17,0.55 6.71,2.65 7.48,6.14l-84.8 151.21 -181.47 0c-16.1,25.18 -100.16,178.13 -252.2,458.77l-203.52 0 -0.67 -3.08c109.72,-202.64 190.86,-354.55 243.59,-455.69l-240.46 0 -0.77 -3.7c47.6,-91.52 76.61,-142.78 87.4,-153.65zm-14.19 821.74l-287.36 153.05 187.35 -278.86 1362.49 0 -8.53 5.99 -1253.95 119.82zm6102.31 -1005.2l131.69 -113.42 0 215.51 -960.53 0 8.48 -6 820.36 -96.09zm-574.92 183.46l298.9 0 1.32 6.14c-45.66,84.33 -70.46,131.58 -74.1,141.4 160.29,-96.44 243.35,-144.55 249.31,-144.55l224.51 0 1.32 6.11c-3.09,0.39 -163.87,96.95 -482.4,289.8l215.31 314.14 -5.44 3.08 -212.81 0c-5.17,-3.62 -50.38,-70.48 -135.48,-200.49l-3.14 0c-57.01,115.32 -92.82,182.15 -107.4,200.49l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.77,-24.7l-1.96 -9.09c-2.91,-13.47 -17.46,-33.95 -43.92,-61.58l5.47 -2.99zm-900.24 0.38l295.21 0 0.67 3.13 -177.4 332.67 0.7 3.15 3.15 0 281.78 -191.3c5.47,6.84 8.72,12.09 9.42,15.42l50.56 191.26 2.97 0c-0.06,-5.07 62.84,-123.21 188.62,-354.33l199.85 0 7 3.13c-2.97,8.9 -110.79,213.14 -323.65,612.64l-212.28 0c-4.01,0 -6.55,-2.09 -7.43,-6.09l-8.67 -40.1c-6.4,-29.71 -17.38,-75.75 -32.99,-138.44l-289.68 184.63 -221.52 0 -0.69 -3.12 276.81 -529.56 -3.98 -18.37c-2.88,-13.46 -17.46,-33.93 -43.89,-61.59l5.44 -3.13zm-792.78 -0.38l758.24 0 0.66 2.99c-195.43,377.28 -303.39,581.65 -323.9,613.13l-197.37 0c-4.22,0 -6.58,-2.06 -7.45,-6.06 5.76,-4.89 46.12,-79.83 121.01,-225.06l-249.55 0c-5.54,7.52 -48.45,84.55 -128.62,231.12l-203.51 0 -0.67 -3.08c178.19,-329 269.43,-500.66 273.89,-514.68 2.75,-6.83 3.49,-17.15 2.64,-30.81 -2.41,-11.19 -17.16,-31.67 -44.05,-61.41l-1.32 -6.14zm185.18 228.04l249.02 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.73 0c-2.8,0 -16.07,23.62 -40.03,70.69zm-991.54 -228.04l298.86 0 1.32 6.14 -118.16 221.9 0.69 3.15 249.5 0c81.88,-151.73 124.55,-228.88 128.62,-231.19l191.28 0c4.13,0.55 6.7,2.65 7.45,6.14 -213.25,402.5 -322.44,606 -327.72,609.98l-196.86 0 -0.67 -3.08 112.7 -218.93 -252.85 0c-6.07,5.96 -41.47,70.68 -105.58,194.4 -11.11,18.37 -17.29,27.61 -18.72,27.61l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.79,-24.7l-1.98 -9.09c-2.9,-13.47 -17.45,-33.95 -43.92,-61.58l5.51 -2.99zm-792.75 0l758.27 0 0.64 2.99c-195.44,377.28 -303.38,581.65 -323.89,613.13l-197.37 0c-4.24,0 -6.6,-2.06 -7.45,-6.06 5.75,-4.89 46.12,-79.83 120.97,-225.06l-249.51 0c-5.56,7.52 -48.47,84.55 -128.62,231.12l-203.49 0 -0.69 -3.08c178.16,-329 269.38,-500.66 273.91,-514.68 2.71,-6.83 3.45,-17.15 2.6,-30.81 -2.39,-11.19 -17.15,-31.67 -44.05,-61.41l-1.32 -6.14zm185.2 228.04l249 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.72 0c-2.81,0 -16.06,23.62 -40.02,70.69zm-1103.91 -228.04l298.89 0c4.16,0.55 6.74,2.81 7.57,6.66l9.27 43.04c6.44,29.76 17.44,75.82 32.88,138.45 190.96,-123.03 291.13,-185.84 300.97,-188.15l206.5 0c4.3,0.55 6.73,2.81 7.55,6.66 -212.8,402.15 -321.84,605.48 -327.27,609.46l-203.52 0 -0.69 -3.08 175.45 -329.54 -0.68 -3.15 -2.97 0 -282.28 191.28c-5.52,-6.84 -8.76,-12.07 -9.47,-15.4l-50.55 -191.26 -2.98 0c-112.09,216.6 -175.21,333.7 -189.29,351.15l-202.99 0 -0.71 -3.08 274.04 -514.16c2.58,-7.52 2.71,-15.74 0.78,-24.65l-1.95 -9.11c-2.91,-13.47 -17.46,-33.95 -43.93,-61.59l5.38 -3.53zm-496.95 0l400.37 0c23.26,0 40.99,20.47 53.34,61.46 5.96,27.63 -9.61,69.81 -46.53,126.69 -44.77,80.33 -115.53,214.7 -211.82,403.33 -9.73,16.45 -24.43,24.64 -43.84,24.64l-517.82 0c-14.01,-8.19 -22.34,-17.45 -24.49,-27.61 -6.2,-28.7 27.81,-103.76 102.25,-225.02 91.52,-179.21 152.8,-290.15 184.01,-332.87 24.3,-20.48 59.21,-30.62 104.53,-30.62zm-137.63 461.82l203.51 0c1.89,-7.52 54.92,-107.99 159.41,-301.53l-0.63 -2.94 -196.86 0c-5.24,4 -60.32,105.51 -165.43,304.47z"/>
+        <path d="M7160.73 529.99c52.95,0 95.89,42.94 95.89,95.95 0,52.95 -42.94,95.89 -95.89,95.89 -53,0 -95.97,-42.94 -95.97,-95.89 0,-53.01 42.97,-95.95 95.97,-95.95zm-42.35 149.95l0 -110.28 46.91 0c11.77,0 20.35,1.01 25.65,3.01 5.34,1.97 9.65,5.52 12.86,10.57 3.22,5.05 4.8,10.81 4.8,17.39 0,8.2 -2.44,15.09 -7.3,20.45 -4.85,5.38 -12.16,8.8 -21.83,10.2 4.84,2.81 8.84,5.9 11.95,9.27 3.13,3.36 7.34,9.3 12.66,17.89l13.46 21.5 -26.6 0 -16.09 -23.99c-5.74,-8.56 -9.67,-13.99 -11.76,-16.2 -2.1,-2.26 -4.33,-3.73 -6.7,-4.58 -2.37,-0.83 -6.08,-1.25 -11.2,-1.25l-4.5 0 0 46.02 -22.31 0zm22.31 -63.65l16.45 0c10.69,0 17.35,-0.44 20.02,-1.32 2.65,-0.87 4.74,-2.48 6.23,-4.68 1.53,-2.18 2.3,-4.96 2.3,-8.25 0,-3.76 -1.01,-6.69 -3,-8.99 -1.97,-2.32 -4.75,-3.73 -8.39,-4.34 -1.8,-0.25 -7.21,-0.37 -16.25,-0.37l-17.36 0 0 27.95zm20.04 -72.89c45.53,0 82.45,36.94 82.45,82.54 0,45.52 -36.92,82.49 -82.45,82.49 -45.59,0 -82.53,-36.97 -82.53,-82.49 0,-45.6 36.94,-82.54 82.53,-82.54z"/>
+      </svg>
+    </a>
+    <div class="logo-divider"></div>
+    <span class="logo-tagline">Order Processing</span>
+  </div>
+  <div class="header-right">
+    <div class="sys-status">
+      <div class="status-dot"></div>
+      <span>All systems live</span>
+    </div>
+    <button class="header-theme-toggle" onclick="toggleTheme()" id="theme-btn" aria-label="Toggle theme">
+      <svg class="icon-moon" width="18" height="18" viewBox="0 0 18 18" fill="none">
+        <path d="M15.5 10.5A7 7 0 017.5 2.5a7 7 0 000 13 7 7 0 008-5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+      </svg>
+      <svg class="icon-sun" width="18" height="18" viewBox="0 0 18 18" fill="none">
+        <circle cx="9" cy="9" r="3.5" stroke="currentColor" stroke-width="1.4"/>
+        <path d="M9 1v2M9 15v2M1 9h2M15 9h2M3.22 3.22l1.42 1.42M13.36 13.36l1.42 1.42M3.22 14.78l1.42-1.42M13.36 4.64l1.42-1.42" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <div class="header-user">
+      <div class="user-avatar">IT</div>
+      <span class="user-name">ITH Team</span>
+    </div>
+  </div>
+</header>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab('picklist',this)">Picklist Generator</button>
+  <button class="tab-btn" onclick="switchTab('cropper',this)">Label Cropper</button>
+</div>
+
+<div id="tab-picklist" class="tab-content active">
+
+<span id="gen-time" style="display:none;"></span>
+
+<div id="upload-screen">
+  <div style="font-size:11px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:var(--accent);font-family:var(--font-display);">Tomahawk Tools &bull; E3 Warehouse</div>
+  <h1>Picklist Generator</h1>
+  <p>Upload the Uniware shipments CSV export</p>
+  <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+    <div class="icon">&#128230;</div>
+    <div class="label"><strong>Drop CSV here</strong> or click to browse</div>
+    <input type="file" id="file-input" accept=".csv">
+    <button class="btn btn-dark" onclick="event.stopPropagation();document.getElementById('file-input').click()">Choose File</button>
+  </div>
+  <p style="font-size:11px;color:#999;max-width:340px;text-align:center;line-height:1.6;">Shipments &rarr; New tab &rarr; Export CSV.<br>Combos auto-detected and sectioned.</p>
+</div>
+
+<div id="picklist-screen">
+  <div class="actionbar no-print" style="display:flex;align-items:center;gap:10px;padding:8px 16px;background:var(--surface);border-bottom:1px solid var(--border);">
+    <span id="topbar-title" style="font-family:var(--font-display);font-weight:700;font-size:14px;color:var(--text);flex:1;"></span>
+    <input type="file" id="file-input-add" accept=".csv" style="display:none;">
+    <button class="btn btn-outline" onclick="document.getElementById('file-input-add').click()">&#10133; Add More</button>
+    <button class="btn btn-outline" onclick="resetApp()">&#8617; New CSV</button>
+  </div>
+  <div class="actionbar no-print">
+    <button class="btn btn-dark" onclick="window.print()">&#128424; Print / Save PDF</button>
+    <span id="combo-flag" style="display:none;background:#fffbeb;border:1px solid #f0c040;color:#7a5500;border-radius:5px;padding:4px 10px;font-size:12px;font-weight:600;"></span>
+    <span id="add-toast" style="display:none;background:#eafaf0;border:1px solid #3fae5e;color:#1a6b35;border-radius:5px;padding:4px 10px;font-size:12px;font-weight:600;"></span>
+  </div>
+  <div id="print-header">
+    <span class="ph-channel" id="ph-channel"></span>
+    <span class="ph-meta">
+      <span id="ph-date"></span>
+      <span id="ph-qty"></span>
+    </span>
+  </div>
+  <div id="picklist-content"></div>
+</div>
+
+</div>
+
+<div id="tab-cropper" class="tab-content">
+  <div style="max-width:560px;margin:32px auto;padding:0 16px;">
+    <div style="font-size:11px;color:var(--text2);line-height:1.6;margin-bottom:14px;">Upload a shipping-label PDF (E-Kart, Delhivery, etc.) &rarr; auto-detects the courier label box on each page &rarr; crops out the Tax Invoice below it.</div>
+
+    <div class="drop-zone" id="lc-dropzone" style="width:100%;" ondragover="lcDragOver(event)" ondragleave="lcDragLeave()" ondrop="lcDropFile(event)">
+      <div class="icon">&#128203;</div>
+      <div class="label"><strong>Drop PDF here</strong> or click to browse</div>
+      <input type="file" id="lc-file-input" accept="application/pdf" onchange="lcFileSelected(this)">
+      <button class="btn btn-dark" onclick="event.stopPropagation();document.getElementById('lc-file-input').click()">Choose File</button>
+      <div id="lc-filename" style="font-size:11px;color:var(--accent);margin-top:10px;word-break:break-all;"></div>
+    </div>
+
+    <div id="lc-action-card" style="display:none;margin-top:18px;">
+      <button class="btn btn-dark" id="lc-process-btn" style="width:100%;padding:12px;font-size:13px;" onclick="lcProcessAll()">Crop &amp; download</button>
+      <div style="height:8px;background:var(--surface2);border-radius:5px;overflow:hidden;margin-top:12px;display:none;" id="lc-progress-outer">
+        <div style="height:100%;width:0%;background:var(--accent);transition:width .2s;" id="lc-progress-inner"></div>
+      </div>
+      <div id="lc-status" style="font-size:12px;color:var(--text2);margin-top:12px;min-height:18px;"></div>
+      <div id="lc-warn-box" style="background:rgba(229,72,77,0.08);border:1px solid rgba(229,72,77,0.35);border-radius:8px;padding:10px 14px;font-size:12px;color:#e5484d;margin-top:12px;display:none;"></div>
+      <div id="lc-dl-fallback" style="margin-top:10px;display:none;">
+        <a class="btn btn-outline" id="lc-dl-link" style="display:block;text-align:center;text-decoration:none;" href="#" download="cropped_shipping_labels.pdf">&#8595; Download didn't start? Click here</a>
+      </div>
+
+      <button id="lc-adv-toggle" onclick="lcToggleAdvanced()" style="background:none;border:none;color:var(--text2);font-size:11px;cursor:pointer;padding:0;display:flex;align-items:center;gap:5px;font-family:var(--font-body);margin-top:16px;">
+        &#9881; Advanced settings &#9662;
+      </button>
+      <div id="lc-adv-panel" style="display:none;flex-direction:column;gap:.8rem;margin-top:14px;border-top:1px solid var(--border);padding-top:14px;">
+        <div>
+          <label style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:6px;"><span>Padding around label</span><b id="lc-pad-val" style="color:var(--accent);">1 mm</b></label>
+          <input type="range" id="lc-pad-slider" min="0" max="6" step="0.5" value="1" style="width:100%;accent-color:var(--accent);">
+        </div>
+        <div>
+          <label style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:6px;"><span>Detection sensitivity</span><b id="lc-thresh-val" style="color:var(--accent);">Standard</b></label>
+          <input type="range" id="lc-thresh-slider" min="215" max="250" step="5" value="240" style="width:100%;accent-color:var(--accent);">
+        </div>
+        <div style="font-size:10px;color:var(--text2);line-height:1.5;">Defaults work for standard Flipkart/E-Kart/Delhivery shipping labels. Only adjust if a batch isn't cropping cleanly.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const IMAGE_MAP = {
+  "5m-Tape-With-Lock": "https://m.media-amazon.com/images/I/61AVHSv1+sL._SL1500_.jpg",
+  "738-24-Handsaw-HT": "https://m.media-amazon.com/images/I/312lwGJ951L._SS40_.jpg",
+  "ADA-021-Adatpor-Wrench-Screwbit": "https://m.media-amazon.com/images/I/41dgCsx4BkL._SS40_.jpg",
+  "APR-0075-Anvil-Pruner-HT": "https://m.media-amazon.com/images/I/31++0hpTUIL._SS40_.jpg",
+  "APS-9000-AL-Paint-Sprayer-AL": "https://m.media-amazon.com/images/I/41PXPjedlRL._SS40_.jpg",
+  "APS-9470-AL-Paint-Sprayer-AL": "https://m.media-amazon.com/images/I/41PXPjedlRL._SS40_.jpg",
+  "ARC-2001-Welding-Machine": "https://m.media-amazon.com/images/I/51bRCjD-88L._SS40_.jpg",
+  "ARC-2002-Welding-Machine": "https://m.media-amazon.com/images/I/41Bxjl8GHML._SS40_.jpg",
+  "ARC-2501-Welding-Machine": "https://m.media-amazon.com/images/I/41IeMKdrDJL._SS40_.jpg",
+  "ARC-3151-Welding-Machine": "https://m.media-amazon.com/images/I/41rZyDnVojL._SS40_.jpg",
+  "BLA-0500-Meter-LT": "https://m.media-amazon.com/images/I/41fl0JzF4+L._SS40_.jpg",
+  "BLB-8130-Leaf-Blower": "https://m.media-amazon.com/images/I/41D2jVQIAbL._SS40_.jpg",
+  "Block": "https://m.media-amazon.com/images/I/51jXYUn5ykL._SS40_.jpg",
+  "Block-1": "https://m.media-amazon.com/images/I/41XuRmmtc6L._SS40_.jpg",
+  "BMT-1666-16-Line-Level": "https://m.media-amazon.com/images/I/417+kotHgwL._SS40_.jpg",
+  "BPT-801-3-Grinder-ET": "https://m.media-amazon.com/images/I/31Zdn1RlLnL._SS40_.jpg",
+  "BSD-2010-Drill-BL": "https://m.media-amazon.com/images/I/41cWXirrYmL._SS40_.jpg",
+  "BSD-8200-Brushlesss-Screwdriver": "https://m.media-amazon.com/images/I/419GOEKrr2L._SS40_.jpg",
+  "BSD-999-Drill-BL": "https://m.media-amazon.com/images/I/41RguLeimVL._SS40_.jpg",
+  "CAR-0061-Carpenter-Kit": "https://m.media-amazon.com/images/I/419SbkDv6WL._SS40_.jpg",
+  "CBL-5001-Blower-CL": "https://m.media-amazon.com/images/I/41t5QwBrH1L._SS40_.jpg",
+  "CCP-20A-1B-SS": "https://m.media-amazon.com/images/I/31z2B6McGeL._SS40_.jpg",
+  "CGR-1010-Grinder-4": "https://m.media-amazon.com/images/I/41dB64MVrmL._SS40_.jpg",
+  "CGR-5555-Grinder-CL": "https://m.media-amazon.com/images/I/410f5zMJ3RL._SS40_.jpg",
+  "CHA-1000-Charger-20V": "https://m.media-amazon.com/images/I/31j4EugFpWL._SS40_.jpg",
+  "CHA-1500-Charger-20V": "https://m.media-amazon.com/images/I/31gOacQC0dL._SS40_.jpg",
+  "CHA-500-Charger-12V": "https://m.media-amazon.com/images/I/31s78ufhcgL._SS40_.jpg",
+  "Chainsaw-Pruner-Extension-Pole-2.9m-CL": "https://m.media-amazon.com/images/I/31XLaUf1iuL._SS40_.jpg",
+  "CHT-20": "https://m.media-amazon.com/images/I/41Yq2LjxB8L._SS40_.jpg",
+  "CHT-8A": "https://m.media-amazon.com/images/I/41rbGqZnynL._SS40_.jpg",
+  "CIR-365-Laser-Level-Receiver": "https://m.media-amazon.com/images/I/41Osd59kZ9L._SS40_.jpg",
+  "CIR-365-Laser-Level-Round": "https://m.media-amazon.com/images/I/41UaQCDUnsL._SS40_.jpg",
+  "CIW2145-ImpactWrench-CL": "https://m.media-amazon.com/images/I/41k6fytdNKL._SS40_.jpg",
+  "CMG-MINI-12B": "https://m.media-amazon.com/images/I/41Hfe3NRtxL._SS40_.jpg",
+  "COM-2200-Laser-Level-LT": "https://m.media-amazon.com/images/I/41srRRSU4HL._SS40_.jpg",
+  "COM-5500-Laser-Level-LT": "https://m.media-amazon.com/images/I/41srRRSU4HL._SS40_.jpg",
+  "COMBO-DSS4222-TRV0065": "https://rukminim1.flixcart.com/image/1698/1698/xif0q/power-drill/i/3/o/10-0-dss-4222-12v-drill-kit-with-65mm-ph2-screw-bit-2-speed-led-original-imahmz6369zhfuxq.jpeg?q=90",
+  "COS-1800-Orbital-Sander-2Ah-2B": "https://m.media-amazon.com/images/I/41Rjz7ZjPQL._SS40_.jpg",
+  "CP-4180-Car-Polisher": "https://m.media-amazon.com/images/I/31ciesISRGL._SS40_.jpg",
+  "CPS-3123-Paint-Sprayer-CL-1B-2Ah": "https://m.media-amazon.com/images/I/41bVIDPSZBL._SS40_.jpg",
+  "CPS-3125-Paint-Sprayer-CL": "https://m.media-amazon.com/images/I/41JlfdTFfSL._SS40_.jpg",
+  "CPS-3225-Paint-Sprayer-CL": "https://m.media-amazon.com/images/I/418vieJa2hL._SS40_.jpg",
+  "CPW0700-Pressure-Washer-CL": "https://m.media-amazon.com/images/I/41VM+Y7+y8L._SS40_.jpg",
+  "CRW-1230-Ratchet-Wrench": "https://m.media-amazon.com/images/I/41-LWZduzuL._SS40_.jpg",
+  "CRW-3390-Ratchet-Wrench": "https://m.media-amazon.com/images/I/41t971ZAfML._SS40_.jpg",
+  "CTB-20A-NB": "https://m.media-amazon.com/images/I/41ZPeI7br7L._SS40_.jpg",
+  "CTI-1920-Tyre-Inflator-Corded": "https://m.media-amazon.com/images/I/51iwLRxpOFL._SS40_.jpg",
+  "CTM0060-Tile-Machine-CL": "https://m.media-amazon.com/images/I/51NFqphnmWL._SS40_.jpg",
+  "DCF-3465-Fan-Desktop-5Inch": "https://m.media-amazon.com/images/I/41jYZRkCnjL._SS40_.jpg",
+  "DCH-1500-20V-1.5A": "https://www.tomahawk.tools/cdn/shop/files/6153usH5PcL._SL1500_21d392b5-049c-434e-a4df-02aed83be13f.jpg?v=1762236630&width=713",
+  "DGR-6375-Die-Grinder": "https://m.media-amazon.com/images/I/31A1wF7OJvL._SS40_.jpg",
+  "DHM-6600-Demolition-Hammer": "https://m.media-amazon.com/images/I/41bw0QLaUJL._SS40_.jpg",
+  "DMD-2100-Drill-CL": "https://m.media-amazon.com/images/I/41j6yR+UxML._SS40_.jpg",
+  "DMD-3100-Drill-CL": "https://m.media-amazon.com/images/I/41mfAzU8icL._SS40_.jpg",
+  "DMD-4100-Drill-CL": "https://m.media-amazon.com/images/I/41wXdE7yswL._SS40_.jpg",
+  "DMS-1000-Drill-CL": "https://m.media-amazon.com/images/I/41zo86-a1cL._SS40_.jpg",
+  "DMS-3000-Drill-Set-CL": "https://m.media-amazon.com/images/I/41U-zDmBY-L._SS40_.jpg",
+  "DMS-3100-Drill-CL": "https://m.media-amazon.com/images/I/41mfAzU8icL._SS40_.jpg",
+  "DMS-5000-Drill-CL": "https://m.media-amazon.com/images/I/418oi64DVVL._SS40_.jpg",
+  "DMS-6000-Drill-CL": "https://m.media-amazon.com/images/I/4167GZmxD7L._SS40_.jpg",
+  "DMS-7000-Drill-CL": "https://m.media-amazon.com/images/I/41LdzoGMapL._SS40_.jpg",
+  "DMS-8501-Drill-CL": "https://m.media-amazon.com/images/I/41W5Bl9qWHL._SS40_.jpg",
+  "DMS-9000-Drill-CL-New": "https://m.media-amazon.com/images/I/41E3NvWHo1L._SS40_.jpg",
+  "DOB-2008-Electric-Sprayer-20L-12V": "https://m.media-amazon.com/images/I/412eio2cYJL._SS40_.jpg",
+  "Driil-Bits-Set": "https://m.media-amazon.com/images/I/31GbYGyqT8L._SS40_.jpg",
+  "DRT-1000-Drill-CL": "https://m.media-amazon.com/images/I/41GnuGCmkQL._SS40_.jpg",
+  "DSC-0065-Screwdriver-Bit-HT": "https://m.media-amazon.com/images/I/31BSyKLCa3L._SS40_.jpg",
+  "DSS-4222-Drill-CL": "https://m.media-amazon.com/images/I/41dWcb2Zm7L._SS40_.jpg",
+  "ELE-0512-Sprayer-Electric-5L-12V": "https://m.media-amazon.com/images/I/41MZSJsti8L._SS40_.jpg",
+  "ELE-0812-Sprayer-Electric-8L-12V": "https://m.media-amazon.com/images/I/416twejdVFL._SS40_.jpg",
+  "ELE-1110-Eletrician-Hand-Tool-Kit": "https://m.media-amazon.com/images/I/41zZyrKXnzL._SS40_.jpg",
+  "EPS-3000-Paint-Sprayer-AL": "https://m.media-amazon.com/images/I/41rxtb1Ee3L._SS40_.jpg",
+  "EPS-9018-Paint-Sprayer": "https://m.media-amazon.com/images/I/41-QQ7H5LrL._SS40_.jpg",
+  "EPS-B08-Paint-Sparyer": "https://m.media-amazon.com/images/I/418vieJa2hL._SS40_.jpg",
+  "EPS-C10-Paint-Sprayer": "https://m.media-amazon.com/images/I/416QpFwW2RL._SS40_.jpg",
+  "FC-200-Flower-Cutter": "https://m.media-amazon.com/images/I/41I5wSt65nL._SS40_.jpg",
+  "FLT-5640-Flashlight-CL": "https://m.media-amazon.com/images/I/415pyUzm90L._SS40_.jpg",
+  "GBD-3693-Drill": "https://m.media-amazon.com/images/I/415lNyQw+EL._SS40_.jpg",
+  "GBD-3775-Drill-Set-CL": "https://m.media-amazon.com/images/I/412D+-CL3mL._SS40_.jpg",
+  "GBS-1055-2-Battery-Drill-Set": "https://m.media-amazon.com/images/I/41ySnX6jNUL._SS40_.jpg",
+  "GC-4-1pc-FBA": "https://m.media-amazon.com/images/I/51hvU+bqezL._SS40_.jpg",
+  "GCD-12P-1B-DD": "https://m.media-amazon.com/images/I/51WEej6Y8lL._SS40_.jpg",
+  "GCS-4618-Chainsaw-Petrol": "https://m.media-amazon.com/images/I/41a4bI8ZwjL._SS40_.jpg",
+  "GCS-4622-Chainsaw-Petrol": "https://m.media-amazon.com/images/I/41a4bI8ZwjL._SS40_.jpg",
+  "GID-2700-Drill-ET": "https://m.media-amazon.com/images/I/41-oaT06BML._SS40_.jpg",
+  "HCE-1085-Laser-Level-Cross-Line": "https://m.media-amazon.com/images/I/41ZfXCPVI3L._SS40_.jpg",
+  "HGV-2400-Heat-Gun-ET": "https://m.media-amazon.com/images/I/41K7YbPp7mL._SS40_.jpg",
+  "HHDF-1475-Fan-Handheld": "https://m.media-amazon.com/images/I/314Yh1QMWuL._SS40_.jpg",
+  "HIW-800-Impact-Wrench-CL": "https://m.media-amazon.com/images/I/4133D8-HDvL._SS40_.jpg",
+  "HOM-0650-Drill-Impact-13mm": "https://m.media-amazon.com/images/I/41-WxfgerIL._SS40_.jpg",
+  "HPE-6066-Laser-Level-16-Line": "https://m.media-amazon.com/images/I/410izZWjJeL._SS40_.jpg",
+  "HR-061-Hand-Riveter": "https://m.media-amazon.com/images/I/41Rnv1iiObL._SS40_.jpg",
+  "HR06-Hand-Riveter": "https://m.media-amazon.com/images/I/31FhmEDNwBL._SS40_.jpg",
+  "HTK-5552-Home-Kit": "https://m.media-amazon.com/images/I/41pajIMQS1L._SS40_.jpg",
+  "ID-1350-Impact-Drill": "https://m.media-amazon.com/images/I/41ql00GQfhL._SS40_.jpg",
+  "IW-3045-Electric-Impact-Wrench": "https://m.media-amazon.com/images/I/41dxFL21DZL._SS40_.jpg",
+  "JET-4444-Turbojet-Blower": "https://m.media-amazon.com/images/I/41HNNO71F6L._SS40_.jpg",
+  "JET-5000-Turbojet-Blower": "https://m.media-amazon.com/images/I/31BhtbrM3vL._SS40_.jpg",
+  "JIG-1105-Jigsaw-2Ah-1B": "https://m.media-amazon.com/images/I/41qlZUucp0L._SS40_.jpg",
+  "JSI-5345-Jump-starter-Tyre-Inflator-CL": "https://m.media-amazon.com/images/I/31HjMV6385L._SS40_.jpg",
+  "JSI-9695-Jump-starter-Tyre-Inflator-CL": "https://m.media-amazon.com/images/I/41IdWN2xuPL._SS40_.jpg",
+  "JST-4045-Jump-Starter-n-Inflator": "https://m.media-amazon.com/images/I/41UQa9sg6oL._SS40_.jpg",
+  "JUM-5635-Jump-Starter": "https://m.media-amazon.com/images/I/41XI8aMnoeL._SS40_.jpg",
+  "Jump-Starter-Clamp-1": "https://m.media-amazon.com/images/I/51vUkDyz0UL._SS40_.jpg",
+  "KON-1288-Laser-Level-16-Line": "https://m.media-amazon.com/images/I/41VSy+UCsuL._SS40_.jpg",
+  "LAF-1270-Angle-Finder-Laser": "https://m.media-amazon.com/images/I/51wDbPy3GJL._SS40_.jpg",
+  "LDF-555-Leaf-Blower": "https://m.media-amazon.com/images/I/41v6nhFvmhL._SS40_.jpg",
+  "LEV-1616-16-Line-Level-LT": "https://m.media-amazon.com/images/I/41eq8GpLuoL._SS40_.jpg",
+  "LEV-1699-16-Line-Level-LT": "https://m.media-amazon.com/images/I/41C73CTHg8L._SS40_.jpg",
+  "LIO-0521-Sprayer-Electric-5L-21V": "https://m.media-amazon.com/images/I/41Zbi0CA9qL._SS40_.jpg",
+  "LIO-0821-Sprayer-Electric-8L-21V": "https://m.media-amazon.com/images/I/41+mY8bKggL._SS40_.jpg",
+  "MAG-320-Drill-CL": "https://m.media-amazon.com/images/I/41gP5WafTML._SS40_.jpg",
+  "MAN-2800-Sprayer-Manual-16L": "https://m.media-amazon.com/images/I/41r9UNJR-XL._SS40_.jpg",
+  "MFM-1830-CL-Multi-Functional-3Ah-2B": "https://m.media-amazon.com/images/I/414j7r9wroL._SS40_.jpg",
+  "MGK-0300-Mini-Grinder-Kit": "https://m.media-amazon.com/images/I/61966U4ijIL._SS40_.jpg",
+  "MIG-1500-Mini-Grinder-CL": "https://m.media-amazon.com/images/I/41iZekOOi8L._SS40_.jpg",
+  "MIN-0040-Meter": "https://m.media-amazon.com/images/I/412+skBxk3L._SS40_.jpg",
+  "MIN-1500-Driver-CL": "https://m.media-amazon.com/images/I/31a2AOeEipL._SS40_.jpg",
+  "MLL-1200-12-Line-Level-LT": "https://m.media-amazon.com/images/I/41+Y4a5zfHL._SS40_.jpg",
+  "MSL-0004-Spirit-Level-HT": "https://m.media-amazon.com/images/I/41+yhHIj2ZL._SS40_.jpg",
+  "O-32-A-4-Chainsaw-CL": "https://m.media-amazon.com/images/I/41PxysvsMHL._SS40_.jpg",
+  "O-3750-Drill-CL": "https://m.media-amazon.com/images/I/41lNw2r31IL._SS40_.jpg",
+  "O-80-Blower-CL": "https://m.media-amazon.com/images/I/41pUxKKjeFL._SS40_.jpg",
+  "O195-MarbleCutter-ET": "https://m.media-amazon.com/images/I/41p9Ved++4L._SS40_.jpg",
+  "O320-Oxford-Blower-ET": "https://m.media-amazon.com/images/I/41GZ45E8AQL._SS40_.jpg",
+  "O4226-Drill-Impact-CL-OXF": "https://m.media-amazon.com/images/I/41TdtlBaoBL._SS40_.jpg",
+  "O8892-Vacuum-WnD-ET": "https://m.media-amazon.com/images/I/41nsyOlI8vL._SS40_.jpg",
+  "OCS-2040-Chainsaw-10-CL": "https://m.media-amazon.com/images/I/41WYwqI7HRL._SS40_.jpg",
+  "OIW3220-Impact-Wrench-CL": "https://m.media-amazon.com/images/I/516vvkhRRqL._SS40_.jpg",
+  "OLB-85-Blower-Leaf-CL-Red": "https://m.media-amazon.com/images/I/41ZPeI7br7L._SS40_.jpg",
+  "OLC-002-Line-Level": "https://m.media-amazon.com/images/I/410noO+y-5L._SS40_.jpg",
+  "OLL-004-Line-Level": "https://m.media-amazon.com/images/I/410noO+y-5L._SS40_.jpg",
+  "OLL-010-Line-Level": "https://m.media-amazon.com/images/I/410noO+y-5L._SS40_.jpg",
+  "OLLD-32-16-Line-Level": "https://m.media-amazon.com/images/I/41SSk8TMUIL._SS40_.jpg",
+  "OLO-0400-LT-Distance-Meter": "https://m.media-amazon.com/images/I/31CXvdhqKYL._SS40_.jpg",
+  "OLO0600-Meter-LT-01": "https://m.media-amazon.com/images/I/31CXvdhqKYL._SS40_.jpg",
+  "OLO0800-Meter-LT-01": "https://m.media-amazon.com/images/I/410RF4IvpML._SS40_.jpg",
+  "OPS-6250-Paint-Sprayer-CL": "https://m.media-amazon.com/images/I/41t5YDmm2mL._SS40_.jpg",
+  "OSD-2001-Drill-CL": "https://m.media-amazon.com/images/I/41OQseoLaIL._SS40_.jpg",
+  "OSG-3001-Drill-CL": "https://m.media-amazon.com/images/I/41A9zT+2TVL._SS40_.jpg",
+  "OXS-4708-Level-16-Line": "https://m.media-amazon.com/images/I/41OYpSzQPDL._SS40_.jpg",
+  "PBC-4200-Brush-Cutter": "https://m.media-amazon.com/images/I/41HUByLRqDL._SS40_.jpg",
+  "PGR-2100-Grinder": "https://m.media-amazon.com/images/I/41Y5Oz3isAL._SS40_.jpg",
+  "PGR-4995-Grinder-CL": "https://m.media-amazon.com/images/I/41w7xJSYC4L._SS40_.jpg",
+  "PIW-3999-Wrench-Impact": "https://m.media-amazon.com/images/I/41qJogXJBSL._SS40_.jpg",
+  "PIW-5999-Wrench-Impact": "https://m.media-amazon.com/images/I/41Mhwu5zprL._SS40_.jpg",
+  "PRU-5222-1B-2Ah-CL": "https://m.media-amazon.com/images/I/31EKd8L5o+L._SS40_.jpg",
+  "PRU-5222-Pruner-CL-02": "https://m.media-amazon.com/images/I/414WigWCXEL._SS40_.jpg",
+  "PSC-7900-Screwdriver-Home": "https://m.media-amazon.com/images/I/31qz8At8iSL._SS40_.jpg",
+  "PSC-8900-Screwdriver-Home": "https://m.media-amazon.com/images/I/31VXwytiu0L._SS40_.jpg",
+  "PSP-1600-AL-Paint-Sprayer-AL": "https://m.media-amazon.com/images/I/41uY-Ij9voL._SS40_.jpg",
+  "PVC-8999-PVC-Cutter-HT": "https://m.media-amazon.com/images/I/41DfWlA8GVL._SS40_.jpg",
+  "PXL-9999-AL-Paint-Sprayer-AL": "https://m.media-amazon.com/images/I/41xAulFCrFL._SS40_.jpg",
+  "RBL-640-Blower": "https://m.media-amazon.com/images/I/41MZhFWXBNL._SS40_.jpg",
+  "REC-5230-Reciprocal-Saw": "https://m.media-amazon.com/images/I/41wNa2TQ9pL._SS40_.jpg",
+  "RSC-4900-Screwdriver-Home": "https://m.media-amazon.com/images/I/319vVZLIQcL._SS40_.jpg",
+  "SAW-6001-Chiansaw-CL": "https://m.media-amazon.com/images/I/41smSjy-VcL._SS40_.jpg",
+  "SAW-8042-Chiansaw-CL": "https://m.media-amazon.com/images/I/413EpVfWczL._SS40_.jpg",
+  "SBD-4044-Drill-Impact-CL": "https://m.media-amazon.com/images/I/41-c7iQCHqL._SS40_.jpg",
+  "SC-COW-14-Green-20pc": "https://m.media-amazon.com/images/I/61UK3XSk6cL._SS40_.jpg",
+  "SCR-4430-Scissors-Fabric": "https://m.media-amazon.com/images/I/419eTPRMyHL._SS40_.jpg",
+  "SDP-7272-Screwdriver-Kit": "https://m.media-amazon.com/images/I/4114sm2iuHL._SS40_.jpg",
+  "SIN-2031-Sprayer-20L-12V": "https://m.media-amazon.com/images/I/41r3bdFWxEL._SS40_.jpg",
+  "Spare-Nozzle-Blower": "https://m.media-amazon.com/images/I/41ZPeI7br7L._SS40_.jpg",
+  "Spare-Nozzle-Paint-Sprayer": "https://m.media-amazon.com/images/I/416hDL3lG1L._SS40_.jpg",
+  "Spare-Nozzle-Tyre-Inflator": "https://m.media-amazon.com/images/I/21qPr1MLIqL._SS40_.jpg",
+  "Spare-Screwbit": "https://m.media-amazon.com/images/I/516vvkhRRqL._SS40_.jpg",
+  "SPB-6682-Laser-Level-2-Line": "https://m.media-amazon.com/images/I/41Osd59kZ9L._SS40_.jpg",
+  "SPB-6683-Laser-Level-3-Line": "https://m.media-amazon.com/images/I/41eIgVCkvEL._SS40_.jpg",
+  "SPB-6685-Laser-Level-5-Line": "https://m.media-amazon.com/images/I/41ZCLhip5jL._SS40_.jpg",
+  "SPZ-8116-16-Line-Level-LT": "https://m.media-amazon.com/images/I/41EiNn6ak9L._SS40_.jpg",
+  "SSS-1111-Drill-Set-CL": "https://m.media-amazon.com/images/I/5157CoCoN1L._SS40_.jpg",
+  "SSS-2111-Drill-Set-CL": "https://m.media-amazon.com/images/I/41tyN+SSYfL._SS40_.jpg",
+  "SSS-3111-Drill-Set-CL": "https://m.media-amazon.com/images/I/41VR7vUfmeL._SS40_.jpg",
+  "T-0010-Jack-Plane": "https://m.media-amazon.com/images/I/41yWZjcwxmL._SS40_.jpg",
+  "T-082-BSD-BrushlessScrewdriver-CL": "https://m.media-amazon.com/images/I/41jyc5b6QnL._SS40_.jpg",
+  "T-1169-Chainsaw-AT": "https://m.media-amazon.com/images/I/31dndhCSDyL._SS40_.jpg",
+  "T-1200-Pressure-Washer-ET": "https://m.media-amazon.com/images/I/41aYUyL0njL._SS40_.jpg",
+  "T-1200-Pressure-Washer-Nozzle": "https://m.media-amazon.com/images/I/41u6Rtd0-GL._SS40_.jpg",
+  "T-12310-Rotary-Hammer-CL": "https://m.media-amazon.com/images/I/51muCwnjDYL._SS40_.jpg",
+  "T-14692-Drywall-Sander-Machine-ET": "https://m.media-amazon.com/images/I/41GgV1ofV-L._SS40_.jpg",
+  "T-5252-Impact-Wrench-CL": "https://m.media-amazon.com/images/I/41qXXobEbaL._SS40_.jpg",
+  "T-7020-Brush-cutter-AT": "https://m.media-amazon.com/images/I/41enwxUJYWL._SS40_.jpg",
+  "T-84-Pipe-Cutter-QR": "https://m.media-amazon.com/images/I/312-W5gcmJL._SS40_.jpg",
+  "T-CTI-0290-Tire-Inflator-CL": "https://m.media-amazon.com/images/I/41afjcxgmoL._SS40_.jpg",
+  "T-PW-3111-Pressure-Washer-CL": "https://m.media-amazon.com/images/I/41Z+8w0KsNL._SS40_.jpg",
+  "T-PW-3222-Pressure-Washer-CL": "https://m.media-amazon.com/images/I/31TXBdXsjEL._SS40_.jpg",
+  "T-SD-36pc-Driver-set-CL": "https://m.media-amazon.com/images/I/41+nh8ILOBL._SS40_.jpg",
+  "T-SD-3pcs-Screwdriver-Set-CL": "https://m.media-amazon.com/images/I/31D-JuWEPSL._SS40_.jpg",
+  "T-SD-N-36pcs-Screwdriver-Set-CL": "https://m.media-amazon.com/images/I/417Fg+UKnyL._SS40_.jpg",
+  "T-SK-6800-Scewdriver-Kit-CL": "https://m.media-amazon.com/images/I/41qngd7f6RL._SS40_.jpg",
+  "T100-Blower-ET": "https://m.media-amazon.com/images/I/31g4LsQ79BL._SS40_.jpg",
+  "T1045-Marble-Cutter-ET": "https://m.media-amazon.com/images/I/41lhTVC6G7L._SS40_.jpg",
+  "T11454-Concrete-Vibrator": "https://m.media-amazon.com/images/I/41KqKbw64nL._SS40_.jpg",
+  "T160-Blower-Red-ET": "https://m.media-amazon.com/images/I/41JdJkjsUlL._SS40_.jpg",
+  "T160-Blower-Yellow-ET": "https://m.media-amazon.com/images/I/31Fo6qiOQ2L._SS40_.jpg",
+  "T2246-Drill-ET": "https://m.media-amazon.com/images/I/41ezRwzGJPL._SS40_.jpg",
+  "T2246-Drill-No-Bit-ET": "https://m.media-amazon.com/images/I/41J5bGxIknL._SS40_.jpg",
+  "T226-Rot-Ham-ET": "https://m.media-amazon.com/images/I/41alylnzhYL._SS40_.jpg",
+  "T2270-Rotary_Hammer-CL": "https://m.media-amazon.com/images/I/51muCwnjDYL._SS40_.jpg",
+  "T284A-Chainsaw-CL": "https://m.media-amazon.com/images/I/41UOLjWBXwL._SS40_.jpg",
+  "T296A-Chainsaw-CL": "https://m.media-amazon.com/images/I/41ZJiOc0aoL._SS40_.jpg",
+  "T303-Flower-Cutter-HT": "https://m.media-amazon.com/images/I/31LbSJykAcL._SS40_.jpg",
+  "T3200-Heat-Gun-ET": "https://m.media-amazon.com/images/I/41-hCBwHf5L._SS40_.jpg",
+  "T32052-Grinder-CL": "https://m.media-amazon.com/images/I/41TAmyHB3DL._SS40_.jpg",
+  "T3600-Heat-Gun-ET": "https://m.media-amazon.com/images/I/41elm+nSXRL._SS40_.jpg",
+  "T3626-Drill-Impact-CL": "https://m.media-amazon.com/images/I/51IlswuxPLL._SS40_.jpg",
+  "T4000-Heat-Gun-ET": "https://m.media-amazon.com/images/I/41-hCBwHf5L._SS40_.jpg",
+  "T4446-Vacuum-Cleaner-10L-W/D": "https://m.media-amazon.com/images/I/41JCP6Hk3sL._SS40_.jpg",
+  "T500-Blower-CL": "https://m.media-amazon.com/images/I/41R1fbFCUqL._SS40_.jpg",
+  "T700-Blower-SS-ET": "https://m.media-amazon.com/images/I/31MSkHFb8bL._SS40_.jpg",
+  "T730-Blower-VS-ET": "https://m.media-amazon.com/images/I/41trxmsw20L._SS40_.jpg",
+  "T738-18-Handsaw": "https://m.media-amazon.com/images/I/31DD-utQtnL._SS40_.jpg",
+  "T7384-Drill-CL": "https://m.media-amazon.com/images/I/41G5KSefmBL._SS40_.jpg",
+  "T7385-ScrewdriverSet-25pc-CL": "https://m.media-amazon.com/images/I/51S-7AYqx4L._SS40_.jpg",
+  "T7386-Screwdriver-CL": "https://m.media-amazon.com/images/I/41fTaWinPdL._SS40_.jpg",
+  "T7400-Screwdriver-CL": "https://m.media-amazon.com/images/I/51jXYUn5ykL._SS40_.jpg",
+  "T7450-Drill-CL": "https://m.media-amazon.com/images/I/41jFSEYC+KL._SS40_.jpg",
+  "T7500-S-Drill-CL": "https://m.media-amazon.com/images/I/41VR7vUfmeL._SS40_.jpg",
+  "T7550-S-Drill-Set-CL": "https://m.media-amazon.com/images/I/41xn0GcmbPL._SS40_.jpg",
+  "T7600-S-Drill-Set-CL": "https://m.media-amazon.com/images/I/51p9nMDP0SL._SS40_.jpg",
+  "T7920-Car-Polisher-CL": "https://m.media-amazon.com/images/I/31z2B6McGeL._SS40_.jpg",
+  "T8-A-Spare-Chain": "https://m.media-amazon.com/images/I/313DH5IR5FL._SS40_.jpg",
+  "T80-Blower-ET": "https://m.media-amazon.com/images/I/41kr+E2X73L._SS40_.jpg",
+  "T8000-Drill-CL": "https://m.media-amazon.com/images/I/41WnRCYJXHL._SS40_.jpg",
+  "T8002-Drill-CL": "https://m.media-amazon.com/images/I/41WnRCYJXHL._SS40_.jpg",
+  "T850-Blower-SS-5m-ET-1": "https://m.media-amazon.com/images/I/41MZhFWXBNL._SS40_.jpg",
+  "T8582-Impact-Wrench-CL": "https://m.media-amazon.com/images/I/51xQkIGYKnL._SS40_.jpg",
+  "T870-Blower-SS-DB-ET": "https://m.media-amazon.com/images/I/41QDmQUS3EL._SS40_.jpg",
+  "T8700-Drill-CL": "https://m.media-amazon.com/images/I/41ZZU2KEW7L._SS40_.jpg",
+  "T8702-Drill-CL": "https://m.media-amazon.com/images/I/41ZZU2KEW7L._SS40_.jpg",
+  "T970-Blower-VS-DB-ET": "https://m.media-amazon.com/images/I/41QDmQUS3EL._SS40_.jpg",
+  "TAD-4625-Drill": "https://m.media-amazon.com/images/I/41O7rUmwpgL._SS40_.jpg",
+  "TAG-1155-Grinder-CL": "https://m.media-amazon.com/images/I/41ePJALVcOL._SS40_.jpg",
+  "TAG-4000-Angle-Grinder-Set-CL": "https://m.media-amazon.com/images/I/41PkFKHlrfL._SS40_.jpg",
+  "TAL-6500-Drill-CL": "https://m.media-amazon.com/images/I/416z582861L._SS40_.jpg",
+  "TAP-200-Anvil-Pruner-HT": "https://m.media-amazon.com/images/I/31hKw-qzhBL._SS40_.jpg",
+  "TBA-1500-Battery-12V-1.5Ah": "https://m.media-amazon.com/images/I/21e6fJ7mK9L._SS40_.jpg",
+  "TBA-2000-Battery-20V-2AH": "https://m.media-amazon.com/images/I/21ewX8ryx6L._SS40_.jpg",
+  "TBA-3000-Battery-20V-3AH": "https://m.media-amazon.com/images/I/41-WQmqbi3L._SS40_.jpg",
+  "TBA-4000-Battery-20V-4AH": "https://m.media-amazon.com/images/I/41-WQmqbi3L._SS40_.jpg",
+  "TBL-0024-Bypass-Lopper-HT": "https://m.media-amazon.com/images/I/31n+vtB9ShL._SS40_.jpg",
+  "TBP-200-BypassPruner-HT": "https://m.media-amazon.com/images/I/417wg-sGAjL._SS40_.jpg",
+  "TCB40-Blower-CL": "https://m.media-amazon.com/images/I/31bv5gpKiaL._SS40_.jpg",
+  "TCBC-12-Grass-Trimmer-CL": "https://m.media-amazon.com/images/I/41TYg36ubpL._SS40_.jpg",
+  "TCBC-20-Grass-Trimmer-CL": "https://m.media-amazon.com/images/I/41jZiLm1SXL._SS40_.jpg",
+  "TCD-20A-2B-2Ah-SSS": "https://m.media-amazon.com/images/I/512KdDV5GfL._SS40_.jpg",
+  "TCD-21K-DBK": "https://m.media-amazon.com/images/I/51Mv1Ava9aL._SS40_.jpg",
+  "TCD-333-Compressed-Air-Duster-ET": "https://m.media-amazon.com/images/I/51Rg8kbMquL._SS40_.jpg",
+  "TCD-9011-Drill-CL": "https://m.media-amazon.com/images/I/41E+kMuXpLL._SS40_.jpg",
+  "TCD-9021-Drill-CL": "https://m.media-amazon.com/images/I/41E+kMuXpLL._SS40_.jpg",
+  "TCF-0040-Electric-Fan-CL": "https://m.media-amazon.com/images/I/41m9JmpWx+L._SS40_.jpg",
+  "TCF-0042-Electric-Fan-CL-2B-2Ah": "https://m.media-amazon.com/images/I/41eRksVz9kL._SS40_.jpg",
+  "TCF-4012-Fan-CL": "https://m.media-amazon.com/images/I/51ab1e-bmeL._SS40_.jpg",
+  "TCF-4019-Fan-CL-1B-2Ah": "https://m.media-amazon.com/images/I/51GP5E+vJ+L._SS40_.jpg",
+  "TCF-4405-Fan-Camping": "https://m.media-amazon.com/images/I/51ZlDjZqDoL._SS40_.jpg",
+  "TCG-008-Sausage-Gun": "https://m.media-amazon.com/images/I/21NlmoHaaKL._SS40_.jpg",
+  "TCG-04-Caulking-Tool": "https://m.media-amazon.com/images/I/31KerkF2NnL._SS40_.jpg",
+  "TCG-18-Caulking-Tool": "https://m.media-amazon.com/images/I/31am-NyGxVL._SS40_.jpg",
+  "TCL-0020": "https://m.media-amazon.com/images/I/31sNVoHezwL._SS40_.jpg",
+  "TCL0040": "https://m.media-amazon.com/images/I/31+8dI+31JL._SS40_.jpg",
+  "TCM8A-Marble-Cutter-ET": "https://m.media-amazon.com/images/I/41lcoX9yfAL._SS40_.jpg",
+  "TCP-0013-Curved-Pruning-Saw": "https://m.media-amazon.com/images/I/41wNa2TQ9pL._SS40_.jpg",
+  "TCPM-1122-Planner-Machine-CL": "https://m.media-amazon.com/images/I/41yWZjcwxmL._SS40_.jpg",
+  "TCPW-20E-1B-2AH": "https://m.media-amazon.com/images/I/41BsS-vXnZL._SS40_.jpg",
+  "TCR-4187-Riveter-CL": "https://m.media-amazon.com/images/I/31iFkBHGsvL._SS40_.jpg",
+  "TCR218-Mini-Rotary-Hammer-CL": "https://m.media-amazon.com/images/I/51muCwnjDYL._SS40_.jpg",
+  "TCS-1020-Chainsaw-CL": "https://m.media-amazon.com/images/I/41WYwqI7HRL._SS40_.jpg",
+  "TCS-1660-Chainsaw-16-CL": "https://m.media-amazon.com/images/I/415uDkdP89L._SS40_.jpg",
+  "TCS-401-Chainsaw-CL": "https://m.media-amazon.com/images/I/41C7GDIcRKL._SS40_.jpg",
+  "TCS-4B": "https://m.media-amazon.com/images/I/419eTPRMyHL._SS40_.jpg",
+  "TCS-5121-Chainsaw-CL": "https://m.media-amazon.com/images/I/41gEd12ecdL._SS40_.jpg",
+  "TCT.4.40.1pc": "https://m.media-amazon.com/images/I/51-bMzYqZSL._SS40_.jpg",
+  "TCT.5.40.1pc": "https://m.media-amazon.com/images/I/519nedKfS-L._SS40_.jpg",
+  "TCV-126-Car-Vacuum-CL": "https://m.media-amazon.com/images/I/41FB+AhmnHL._SS40_.jpg",
+  "TCV-360-Vacuum-W/D-CL": "https://m.media-amazon.com/images/I/31AH7idWkHL._SS40_.jpg",
+  "TCV1650-Concrete-Vibrator-Needle-ET": "https://m.media-amazon.com/images/I/31n-1QWFNhL._SS40_.jpg",
+  "TCV2200-Concrete-Vibrator-Needle-ET": "https://m.media-amazon.com/images/I/31WTHghSTpL._SS40_.jpg",
+  "TCVP-400-Vacuum-W/D-CL": "https://m.media-amazon.com/images/I/31xty+WhuVL._SS40_.jpg",
+  "TDS-1020-BL-Drill-Set-CL": "https://m.media-amazon.com/images/I/41hubBVyhhL._SS40_.jpg",
+  "TDS-7812-Drill-Set-CL": "https://m.media-amazon.com/images/I/617Hz8e6vdL._SS40_.jpg",
+  "TDS-9130-Drill-Set-CL": "https://m.media-amazon.com/images/I/41eISkGED+L._SS40_.jpg",
+  "TDS-9150-Drill-Set-CL": "https://m.media-amazon.com/images/I/414MO-EivFL._SS40_.jpg",
+  "TEA-5240-Earth-Auger-4": "https://m.media-amazon.com/images/I/31A6mgjpcLL._SS40_.jpg",
+  "TEA-5260-Earth-Auger-6": "https://m.media-amazon.com/images/I/310l4+H8ZbL._SS40_.jpg",
+  "TEA-5280-Earth-Auger-AT": "https://m.media-amazon.com/images/I/317kA6BucCL._SS40_.jpg",
+  "TEA-6340-Earth-Auger-4": "https://m.media-amazon.com/images/I/31PBS4CmjbL._SS40_.jpg",
+  "TEA-6360-Earth-Auger-6": "https://m.media-amazon.com/images/I/310l4+H8ZbL._SS40_.jpg",
+  "TEA-6380-Earth-Auger-AT": "https://m.media-amazon.com/images/I/31DbwCIfAUL._SS40_.jpg",
+  "TEB-300-Blower-ET": "https://m.media-amazon.com/images/I/31t5IefD-KL._SS40_.jpg",
+  "TEB-3400-Turbo-Blower": "https://m.media-amazon.com/images/I/31DvImtuvVL._SS40_.jpg",
+  "TEV-220-Car-Vacuum-ET": "https://m.media-amazon.com/images/I/41OsaxrkT0L._SS40_.jpg",
+  "TEV-363-Vacuum-W/D-ET": "https://m.media-amazon.com/images/I/312-psnwTQL._SS40_.jpg",
+  "TFC-0631-Flower-Cutter": "https://m.media-amazon.com/images/I/31HaAdr+TpL._SS40_.jpg",
+  "TFP-7000-Folding-Pruning-Saw": "https://m.media-amazon.com/images/I/41wNa2TQ9pL._SS40_.jpg",
+  "TFR-0100-Meter-LT": "https://m.media-amazon.com/images/I/41HukR228FL._SS40_.jpg",
+  "TFR-0600-Meter-LT": "https://m.media-amazon.com/images/I/41HukR228FL._SS40_.jpg",
+  "TFR-0800-Meter-LT-01": "https://m.media-amazon.com/images/I/418aW5E21HL._SS40_.jpg",
+  "TFS-3700-Orbital-Sander": "https://m.media-amazon.com/images/I/41JhXR0zcaL._SS40_.jpg",
+  "TG-8001-Drill-CL": "https://m.media-amazon.com/images/I/41tJQcTFdqL._SS40_.jpg",
+  "TGK-280-Angle-Grinder-Kit-ET": "https://m.media-amazon.com/images/I/41zt93H9oTL._SS40_.jpg",
+  "TGR-060-Meter-LT": "https://m.media-amazon.com/images/I/41HaTeEfkAL._SS40_.jpg",
+  "TGSC-1-Suction-Cup": "https://m.media-amazon.com/images/I/31HEU1sCkZL._SS40_.jpg",
+  "TGSC-2-Suction-Cup": "https://m.media-amazon.com/images/I/31HEU1sCkZL._SS40_.jpg",
+  "TGSC-3-Suction-Cup": "https://m.media-amazon.com/images/I/318rbHMyBWL._SS40_.jpg",
+  "TGSC111-Glass-Suction-Cup-HT": "https://m.media-amazon.com/images/I/31QARx9BcRL._SS40_.jpg",
+  "TGSC222-Glass-Suction-Cup-HT-1": "https://m.media-amazon.com/images/I/31J4a8I14oL._SS40_.jpg",
+  "TGSC333-Glass-Suction-Cup-HT": "https://m.media-amazon.com/images/I/31fU1aWrInL._SS40_.jpg",
+  "THB-3800-Turbo-Blower-CL": "https://m.media-amazon.com/images/I/41KuRL6NHiL._SS40_.jpg",
+  "THP-0021-Hook-Pruning-Saw": "https://m.media-amazon.com/images/I/21vzPZ6WTFL._SS40_.jpg",
+  "THR-0034-Hand-Riveter": "https://drive.google.com/file/d/1EplBdyPchs7gGdxFG1-eZ6OjEwZg-8cu/view?usp=sharing",
+  "THS24-Hedge-Shear-Metal-Handle": "https://m.media-amazon.com/images/I/31wrcNpKeuL._SS40_.jpg",
+  "THY-4405-Rotary-26mm": "https://m.media-amazon.com/images/I/31T4viwwTDL._SS40_.jpg",
+  "THY-4526-Rotary-26mm": "https://m.media-amazon.com/images/I/41J5bGxIknL._SS40_.jpg",
+  "TID-3616-Impact-Drill-CL": "https://m.media-amazon.com/images/I/41bSj2acokL._SS40_.jpg",
+  "TID-3628-Impact-Drill-CL": "https://m.media-amazon.com/images/I/41A2Rrg3a8L._SS40_.jpg",
+  "TID-3629-Impact-Drill-CL": "https://m.media-amazon.com/images/I/414Pv9Cq89L._SS40_.jpg",
+  "TIF-3930-Tyre-Inflator-CL": "https://m.media-amazon.com/images/I/41fE6WTMDyL._SS40_.jpg",
+  "TIS-699-Impact-Wrench-Set-CL": "https://m.media-amazon.com/images/I/51ABXDVIJ6L._SS40_.jpg",
+  "TIW-400-Impact-Wrench-CL": "https://m.media-amazon.com/images/I/516wkKaE4UL._SS40_.jpg",
+  "TIW-8300-Impact-Wrench-Set-CL-1": "https://m.media-amazon.com/images/I/41uSvIeoM4L._SS40_.jpg",
+  "TIW-85B-Impact-Wrench-Bare-Tool-CL": "https://m.media-amazon.com/images/I/41vaKNox9zL._SS40_.jpg",
+  "TIW-8600-Impact-Wrench-Set-CL": "https://m.media-amazon.com/images/I/41ByTkPfaBL._SS40_.jpg",
+  "TLB-40-Spare-Motor": "https://m.media-amazon.com/images/I/31aWV4cQBiL._SS40_.jpg",
+  "TLB40-Blower-Leaf-CL": "https://m.media-amazon.com/images/I/31GlR98gYUL._SS40_.jpg",
+  "TLC-2315-Laser-Level-Cross-Line": "https://m.media-amazon.com/images/I/41wXRvgjfKL._SS40_.jpg",
+  "TLL-12-12-Lines-Level": "https://m.media-amazon.com/images/I/51itYoD6asL._SS40_.jpg",
+  "TLL-16-16-Line-Level-LT": "https://m.media-amazon.com/images/I/41IUyaM3NTL._SS40_.jpg",
+  "TLL-16-Power-Point": "https://m.media-amazon.com/images/I/41VSy+UCsuL._SS40_.jpg",
+  "TLL-2CL-4H1V-Line-Level-LT": "https://m.media-amazon.com/images/I/51ih6wZUXyL._SS40_.jpg",
+  "TLL-4H4V-Line-Level": "https://m.media-amazon.com/images/I/41cN1GiHATL._SS40_.jpg",
+  "TLL-6416-Laser-Level-16-Line": "https://m.media-amazon.com/images/I/41WFAjFqG2L._SS40_.jpg",
+  "TLL-8-8-Line-Level-LT": "https://m.media-amazon.com/images/I/41trRy-RN7L._SS40_.jpg",
+  "TLL-A-03-3-Line-Level-LT": "https://m.media-amazon.com/images/I/51kc3LmR1WL._SS40_.jpg",
+  "TLL-A-05-5-Line-Level-LT": "https://m.media-amazon.com/images/I/51TVKkwv16L._SS40_.jpg",
+  "TLL-B-02-N-2-Line-Level-LT": "https://m.media-amazon.com/images/I/41srRRSU4HL._SS40_.jpg",
+  "TLL-B-03-N-3-Line-Level-LT": "https://m.media-amazon.com/images/I/419rROmKf5L._SS40_.jpg",
+  "TLL-B-05-N-5Line-level": "https://m.media-amazon.com/images/I/41ImXXmxQbL._SS40_.jpg",
+  "TLL-BLC-02-Line-Level": "https://m.media-amazon.com/images/I/410RF4IvpML._SS40_.jpg",
+  "TLL-C-02-2-Line-Level-LT": "https://m.media-amazon.com/images/I/41XAdnIj5kL._SS40_.jpg",
+  "TLL-D-2-C-2-Line-Level": "https://m.media-amazon.com/images/I/41I5KSfhXRL._SS40_.jpg",
+  "TLL-GLC-02-Line-Level": "https://m.media-amazon.com/images/I/41d2cFYW-EL._SS40_.jpg",
+  "TLL-N-12-Line-Level": "https://m.media-amazon.com/images/I/41CXRaS5hbL._SS40_.jpg",
+  "TLL-S-02-Line-Level": "https://m.media-amazon.com/images/I/41srRRSU4HL._SS40_.jpg",
+  "TLL-S-03-Line-Level": "https://m.media-amazon.com/images/I/51L62Go5rkL._SS40_.jpg",
+  "TLL-S-05-Line-Level": "https://m.media-amazon.com/images/I/51FdWzASaIL._SS40_.jpg",
+  "TLL02-C-98FT-TRI-COMBO": "https://m.media-amazon.com/images/I/51L62Go5rkL._SS40_.jpg",
+  "TLM-2425-Tile-Laying": "https://m.media-amazon.com/images/I/51NFqphnmWL._SS40_.jpg",
+  "TLM-2450-Tile-Laying": "https://m.media-amazon.com/images/I/51NFqphnmWL._SS40_.jpg",
+  "TLM-FR-040-Distance-Meter": "https://m.media-amazon.com/images/I/41HukR228FL._SS40_.jpg",
+  "TLM-O-100-Distance-Meter": "https://m.media-amazon.com/images/I/41pqru6W1TL._SS40_.jpg",
+  "TLM-O-40-LT-Distance-Meter": "https://m.media-amazon.com/images/I/41pqru6W1TL._SS40_.jpg",
+  "TLM-O-60-Laser-Distance-Meter": "https://m.media-amazon.com/images/I/4116e4Jn2pL._SS40_.jpg",
+  "TLM-O-80-Distance-Meter": "https://m.media-amazon.com/images/I/41s-EgMDZbL._SS40_.jpg",
+  "TLN-3232-16-Line-Level": "https://m.media-amazon.com/images/I/41jRpKy33YL._SS40_.jpg",
+  "TLP-02-2P-2-Line-Level": "https://m.media-amazon.com/images/I/51L62Go5rkL._SS40_.jpg",
+  "TLP-02-3P-2-Line-Level": "https://m.media-amazon.com/images/I/51rlm2BVxfL._SS40_.jpg",
+  "TLP-8005-Leaf-Picker": "https://m.media-amazon.com/images/I/41KtFO+iihL._SS40_.jpg",
+  "TLT-N-5M-Laser-Tape": "https://m.media-amazon.com/images/I/41ybtB76i-L._SS40_.jpg",
+  "TLTM-5mtr-Laser-Measuring-Tape": "https://m.media-amazon.com/images/I/31Ao05UtgEL._SS40_.jpg",
+  "TLV-2012-Vacuum-Li-CL-1": "https://m.media-amazon.com/images/I/41-m-ZRBa7L._SS40_.jpg",
+  "TNR-0028-Nut-Riveter": "https://m.media-amazon.com/images/I/411O42z3zkL._SS40_.jpg",
+  "TP-B10-Tripod": "https://m.media-amazon.com/images/I/31hwY+w4ARL._SS40_.jpg",
+  "TPM-3944-Planner-Machine-ET": "https://m.media-amazon.com/images/I/41yWZjcwxmL._SS40_.jpg",
+  "TPR-2000-Pressure-Washer-ET": "https://m.media-amazon.com/images/I/41O+i6LeTbL._SS40_.jpg",
+  "TPS-2400-Paint-Sprayer-ET": "https://m.media-amazon.com/images/I/416QpFwW2RL._SS40_.jpg",
+  "TRV-0065-Screwdriver-Bit-HT": "https://m.media-amazon.com/images/I/31Bryc0TeoL._SS40_.jpg",
+  "TSB40-Blower-CL": "https://m.media-amazon.com/images/I/41xBWgakIYL._SS40_.jpg",
+  "TSE-1212-Drill-CL": "https://m.media-amazon.com/images/I/41m75sqZUoL._SS40_.jpg",
+  "TSG-1525-Angle-Grinder-Set-CL": "https://m.media-amazon.com/images/I/51mTteTXdQL._SS40_.jpg",
+  "TSW-5300-Impact-Wrench-Set": "https://m.media-amazon.com/images/I/51JHBJ-7AzL._SS40_.jpg",
+  "TSW-9548-Impact-Wrench-Set": "https://m.media-amazon.com/images/I/41dgCsx4BkL._SS40_.jpg",
+  "TTI-160-Tyre-Inflator-CL": "https://m.media-amazon.com/images/I/41h9zlnxVtL._SS40_.jpg",
+  "TTM-0050-Meter-LT": "https://m.media-amazon.com/images/I/41k+Z0hEr8L._SS40_.jpg",
+  "TTM-121-Tile-Machine-CL": "https://m.media-amazon.com/images/I/41xZy4wzjUL._SS40_.jpg",
+  "TTM-7402-Trimmer-CL": "https://m.media-amazon.com/images/I/41n0-8Bi49L._SS40_.jpg",
+  "TTS-0029-Hedge-Shear-Telescopic-HT": "https://m.media-amazon.com/images/I/31cZxVJj1zL._SS40_.jpg",
+  "TTS-1500": "https://m.media-amazon.com/images/I/31qXU4ZaotL._SS40_.jpg",
+  "TUR-3801-Turbo-Blower-CL": "https://m.media-amazon.com/images/I/41HLEn1gXYL._SS40_.jpg",
+  "TUR-3900-Blower-Turbo": "https://m.media-amazon.com/images/I/41BzlkLg3xL._SS40_.jpg",
+  "TVC350-Vacuum-W/D-ET": "https://m.media-amazon.com/images/I/41f8kTbTNVL._SS40_.jpg",
+  "TWS-0021-Hedge-Shear-Wooden-Handle-HT": "https://m.media-amazon.com/images/I/31wrcNpKeuL._SS40_.jpg",
+  "TYS-9055-Drill-Set-CL": "https://m.media-amazon.com/images/I/5146Ey+E6uL._SS40_.jpg",
+  "VAB-460-Vaccum-n-Blower-CL": "https://m.media-amazon.com/images/I/418XRFmTDlL._SS40_.jpg",
+  "VBL-645-Blower": "https://m.media-amazon.com/images/I/31zChA94WVL._SS40_.jpg",
+  "VT80-D-Blower-ET": "https://m.media-amazon.com/images/I/41kr+E2X73L._SS40_.jpg",
+  "Wooden-Handle-6-Row": "https://m.media-amazon.com/images/I/31nIR4gvACL._SS40_.jpg",
+  "XLS-9416-Laser-Level-16-Line": "https://m.media-amazon.com/images/I/41INL1k-hLL._SS40_.jpg",
+  "YLM-4850-Tile-Laying": "https://m.media-amazon.com/images/I/41qwoRLqmUL._SS40_.jpg",
+  "YRH-7865-Rotary-Hammer-26": "https://m.media-amazon.com/images/I/51muCwnjDYL._SS40_.jpg"
+};
+
+// Check if two SKUs are totally different
+function skusDiffer(ucSku, chSku) {
+  if (!ucSku || !chSku) return false;
+  const clean = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const tokenize = s => s.toLowerCase().replace(/[_\s]/g, '-').split('-').filter(Boolean);
+  const a = clean(ucSku);
+  const b = clean(chSku);
+  const aToks = tokenize(ucSku);
+  const bToks = tokenize(chSku);
+  // Either contains the other (after cleaning)
+  if (a.includes(b) || b.includes(a)) return false;
+  // First token matches
+  if (aToks[0] === bToks[0]) return false;
+  // First token of one starts with digits stripped from first token of other
+  // e.g. T80 vs T-80A -> both start with 't'
+  if (aToks[0][0] === bToks[0][0] && (aToks[0].replace(/\d/g,'') === bToks[0].replace(/\d/g,''))) return false;
+  return true;
+}
+
+function parseCSVLine(line) {
+  const res = []; let cur = '', q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') { if (q && line[i+1] === '"') { cur += '"'; i++; } else q = !q; }
+    else if (c === ',' && !q) { res.push(cur); cur = ''; }
+    else cur += c;
+  }
+  res.push(cur); return res;
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  const rawH = parseCSVLine(lines[0]);
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const vals = parseCSVLine(lines[i]);
+    const obj = {};
+    rawH.forEach((h, idx) => {
+      const k = h.trim();
+      if (k === 'Shipment' && idx === 24) obj['SPCode'] = (vals[idx]||'').trim();
+      else if (obj[k] === undefined) obj[k] = (vals[idx]||'').trim();
+    });
+    rows.push(obj);
+  }
+  return rows;
+}
+
+function processRows(rows) {
+  // sections keyed by unique SKU count
+  const sections = {};
+
+  rows.forEach(r => {
+    const skuRaw  = (r['Item Type SKUs']||'');
+    const selRaw  = (r['Seller SKUs']||'');
+    const imgRaw  = (r['Channel Product Images']||'');
+
+    const skuList  = skuRaw.split(',').map(s=>s.trim()).filter(Boolean);
+    const selList  = selRaw.split(',').map(s=>s.trim()).filter(Boolean);
+    const uniqueSkus = [...new Map(skuList.map(s=>[s,s])).values()];
+    const comboSize = uniqueSkus.length;
+
+    const imgRawUrl = imgRaw.includes('~') ? imgRaw.split('~')[1].trim() : '';
+    const imgUrl = (imgRawUrl && imgRawUrl !== 'NULL') ? imgRawUrl : (IMAGE_MAP[uniqueSkus[0]]||'');
+
+    const key = uniqueSkus.slice().sort().join('|');
+
+    if (!sections[comboSize]) sections[comboSize] = {};
+    if (!sections[comboSize][key]) {
+      const selMap = {};
+      uniqueSkus.forEach((s,i) => { selMap[s] = selList[i]||selList[0]||''; });
+      sections[comboSize][key] = {
+        uniqueSkus, selMap, imgUrl, comboSize,
+        qtyPerSku: Object.fromEntries(uniqueSkus.map(s=>[s,0])),
+        skuCounts: Object.fromEntries(uniqueSkus.map(s=>[s,1])),
+        qty: 0,
+        orderCount: 0
+      };
+    }
+
+    // qty = number of sets = how many times the first unique SKU appears
+    // sets = appearances of the most-common SKU (defines how many combo sets in this shipment)
+    const skuCounts = {};
+    uniqueSkus.forEach(s => { skuCounts[s] = skuList.filter(x => x === s).length; });
+    const sets = Math.min(...uniqueSkus.map(s => skuCounts[s]));
+    // normalise: how many of each SKU per 1 set
+    const normCounts = {};
+    uniqueSkus.forEach(s => { normCounts[s] = skuCounts[s] / sets; });
+    sections[comboSize][key].skuCounts = normCounts;
+    sections[comboSize][key].qty = (sections[comboSize][key].qty||0) + sets;
+    sections[comboSize][key].orderCount += 1;
+    if (!sections[comboSize][key].imgUrl && imgUrl) sections[comboSize][key].imgUrl = imgUrl;
+  });
+
+  return sections;
+}
+
+function renderSection(groups, comboSize, rowNumStart) {
+  let html = '';
+  let rowNum = rowNumStart;
+  const isCombo = comboSize > 1;
+  const divClass = comboSize >= 3 ? 'combo-3' : comboSize === 2 ? 'combo-2' : 'single';
+  const label = comboSize >= 3 ? comboSize+'-Item Combo Orders' : comboSize === 2 ? '2-Item Combo Orders' : 'Single Orders';
+
+  html += `<div class="section-divider ${divClass}">
+    <div class="section-divider-line"></div>
+    <div class="section-divider-label">${label}</div>
+    <div class="section-divider-line"></div>
+  </div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr>
+        <th class="check-col">&#10003;</th>
+        <th style="width:28px">#</th>
+        <th style="width:160px">UC SKU</th>
+        <th style="width:150px">Channel SKU</th>
+        ${isCombo ? '<th>Combo</th>' : ''}
+        <th style="width:60px;text-align:center">Image</th>
+        <th style="width:42px;text-align:center">Qty</th>
+      </tr></thead>
+      <tbody>`;
+
+  // Sort groups by order count desc
+  const sorted = Object.values(groups).sort((a,b) => b.orderCount - a.orderCount);
+
+  sorted.forEach(group => {
+    const isMultiRow = group.uniqueSkus.length > 1;
+    const imgUrl = group.imgUrl || IMAGE_MAP[group.uniqueSkus[0]] || '';
+
+    // combo chip html
+    let comboHtml = '';
+    if (isCombo) {
+      comboHtml = '<div class="combo-box">' +
+        group.uniqueSkus.map(s =>
+          `<div class="combo-line"><span class="cx">${group.skuCounts[s]||1}&times;</span><span class="cname">${s}</span></div>`
+        ).join('') + '</div>';
+    }
+
+    // For combos: one row per unique SKU but merged image/combo/qty
+    if (isMultiRow) {
+      // Check if all channel SKUs are the same
+      const selVals = group.uniqueSkus.map(s => group.selMap[s]||'');
+      const allSameSel = selVals.every(v => v === selVals[0]);
+
+      group.uniqueSkus.forEach((sku, idx) => {
+        const isFirst = idx === 0;
+        const rowspan = group.uniqueSkus.length;
+        const selDiff = skusDiffer(sku, group.selMap[sku]||'');
+        const selCell = allSameSel
+          ? (isFirst ? `<td rowspan="${rowspan}"><div class="sku-sell${skusDiffer(group.uniqueSkus[0], selVals[0]) ? ' diff' : ''}">${selVals[0]}</div></td>` : '')
+          : `<td><div class="sku-sell${selDiff ? ' diff' : ''}">${group.selMap[sku]||''}</div></td>`;
+        html += `<tr class="combo-row">
+          ${isFirst ? `<td rowspan="${rowspan}" class="check-col"><input type="checkbox"></td>` : ''}
+          ${isFirst ? `<td rowspan="${rowspan}" style="color:#999;font-size:11px">${rowNum}</td>` : ''}
+          <td><div class="sku">${sku}</div></td>
+          ${selCell}
+          ${isCombo && isFirst ? `<td rowspan="${rowspan}">${comboHtml}</td>` : isCombo && !isFirst ? '' : ''}
+          ${isFirst ? `<td rowspan="${rowspan}" class="img-cell">${imgUrl ? `<img src="${imgUrl}" alt="">` : ''}</td>` : ''}
+          ${isFirst ? `<td rowspan="${rowspan}" class="qty">${group.qty||group.qtyPerSku[sku]}</td>` : ''}
+        </tr>`;
+      });
+    } else {
+      const sku = group.uniqueSkus[0];
+      html += `<tr>
+        <td class="check-col"><input type="checkbox"></td>
+        <td style="color:#999;font-size:11px">${rowNum}</td>
+        <td><div class="sku">${sku}</div></td>
+        <td><div class="sku-sell${skusDiffer(sku, group.selMap[sku]||'') ? ' diff' : ''}">${group.selMap[sku]||''}</div></td>
+        ${isCombo ? `<td>${comboHtml}</td>` : ''}
+        <td class="img-cell">${imgUrl ? `<img src="${imgUrl}" alt="">` : ''}</td>
+        <td class="qty">${group.qty||group.qtyPerSku[sku]}</td>
+      </tr>`;
+    }
+    rowNum++;
+  });
+
+  html += '</tbody></table></div>';
+  return { html, nextRow: rowNum };
+}
+
+function render(rows) {
+  const sections = processRows(rows);
+  const channels = [...new Set(rows.map(r => (r['Channel']||'UNKNOWN').trim().toUpperCase()))];
+  const channel = channels.length > 1 ? `${channels.length} CHANNELS MERGED` : channels[0];
+  document.getElementById('topbar-title').textContent = `\u{1F4CB} ${channel} \u2014 ${rows.length} Orders`;
+  document.getElementById('gen-time').textContent = new Date().toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+
+  // print-only header: channel, date, total order qty
+  document.getElementById('ph-channel').textContent = channel;
+  document.getElementById('ph-date').textContent = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  document.getElementById('ph-qty').textContent = `Total Order Qty: ${rows.length}`;
+  document.title = `${channel.charAt(0) + channel.slice(1).toLowerCase()}-${rows.length} Orders`;
+
+  // combo count
+  const comboOrders = rows.filter(r => {
+    const skus = [...new Set((r['Item Type SKUs']||'').split(',').map(s=>s.trim()).filter(Boolean))];
+    return skus.length > 1;
+  }).length;
+  const cf = document.getElementById('combo-flag');
+  if (comboOrders) { cf.textContent = `⚠ ${comboOrders} combo orders`; cf.style.display='inline-block'; }
+
+  let fullHtml = '';
+  let rowNum = 1;
+
+  // Render sections: 3+ first, then 2, then 1
+  const sizes = Object.keys(sections).map(Number).sort((a,b) => b-a);
+  sizes.forEach(size => {
+    const result = renderSection(sections[size], size, rowNum);
+    fullHtml += result.html;
+    rowNum = result.nextRow;
+  });
+
+  document.getElementById('picklist-content').innerHTML = fullHtml;
+  document.getElementById('upload-screen').style.display = 'none';
+  document.getElementById('picklist-screen').style.display = 'block';
+}
+
+// file handling
+// allRows holds every row across all CSVs merged into the current picklist
+let allRows = [];
+
+document.getElementById('file-input').addEventListener('change', e => { if (e.target.files[0]) load(e.target.files[0]); });
+const dz = document.getElementById('drop-zone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('drag-over'); if (e.dataTransfer.files[0]) load(e.dataTransfer.files[0]); });
+
+document.getElementById('file-input-add').addEventListener('change', e => { if (e.target.files[0]) loadMore(e.target.files[0]); e.target.value = ''; });
+
+function load(file) {
+  const r = new FileReader();
+  r.onload = e => {
+    try {
+      const rows = parseCSV(e.target.result);
+      if (!rows.length) { alert('No data found.'); return; }
+      allRows = rows;
+      render(allRows);
+    } catch(err) { alert('Error: ' + err.message); console.error(err); }
+  };
+  r.readAsText(file);
+}
+
+// Adds another CSV's orders into the currently displayed picklist,
+// skipping any row that's an exact duplicate of one already loaded
+// (guards against accidentally uploading the same export twice).
+function loadMore(file) {
+  const r = new FileReader();
+  r.onload = e => {
+    try {
+      const newRows = parseCSV(e.target.result);
+      if (!newRows.length) { alert('No data found in that CSV.'); return; }
+
+      const seen = new Set(allRows.map(row => JSON.stringify(row)));
+      const uniqueNew = newRows.filter(row => {
+        const fp = JSON.stringify(row);
+        if (seen.has(fp)) return false;
+        seen.add(fp);
+        return true;
+      });
+      const dupeCount = newRows.length - uniqueNew.length;
+
+      allRows = allRows.concat(uniqueNew);
+      render(allRows);
+
+      let msg = `\u2714 Added ${uniqueNew.length} orders (${allRows.length} total)`;
+      if (dupeCount) msg += ` \u2014 skipped ${dupeCount} duplicate${dupeCount>1?'s':''}`;
+      showToast(msg);
+    } catch(err) { alert('Error: ' + err.message); console.error(err); }
+  };
+  r.readAsText(file);
+}
+
+function showToast(msg) {
+  const t = document.getElementById('add-toast');
+  t.textContent = msg;
+  t.style.display = 'inline-block';
+  clearTimeout(showToast._timer);
+  showToast._timer = setTimeout(() => { t.style.display = 'none'; }, 4000);
+}
+
+function resetApp() {
+  allRows = [];
+  document.getElementById('upload-screen').style.display = 'flex';
+  document.getElementById('picklist-screen').style.display = 'none';
+  document.getElementById('file-input').value = '';
+  document.getElementById('add-toast').style.display = 'none';
+}
+
+// ── Theme ──
+if (localStorage.getItem('tm_theme') === 'light') {
+  document.documentElement.setAttribute('data-theme', 'light');
+}
+function toggleTheme() {
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  document.documentElement.setAttribute('data-theme', isLight ? 'dark' : 'light');
+  localStorage.setItem('tm_theme', isLight ? 'dark' : 'light');
+}
+
+// ── Tabs ──
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-btn').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  document.querySelectorAll('.tab-content').forEach(function(t){ t.classList.remove('active'); });
+  document.getElementById('tab-' + name).classList.add('active');
+}
+
+// ── LABEL CROPPER ──
+// Crops just the courier shipping-label portion off each page, discarding the
+// Tax Invoice section below it. Uses the "Not for resale." footer text (present
+// on every Flipkart-routed shipping label regardless of courier) as an anchor
+// to find where the label ends, then finds the label's own tight content box
+// within that region. Namespaced with lc* to stay independent of the picklist code.
+(function(){
+  var LC_SETTINGS_KEY = 'picklist_cropper_v1';
+  var LC_DETECT_SCALE = 2.2;
+  var LC_ANCHOR_BUFFER_PT = 10;
+
+  var lcOriginalBytes = null;
+  var lcPageCount = 0;
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  var lcDropzone = document.getElementById('lc-dropzone');
+  var lcActionCard = document.getElementById('lc-action-card');
+  var lcProcessBtn = document.getElementById('lc-process-btn');
+  var lcProgressOuter = document.getElementById('lc-progress-outer');
+  var lcProgressInner = document.getElementById('lc-progress-inner');
+  var lcStatus = document.getElementById('lc-status');
+  var lcWarnBox = document.getElementById('lc-warn-box');
+  var lcDlFallback = document.getElementById('lc-dl-fallback');
+  var lcDlLink = document.getElementById('lc-dl-link');
+  var lcPadSlider = document.getElementById('lc-pad-slider');
+  var lcPadVal = document.getElementById('lc-pad-val');
+  var lcThreshSlider = document.getElementById('lc-thresh-slider');
+  var lcThreshVal = document.getElementById('lc-thresh-val');
+  var lcAdvToggle = document.getElementById('lc-adv-toggle');
+  var lcAdvPanel = document.getElementById('lc-adv-panel');
+
+  // Settings persistence
+  (function restore(){
+    try{
+      var s = JSON.parse(localStorage.getItem(LC_SETTINGS_KEY)) || {};
+      if (s.pad != null) lcPadSlider.value = s.pad;
+      if (s.thresh != null) lcThreshSlider.value = s.thresh;
+    } catch(e){}
+    lcUpdatePadLabel(); lcUpdateThreshLabel();
+  })();
+  function lcSave(){ localStorage.setItem(LC_SETTINGS_KEY, JSON.stringify({ pad: parseFloat(lcPadSlider.value), thresh: parseInt(lcThreshSlider.value) })); }
+  function lcUpdatePadLabel(){ lcPadVal.textContent = parseFloat(lcPadSlider.value).toFixed(1).replace(/\.0$/,'') + ' mm'; }
+  function lcUpdateThreshLabel(){ var v=parseInt(lcThreshSlider.value); lcThreshVal.textContent = v<=225?'Strict':v>=245?'Loose':'Standard'; }
+  lcPadSlider.addEventListener('input', function(){ lcUpdatePadLabel(); lcSave(); });
+  lcThreshSlider.addEventListener('input', function(){ lcUpdateThreshLabel(); lcSave(); });
+
+  window.lcToggleAdvanced = function(){
+    var open = lcAdvPanel.style.display === 'flex';
+    lcAdvPanel.style.display = open ? 'none' : 'flex';
+    lcAdvToggle.innerHTML = open ? '&#9881; Advanced settings &#9662;' : '&#9881; Advanced settings &#9652;';
+  };
+
+  // Drag/drop + file input
+  window.lcDragOver = function(e){ e.preventDefault(); lcDropzone.classList.add('drag-over'); };
+  window.lcDragLeave = function(){ lcDropzone.classList.remove('drag-over'); };
+  window.lcDropFile = function(e){
+    e.preventDefault();
+    lcDropzone.classList.remove('drag-over');
+    if (e.dataTransfer.files.length) lcHandleFile(e.dataTransfer.files[0]);
+  };
+  window.lcFileSelected = function(input){
+    if (input.files.length) lcHandleFile(input.files[0]);
+  };
+
+  async function lcHandleFile(file){
+    if (!file.name.toLowerCase().endsWith('.pdf')){
+      alert('Please upload a PDF file.');
+      return;
+    }
+    document.getElementById('lc-filename').textContent = file.name;
+    var buf = await file.arrayBuffer();
+    lcOriginalBytes = new Uint8Array(buf);
+    var doc = await pdfjsLib.getDocument({ data: lcOriginalBytes.slice() }).promise;
+    lcPageCount = doc.numPages;
+    lcActionCard.style.display = 'block';
+    lcStatus.textContent = lcPageCount + ' page' + (lcPageCount!==1?'s':'') + ' loaded.';
+    lcWarnBox.style.display = 'none';
+    lcDlFallback.style.display = 'none';
+  }
+
+  // Anchor: find the "Not for resale" text line on the page
+  async function lcFindAnchorY(pdfDoc, pageIndex){
+    var page = await pdfDoc.getPage(pageIndex + 1);
+    var textContent = await page.getTextContent();
+    for (var i=0; i<textContent.items.length; i++){
+      var item = textContent.items[i];
+      if (item.str && /resale/i.test(item.str)){
+        return item.transform[5];
+      }
+    }
+    return null;
+  }
+
+  async function lcRenderPageToCanvas(pdfDoc, pageIndex){
+    var page = await pdfDoc.getPage(pageIndex + 1);
+    var viewport = page.getViewport({ scale: LC_DETECT_SCALE });
+    var canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    var ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+    return { canvas: canvas, ctx: ctx, pageWidthPt: page.view[2]-page.view[0], pageHeightPt: page.view[3]-page.view[1] };
+  }
+
+  function lcIsInk(data, width, x, y, threshold){
+    var idx = (y*width+x)*4;
+    var lum = 0.299*data[idx] + 0.587*data[idx+1] + 0.114*data[idx+2];
+    return lum < threshold;
+  }
+
+  // Band-aware tight-box detection: stops at the label's own content block and
+  // ignores anything after a real gap (e.g. the dashed perforation line below it).
+  function lcDetectTightBox(ctx, width, height, threshold, maxRow){
+    var limit = Math.min(height, Math.max(1, maxRow));
+    var data = ctx.getImageData(0, 0, width, limit).data;
+
+    var rowHasInk = new Uint8Array(limit);
+    for (var y=0; y<limit; y++){
+      var found=false;
+      for (var x=0; x<width; x++){
+        if (lcIsInk(data, width, x, y, threshold)){ found=true; break; }
+      }
+      rowHasInk[y] = found ? 1 : 0;
+    }
+
+    var runs=[], s=-1;
+    for (y=0; y<limit; y++){
+      if (rowHasInk[y] && s===-1) s=y;
+      if (!rowHasInk[y] && s!==-1){ runs.push([s,y-1]); s=-1; }
+    }
+    if (s!==-1) runs.push([s, limit-1]);
+    if (!runs.length) return null;
+
+    var minGap = 4;
+    var bands=[runs[0].slice()];
+    for (var i=1; i<runs.length; i++){
+      if (runs[i][0]-bands[bands.length-1][1]-1 < minGap){
+        bands[bands.length-1][1] = runs[i][1];
+      } else {
+        bands.push(runs[i].slice());
+      }
+    }
+
+    var y0=bands[0][0], y1=bands[0][1];
+    var minX=width, maxX=-1;
+    for (var x=0; x<width; x++){
+      var hit=false;
+      for (var yy=y0; yy<=y1; yy+=2){
+        if (lcIsInk(data, width, x, yy, threshold)){ hit=true; break; }
+      }
+      if (hit){ if (x<minX) minX=x; if (x>maxX) maxX=x; }
+    }
+    if (maxX<=minX) return null;
+    return { x0:minX, y0:y0, x1:maxX, y1:y1 };
+  }
+
+  function lcPixelBoxToPdfRect(box, pageWidthPt, pageHeightPt, padMm){
+    var padPt = padMm * 72 / 25.4;
+    var xMinPt = box.x0/LC_DETECT_SCALE, xMaxPt = box.x1/LC_DETECT_SCALE;
+    var yTopPt = pageHeightPt - (box.y0/LC_DETECT_SCALE);
+    var yBotPt = pageHeightPt - (box.y1/LC_DETECT_SCALE);
+    return {
+      tight: { x: xMinPt, y: yBotPt, width: xMaxPt-xMinPt, height: yTopPt-yBotPt },
+      padded: {
+        x: Math.max(0, xMinPt-padPt), y: Math.max(0, yBotPt-padPt),
+        x1: Math.min(pageWidthPt, xMaxPt+padPt), y1: Math.min(pageHeightPt, yTopPt+padPt)
+      }
+    };
+  }
+
+  window.lcProcessAll = async function(){
+    if (!lcOriginalBytes) return;
+    lcProcessBtn.disabled = true;
+    lcWarnBox.style.display = 'none';
+    lcDlFallback.style.display = 'none';
+    lcProgressOuter.style.display = 'block';
+    lcProgressInner.style.width = '0%';
+    lcStatus.textContent = 'Starting...';
+
+    var padMm = parseFloat(lcPadSlider.value);
+    var threshold = parseInt(lcThreshSlider.value);
+    var problemPages = [];
+
+    try{
+      var pdfjsDoc = await pdfjsLib.getDocument({ data: lcOriginalBytes.slice() }).promise;
+      var srcDoc = await PDFLib.PDFDocument.load(lcOriginalBytes.slice());
+      var outDoc = await PDFLib.PDFDocument.create();
+
+      for (var i=0; i<lcPageCount; i++){
+        lcStatus.textContent = 'Analyzing page ' + (i+1) + ' of ' + lcPageCount + '...';
+        var r = await lcRenderPageToCanvas(pdfjsDoc, i);
+        var anchorY = await lcFindAnchorY(pdfjsDoc, i);
+
+        var maxRowPx;
+        if (anchorY != null){
+          var cutoffPt = anchorY - LC_ANCHOR_BUFFER_PT;
+          maxRowPx = Math.ceil((r.pageHeightPt - cutoffPt) * LC_DETECT_SCALE);
+        } else {
+          maxRowPx = r.canvas.height;
+          problemPages.push({ page: i+1, reason: 'no anchor text found' });
+        }
+
+        var box = lcDetectTightBox(r.ctx, r.canvas.width, r.canvas.height, threshold, maxRowPx);
+        if (!box){
+          if (!problemPages.some(function(p){ return p.page===i+1; })) problemPages.push({ page:i+1, reason:'no content detected' });
+          lcProgressInner.style.width = Math.round(((i+1)/lcPageCount)*100) + '%';
+          continue;
+        }
+
+        var rects = lcPixelBoxToPdfRect(box, r.pageWidthPt, r.pageHeightPt, padMm);
+        var copiedArr = await outDoc.copyPages(srcDoc, [i]);
+        var copied = copiedArr[0];
+        copied.setMediaBox(rects.padded.x, rects.padded.y, rects.padded.x1-rects.padded.x, rects.padded.y1-rects.padded.y);
+        copied.setCropBox(rects.padded.x, rects.padded.y, rects.padded.x1-rects.padded.x, rects.padded.y1-rects.padded.y);
+        var bw = 1;
+        copied.drawRectangle({
+          x: rects.tight.x - bw/2, y: rects.tight.y - bw/2,
+          width: rects.tight.width + bw, height: rects.tight.height + bw,
+          borderColor: PDFLib.rgb(0,0,0), borderWidth: bw
+        });
+        outDoc.addPage(copied);
+
+        lcProgressInner.style.width = Math.round(((i+1)/lcPageCount)*100) + '%';
+        await new Promise(function(res){ setTimeout(res, 0); });
+      }
+
+      var outBytes = await outDoc.save();
+      var blob = new Blob([outBytes], { type: 'application/pdf' });
+      var url = URL.createObjectURL(blob);
+      var totalLabels = outDoc.getPageCount();
+
+      lcStatus.textContent = totalLabels + ' label' + (totalLabels!==1?'s':'') + ' cropped from ' + lcPageCount + ' page' + (lcPageCount!==1?'s':'') + '. Download started.';
+
+      var a = document.createElement('a');
+      a.href = url; a.download = 'cropped_shipping_labels.pdf';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      lcDlLink.href = url;
+      lcDlFallback.style.display = 'block';
+
+      if (problemPages.length){
+        lcWarnBox.style.display = 'block';
+        lcWarnBox.textContent = '\u26A0 ' + problemPages.length + ' page(s) needed a fallback: ' +
+          problemPages.map(function(p){ return 'page ' + p.page + ' (' + p.reason + ')'; }).join(', ') +
+          '. Worth double-checking those pages in the output.';
+      }
+    } catch(err){
+      lcStatus.textContent = 'Error: ' + err.message;
+    } finally {
+      lcProcessBtn.disabled = false;
+    }
+  };
+})();
+</script>
+</body>
+</html>
