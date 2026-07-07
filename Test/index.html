@@ -131,7 +131,7 @@
   @media print{
     @page{size:75mm 50mm;margin:0}
     *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-    html,body{margin:0!important;padding:0!important;width:75mm!important;height:50mm!important;overflow:hidden!important;background:#fff!important}
+    html,body{margin:0!important;padding:0!important;width:75mm!important;height:50mm!important;overflow:hidden!important;background:#fff!important;zoom:1!important}
     header,.left-panel,.zoom-row,.preview-meta{display:none!important}
     .app-body{display:block!important;width:75mm!important;height:50mm!important}
     .preview-panel{display:block!important;width:75mm!important;height:50mm!important;padding:0!important}
@@ -156,18 +156,18 @@
 </header>
 
 <div class="tabs">
-  <button class="tab-btn active" onclick="switchTab('bulk',this)">Label Print</button>
-  <button class="tab-btn" onclick="switchTab('library',this)">SKU Library</button>
-  <button class="tab-btn" onclick="switchTab('invoice',this)">&#128196; Generate Invoice</button>
+  <button class="tab-btn active" onclick="switchTab('invoice',this)">&#128196; Generate Invoice</button>
+  <button class="tab-btn" onclick="switchTab('bulk',this)">Label Print</button>
   <button class="tab-btn" onclick="switchTab('ledger',this)">&#128203; Invoice Ledger</button>
+  <button class="tab-btn" onclick="switchTab('library',this)">SKU Library</button>
 </div>
 
-<div class="app-body">
+<div class="app-body" style="display:none">
 
   <!-- LEFT PANEL: upload controls only -->
   <div class="left-panel">
 
-    <div id="tab-bulk" class="tab-content active" style="display:flex">
+    <div id="tab-bulk" class="tab-content" style="display:none">
       <div class="left-inner" style="display:flex;flex-direction:column;gap:.8rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
           <div style="font-size:11px;color:var(--muted);line-height:1.6">Upload PDF or CSV &rarr; auto-matches to library &rarr; prints labels.</div>
@@ -412,7 +412,7 @@
 </div>
 
 <!-- INVOICE FULL-WIDTH AREA (shown when Generate Invoice tab is active) -->
-<div id="invoiceArea" style="display:none;min-height:0;overflow:hidden">
+<div id="invoiceArea" style="display:flex;flex:1;min-height:0;overflow:hidden">
 
   <!-- LEFT: Upload + Form -->
   <div style="width:42%;min-width:320px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden">
@@ -525,12 +525,12 @@
 
 
 <!-- INVOICE LEDGER FULL-WIDTH AREA -->
-<div id="ledgerArea" style="display:none;flex:1;min-height:0;overflow:hidden;flex-direction:column">
+<div id="ledgerArea" style="display:none;flex:1;height:0;min-height:0;overflow:hidden;flex-direction:column">
 
   <!-- Top bar -->
   <div style="flex-shrink:0;padding:.7rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.8rem;background:var(--surface)">
     <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128203; Invoice Ledger</div>
-    <input type="text" id="ledgerSearch" placeholder="Search RO or Invoice No..." oninput="ledgerRender()" style="width:220px;font-size:11px;padding:5px 10px">
+    <input type="text" id="ledgerSearch" placeholder="Search RO or Invoice No..." oninput="_ledgerPage=1;ledgerRender()" style="width:220px;font-size:11px;padding:5px 10px">
     <button class="btn btn-secondary btn-sm" onclick="ledgerLoad()" style="width:auto">&#8635; Refresh</button>
     <!-- TEMP — dev/testing only. Remove this button (and ledgerDeleteAllPrompt() below) once app is out of active development. -->
     <button class="btn btn-sm" onclick="ledgerDeleteAllPrompt()" style="width:auto;background:#3a1414;border:1px solid #6b2020;color:#ff8080">&#128465; Delete All (Temp)</button>
@@ -574,6 +574,15 @@
         <tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
     </table>
+  </div>
+
+  <!-- Pagination footer — sits below the table as its own flex-shrink:0 row, same
+       pattern as the top bar and stats strip above (both of which always render
+       correctly), rather than living inside the table itself. -->
+  <div id="ledgerPagerControls" style="display:none;flex-shrink:0;align-items:center;justify-content:center;gap:1rem;padding:.6rem 1.4rem;border-top:1px solid var(--border);background:var(--surface)">
+    <button class="btn btn-secondary btn-sm" id="ledgerPrevBtn" style="width:auto" onclick="ledgerGoToPage(_ledgerPage-1)">&#8592; Prev</button>
+    <span id="ledgerPageIndicator" style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap"></span>
+    <button class="btn btn-secondary btn-sm" id="ledgerNextBtn" style="width:auto" onclick="ledgerGoToPage(_ledgerPage+1)">Next &#8594;</button>
   </div>
 
 </div>
@@ -875,7 +884,7 @@ function switchTab(name, btn) {
       ia.style.display='flex'; ia.style.height=''; ia.style.flex='1';
     } else {
       var la=document.getElementById('ledgerArea');
-      la.style.display='flex'; la.style.height=''; la.style.flex='1';
+      la.style.display='flex'; la.style.height='0'; la.style.flex='1';
       ledgerLoad();
     }
     return;
@@ -3193,8 +3202,11 @@ function ledgerDeleteAllPrompt() {
 // ═══════════════════════════════════════════════════════════════
 var _ledgerRecords = [];
 var _cnByInv = {}; // inv_number -> array of credit note records
+var _ledgerPage = 1;
+var _ledgerPageSize = 10;
 
 function ledgerLoad() {
+  _ledgerPage = 1;
   document.getElementById('ledgerTbody').innerHTML =
     '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
 
@@ -3241,6 +3253,14 @@ function ledgerRender() {
            (r.warehouse||'').toLowerCase().includes(q);
   });
 
+  // Explicit descending order by invoice sequence number (latest first), regardless of
+  // what order the data arrived in from D1/localStorage.
+  rows.sort(function(a, b) {
+    var na = parseInt(((a.inv_number||'').match(/(\d+)$/)||[])[0]) || 0;
+    var nb = parseInt(((b.inv_number||'').match(/(\d+)$/)||[])[0]) || 0;
+    return nb - na;
+  });
+
   // Stats
   document.getElementById('ledgerStatTotal').textContent = _ledgerRecords.length;
   var now = new Date();
@@ -3257,10 +3277,20 @@ function ledgerRender() {
     document.getElementById('ledgerTbody').innerHTML =
       '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">' +
       (q ? 'No results for "' + q + '"' : 'No invoices generated yet') + '</td></tr>';
+    document.getElementById('ledgerPagerControls').style.display = 'none';
     return;
   }
 
-  document.getElementById('ledgerTbody').innerHTML = rows.map(function(r, i) {
+  // ── Pagination — 10 per page ──
+  var totalPages = Math.max(1, Math.ceil(rows.length / _ledgerPageSize));
+  if (_ledgerPage > totalPages) _ledgerPage = totalPages;
+  if (_ledgerPage < 1) _ledgerPage = 1;
+  var startIdx = (_ledgerPage - 1) * _ledgerPageSize;
+  var pageRows = rows.slice(startIdx, startIdx + _ledgerPageSize);
+
+  ledgerRenderPagination(rows.length, totalPages);
+
+  document.getElementById('ledgerTbody').innerHTML = pageRows.map(function(r, i) {
     var dateStr = r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) : '—';
     var bg = i % 2 === 0 ? '' : 'background:#0a0a0a';
         // Show inv_date as date created; warehouse trimmed
@@ -3340,6 +3370,30 @@ function ledgerRender() {
       + '<td style="padding:.6rem 1rem;text-align:center;white-space:nowrap">' + statusCell + '</td>'
     + '</tr>';
   }).join('');
+}
+
+// Updates the Prev/Next + page indicator controls in the top bar. Deliberately does NOT
+// rebuild any HTML — the buttons and span already exist in the page; we just toggle
+// visibility, update the label text, and set disabled state on the two buttons directly.
+function ledgerRenderPagination(totalRows, totalPages) {
+  var wrap = document.getElementById('ledgerPagerControls');
+  if (totalRows <= _ledgerPageSize) { wrap.style.display = 'none'; return; } // single page — nothing to paginate
+  wrap.style.display = 'flex';
+
+  var startRow = (_ledgerPage - 1) * _ledgerPageSize + 1;
+  var endRow = Math.min(_ledgerPage * _ledgerPageSize, totalRows);
+  document.getElementById('ledgerPageIndicator').textContent =
+    startRow + '\u2013' + endRow + ' of ' + totalRows + ' \u00b7 Page ' + _ledgerPage + ' of ' + totalPages;
+
+  var prevBtn = document.getElementById('ledgerPrevBtn');
+  var nextBtn = document.getElementById('ledgerNextBtn');
+  prevBtn.disabled = (_ledgerPage <= 1);
+  nextBtn.disabled = (_ledgerPage >= totalPages);
+}
+
+function ledgerGoToPage(p) {
+  _ledgerPage = p;
+  ledgerRender();
 }
 
 // Hard-clamps the received-qty input to [0, sentQty] on every keystroke — can never
