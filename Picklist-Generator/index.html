@@ -152,8 +152,18 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
 
 #print-header { display: none; }
 
+/* ── Tabs (shared pattern with other Tomahawk apps) ── */
+.tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); }
+.tab-btn { padding: .7rem 1.4rem; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; border-bottom: 2px solid transparent; color: var(--text2); transition: all .15s; font-family: var(--font-body); background: none; border-top: none; border-left: none; border-right: none; }
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
 @media print {
-  .actionbar, .topbar .btn-outline, .site-header, #gen-time { display: none !important; }
+  .actionbar, .topbar .btn-outline, .site-header, #gen-time, .tabs { display: none !important; }
+  #tab-picklist { display: block !important; }
+  #tab-cropper { display: none !important; }
   body { background: #fff; font-size: 12px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .topbar { position: static; background: #fff !important; color: #000 !important; border-bottom: 2px solid #000; }
   .topbar-title { color: #000 !important; font-size: 15px; }
@@ -185,6 +195,8 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
   #picklist-screen { display: block !important; }
 }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 </head>
 <body>
 
@@ -219,6 +231,13 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
     </div>
   </div>
 </header>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab('picklist',this)">Picklist Generator</button>
+  <button class="tab-btn" onclick="switchTab('cropper',this)">Label Cropper</button>
+</div>
+
+<div id="tab-picklist" class="tab-content active">
 
 <span id="gen-time" style="display:none;"></span>
 
@@ -255,6 +274,49 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
     </span>
   </div>
   <div id="picklist-content"></div>
+</div>
+
+</div>
+
+<div id="tab-cropper" class="tab-content">
+  <div style="max-width:560px;margin:32px auto;padding:0 16px;">
+    <div style="font-size:11px;color:var(--text2);line-height:1.6;margin-bottom:14px;">Upload a shipping-label PDF (E-Kart, Delhivery, etc.) &rarr; auto-detects the courier label box on each page &rarr; crops out the Tax Invoice below it.</div>
+
+    <div class="drop-zone" id="lc-dropzone" style="width:100%;" ondragover="lcDragOver(event)" ondragleave="lcDragLeave()" ondrop="lcDropFile(event)">
+      <div class="icon">&#128203;</div>
+      <div class="label"><strong>Drop PDF here</strong> or click to browse</div>
+      <input type="file" id="lc-file-input" accept="application/pdf" onchange="lcFileSelected(this)">
+      <button class="btn btn-dark" onclick="event.stopPropagation();document.getElementById('lc-file-input').click()">Choose File</button>
+      <div id="lc-filename" style="font-size:11px;color:var(--accent);margin-top:10px;word-break:break-all;"></div>
+    </div>
+
+    <div id="lc-action-card" style="display:none;margin-top:18px;">
+      <button class="btn btn-dark" id="lc-process-btn" style="width:100%;padding:12px;font-size:13px;" onclick="lcProcessAll()">Crop &amp; download</button>
+      <div style="height:8px;background:var(--surface2);border-radius:5px;overflow:hidden;margin-top:12px;display:none;" id="lc-progress-outer">
+        <div style="height:100%;width:0%;background:var(--accent);transition:width .2s;" id="lc-progress-inner"></div>
+      </div>
+      <div id="lc-status" style="font-size:12px;color:var(--text2);margin-top:12px;min-height:18px;"></div>
+      <div id="lc-warn-box" style="background:rgba(229,72,77,0.08);border:1px solid rgba(229,72,77,0.35);border-radius:8px;padding:10px 14px;font-size:12px;color:#e5484d;margin-top:12px;display:none;"></div>
+      <div id="lc-dl-fallback" style="margin-top:10px;display:none;">
+        <a class="btn btn-outline" id="lc-dl-link" style="display:block;text-align:center;text-decoration:none;" href="#" download="cropped_shipping_labels.pdf">&#8595; Download didn't start? Click here</a>
+      </div>
+
+      <button id="lc-adv-toggle" onclick="lcToggleAdvanced()" style="background:none;border:none;color:var(--text2);font-size:11px;cursor:pointer;padding:0;display:flex;align-items:center;gap:5px;font-family:var(--font-body);margin-top:16px;">
+        &#9881; Advanced settings &#9662;
+      </button>
+      <div id="lc-adv-panel" style="display:none;flex-direction:column;gap:.8rem;margin-top:14px;border-top:1px solid var(--border);padding-top:14px;">
+        <div>
+          <label style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:6px;"><span>Padding around label</span><b id="lc-pad-val" style="color:var(--accent);">1 mm</b></label>
+          <input type="range" id="lc-pad-slider" min="0" max="6" step="0.5" value="1" style="width:100%;accent-color:var(--accent);">
+        </div>
+        <div>
+          <label style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:6px;"><span>Detection sensitivity</span><b id="lc-thresh-val" style="color:var(--accent);">Standard</b></label>
+          <input type="range" id="lc-thresh-slider" min="215" max="250" step="5" value="240" style="width:100%;accent-color:var(--accent);">
+        </div>
+        <div style="font-size:10px;color:var(--text2);line-height:1.5;">Defaults work for standard Flipkart/E-Kart/Delhivery shipping labels. Only adjust if a batch isn't cropping cleanly.</div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -948,6 +1010,270 @@ function toggleTheme() {
   document.documentElement.setAttribute('data-theme', isLight ? 'dark' : 'light');
   localStorage.setItem('tm_theme', isLight ? 'dark' : 'light');
 }
+
+// ── Tabs ──
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-btn').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  document.querySelectorAll('.tab-content').forEach(function(t){ t.classList.remove('active'); });
+  document.getElementById('tab-' + name).classList.add('active');
+}
+
+// ── LABEL CROPPER ──
+// Crops just the courier shipping-label portion off each page, discarding the
+// Tax Invoice section below it. Uses the "Not for resale." footer text (present
+// on every Flipkart-routed shipping label regardless of courier) as an anchor
+// to find where the label ends, then finds the label's own tight content box
+// within that region. Namespaced with lc* to stay independent of the picklist code.
+(function(){
+  var LC_SETTINGS_KEY = 'picklist_cropper_v1';
+  var LC_DETECT_SCALE = 2.2;
+  var LC_ANCHOR_BUFFER_PT = 10;
+
+  var lcOriginalBytes = null;
+  var lcPageCount = 0;
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  var lcDropzone = document.getElementById('lc-dropzone');
+  var lcActionCard = document.getElementById('lc-action-card');
+  var lcProcessBtn = document.getElementById('lc-process-btn');
+  var lcProgressOuter = document.getElementById('lc-progress-outer');
+  var lcProgressInner = document.getElementById('lc-progress-inner');
+  var lcStatus = document.getElementById('lc-status');
+  var lcWarnBox = document.getElementById('lc-warn-box');
+  var lcDlFallback = document.getElementById('lc-dl-fallback');
+  var lcDlLink = document.getElementById('lc-dl-link');
+  var lcPadSlider = document.getElementById('lc-pad-slider');
+  var lcPadVal = document.getElementById('lc-pad-val');
+  var lcThreshSlider = document.getElementById('lc-thresh-slider');
+  var lcThreshVal = document.getElementById('lc-thresh-val');
+  var lcAdvToggle = document.getElementById('lc-adv-toggle');
+  var lcAdvPanel = document.getElementById('lc-adv-panel');
+
+  // Settings persistence
+  (function restore(){
+    try{
+      var s = JSON.parse(localStorage.getItem(LC_SETTINGS_KEY)) || {};
+      if (s.pad != null) lcPadSlider.value = s.pad;
+      if (s.thresh != null) lcThreshSlider.value = s.thresh;
+    } catch(e){}
+    lcUpdatePadLabel(); lcUpdateThreshLabel();
+  })();
+  function lcSave(){ localStorage.setItem(LC_SETTINGS_KEY, JSON.stringify({ pad: parseFloat(lcPadSlider.value), thresh: parseInt(lcThreshSlider.value) })); }
+  function lcUpdatePadLabel(){ lcPadVal.textContent = parseFloat(lcPadSlider.value).toFixed(1).replace(/\.0$/,'') + ' mm'; }
+  function lcUpdateThreshLabel(){ var v=parseInt(lcThreshSlider.value); lcThreshVal.textContent = v<=225?'Strict':v>=245?'Loose':'Standard'; }
+  lcPadSlider.addEventListener('input', function(){ lcUpdatePadLabel(); lcSave(); });
+  lcThreshSlider.addEventListener('input', function(){ lcUpdateThreshLabel(); lcSave(); });
+
+  window.lcToggleAdvanced = function(){
+    var open = lcAdvPanel.style.display === 'flex';
+    lcAdvPanel.style.display = open ? 'none' : 'flex';
+    lcAdvToggle.innerHTML = open ? '&#9881; Advanced settings &#9662;' : '&#9881; Advanced settings &#9652;';
+  };
+
+  // Drag/drop + file input
+  window.lcDragOver = function(e){ e.preventDefault(); lcDropzone.classList.add('drag-over'); };
+  window.lcDragLeave = function(){ lcDropzone.classList.remove('drag-over'); };
+  window.lcDropFile = function(e){
+    e.preventDefault();
+    lcDropzone.classList.remove('drag-over');
+    if (e.dataTransfer.files.length) lcHandleFile(e.dataTransfer.files[0]);
+  };
+  window.lcFileSelected = function(input){
+    if (input.files.length) lcHandleFile(input.files[0]);
+  };
+
+  async function lcHandleFile(file){
+    if (!file.name.toLowerCase().endsWith('.pdf')){
+      alert('Please upload a PDF file.');
+      return;
+    }
+    document.getElementById('lc-filename').textContent = file.name;
+    var buf = await file.arrayBuffer();
+    lcOriginalBytes = new Uint8Array(buf);
+    var doc = await pdfjsLib.getDocument({ data: lcOriginalBytes.slice() }).promise;
+    lcPageCount = doc.numPages;
+    lcActionCard.style.display = 'block';
+    lcStatus.textContent = lcPageCount + ' page' + (lcPageCount!==1?'s':'') + ' loaded.';
+    lcWarnBox.style.display = 'none';
+    lcDlFallback.style.display = 'none';
+  }
+
+  // Anchor: find the "Not for resale" text line on the page
+  async function lcFindAnchorY(pdfDoc, pageIndex){
+    var page = await pdfDoc.getPage(pageIndex + 1);
+    var textContent = await page.getTextContent();
+    for (var i=0; i<textContent.items.length; i++){
+      var item = textContent.items[i];
+      if (item.str && /resale/i.test(item.str)){
+        return item.transform[5];
+      }
+    }
+    return null;
+  }
+
+  async function lcRenderPageToCanvas(pdfDoc, pageIndex){
+    var page = await pdfDoc.getPage(pageIndex + 1);
+    var viewport = page.getViewport({ scale: LC_DETECT_SCALE });
+    var canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    var ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+    return { canvas: canvas, ctx: ctx, pageWidthPt: page.view[2]-page.view[0], pageHeightPt: page.view[3]-page.view[1] };
+  }
+
+  function lcIsInk(data, width, x, y, threshold){
+    var idx = (y*width+x)*4;
+    var lum = 0.299*data[idx] + 0.587*data[idx+1] + 0.114*data[idx+2];
+    return lum < threshold;
+  }
+
+  // Band-aware tight-box detection: stops at the label's own content block and
+  // ignores anything after a real gap (e.g. the dashed perforation line below it).
+  function lcDetectTightBox(ctx, width, height, threshold, maxRow){
+    var limit = Math.min(height, Math.max(1, maxRow));
+    var data = ctx.getImageData(0, 0, width, limit).data;
+
+    var rowHasInk = new Uint8Array(limit);
+    for (var y=0; y<limit; y++){
+      var found=false;
+      for (var x=0; x<width; x++){
+        if (lcIsInk(data, width, x, y, threshold)){ found=true; break; }
+      }
+      rowHasInk[y] = found ? 1 : 0;
+    }
+
+    var runs=[], s=-1;
+    for (y=0; y<limit; y++){
+      if (rowHasInk[y] && s===-1) s=y;
+      if (!rowHasInk[y] && s!==-1){ runs.push([s,y-1]); s=-1; }
+    }
+    if (s!==-1) runs.push([s, limit-1]);
+    if (!runs.length) return null;
+
+    var minGap = 4;
+    var bands=[runs[0].slice()];
+    for (var i=1; i<runs.length; i++){
+      if (runs[i][0]-bands[bands.length-1][1]-1 < minGap){
+        bands[bands.length-1][1] = runs[i][1];
+      } else {
+        bands.push(runs[i].slice());
+      }
+    }
+
+    var y0=bands[0][0], y1=bands[0][1];
+    var minX=width, maxX=-1;
+    for (var x=0; x<width; x++){
+      var hit=false;
+      for (var yy=y0; yy<=y1; yy+=2){
+        if (lcIsInk(data, width, x, yy, threshold)){ hit=true; break; }
+      }
+      if (hit){ if (x<minX) minX=x; if (x>maxX) maxX=x; }
+    }
+    if (maxX<=minX) return null;
+    return { x0:minX, y0:y0, x1:maxX, y1:y1 };
+  }
+
+  function lcPixelBoxToPdfRect(box, pageWidthPt, pageHeightPt, padMm){
+    var padPt = padMm * 72 / 25.4;
+    var xMinPt = box.x0/LC_DETECT_SCALE, xMaxPt = box.x1/LC_DETECT_SCALE;
+    var yTopPt = pageHeightPt - (box.y0/LC_DETECT_SCALE);
+    var yBotPt = pageHeightPt - (box.y1/LC_DETECT_SCALE);
+    return {
+      tight: { x: xMinPt, y: yBotPt, width: xMaxPt-xMinPt, height: yTopPt-yBotPt },
+      padded: {
+        x: Math.max(0, xMinPt-padPt), y: Math.max(0, yBotPt-padPt),
+        x1: Math.min(pageWidthPt, xMaxPt+padPt), y1: Math.min(pageHeightPt, yTopPt+padPt)
+      }
+    };
+  }
+
+  window.lcProcessAll = async function(){
+    if (!lcOriginalBytes) return;
+    lcProcessBtn.disabled = true;
+    lcWarnBox.style.display = 'none';
+    lcDlFallback.style.display = 'none';
+    lcProgressOuter.style.display = 'block';
+    lcProgressInner.style.width = '0%';
+    lcStatus.textContent = 'Starting...';
+
+    var padMm = parseFloat(lcPadSlider.value);
+    var threshold = parseInt(lcThreshSlider.value);
+    var problemPages = [];
+
+    try{
+      var pdfjsDoc = await pdfjsLib.getDocument({ data: lcOriginalBytes.slice() }).promise;
+      var srcDoc = await PDFLib.PDFDocument.load(lcOriginalBytes.slice());
+      var outDoc = await PDFLib.PDFDocument.create();
+
+      for (var i=0; i<lcPageCount; i++){
+        lcStatus.textContent = 'Analyzing page ' + (i+1) + ' of ' + lcPageCount + '...';
+        var r = await lcRenderPageToCanvas(pdfjsDoc, i);
+        var anchorY = await lcFindAnchorY(pdfjsDoc, i);
+
+        var maxRowPx;
+        if (anchorY != null){
+          var cutoffPt = anchorY - LC_ANCHOR_BUFFER_PT;
+          maxRowPx = Math.ceil((r.pageHeightPt - cutoffPt) * LC_DETECT_SCALE);
+        } else {
+          maxRowPx = r.canvas.height;
+          problemPages.push({ page: i+1, reason: 'no anchor text found' });
+        }
+
+        var box = lcDetectTightBox(r.ctx, r.canvas.width, r.canvas.height, threshold, maxRowPx);
+        if (!box){
+          if (!problemPages.some(function(p){ return p.page===i+1; })) problemPages.push({ page:i+1, reason:'no content detected' });
+          lcProgressInner.style.width = Math.round(((i+1)/lcPageCount)*100) + '%';
+          continue;
+        }
+
+        var rects = lcPixelBoxToPdfRect(box, r.pageWidthPt, r.pageHeightPt, padMm);
+        var copiedArr = await outDoc.copyPages(srcDoc, [i]);
+        var copied = copiedArr[0];
+        copied.setMediaBox(rects.padded.x, rects.padded.y, rects.padded.x1-rects.padded.x, rects.padded.y1-rects.padded.y);
+        copied.setCropBox(rects.padded.x, rects.padded.y, rects.padded.x1-rects.padded.x, rects.padded.y1-rects.padded.y);
+        var bw = 1;
+        copied.drawRectangle({
+          x: rects.tight.x - bw/2, y: rects.tight.y - bw/2,
+          width: rects.tight.width + bw, height: rects.tight.height + bw,
+          borderColor: PDFLib.rgb(0,0,0), borderWidth: bw
+        });
+        outDoc.addPage(copied);
+
+        lcProgressInner.style.width = Math.round(((i+1)/lcPageCount)*100) + '%';
+        await new Promise(function(res){ setTimeout(res, 0); });
+      }
+
+      var outBytes = await outDoc.save();
+      var blob = new Blob([outBytes], { type: 'application/pdf' });
+      var url = URL.createObjectURL(blob);
+      var totalLabels = outDoc.getPageCount();
+
+      lcStatus.textContent = totalLabels + ' label' + (totalLabels!==1?'s':'') + ' cropped from ' + lcPageCount + ' page' + (lcPageCount!==1?'s':'') + '. Download started.';
+
+      var a = document.createElement('a');
+      a.href = url; a.download = 'cropped_shipping_labels.pdf';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      lcDlLink.href = url;
+      lcDlFallback.style.display = 'block';
+
+      if (problemPages.length){
+        lcWarnBox.style.display = 'block';
+        lcWarnBox.textContent = '\u26A0 ' + problemPages.length + ' page(s) needed a fallback: ' +
+          problemPages.map(function(p){ return 'page ' + p.page + ' (' + p.reason + ')'; }).join(', ') +
+          '. Worth double-checking those pages in the output.';
+      }
+    } catch(err){
+      lcStatus.textContent = 'Error: ' + err.message;
+    } finally {
+      lcProcessBtn.disabled = false;
+    }
+  };
+})();
 </script>
 </body>
 </html>
