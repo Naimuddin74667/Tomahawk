@@ -156,10 +156,10 @@
 </header>
 
 <div class="tabs">
-  <button class="tab-btn active" onclick="switchTab('invoice',this)">&#128196; Generate Invoice</button>
-  <button class="tab-btn" onclick="switchTab('bulk',this)">Label Print</button>
-  <button class="tab-btn" onclick="switchTab('ledger',this)">&#128203; Invoice Ledger</button>
-  <button class="tab-btn" onclick="switchTab('library',this)">SKU Library</button>
+  <button id="tabBtnInvoice" class="tab-btn active" onclick="switchTab('invoice',this)">&#128196; Generate Invoice</button>
+  <button id="tabBtnBulk" class="tab-btn" onclick="switchTab('bulk',this)">Label Print</button>
+  <button id="tabBtnLedger" class="tab-btn" onclick="switchTab('ledger',this)">&#128203; Invoice Ledger</button>
+  <button id="tabBtnLibrary" class="tab-btn" onclick="switchTab('library',this)">SKU Library</button>
 </div>
 
 <div class="app-body" style="display:none">
@@ -496,6 +496,7 @@
         <!-- Actions -->
         <div style="display:flex;gap:.5rem;padding-top:.4rem;flex-shrink:0;position:sticky;bottom:0;background:var(--surface);padding-bottom:.5rem">
           <button class="btn btn-secondary" style="flex:1" onclick="invReset()">&#8635; Reset</button>
+          <button class="btn btn-secondary" style="flex:1;border-color:var(--accent);color:var(--accent)" onclick="invGenerateLabels()">&#127991; Generate Label</button>
           <button class="btn btn-primary" style="flex:2" onclick="invGeneratePreview()">&#128065; Preview Invoice</button>
         </div>
       </div>
@@ -3143,6 +3144,25 @@ function invConfirmAndDownload() {
       });
     }, 800);
   });
+}
+
+function invGenerateLabels() {
+  // Reads current form values (respects any edits the user made post-parse)
+  var d = invCollectData();
+  if (!d.items.length) { toast('No items found — upload an RO PDF first', 'err'); return; }
+
+  // Map RO items into the {skuId, qty, upc, mrp, desc} shape Label Print already expects
+  var skuQtyMap = {};
+  d.items.forEach(function(it) {
+    if (!it.item_id) return;
+    skuQtyMap[it.item_id] = { skuId: it.item_id, qty: it.qty, upc: it.upc, mrp: it.mrp, desc: it.description };
+  });
+
+  buildBulkRows(skuQtyMap); // existing Label Print SKU-matching logic — untouched
+
+  var labelBtn = document.getElementById('tabBtnBulk');
+  switchTab('bulk', labelBtn);
+  toast('Labels matched from RO \u2014 ' + d.items.length + ' SKU(s). Review in Label Print.', 'ok');
 }
 
 function invReset() {
