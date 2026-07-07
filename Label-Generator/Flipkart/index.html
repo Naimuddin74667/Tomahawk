@@ -2334,14 +2334,17 @@ loadGSheetLookup();
         }
 
         for (var j=0; j<boxes.length; j++){
-          var borderRect = blPixelBoxToPdfRect(boxes[j], r.pageWidthPt, r.pageHeightPt, padMm);
+          // Tight rect = exact content/border edge, no padding — this is where the
+          // original Flipkart border line already sits, so our drawn border lands
+          // right on top of it instead of creating a second, offset rectangle.
+          var tightRect = blPixelBoxToPdfRect(boxes[j], r.pageWidthPt, r.pageHeightPt, 0);
 
-          // Extra breathing room outside the border on all four sides.
-          var extraPt = BL_EXTRA_PAD_MM * 72 / 25.4;
-          var pxLeft = Math.max(0, borderRect.x - extraPt);
-          var pxBottom = Math.max(0, borderRect.y - extraPt);
-          var pxRight = Math.min(r.pageWidthPt, borderRect.x + borderRect.width + extraPt);
-          var pxTop = Math.min(r.pageHeightPt, borderRect.y + borderRect.height + extraPt);
+          // Blank margin between the border and the page edge = user padding + fixed breathing room.
+          var totalPadPt = (padMm + BL_EXTRA_PAD_MM) * 72 / 25.4;
+          var pxLeft = Math.max(0, tightRect.x - totalPadPt);
+          var pxBottom = Math.max(0, tightRect.y - totalPadPt);
+          var pxRight = Math.min(r.pageWidthPt, tightRect.x + tightRect.width + totalPadPt);
+          var pxTop = Math.min(r.pageHeightPt, tightRect.y + tightRect.height + totalPadPt);
           var pageRect = { x: pxLeft, y: pxBottom, width: pxRight-pxLeft, height: pxTop-pxBottom };
 
           var copiedArr = await outDoc.copyPages(srcDoc, [i]);
@@ -2349,13 +2352,13 @@ loadGSheetLookup();
           copied.setMediaBox(pageRect.x, pageRect.y, pageRect.width, pageRect.height);
           copied.setCropBox(pageRect.x, pageRect.y, pageRect.width, pageRect.height);
           // Draw a solid border so the label always has a clean frame, even if
-          // the original border line sat right at the padding edge and got trimmed.
+          // the original border line got clipped during detection.
           var bw = 1;
           copied.drawRectangle({
-            x: borderRect.x + bw/2,
-            y: borderRect.y + bw/2,
-            width: borderRect.width - bw,
-            height: borderRect.height - bw,
+            x: tightRect.x - bw/2,
+            y: tightRect.y - bw/2,
+            width: tightRect.width + bw,
+            height: tightRect.height + bw,
             borderColor: PDFLib.rgb(0,0,0),
             borderWidth: bw
           });
