@@ -176,6 +176,7 @@
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 </head>
 <body>
 <script>(function(){var t=localStorage.getItem('tm_theme');if(t==='light'){document.documentElement.setAttribute('data-theme','light');}})();</script>
@@ -212,6 +213,7 @@
 
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('bulk',this)">Label Print</button>
+  <button class="tab-btn" onclick="switchTab('boxlabel',this)">Box Label</button>
   <button class="tab-btn" onclick="switchTab('library',this)">SKU Library</button>
 </div>
 
@@ -317,6 +319,57 @@
           <button onclick="openSettings()" style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;width:34px;height:34px;flex-shrink:0;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;transition:all .15s" title="Settings" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">&#9881;</button>
         </div>
         <div id="libList" class="sku-list" style="flex:1;overflow-y:auto;min-height:0;padding-right:4px"></div>
+      </div>
+    </div>
+
+    <div id="tab-boxlabel" class="tab-content" style="display:none">
+      <div class="left-inner" style="display:flex;flex-direction:column;gap:.8rem">
+        <div style="font-size:11px;color:var(--muted);line-height:1.6">Upload a Flipkart box/shipping-label PDF &rarr; auto-detects each label's border box &rarr; crops it to its own page.</div>
+
+        <div class="file-drop" id="boxlabelDrop" ondragover="blDragOver(event)" ondragleave="blDragLeave()" ondrop="blDropFile(event)">
+          <input type="file" accept=".pdf" onchange="blFileSelected(this)">
+          <div class="file-drop-icon">&#128203;</div>
+          <div class="file-drop-text">Drop PDF or click</div>
+          <div class="file-drop-name" id="boxlabelFileName"></div>
+        </div>
+
+        <div id="blSettings" style="display:none;flex-direction:column;gap:.8rem">
+          <div class="btn-row" style="margin-top:0">
+            <button class="btn btn-primary" id="blProcessBtn" onclick="blProcessAll()">Crop &amp; download</button>
+          </div>
+
+          <div class="progress-wrap" id="blProgress" style="display:none">
+            <div class="progress-bg"><div class="progress-fill" id="blProgressFill"></div></div>
+            <div class="progress-text" id="blProgressText">Processing...</div>
+          </div>
+
+          <div id="blStatus" style="font-size:11px;color:var(--muted);line-height:1.5"></div>
+          <div id="blWarnBox" class="warn-box" style="display:none;color:#e05555;background:rgba(224,85,85,0.08);border-color:rgba(224,85,85,0.3)"></div>
+          <div id="blDoneRow" style="display:none">
+            <a id="blDlLink" class="btn btn-secondary" style="text-decoration:none;display:block" href="#" download="cropped_box_labels.pdf">&#8595; Download didn't start? Click here</a>
+          </div>
+
+          <div style="border-top:1px solid var(--border);padding-top:.6rem;margin-top:.2rem">
+            <button id="blAdvToggle" onclick="blToggleAdvanced()" style="background:none;border:none;color:var(--muted);font-size:11px;cursor:pointer;padding:0;display:flex;align-items:center;gap:5px;font-family:'DM Sans',sans-serif">
+              &#9881; Advanced settings &#9662;
+            </button>
+            <div id="blAdvancedPanel" style="display:none;flex-direction:column;gap:.8rem;margin-top:.7rem">
+              <div class="field" style="margin:0">
+                <label class="field-lbl" style="display:flex;justify-content:space-between">
+                  <span>Padding around each label</span><span id="blPadVal" style="color:var(--accent);font-weight:700">1.5 mm</span>
+                </label>
+                <input type="range" id="blPadSlider" min="0" max="6" step="0.25" value="1.5" style="width:100%;accent-color:var(--accent)">
+              </div>
+              <div class="field" style="margin:0">
+                <label class="field-lbl" style="display:flex;justify-content:space-between">
+                  <span>Detection sensitivity</span><span id="blThreshVal" style="color:var(--accent);font-weight:700">Standard</span>
+                </label>
+                <input type="range" id="blThreshSlider" min="215" max="250" step="5" value="240" style="width:100%;accent-color:var(--accent)">
+              </div>
+              <div style="font-size:10px;color:var(--muted);line-height:1.5">Only touch these if a batch isn't cropping cleanly &mdash; the defaults work for standard Flipkart labels. Lower sensitivity if faint borders are being missed; raise it if background specks get picked up as content.</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -687,12 +740,29 @@ function switchTab(name, btn) {
   btn.classList.add('active');
   document.querySelectorAll('.tab-content').forEach(function(t){ t.style.display='none'; });
   document.getElementById('tab-'+name).style.display='flex';
+
+  var leftPanel = document.querySelector('.left-panel');
+  var previewPanel = document.getElementById('previewPanel');
+
+  if(name==='boxlabel'){
+    // Single-column tab: no side-by-side preview needed for this workflow
+    leftPanel.style.width='100%';
+    leftPanel.style.maxWidth='100%';
+    leftPanel.style.borderRight='none';
+    previewPanel.style.display='none';
+    return;
+  }
+  // Restore the normal two-column layout for every other tab
+  leftPanel.style.width='';
+  leftPanel.style.maxWidth='';
+  leftPanel.style.borderRight='';
+  previewPanel.style.display='flex';
+
   if(name==='library'){
     renderLibrary();
     // Right panel: hide bulk areas, show library preview
     document.getElementById('bulkEmptyState').style.display='none';
     document.getElementById('bulkTableArea').style.display='none';
-    document.getElementById('labelPreviewArea').style.display='none';
     document.getElementById('libraryPreviewArea').style.display='flex';
     // Reset label preview to empty state
     hideLabelPreview();
@@ -2077,6 +2147,260 @@ function saveNotFoundModal() {
 
 loadGSheetLookup();
 
+// ── BOX LABEL CROPPER ──
+// Auto-detects each label's border-box on a Flipkart box/shipping-label PDF
+// and outputs a new PDF with each label cropped to its own page.
+// Namespaced with bl_ / bl* to avoid clashing with the rest of the app.
+(function(){
+  var BL_SETTINGS_KEY = 'flg_cropper_v1';
+  var BL_DETECT_SCALE = 2.2;
+  var BL_EXTRA_PAD_MM = 2.5; // extra breathing room outside the drawn border, all sides
+
+  var blOriginalBytes = null; // Uint8Array, cloned per read since pdfjs/pdf-lib each consume their own copy
+  var blPageCount = 0;
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  function blLoadSettings(){
+    try { return JSON.parse(localStorage.getItem(BL_SETTINGS_KEY)) || {}; } catch(e){ return {}; }
+  }
+  function blSaveSettings(){
+    localStorage.setItem(BL_SETTINGS_KEY, JSON.stringify({
+      pad: parseFloat(document.getElementById('blPadSlider').value),
+      thresh: parseInt(document.getElementById('blThreshSlider').value)
+    }));
+  }
+  (function blRestoreSettings(){
+    var s = blLoadSettings();
+    if (s.pad != null) document.getElementById('blPadSlider').value = s.pad;
+    if (s.thresh != null) document.getElementById('blThreshSlider').value = s.thresh;
+    blUpdatePadLabel(); blUpdateThreshLabel();
+  })();
+
+  function blUpdatePadLabel(){
+    var v = parseFloat(document.getElementById('blPadSlider').value);
+    document.getElementById('blPadVal').textContent = v.toFixed(2).replace(/\.?0+$/,'') + ' mm';
+  }
+  function blUpdateThreshLabel(){
+    var v = parseInt(document.getElementById('blThreshSlider').value);
+    document.getElementById('blThreshVal').textContent = v<=225 ? 'Strict' : v>=245 ? 'Loose' : 'Standard';
+  }
+  document.getElementById('blPadSlider').addEventListener('input', function(){ blUpdatePadLabel(); blSaveSettings(); });
+  document.getElementById('blThreshSlider').addEventListener('input', function(){ blUpdateThreshLabel(); blSaveSettings(); });
+
+  window.blToggleAdvanced = function(){
+    var panel = document.getElementById('blAdvancedPanel');
+    var open = panel.style.display === 'flex';
+    panel.style.display = open ? 'none' : 'flex';
+    document.getElementById('blAdvToggle').innerHTML = open ? '&#9881; Advanced settings &#9662;' : '&#9881; Advanced settings &#9652;';
+  };
+
+  // ── Drag/drop + file input ──
+  window.blDragOver = function(e){ e.preventDefault(); document.getElementById('boxlabelDrop').classList.add('dragover'); };
+  window.blDragLeave = function(){ document.getElementById('boxlabelDrop').classList.remove('dragover'); };
+  window.blDropFile = function(e){
+    e.preventDefault();
+    document.getElementById('boxlabelDrop').classList.remove('dragover');
+    if (e.dataTransfer.files.length) blHandleFile(e.dataTransfer.files[0]);
+  };
+  window.blFileSelected = function(input){
+    if (input.files.length) blHandleFile(input.files[0]);
+  };
+
+  async function blHandleFile(file){
+    if (!file.name.toLowerCase().endsWith('.pdf')){
+      toast('Please upload a PDF file', 'err');
+      return;
+    }
+    document.getElementById('boxlabelFileName').textContent = file.name;
+    var buf = await file.arrayBuffer();
+    blOriginalBytes = new Uint8Array(buf);
+    var doc = await pdfjsLib.getDocument({ data: blOriginalBytes.slice() }).promise;
+    blPageCount = doc.numPages;
+
+    document.getElementById('blSettings').style.display = 'flex';
+    document.getElementById('blStatus').textContent = blPageCount + ' page' + (blPageCount!==1?'s':'') + ' loaded.';
+    document.getElementById('blWarnBox').style.display = 'none';
+    document.getElementById('blDoneRow').style.display = 'none';
+  }
+
+  // ── Detection core ──
+  async function blRenderPageToCanvas(pdfDoc, pageIndex){
+    var page = await pdfDoc.getPage(pageIndex + 1);
+    var viewport = page.getViewport({ scale: BL_DETECT_SCALE });
+    var canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    var ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+    return { canvas: canvas, ctx: ctx, pageWidthPt: page.view[2]-page.view[0], pageHeightPt: page.view[3]-page.view[1] };
+  }
+
+  function blDetectBoxes(ctx, width, height, threshold){
+    var data = ctx.getImageData(0, 0, width, height).data;
+    var rowHasInk = new Uint8Array(height);
+    for (var y=0; y<height; y++){
+      var found=false, rowOffset=y*width*4;
+      for (var x=0; x<width; x++){
+        var idx = rowOffset + x*4;
+        var lum = 0.299*data[idx] + 0.587*data[idx+1] + 0.114*data[idx+2];
+        if (lum < threshold){ found=true; break; }
+      }
+      rowHasInk[y] = found ? 1 : 0;
+    }
+    var runs=[], s=-1;
+    for (y=0; y<height; y++){
+      if (rowHasInk[y] && s===-1) s=y;
+      if (!rowHasInk[y] && s!==-1){ runs.push([s,y-1]); s=-1; }
+    }
+    if (s!==-1) runs.push([s, height-1]);
+
+    var minGap = Math.max(10, Math.floor(height*0.02));
+    var bands=[];
+    for (var i=0;i<runs.length;i++){
+      if (bands.length && runs[i][0]-bands[bands.length-1][1]-1 < minGap){
+        bands[bands.length-1][1] = runs[i][1];
+      } else {
+        bands.push(runs[i].slice());
+      }
+    }
+    var minBandHeight = height*0.06;
+    var realBands = bands.filter(function(b){ return (b[1]-b[0]) >= minBandHeight; });
+
+    var boxes=[];
+    realBands.forEach(function(b){
+      var y0=b[0], y1=b[1], minX=width, maxX=-1;
+      for (var x=0; x<width; x++){
+        var hit=false;
+        for (var yy=y0; yy<=y1; yy+=2){
+          var idx=(yy*width+x)*4;
+          var lum=0.299*data[idx]+0.587*data[idx+1]+0.114*data[idx+2];
+          if (lum<threshold){ hit=true; break; }
+        }
+        if (hit){ if (x<minX) minX=x; if (x>maxX) maxX=x; }
+      }
+      if (maxX>minX) boxes.push({x0:minX,y0:y0,x1:maxX,y1:y1});
+    });
+    return boxes;
+  }
+
+  function blPixelBoxToPdfRect(box, pageWidthPt, pageHeightPt, padMm){
+    var padPt = padMm * 72 / 25.4;
+    var xMinPt = box.x0/BL_DETECT_SCALE, xMaxPt = box.x1/BL_DETECT_SCALE;
+    var yTopPt = pageHeightPt - (box.y0/BL_DETECT_SCALE);
+    var yBotPt = pageHeightPt - (box.y1/BL_DETECT_SCALE);
+    var x0=Math.max(0, xMinPt-padPt), x1=Math.min(pageWidthPt, xMaxPt+padPt);
+    var y0=Math.max(0, yBotPt-padPt), y1=Math.min(pageHeightPt, yTopPt+padPt);
+    return { x:x0, y:y0, width:x1-x0, height:y1-y0 };
+  }
+
+  // ── Full process ──
+  window.blProcessAll = async function(){
+    if (!blOriginalBytes) return;
+    var btn = document.getElementById('blProcessBtn');
+    btn.disabled = true;
+    document.getElementById('blWarnBox').style.display = 'none';
+    document.getElementById('blProgress').style.display = 'block';
+    document.getElementById('blProgressFill').style.width = '0%';
+    document.getElementById('blStatus').textContent = 'Starting...';
+
+    var padMm = parseFloat(document.getElementById('blPadSlider').value);
+    var threshold = parseInt(document.getElementById('blThreshSlider').value);
+    var problemPages = [];
+
+    try{
+      var pdfjsDoc = await pdfjsLib.getDocument({ data: blOriginalBytes.slice() }).promise;
+      var srcDoc = await PDFLib.PDFDocument.load(blOriginalBytes.slice());
+      var outDoc = await PDFLib.PDFDocument.create();
+
+      for (var i=0; i<blPageCount; i++){
+        document.getElementById('blStatus').textContent = 'Analyzing page ' + (i+1) + ' of ' + blPageCount + '...';
+        var r = await blRenderPageToCanvas(pdfjsDoc, i);
+        var boxes = blDetectBoxes(r.ctx, r.canvas.width, r.canvas.height, threshold);
+
+        if (boxes.length === 0){
+          // Skip silently if the page is genuinely blank (common trailing page in Flipkart exports)
+          var hasAnyInk = false;
+          var d = r.ctx.getImageData(0,0,r.canvas.width,r.canvas.height).data;
+          for (var p=0; p<d.length; p+=4*97){ // coarse sample for speed
+            var lum = 0.299*d[p]+0.587*d[p+1]+0.114*d[p+2];
+            if (lum < threshold){ hasAnyInk = true; break; }
+          }
+          if (hasAnyInk) problemPages.push({ page:i+1, count:0 });
+        } else if (boxes.length > 2){
+          problemPages.push({ page:i+1, count:boxes.length });
+        }
+
+        for (var j=0; j<boxes.length; j++){
+          var borderRect = blPixelBoxToPdfRect(boxes[j], r.pageWidthPt, r.pageHeightPt, padMm);
+
+          // Extra breathing room outside the border on all four sides.
+          var extraPt = BL_EXTRA_PAD_MM * 72 / 25.4;
+          var pxLeft = Math.max(0, borderRect.x - extraPt);
+          var pxBottom = Math.max(0, borderRect.y - extraPt);
+          var pxRight = Math.min(r.pageWidthPt, borderRect.x + borderRect.width + extraPt);
+          var pxTop = Math.min(r.pageHeightPt, borderRect.y + borderRect.height + extraPt);
+          var pageRect = { x: pxLeft, y: pxBottom, width: pxRight-pxLeft, height: pxTop-pxBottom };
+
+          var copiedArr = await outDoc.copyPages(srcDoc, [i]);
+          var copied = copiedArr[0];
+          copied.setMediaBox(pageRect.x, pageRect.y, pageRect.width, pageRect.height);
+          copied.setCropBox(pageRect.x, pageRect.y, pageRect.width, pageRect.height);
+          // Draw a solid border so the label always has a clean frame, even if
+          // the original border line sat right at the padding edge and got trimmed.
+          var bw = 1;
+          copied.drawRectangle({
+            x: borderRect.x + bw/2,
+            y: borderRect.y + bw/2,
+            width: borderRect.width - bw,
+            height: borderRect.height - bw,
+            borderColor: PDFLib.rgb(0,0,0),
+            borderWidth: bw
+          });
+          outDoc.addPage(copied);
+        }
+
+        document.getElementById('blProgressFill').style.width = Math.round(((i+1)/blPageCount)*100) + '%';
+        await new Promise(function(res){ setTimeout(res, 0); });
+      }
+
+      var outBytes = await outDoc.save();
+      var blob = new Blob([outBytes], { type: 'application/pdf' });
+      var url = URL.createObjectURL(blob);
+      var totalLabels = outDoc.getPageCount();
+
+      document.getElementById('blStatus').textContent = totalLabels + ' label' + (totalLabels!==1?'s':'') + ' cropped from ' + blPageCount + ' page' + (blPageCount!==1?'s':'') + '. Download started.';
+
+      // Auto-download — no extra click needed
+      var dl = document.getElementById('blDlLink');
+      dl.href = url;
+      var autoA = document.createElement('a');
+      autoA.href = url;
+      autoA.download = 'cropped_box_labels.pdf';
+      document.body.appendChild(autoA);
+      autoA.click();
+      document.body.removeChild(autoA);
+
+      document.getElementById('blDoneRow').style.display = 'block';
+
+      if (problemPages.length){
+        var wb = document.getElementById('blWarnBox');
+        wb.style.display = 'block';
+        wb.textContent = '\u26A0 ' + problemPages.length + ' page(s) had an unexpected label count: ' +
+          problemPages.map(function(p){ return 'page ' + p.page + ' (' + p.count + ' found)'; }).join(', ') +
+          '. Worth double-checking those in the output PDF.';
+      }
+      toast('Box labels cropped', 'ok');
+    } catch(err){
+      document.getElementById('blStatus').textContent = 'Error: ' + err.message;
+      toast('Crop failed: ' + err.message, 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+})();
 
 </script>
 <!-- OFF-SCREEN LABEL for PDF generation — never moves, never affected by tab switching -->
