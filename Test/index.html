@@ -1178,6 +1178,13 @@ html[data-theme="light"] .icon-moon{display:none}
               </div>
               <button class="btn bg" style="font-size:13px;padding:5px 10px;flex-shrink:0;border-color:var(--rb);color:var(--rd)" onclick="dangerAction('csv')">Clear CSV</button>
             </div>
+            <div class="settings-item" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--rb)">
+              <div class="settings-item-info">
+                <h4>Delete everything (testing)</h4>
+                <p>Wipes ALL B2C + FBA return logs across every tab \u2014 Process, Claims, Maintenance, Putaway, Trash, All Returns. Uploaded CSV master data and sync settings are kept. \u26a0 This writes to the same live database as production \u2014 use only when you mean it.</p>
+              </div>
+              <button class="btn bg" style="font-size:13px;padding:5px 10px;flex-shrink:0;background:var(--rd);color:#fff;border-color:var(--rd)" onclick="dangerAction('everything')">Delete everything</button>
+            </div>
           </div>
         </div>
       </div>
@@ -2618,6 +2625,22 @@ function confirmDangerAction(){
     master={};meta={uploadedAt:null};persistCSV();persist();
     updateCSVStatus();updateDashboard();
     toast('CSV master data cleared');
+  } else if(_dangerTarget==='everything'){
+    // Clears logs only — master{}/meta/fbaManifest (uploaded CSV + sync data) are untouched
+    returns=[];fbaReturns=[];
+    persist();persistFBA();
+    putawayDoneToday.clear();
+    sessionCount=0;sessionItems=[];
+    fbaSessionCount=0;fbaSessionItems=[];fbaCurrentId=null;
+    currentProcessId=null;claimNeeded=null;
+    resModalId=null;resChoice=null;
+    putawaySelected.clear();repairSelected.clear();currentRepairRecvId=null;
+    fbaInspectId=null;claimModalId2=null;
+    updateDashboard();renderAll();renderListStats();renderClaims();
+    renderPendingList();renderMaint();renderPutaway();renderTrash();
+    renderScanRight();updateCounters();
+    renderFBAProcess();renderFBAScanRight();updateFBAScanCounters();
+    toast('All return logs cleared — CSV & sync data kept');
   }
   _dangerTarget=null;
 }
