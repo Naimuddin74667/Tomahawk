@@ -627,6 +627,15 @@ html[data-theme="light"] .icon-moon{display:none}
           </div>
         </div>
       </div>
+      <div class="cstrip" style="margin-bottom:12px">
+        <div class="csi2"><div class="cn" id="session-count" style="color:var(--or);font-size:32px">0</div><div class="cl2">This session</div></div>
+        <div class="cd"></div>
+        <div class="csi2"><div class="cn" id="b2c-sell-count" style="color:var(--gn);font-size:32px">0</div><div class="cl2">Sellable</div></div>
+        <div class="cd"></div>
+        <div class="csi2"><div class="cn" id="b2c-unsell-count" style="color:var(--rd);font-size:32px">0</div><div class="cl2">Unsellable</div></div>
+        <div class="cd"></div>
+        <div class="csi2"><div class="cn" id="total-all-today" style="color:var(--bl);font-size:32px">0</div><div class="cl2">Total scanned today</div></div>
+      </div>
       <div class="scan-box" id="entry-box">
         <div class="sbt"><div class="slbl"><span class="pulse"></span>Ready — scan parcel barcode</div></div>
         <div class="siw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="3" y1="12" x2="21" y2="12"/></svg><input class="scan-input" id="entry-input" type="text" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Scan tracking barcode…" onkeydown="entryKey(event)" oninput="entryInput(this.value)"></div>
@@ -634,11 +643,6 @@ html[data-theme="light"] .icon-moon{display:none}
         <div class="stmsg msg-ok" id="entry-ok"><div class="mt" id="entry-ok-txt">✓ Logged</div><div class="ms">Scan next parcel</div></div>
         <div class="stmsg msg-err" id="entry-nf"><div class="mt">Tracking not found in CSV</div><div class="ms">No record for <code id="entry-nf-t"></code>. Upload latest Flipkart report.</div><button class="sa sa-r" onclick="entryReset()">↺ Scan again</button></div>
         <div class="stmsg msg-warn" id="entry-dupe"><div class="mt">Already logged</div><div class="ms">Tracking <code id="entry-dupe-t"></code> already in system as <strong id="entry-dupe-st"></strong>.</div><button class="sa sa-a" onclick="entryReset()">↺ Scan next</button></div>
-      </div>
-      <div class="cstrip">
-        <div class="csi2"><div class="cn" id="session-count" style="color:var(--or);font-size:32px">0</div><div class="cl2">This session</div></div>
-        <div class="cd"></div>
-        <div class="csi2"><div class="cn" id="total-all-today" style="color:var(--gn);font-size:32px">0</div><div class="cl2">Total scanned today</div></div>
       </div>
     </div>
     <div class="scan-r">
@@ -1437,7 +1441,7 @@ function entryLookup(track){
   const row=master[track];
   const rec={id:uid(),tracking:track,orderId:row.orderId,product:row.product,sku:row.sku,qty:row.qty,returnReason:row.returnReason,subReason:row.subReason,customerComment:row.customerComment,date:row.date,returnStatus:row.returnStatus,price:row.price,platform:row.platform,sugCond:row.sugCond,returnType:row.returnType||'',disposition:fkDisposition(row.returnType),condition:'',claimNeeded:false,claimRef:'',claimResolution:'',claimApprovedAmt:'',claimNote:'',note:'',putaway:false,maintDone:false,maintResult:'',status:'Return Pending',createdAt:new Date().toISOString()};
   returns.push(rec);persist();
-  sessionCount++;sessionItems.unshift({tracking:track,product:row.product,time:new Date().toISOString()});
+  sessionCount++;sessionItems.unshift({tracking:track,product:row.product,disposition:fkDisposition(row.returnType),time:new Date().toISOString()});
   updateDashboard();updateCounters();renderScanRight();
   document.getElementById('entry-box').className='scan-box found';
   const disp=fkDisposition(row.returnType);
@@ -1455,6 +1459,8 @@ function updateCounters(){
   const todayCount=returns.filter(r=>r.createdAt&&new Date(r.createdAt).toDateString()===today).length;
   document.getElementById('session-count').textContent=sessionCount;
   document.getElementById('total-all-today').textContent=todayCount;
+  const sellEl=document.getElementById('b2c-sell-count');if(sellEl)sellEl.textContent=sessionItems.filter(i=>i.disposition==='Sellable').length;
+  const unsellEl=document.getElementById('b2c-unsell-count');if(unsellEl)unsellEl.textContent=sessionItems.filter(i=>i.disposition==='Unsellable').length;
   document.getElementById('sr-sub').textContent=sessionCount+' parcel'+(sessionCount!==1?'s':'')+' this session';
   const nbScan=document.getElementById('nb-scan-count');if(nbScan)nbScan.textContent=todayCount;
 }
@@ -1467,7 +1473,7 @@ function renderScanRight(){
       <div class="sr-inf">
         <div class="sr-pr">${item.product||item.tracking}</div>
         <div class="sr-tr">${item.tracking}</div>
-        <div class="sr-tm">${fmtTime(item.time)}</div>
+        <div class="sr-tm">${fmtTime(item.time)}${item.disposition?` · <span style="font-size:12px;padding:1px 6px;border-radius:9px;font-weight:500;background:${item.disposition==='Sellable'?'var(--gbg)':'var(--rbg)'};color:${item.disposition==='Sellable'?'var(--gn)':'var(--rd)'}">${item.disposition}</span>`:''}</div>
       </div>
     </div>`).join('');
 }
@@ -2563,7 +2569,7 @@ function dangerAction(target){
 }
 function confirmDangerAction(){
   const pw=document.getElementById('admin-pw-input').value;
-  if(pw!=='Admin74667'){
+  if(pw!=='Admin@8411'){
     document.getElementById('admin-pw-err').style.display='block';
     document.getElementById('admin-pw-input').value='';
     document.getElementById('admin-pw-input').focus();
