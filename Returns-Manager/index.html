@@ -644,6 +644,7 @@ html[data-theme="light"] .icon-moon{display:none}
         <div class="stmsg msg-err" id="entry-nf"><div class="mt">Tracking not found in CSV</div><div class="ms">No record for <code id="entry-nf-t"></code>. Upload latest Flipkart report.</div><button class="sa sa-r" onclick="entryReset()">↺ Scan again</button></div>
         <div class="stmsg msg-warn" id="entry-dupe"><div class="mt">Already logged</div><div class="ms">Tracking <code id="entry-dupe-t"></code> already in system as <strong id="entry-dupe-st"></strong>.</div><button class="sa sa-a" onclick="entryReset()">↺ Scan next</button></div>
       </div>
+      <div id="b2c-scan-result" style="display:none"></div>
     </div>
     <div class="scan-r">
       <div class="sr-hdr"><h3>Scanned this session</h3><p id="sr-sub">0 parcels logged</p></div>
@@ -1448,11 +1449,41 @@ function entryLookup(track){
   returns.push(rec);persist();
   sessionCount++;sessionItems.unshift({tracking:track,product:row.product,disposition:fkDisposition(row.returnType),time:new Date().toISOString()});
   updateDashboard();updateCounters();renderScanRight();
-  document.getElementById('entry-box').className='scan-box found';
-  const disp=fkDisposition(row.returnType);
-  document.getElementById('entry-ok-txt').innerHTML='✓ '+(row.product||track).slice(0,45)+' \u2014 Return Pending'+(disp?' '+dispBadge(disp):'');
-  document.getElementById('entry-ok').classList.add('show');
-  setTimeout(()=>{document.getElementById('entry-input').value='';entryReset(true);document.getElementById('entry-input').focus();},1200);
+  showB2CScanResult(rec);
+  ['entry-nf','entry-dupe'].forEach(id=>document.getElementById(id).classList.remove('show'));
+  document.getElementById('entry-box').className='scan-box';
+  // Auto-select input so next barcode scan immediately overwrites — result card stays visible until then
+  const inp=document.getElementById('entry-input');
+  inp.value=track;
+  inp.focus();
+  inp.select();
+}
+function showB2CScanResult(rec){
+  const isSell=rec.disposition==='Sellable';
+  const el=document.getElementById('b2c-scan-result');
+  el.style.display='block';
+  el.innerHTML=`
+    <div style="border-radius:var(--r);border:1px solid ${rec.disposition?(isSell?'var(--gb)':'var(--rb)'):'var(--bd)'};overflow:hidden;margin-bottom:10px">
+      <div style="padding:10px 14px;background:${rec.disposition?(isSell?'var(--gbg)':'var(--rbg)'):'var(--sf)'};border-bottom:1px solid ${rec.disposition?(isSell?'var(--gb)':'var(--rb)'):'var(--bd)'};display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:14px;font-weight:600;color:${rec.disposition?(isSell?'var(--gn)':'var(--rd)'):'var(--t2)'}">${rec.disposition?(isSell?'✓ SELLABLE':'✕ UNSELLABLE'):'\u2014 TYPE UNKNOWN'} ${platBadge(rec.platform)}</div>
+        <div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--t2)">${rec.tracking}</div>
+      </div>
+      <div style="background:var(--sf);padding:10px 14px">
+        <div style="font-size:12px;color:var(--t3);margin-bottom:6px">Order ${rec.orderId||'\u2014'} ${rec.returnReason?'· '+fmtSnake(rec.returnReason):''}</div>
+        <div style="font-size:12px;color:${rec.disposition?(isSell?'var(--t2)':'var(--rd)'):'var(--t2)'};font-weight:${rec.disposition&&!isSell?'500':'400'};margin-bottom:8px">${isSell?'Courier return \u2014 never reached customer. Verify qty and condition, then putaway.':rec.disposition==='Unsellable'?'\u26a0 Customer return \u2014 delivered then sent back. Inspect condition carefully.':'No Return Type on file \u2014 inspect as usual.'}</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bg)">
+          <div>
+            <div style="font-size:14px;font-weight:500">${rec.product||rec.tracking}</div>
+            <div style="font-size:12px;color:var(--t3);font-family:'DM Mono',monospace">${rec.sku||''}</div>
+          </div>
+          <span style="background:var(--s2);padding:2px 9px;border-radius:6px;font-size:13px;font-weight:600">Qty ${rec.qty||1}</span>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn bp" style="flex:1" onclick="nav('process',document.getElementById('nav-process'));renderPendingList()">Go to Process return →</button>
+          <div style="font-size:13px;color:var(--t3);display:flex;align-items:center;padding:0 4px">Scan next barcode to continue ↑</div>
+        </div>
+      </div>
+    </div>`;
 }
 function entryReset(silent){
   if(!silent){document.getElementById('entry-input').value='';document.getElementById('entry-input').focus();}
