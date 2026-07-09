@@ -358,6 +358,7 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
 .b-good{background:var(--gbg);color:var(--gn)}.b-dirty{background:var(--abg);color:var(--am)}
 .b-damaged{background:var(--rbg);color:var(--rd)}.b-wrong{background:var(--pbg);color:var(--pu)}
 .b-missing{background:var(--bbg);color:var(--bl)}.b-diff{background:var(--tbg);color:var(--tl)}
+.b-sell{background:var(--gbg);color:var(--gn)}.b-unsell{background:var(--rbg);color:var(--rd)}
 .pill{display:inline-flex;padding:3px 9px;border-radius:20px;font-size:12px;font-weight:500;white-space:nowrap}
 .p-pend{background:var(--obg);color:var(--or)}
 .p-insp{background:var(--bbg);color:var(--bl)}
@@ -552,7 +553,6 @@ html[data-theme="light"] .icon-moon{display:none}
         <div style="position:relative;display:inline-block" id="csv-upload-dd">
           <button class="upload-lbl" onclick="toggleUploadMenu('csv-upload-dd-menu')" style="gap:6px"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Upload CSV ▾</button>
           <div id="csv-upload-dd-menu" style="display:none;position:absolute;right:0;top:110%;background:var(--sf);border:1px solid var(--bd);border-radius:var(--rs);box-shadow:0 4px 16px rgba(0,0,0,.1);z-index:100;min-width:170px;overflow:hidden">
-            <label class="csv-dd-item">Flipkart B2C<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fk-b2c')"></label>
             <label class="csv-dd-item">Amazon B2C<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'amz-b2c')"></label>
             <label class="csv-dd-item csv-dd-fba">Amazon FBA<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fba')"></label>
             <label class="csv-dd-item csv-dd-fbf">Flipkart FBF<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fbf')"></label>
@@ -620,7 +620,6 @@ html[data-theme="light"] .icon-moon{display:none}
           <div style="position:relative;display:inline-block" id="csv-upload-scan">
             <button class="upload-lbl" onclick="toggleUploadMenu('csv-upload-scan-menu')">Upload CSV ▾</button>
             <div id="csv-upload-scan-menu" style="display:none;position:absolute;right:0;top:110%;background:var(--sf);border:1px solid var(--bd);border-radius:var(--rs);box-shadow:0 4px 16px rgba(0,0,0,.1);z-index:100;min-width:170px;overflow:hidden">
-              <label class="csv-dd-item">Flipkart B2C<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fk-b2c')"></label>
               <label class="csv-dd-item">Amazon B2C<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'amz-b2c')"></label>
               <label class="csv-dd-item csv-dd-fba">Amazon FBA<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fba')"></label>
               <label class="csv-dd-item csv-dd-fbf">Flipkart FBF<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fbf')"></label>
@@ -628,19 +627,23 @@ html[data-theme="light"] .icon-moon{display:none}
           </div>
         </div>
       </div>
+      <div class="cstrip" style="margin-bottom:12px">
+        <div class="csi2"><div class="cn" id="session-count" style="color:var(--or);font-size:32px">0</div><div class="cl2">This session</div></div>
+        <div class="cd"></div>
+        <div class="csi2"><div class="cn" id="b2c-sell-count" style="color:var(--gn);font-size:32px">0</div><div class="cl2">Sellable</div></div>
+        <div class="cd"></div>
+        <div class="csi2"><div class="cn" id="b2c-unsell-count" style="color:var(--rd);font-size:32px">0</div><div class="cl2">Unsellable</div></div>
+        <div class="cd"></div>
+        <div class="csi2"><div class="cn" id="total-all-today" style="color:var(--bl);font-size:32px">0</div><div class="cl2">Total scanned today</div></div>
+      </div>
       <div class="scan-box" id="entry-box">
         <div class="sbt"><div class="slbl"><span class="pulse"></span>Ready — scan parcel barcode</div></div>
         <div class="siw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="3" y1="12" x2="21" y2="12"/></svg><input class="scan-input" id="entry-input" type="text" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Scan tracking barcode…" onkeydown="entryKey(event)" oninput="entryInput(this.value)"></div>
         <div class="scan-sub">Scanner auto-submits on Enter · or type and press Enter</div>
-        <div class="stmsg msg-ok" id="entry-ok"><div class="mt" id="entry-ok-txt">✓ Logged</div><div class="ms">Scan next parcel</div></div>
         <div class="stmsg msg-err" id="entry-nf"><div class="mt">Tracking not found in CSV</div><div class="ms">No record for <code id="entry-nf-t"></code>. Upload latest Flipkart report.</div><button class="sa sa-r" onclick="entryReset()">↺ Scan again</button></div>
         <div class="stmsg msg-warn" id="entry-dupe"><div class="mt">Already logged</div><div class="ms">Tracking <code id="entry-dupe-t"></code> already in system as <strong id="entry-dupe-st"></strong>.</div><button class="sa sa-a" onclick="entryReset()">↺ Scan next</button></div>
       </div>
-      <div class="cstrip">
-        <div class="csi2"><div class="cn" id="session-count" style="color:var(--or);font-size:32px">0</div><div class="cl2">This session</div></div>
-        <div class="cd"></div>
-        <div class="csi2"><div class="cn" id="total-all-today" style="color:var(--gn);font-size:32px">0</div><div class="cl2">Total scanned today</div></div>
-      </div>
+      <div id="b2c-scan-result" style="display:none"></div>
     </div>
     <div class="scan-r">
       <div class="sr-hdr"><h3>Scanned this session</h3><p id="sr-sub">0 parcels logged</p></div>
@@ -670,6 +673,7 @@ html[data-theme="light"] .icon-moon{display:none}
         <div><h2 id="ip-product"></h2><p id="ip-tracking"></p></div>
         <div style="display:flex;align-items:center;gap:7px"><div id="ip-platform"></div><button class="ip-close" onclick="closeInspect()">← Back</button></div>
       </div>
+      <div id="ip-disp"></div>
       <div class="ip-det"><div class="det-grid" id="ip-grid"></div><div id="ip-rtag"></div><div id="ip-comment"></div></div>
       <div class="ip-form">
         <div class="if-lbl">Physical inspection</div>
@@ -785,13 +789,19 @@ html[data-theme="light"] .icon-moon{display:none}
     <div class="toolbar">
       <div class="sw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg><input type="text" id="q-all" placeholder="Search tracking, product…" oninput="renderAll()"></div>
       <select class="fil" id="f-co" onchange="renderAll()"><option value="">All conditions</option><option>Good</option><option>Dirty/Used</option><option>Damaged</option><option>Wrong product</option><option>Missing items</option><option>Different item</option></select>
+      <select class="fil" id="f-disp" onchange="renderAll()"><option value="">All types</option><option value="Sellable">Sellable</option><option value="Unsellable">Unsellable</option></select>
       <button class="pg-export-btn" onclick="exportPageCSV('all')" style="margin-left:auto">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         Export CSV
       </button>
+      <!-- TEMP: testing-phase quick access to Clear return logs, remove once testing is done -->
+      <button class="pg-export-btn" style="border-color:var(--rb);color:var(--rd)" onclick="dangerAction('logs')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        Clear all logs
+      </button>
     </div>
     <div class="tc"><table>
-      <thead><tr><th>Logged</th><th>Tracking</th><th>Product</th><th>Platform</th><th>Condition</th><th>Claim</th><th>Status</th></tr></thead>
+      <thead><tr><th>Logged</th><th>Tracking</th><th>Product</th><th>Platform</th><th>Type</th><th>Condition</th><th>Claim</th><th>Status</th></tr></thead>
       <tbody id="all-tbody"></tbody>
     </table></div>
   </div>
@@ -872,7 +882,6 @@ html[data-theme="light"] .icon-moon{display:none}
           <div style="position:relative;display:inline-block" id="csv-upload-fba">
             <button class="upload-lbl" onclick="toggleUploadMenu('csv-upload-fba-menu')">Upload CSV ▾</button>
             <div id="csv-upload-fba-menu" style="display:none;position:absolute;right:0;top:110%;background:var(--sf);border:1px solid var(--bd);border-radius:var(--rs);box-shadow:0 4px 16px rgba(0,0,0,.1);z-index:100;min-width:170px;overflow:hidden">
-              <label class="csv-dd-item">Flipkart B2C<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fk-b2c')"></label>
               <label class="csv-dd-item">Amazon B2C<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'amz-b2c')"></label>
               <label class="csv-dd-item csv-dd-fba">Amazon FBA<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fba')"></label>
               <label class="csv-dd-item csv-dd-fbf">Flipkart FBF<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fbf')"></label>
@@ -1364,6 +1373,7 @@ function handleCSV(input){
     const iR=col('return_reason','reason'),iSub=col('sub_reason'),iCom=col('comments','comment');
     const iD=col('return_requested','requested_date','return_date');
     const iSt=col('return_status'),iPr=col('total_price','price');
+    const iRT=col('return_type');
     const dates=[];let added=0,dupes=0;
     for(let i=1;i<rows.length;i++){
       const r=rows[i];if(!r||r.length<2)continue;
@@ -1380,7 +1390,8 @@ function handleCSV(input){
         sku:(r[iSku]||r[iFsn]||'').trim(),fsn:(r[iFsn]||'').trim(),qty:(r[iQ]||'1').trim(),
         returnReason:reason,subReason:(r[iSub]||'').trim(),customerComment:(r[iCom]||'').trim(),
         date:ds,returnStatus:(r[iSt]||'').trim(),price:(r[iPr]||'').trim(),
-        platform:window._csvPlatformOverride||'Flipkart B2C',sugCond};
+        platform:window._csvPlatformOverride||'Flipkart B2C',sugCond,
+        returnType:(iRT>=0?(r[iRT]||'').trim().toLowerCase():'')};
       added++;
     }
     if(dates.length){const s=dates.sort((a,b)=>a-b);
@@ -1415,12 +1426,11 @@ function updateCSVStatus(){
 function entryInput(v){if(!v.trim())entryReset(true)}
 function entryKey(e){if(e.key==='Enter'){e.preventDefault();const v=document.getElementById('entry-input').value.trim();if(v)entryLookup(v)}}
 function entryLookup(track){
-  ['entry-ok','entry-nf','entry-dupe'].forEach(id=>document.getElementById(id).classList.remove('show'));
+  ['entry-nf','entry-dupe'].forEach(id=>document.getElementById(id).classList.remove('show'));
   if(!master[track]){
     document.getElementById('entry-box').className='scan-box notfound';
     document.getElementById('entry-nf-t').textContent=track;
     document.getElementById('entry-nf').classList.add('show');
-    setTimeout(()=>{document.getElementById('entry-input').value='';document.getElementById('entry-input').select();entryReset(true);document.getElementById('entry-input').focus();},2500);
     return;
   }
   const existing=returns.find(r=>r.tracking===track);
@@ -1429,29 +1439,61 @@ function entryLookup(track){
     document.getElementById('entry-dupe-t').textContent=track;
     document.getElementById('entry-dupe-st').textContent=existing.status;
     document.getElementById('entry-dupe').classList.add('show');
-    setTimeout(()=>{document.getElementById('entry-input').value='';entryReset(true);document.getElementById('entry-input').focus();},2500);
     return;
   }
   const row=master[track];
-  const rec={id:uid(),tracking:track,orderId:row.orderId,product:row.product,sku:row.sku,qty:row.qty,returnReason:row.returnReason,subReason:row.subReason,customerComment:row.customerComment,date:row.date,returnStatus:row.returnStatus,price:row.price,platform:row.platform,sugCond:row.sugCond,condition:'',claimNeeded:false,claimRef:'',claimResolution:'',claimApprovedAmt:'',claimNote:'',note:'',putaway:false,maintDone:false,maintResult:'',status:'Return Pending',createdAt:new Date().toISOString()};
+  const rec={id:uid(),tracking:track,orderId:row.orderId,product:row.product,sku:row.sku,qty:row.qty,returnReason:row.returnReason,subReason:row.subReason,customerComment:row.customerComment,date:row.date,returnStatus:row.returnStatus,price:row.price,platform:row.platform,sugCond:row.sugCond,returnType:row.returnType||'',disposition:fkDisposition(row.returnType),condition:'',claimNeeded:false,claimRef:'',claimResolution:'',claimApprovedAmt:'',claimNote:'',note:'',putaway:false,maintDone:false,maintResult:'',status:'Return Pending',createdAt:new Date().toISOString()};
   returns.push(rec);persist();
-  sessionCount++;sessionItems.unshift({tracking:track,product:row.product,time:new Date().toISOString()});
+  sessionCount++;sessionItems.unshift({tracking:track,product:row.product,disposition:fkDisposition(row.returnType),time:new Date().toISOString()});
   updateDashboard();updateCounters();renderScanRight();
-  document.getElementById('entry-box').className='scan-box found';
-  document.getElementById('entry-ok-txt').textContent='✓ '+(row.product||track).slice(0,45)+' \u2014 Return Pending';
-  document.getElementById('entry-ok').classList.add('show');
-  setTimeout(()=>{document.getElementById('entry-input').value='';entryReset(true);document.getElementById('entry-input').focus();},1200);
+  showB2CScanResult(rec);
+  ['entry-nf','entry-dupe'].forEach(id=>document.getElementById(id).classList.remove('show'));
+  document.getElementById('entry-box').className='scan-box';
+  // Auto-select input so next barcode scan immediately overwrites — result card stays visible until then
+  const inp=document.getElementById('entry-input');
+  inp.value=track;
+  inp.focus();
+  inp.select();
+}
+function showB2CScanResult(rec){
+  const isSell=rec.disposition==='Sellable';
+  const el=document.getElementById('b2c-scan-result');
+  el.style.display='block';
+  el.innerHTML=`
+    <div style="border-radius:var(--r);border:1px solid ${rec.disposition?(isSell?'var(--gb)':'var(--rb)'):'var(--bd)'};overflow:hidden;margin-bottom:10px">
+      <div style="padding:10px 14px;background:${rec.disposition?(isSell?'var(--gbg)':'var(--rbg)'):'var(--sf)'};border-bottom:1px solid ${rec.disposition?(isSell?'var(--gb)':'var(--rb)'):'var(--bd)'};display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:14px;font-weight:600;color:${rec.disposition?(isSell?'var(--gn)':'var(--rd)'):'var(--t2)'}">${rec.disposition?(isSell?'✓ SELLABLE':'✕ UNSELLABLE'):'\u2014 TYPE UNKNOWN'} ${platBadge(rec.platform)}</div>
+        <div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--t2)">${rec.tracking}</div>
+      </div>
+      <div style="background:var(--sf);padding:10px 14px">
+        <div style="font-size:12px;color:var(--t3);margin-bottom:6px">Order ${rec.orderId||'\u2014'} ${rec.returnReason?'· '+fmtSnake(rec.returnReason):''}</div>
+        <div style="font-size:12px;color:${rec.disposition?(isSell?'var(--t2)':'var(--rd)'):'var(--t2)'};font-weight:${rec.disposition&&!isSell?'500':'400'};margin-bottom:8px">${isSell?'Courier return \u2014 never reached customer. Verify qty and condition, then putaway.':rec.disposition==='Unsellable'?'\u26a0 Customer return \u2014 delivered then sent back. Inspect condition carefully.':'No Return Type on file \u2014 inspect as usual.'}</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bg)">
+          <div>
+            <div style="font-size:14px;font-weight:500">${rec.product||rec.tracking}</div>
+            <div style="font-size:12px;color:var(--t3);font-family:'DM Mono',monospace">${rec.sku||''}</div>
+          </div>
+          <span style="background:var(--s2);padding:2px 9px;border-radius:6px;font-size:13px;font-weight:600">Qty ${rec.qty||1}</span>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn bp" style="flex:1" onclick="nav('process',document.getElementById('nav-process'));renderPendingList()">Go to Process return →</button>
+          <div style="font-size:13px;color:var(--t3);display:flex;align-items:center;padding:0 4px">Scan next barcode to continue ↑</div>
+        </div>
+      </div>
+    </div>`;
 }
 function entryReset(silent){
   if(!silent){document.getElementById('entry-input').value='';document.getElementById('entry-input').focus();}
   document.getElementById('entry-box').className='scan-box';
-  ['entry-ok','entry-nf','entry-dupe'].forEach(id=>document.getElementById(id).classList.remove('show'));
+  ['entry-nf','entry-dupe'].forEach(id=>document.getElementById(id).classList.remove('show'));
 }
 function updateCounters(){
   const today=new Date().toDateString();
   const todayCount=returns.filter(r=>r.createdAt&&new Date(r.createdAt).toDateString()===today).length;
   document.getElementById('session-count').textContent=sessionCount;
   document.getElementById('total-all-today').textContent=todayCount;
+  const sellEl=document.getElementById('b2c-sell-count');if(sellEl)sellEl.textContent=sessionItems.filter(i=>i.disposition==='Sellable').length;
+  const unsellEl=document.getElementById('b2c-unsell-count');if(unsellEl)unsellEl.textContent=sessionItems.filter(i=>i.disposition==='Unsellable').length;
   document.getElementById('sr-sub').textContent=sessionCount+' parcel'+(sessionCount!==1?'s':'')+' this session';
   const nbScan=document.getElementById('nb-scan-count');if(nbScan)nbScan.textContent=todayCount;
 }
@@ -1464,7 +1506,7 @@ function renderScanRight(){
       <div class="sr-inf">
         <div class="sr-pr">${item.product||item.tracking}</div>
         <div class="sr-tr">${item.tracking}</div>
-        <div class="sr-tm">${fmtTime(item.time)}</div>
+        <div class="sr-tm">${fmtTime(item.time)}${item.disposition?` · <span style="font-size:12px;padding:1px 6px;border-radius:9px;font-weight:500;background:${item.disposition==='Sellable'?'var(--gbg)':'var(--rbg)'};color:${item.disposition==='Sellable'?'var(--gn)':'var(--rd)'}">${item.disposition}</span>`:''}</div>
       </div>
     </div>`).join('');
 }
@@ -1492,7 +1534,7 @@ function renderPendingList(filter){
   el.innerHTML=data.map((r,i)=>`
     <div class="pl-item" onclick="openInspect('${r.id}')">
       <div class="pl-num">${i+1}</div>
-      <div class="pl-inf"><div class="pl-pr">${r.product||r.tracking}</div><div class="pl-tr">${r.tracking}</div></div>
+      <div class="pl-inf"><div class="pl-pr">${r.product||r.tracking}</div><div class="pl-tr">${r.tracking}${r.disposition?' · '+dispBadge(r.disposition):''}</div></div>
       <div class="pl-r"><div class="pl-d">${fmtTime(r.createdAt)}</div><button class="pl-btn" onclick="event.stopPropagation();openInspect('${r.id}')">Process →</button></div>
     </div>`).join('');
 }
@@ -1506,6 +1548,13 @@ function openInspect(id){
   document.getElementById('ip-grid').innerHTML=det.map(([k,v])=>`<div class="drow"><div class="dk">${k}</div><div class="dv">${v}</div></div>`).join('');
   document.getElementById('ip-rtag').innerHTML=r.returnReason?`<div style="margin-top:7px"><span class="rtag">${fmtSnake(r.returnReason)}</span></div>`:'';
   document.getElementById('ip-comment').innerHTML=r.customerComment?`<div class="cbox">"${r.customerComment}"</div>`:'';
+  // Sellable = courier_return, never reached customer — quick verify. Unsellable = customer_return — inspect carefully.
+  const isSell=r.disposition==='Sellable';
+  document.getElementById('ip-disp').innerHTML=r.disposition?`
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:var(--rs);margin-bottom:10px;background:${isSell?'var(--gbg)':'var(--rbg)'};border:1px solid var(--${isSell?'gb':'rb'})">
+      <span style="font-size:14px;font-weight:600;color:var(--${isSell?'gn':'rd'})">${isSell?'✓ SELLABLE':'✕ UNSELLABLE'}</span>
+      <span style="font-size:13px;color:var(--${isSell?'gn':'rd'});opacity:.85">${isSell?'Courier return — never reached customer. Verify qty and condition, then putaway.':'Customer return — delivered then sent back. Inspect condition carefully.'}</span>
+    </div>`:'';
   document.querySelectorAll('.cond-grid .cc').forEach(c=>c.className='cc');
   claimNeeded=null;
   document.getElementById('btn-no').className='choice-btn';document.getElementById('btn-yes').className='choice-btn';
@@ -2360,14 +2409,16 @@ function filterAll(f){
 function renderAll(){
   const q=(document.getElementById('q-all').value||'').toLowerCase();
   const fc=document.getElementById('f-co').value;
+  const fd=document.getElementById('f-disp').value;
   const data=returns.filter(r=>{
     if(q&&!r.tracking.toLowerCase().includes(q)&&!(r.product||'').toLowerCase().includes(q))return false;
     if(allFilter!=='all'&&r.status!==allFilter)return false;
     if(fc&&r.condition!==fc)return false;
+    if(fd&&r.disposition!==fd)return false;
     return true;
   }).slice().reverse();
   const tb=document.getElementById('all-tbody');
-  if(!data.length){tb.innerHTML=`<tr><td colspan="7" class="ec"><div class="es"><div class="es-ic">📦</div><h3>No returns yet</h3><p>${returns.length?'Adjust filters':'Scan parcels at entry to begin'}</p></div></td></tr>`;return}
+  if(!data.length){tb.innerHTML=`<tr><td colspan="8" class="ec"><div class="es"><div class="es-ic">📦</div><h3>No returns yet</h3><p>${returns.length?'Adjust filters':'Scan parcels at entry to begin'}</p></div></td></tr>`;return}
   tb.innerHTML=data.map(r=>{
     const cs=claimStatus(r);
     return`<tr class="rh" onclick="openDet('${r.id}')">
@@ -2375,6 +2426,7 @@ function renderAll(){
       <td style="font-family:'DM Mono',monospace;font-size:14px">${r.tracking}</td>
       <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.product}">${r.product||'\u2014'}</td>
       <td>${platBadge(r.platform)}</td>
+      <td>${r.disposition?dispBadge(r.disposition):'<span style="color:var(--t3);font-size:14px">\u2014</span>'}</td>
       <td>${r.condition?condBadge(r.condition):'<span style="color:var(--t3);font-size:14px">\u2014</span>'}</td>
       <td>${cs?`<span class="pill ${claimPillCls(cs)}">${cs}</span>`:'<span style="color:var(--t3);font-size:14px">\u2014</span>'}</td>
       <td><span class="pill ${pillCls(r.status)}">${r.status}</span></td>
@@ -2438,11 +2490,12 @@ function openDet(id){
   document.getElementById('dm-title').textContent=r.product||r.tracking;
   document.getElementById('dm-sub').textContent=r.tracking;
   const cs=claimStatus(r);
-  const rows=[['Order ID',r.orderId||'\u2014'],['SKU',r.sku||'\u2014'],['Qty',r.qty||'\u2014'],['Price',r.price?'₹'+parseFloat(r.price).toLocaleString('en-IN'):'\u2014'],['Platform',r.platform||'\u2014'],['Return date',fmtDate(r.date)],['Return reason',fmtSnake(r.returnReason||'\u2014')],['Logged at',fmtTime(r.createdAt)],['Condition',r.condition||'Not processed'],['Claim',cs||'No claim'],['Claim ID',r.claimRef||'\u2014'],['Resolution',r.claimResolution||'\u2014'],['Approved ₹',r.claimApprovedAmt?'₹'+parseFloat(r.claimApprovedAmt).toLocaleString('en-IN'):'\u2014'],['Note',r.note||'\u2014']];
+  const rows=[['Order ID',r.orderId||'\u2014'],['SKU',r.sku||'\u2014'],['Qty',r.qty||'\u2014'],['Price',r.price?'₹'+parseFloat(r.price).toLocaleString('en-IN'):'\u2014'],['Platform',r.platform||'\u2014'],['Return type',r.disposition||'\u2014'],['Return date',fmtDate(r.date)],['Return reason',fmtSnake(r.returnReason||'\u2014')],['Logged at',fmtTime(r.createdAt)],['Condition',r.condition||'Not processed'],['Claim',cs||'No claim'],['Claim ID',r.claimRef||'\u2014'],['Resolution',r.claimResolution||'\u2014'],['Approved ₹',r.claimApprovedAmt?'₹'+parseFloat(r.claimApprovedAmt).toLocaleString('en-IN'):'\u2014'],['Note',r.note||'\u2014']];
   document.getElementById('dm-body').innerHTML=`
     <div style="padding:13px 16px">
       <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:9px">
         <span class="pill ${pillCls(r.status)}">${r.status}</span>
+        ${r.disposition?dispBadge(r.disposition):''}
         ${r.condition?condBadge(r.condition):''}
         ${cs?`<span class="pill ${claimPillCls(cs)}">${cs}</span>`:''}
       </div>
@@ -2549,7 +2602,7 @@ function dangerAction(target){
 }
 function confirmDangerAction(){
   const pw=document.getElementById('admin-pw-input').value;
-  if(pw!=='Admin74667'){
+  if(pw!=='Admin@8411'){
     document.getElementById('admin-pw-err').style.display='block';
     document.getElementById('admin-pw-input').value='';
     document.getElementById('admin-pw-input').focus();
@@ -2573,8 +2626,8 @@ function confirmDangerAction(){
 function exportPageCSV(page){
   let rows=[], headers=[], filename='';
   if(page==='all'){
-    headers=['ID','Tracking','Order ID','Product','SKU','Platform','Date','Return Reason','Condition','Status','Claim Needed','Claim Ref','Claim Status','Claim Amount','Note','Created At'];
-    rows=returns.map(r=>[r.id,r.tracking,r.orderId,r.product,r.sku,r.platform,r.date,r.returnReason,r.condition,r.status,r.claimNeeded?'Yes':'No',r.claimRef||'',r.claimResolution||'',r.claimApprovedAmt||'',r.note||'',r.createdAt]);
+    headers=['ID','Tracking','Order ID','Product','SKU','Platform','Return Type','Date','Return Reason','Condition','Status','Claim Needed','Claim Ref','Claim Status','Claim Amount','Note','Created At'];
+    rows=returns.map(r=>[r.id,r.tracking,r.orderId,r.product,r.sku,r.platform,r.disposition||'',r.date,r.returnReason,r.condition,r.status,r.claimNeeded?'Yes':'No',r.claimRef||'',r.claimResolution||'',r.claimApprovedAmt||'',r.note||'',r.createdAt]);
     filename='all-returns';
   } else if(page==='claims'){
     headers=['Tracking','Product','Platform','Condition','Claim Ref','Claim Status','Approved ₹','Note','Resolved At'];
@@ -2628,6 +2681,71 @@ function clearCSVMaster(){
 const CF_WORKER_URL = 'https://tomahawk-returns.naimuddin.workers.dev';
 let autoSyncTimer = null;
 const GS_URL_KEY = 'rm_gs_url_v2';
+
+// ── Flipkart B2C — live GSheet feed (replaces manual CSV upload) ──
+// Paste the Apps Script /exec URL here after deploying (see FK_RETURNS_GAS setup notes).
+const FK_RETURNS_GAS_URL = 'https://script.google.com/macros/s/AKfycbzWR3EMfSLBJ92wLJG8PSaA0xqIWVAlNibQHxVIQQOTZr7vQZbV_yuBXax9AAvOM3V35w/exec';
+
+function fkSugCond(reason){
+  const rl=(reason||'').toLowerCase();
+  if(rl.includes('quality'))return'Damaged';
+  if(rl.includes('remorse')||rl.includes('does_not_want')||rl.includes('cancelled')||rl.includes('expensive'))return'Good';
+  if(rl.includes('wrong')||rl.includes('incorrect'))return'Wrong product';
+  if(rl.includes('missing')||rl.includes('incomplete'))return'Missing items';
+  return'';
+}
+
+// Pulls the "All Returns" tab (via Apps Script bridge) straight into master{},
+// same role the old Flipkart B2C CSV upload used to play. Upserts by Tracking ID —
+// never deletes existing master rows, so previously scanned returns still resolve.
+async function fetchFKReturnsFromSheet(){
+  if(!FK_RETURNS_GAS_URL){ console.warn('FK_RETURNS_GAS_URL not set — Flipkart B2C sheet sync skipped'); return; }
+  try{
+    const res = await fetch(FK_RETURNS_GAS_URL);
+    const d = await res.json();
+    if(!d.ok) throw new Error(d.error || 'Sheet fetch failed');
+    let added=0, updated=0;
+    const dates=[];
+    (d.rows||[]).forEach(row=>{
+      const track=(row['Tracking ID']||'').toString().trim();
+      if(!track) return;
+      const reason=(row['Return Reason']||'').toString();
+      const ds=row['Return Requested Date']||'';
+      if(ds){ const dt=new Date(ds); if(!isNaN(dt)) dates.push(dt); }
+      if(master[track]) updated++; else added++;
+      master[track]={
+        tracking:track,
+        orderId:(row['Order ID']||'').toString().trim(),
+        product:(row['Product']||'').toString().trim(),
+        sku:(row['SKU']||row['FSN']||'').toString().trim(),
+        fsn:(row['FSN']||'').toString().trim(),
+        qty:(row['Quantity']!=null?String(row['Quantity']):'1'),
+        returnReason:reason,
+        subReason:(row['Return Sub-reason']||'').toString().trim(),
+        customerComment:(row['Comments']||'').toString().trim(),
+        date:ds,
+        returnStatus:[row['Return Status'],row['Completion Status']].filter(Boolean).join(' / '),
+        price:(row['Total Price']!=null?String(row['Total Price']):''),
+        platform:'Flipkart B2C',
+        sugCond:fkSugCond(reason),
+        returnType:(row['Return Type']||'').toString().trim().toLowerCase()
+      };
+    });
+    if(dates.length){
+      const s=dates.sort((a,b)=>a-b);
+      if(!meta.dataFrom||new Date(s[0])<new Date(meta.dataFrom))meta.dataFrom=s[0].toISOString();
+      if(!meta.dataTo||new Date(s[s.length-1])>new Date(meta.dataTo))meta.dataTo=s[s.length-1].toISOString();
+    }
+    meta.uploadedAt=new Date().toISOString();
+    meta.file='Flipkart B2C — Live Sheet';
+    meta.total=Object.keys(master).length;
+    persist();persistCSV();updateCSVStatus();updateDashboard();
+    console.log(`FK Returns sheet sync: ${added} new, ${updated} updated`);
+  }catch(err){
+    console.error('fetchFKReturnsFromSheet:', err.message);
+    toast('Flipkart sheet sync failed: '+err.message);
+  }
+}
 
 // ── Supabase helpers ─────────────────────────────────────────
 function setGsStatus(msg, ok) {
@@ -2751,6 +2869,15 @@ function platBadge(p){
   return`<span class="badge b-fk">${p||'Flipkart B2C'}</span>`;
 }
 function condBadge(c){const m={'Good':'b-good','Dirty/Used':'b-dirty','Damaged':'b-damaged','Wrong product':'b-wrong','Missing items':'b-missing','Different item':'b-diff'};return c?`<span class="badge ${m[c]||''}">${c}</span>`:''}
+// Return Type → Sellable/Unsellable. courier_return = came back before reaching customer (Sellable).
+// customer_return = delivered then returned by customer (Unsellable). Unknown/blank = ''.
+function fkDisposition(returnType){
+  const t=(returnType||'').toLowerCase().trim();
+  if(t==='courier_return')return'Sellable';
+  if(t==='customer_return')return'Unsellable';
+  return'';
+}
+function dispBadge(d){return d?`<span class="badge ${d==='Sellable'?'b-sell':'b-unsell'}">${d==='Sellable'?'✓ Sellable':'✕ Unsellable'}</span>`:''}
 function pillCls(s){return{'Return Pending':'p-pend','Inspected':'p-insp','Resolved':'p-res'}[s]||'p-pend'}
 function claimPillCls(s){return{'Claim Pending':'p-cp','Claim Open':'p-co','Claim Approved':'p-ca','Claim Rejected':'p-cr'}[s]||'p-cp'}
 
@@ -3351,6 +3478,7 @@ initTheme();updateFBABadges();
 if(IS_LIVE){
   setSyncStatus('','Loading...');
   sbLoad();
+  setTimeout(() => fetchFKReturnsFromSheet(), 700); // staggered so it doesn't race the D1 load
 }else{
   setSyncStatus('synced','Local only');
 }
