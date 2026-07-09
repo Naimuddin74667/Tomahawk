@@ -1271,7 +1271,14 @@ html[data-theme="light"] .icon-moon{display:none}
 // ── Environment detection ─────────────────────────────────────
 // LIVE  = GitHub Pages → GSheet is sole source of truth, no localStorage
 // LOCAL = localhost / file:// → localStorage for fast dev testing
-const IS_LIVE = location.hostname === 'naimuddin74667.github.io';
+// IS_LIVE controls whether returns/fbaReturns/master sync to the shared D1 database.
+// The Test/ path is deliberately excluded so it's a fully isolated sandbox — deletes
+// stay deleted, and nothing here can affect the live production database.
+const IS_LIVE = location.hostname === 'naimuddin74667.github.io' && !location.pathname.includes('/Test/');
+// SYNC_FK_SHEET controls whether the live Flipkart "All Returns" GSheet is pulled in
+// for product/order lookup data. This stays true on Test/ (read-only source data,
+// no write-back risk) so scanning still works realistically while testing.
+const SYNC_FK_SHEET = location.hostname === 'naimuddin74667.github.io';
 
 // ── Storage keys (local dev only) ────────────────────────────
 const RK='rm_r_v11',MK='rm_m_v11',CSK='rm_csv_v11';
@@ -3533,9 +3540,11 @@ initTheme();updateFBABadges();
 if(IS_LIVE){
   setSyncStatus('','Loading...');
   sbLoad();
-  setTimeout(() => fetchFKReturnsFromSheet(), 700); // staggered so it doesn't race the D1 load
 }else{
   setSyncStatus('synced','Local only');
+}
+if(SYNC_FK_SHEET){
+  setTimeout(() => fetchFKReturnsFromSheet(), 700); // staggered so it doesn't race the D1 load
 }
 document.getElementById('dash-greeting').textContent=greeting();
 
