@@ -552,7 +552,6 @@ html[data-theme="light"] .icon-moon{display:none}
         <div style="position:relative;display:inline-block" id="csv-upload-dd">
           <button class="upload-lbl" onclick="toggleUploadMenu('csv-upload-dd-menu')" style="gap:6px"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Upload CSV ▾</button>
           <div id="csv-upload-dd-menu" style="display:none;position:absolute;right:0;top:110%;background:var(--sf);border:1px solid var(--bd);border-radius:var(--rs);box-shadow:0 4px 16px rgba(0,0,0,.1);z-index:100;min-width:170px;overflow:hidden">
-            <label class="csv-dd-item">Flipkart B2C<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fk-b2c')"></label>
             <label class="csv-dd-item">Amazon B2C<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'amz-b2c')"></label>
             <label class="csv-dd-item csv-dd-fba">Amazon FBA<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fba')"></label>
             <label class="csv-dd-item csv-dd-fbf">Flipkart FBF<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fbf')"></label>
@@ -620,7 +619,6 @@ html[data-theme="light"] .icon-moon{display:none}
           <div style="position:relative;display:inline-block" id="csv-upload-scan">
             <button class="upload-lbl" onclick="toggleUploadMenu('csv-upload-scan-menu')">Upload CSV ▾</button>
             <div id="csv-upload-scan-menu" style="display:none;position:absolute;right:0;top:110%;background:var(--sf);border:1px solid var(--bd);border-radius:var(--rs);box-shadow:0 4px 16px rgba(0,0,0,.1);z-index:100;min-width:170px;overflow:hidden">
-              <label class="csv-dd-item">Flipkart B2C<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fk-b2c')"></label>
               <label class="csv-dd-item">Amazon B2C<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'amz-b2c')"></label>
               <label class="csv-dd-item csv-dd-fba">Amazon FBA<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fba')"></label>
               <label class="csv-dd-item csv-dd-fbf">Flipkart FBF<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fbf')"></label>
@@ -872,7 +870,6 @@ html[data-theme="light"] .icon-moon{display:none}
           <div style="position:relative;display:inline-block" id="csv-upload-fba">
             <button class="upload-lbl" onclick="toggleUploadMenu('csv-upload-fba-menu')">Upload CSV ▾</button>
             <div id="csv-upload-fba-menu" style="display:none;position:absolute;right:0;top:110%;background:var(--sf);border:1px solid var(--bd);border-radius:var(--rs);box-shadow:0 4px 16px rgba(0,0,0,.1);z-index:100;min-width:170px;overflow:hidden">
-              <label class="csv-dd-item">Flipkart B2C<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fk-b2c')"></label>
               <label class="csv-dd-item">Amazon B2C<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'amz-b2c')"></label>
               <label class="csv-dd-item csv-dd-fba">Amazon FBA<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fba')"></label>
               <label class="csv-dd-item csv-dd-fbf">Flipkart FBF<input type="file" accept=".csv" style="display:none" onchange="handleCSVType(this,'fbf')"></label>
@@ -2629,6 +2626,70 @@ const CF_WORKER_URL = 'https://tomahawk-returns.naimuddin.workers.dev';
 let autoSyncTimer = null;
 const GS_URL_KEY = 'rm_gs_url_v2';
 
+// ── Flipkart B2C — live GSheet feed (replaces manual CSV upload) ──
+// Paste the Apps Script /exec URL here after deploying (see FK_RETURNS_GAS setup notes).
+const FK_RETURNS_GAS_URL = 'https://script.google.com/macros/s/AKfycbzWR3EMfSLBJ92wLJG8PSaA0xqIWVAlNibQHxVIQQOTZr7vQZbV_yuBXax9AAvOM3V35w/exec';
+
+function fkSugCond(reason){
+  const rl=(reason||'').toLowerCase();
+  if(rl.includes('quality'))return'Damaged';
+  if(rl.includes('remorse')||rl.includes('does_not_want')||rl.includes('cancelled')||rl.includes('expensive'))return'Good';
+  if(rl.includes('wrong')||rl.includes('incorrect'))return'Wrong product';
+  if(rl.includes('missing')||rl.includes('incomplete'))return'Missing items';
+  return'';
+}
+
+// Pulls the "All Returns" tab (via Apps Script bridge) straight into master{},
+// same role the old Flipkart B2C CSV upload used to play. Upserts by Tracking ID —
+// never deletes existing master rows, so previously scanned returns still resolve.
+async function fetchFKReturnsFromSheet(){
+  if(!FK_RETURNS_GAS_URL){ console.warn('FK_RETURNS_GAS_URL not set — Flipkart B2C sheet sync skipped'); return; }
+  try{
+    const res = await fetch(FK_RETURNS_GAS_URL);
+    const d = await res.json();
+    if(!d.ok) throw new Error(d.error || 'Sheet fetch failed');
+    let added=0, updated=0;
+    const dates=[];
+    (d.rows||[]).forEach(row=>{
+      const track=(row['Tracking ID']||'').toString().trim();
+      if(!track) return;
+      const reason=(row['Return Reason']||'').toString();
+      const ds=row['Return Requested Date']||'';
+      if(ds){ const dt=new Date(ds); if(!isNaN(dt)) dates.push(dt); }
+      if(master[track]) updated++; else added++;
+      master[track]={
+        tracking:track,
+        orderId:(row['Order ID']||'').toString().trim(),
+        product:(row['Product']||'').toString().trim(),
+        sku:(row['SKU']||row['FSN']||'').toString().trim(),
+        fsn:(row['FSN']||'').toString().trim(),
+        qty:(row['Quantity']!=null?String(row['Quantity']):'1'),
+        returnReason:reason,
+        subReason:(row['Return Sub-reason']||'').toString().trim(),
+        customerComment:(row['Comments']||'').toString().trim(),
+        date:ds,
+        returnStatus:[row['Return Status'],row['Completion Status']].filter(Boolean).join(' / '),
+        price:(row['Total Price']!=null?String(row['Total Price']):''),
+        platform:'Flipkart B2C',
+        sugCond:fkSugCond(reason)
+      };
+    });
+    if(dates.length){
+      const s=dates.sort((a,b)=>a-b);
+      if(!meta.dataFrom||new Date(s[0])<new Date(meta.dataFrom))meta.dataFrom=s[0].toISOString();
+      if(!meta.dataTo||new Date(s[s.length-1])>new Date(meta.dataTo))meta.dataTo=s[s.length-1].toISOString();
+    }
+    meta.uploadedAt=new Date().toISOString();
+    meta.file='Flipkart B2C — Live Sheet';
+    meta.total=Object.keys(master).length;
+    persist();persistCSV();updateCSVStatus();updateDashboard();
+    console.log(`FK Returns sheet sync: ${added} new, ${updated} updated`);
+  }catch(err){
+    console.error('fetchFKReturnsFromSheet:', err.message);
+    toast('Flipkart sheet sync failed: '+err.message);
+  }
+}
+
 // ── Supabase helpers ─────────────────────────────────────────
 function setGsStatus(msg, ok) {
   const el = document.getElementById('gs-status');
@@ -2742,6 +2803,8 @@ function initGsUrl() {
   if (IS_LIVE) {
     // Small delay to ensure DOM is fully ready before fetching
     setTimeout(() => sbLoad(), 300);
+    // Staggered after sbLoad so it doesn't race the D1 load
+    setTimeout(() => fetchFKReturnsFromSheet(), 700);
   }
 }
 
