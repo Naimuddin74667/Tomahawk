@@ -1291,13 +1291,27 @@ function persist(){
   if(IS_LIVE){
     scheduleSync();
   } else {
-    localStorage.setItem(RK,JSON.stringify(returns));
-    localStorage.setItem(MK,JSON.stringify(meta));
+    try{
+      localStorage.setItem(RK,JSON.stringify(returns));
+      localStorage.setItem(MK,JSON.stringify(meta));
+    }catch(err){
+      console.error('persist: localStorage write failed:', err.message);
+    }
   }
 }
 function persistCSV(){
   if(!IS_LIVE){
-    localStorage.setItem(CSK,JSON.stringify(master));
+    if(SYNC_FK_SHEET){
+      // On Test/, master{} is refreshed fresh from the live GSheet on every load
+      // and can be large enough (thousands of records) to exceed the localStorage
+      // quota. No need to persist it locally — it's rebuilt immediately anyway.
+      return;
+    }
+    try{
+      localStorage.setItem(CSK,JSON.stringify(master));
+    }catch(err){
+      console.warn('persistCSV: localStorage quota exceeded, master data not persisted locally:', err.message);
+    }
   } else {
     // Saved as part of scheduleSync via saveAll
     scheduleSync();
@@ -2973,8 +2987,8 @@ function handleCSVType(input, type){
 const FBAK='rm_fba_v1', FBAMK='rm_fba_manifest_v1';
 function loadFBA(){if(IS_LIVE)return[];try{return JSON.parse(localStorage.getItem(FBAK))||[]}catch{return[]}}
 function loadFBAManifest(){if(IS_LIVE)return{};try{return JSON.parse(localStorage.getItem(FBAMK))||{}}catch{return{}}}
-function persistFBA(){if(!IS_LIVE)localStorage.setItem(FBAK,JSON.stringify(fbaReturns));updateFBABadges();}
-function persistFBAManifest(){if(!IS_LIVE)localStorage.setItem(FBAMK,JSON.stringify(fbaManifest));}
+function persistFBA(){if(!IS_LIVE){try{localStorage.setItem(FBAK,JSON.stringify(fbaReturns));}catch(err){console.error('persistFBA: localStorage write failed:', err.message);}}updateFBABadges();}
+function persistFBAManifest(){if(!IS_LIVE){try{localStorage.setItem(FBAMK,JSON.stringify(fbaManifest));}catch(err){console.error('persistFBAManifest: localStorage write failed:', err.message);}}}
 
 let fbaReturns=loadFBA(), fbaManifest=loadFBAManifest();
 let fbaSessionCount=0, fbaSessionItems=[], fbaCurrentId=null;
