@@ -358,6 +358,7 @@ tr.rh:hover td{background:var(--s2);cursor:pointer}
 .b-good{background:var(--gbg);color:var(--gn)}.b-dirty{background:var(--abg);color:var(--am)}
 .b-damaged{background:var(--rbg);color:var(--rd)}.b-wrong{background:var(--pbg);color:var(--pu)}
 .b-missing{background:var(--bbg);color:var(--bl)}.b-diff{background:var(--tbg);color:var(--tl)}
+.b-sell{background:var(--gbg);color:var(--gn)}.b-unsell{background:var(--rbg);color:var(--rd)}
 .pill{display:inline-flex;padding:3px 9px;border-radius:20px;font-size:12px;font-weight:500;white-space:nowrap}
 .p-pend{background:var(--obg);color:var(--or)}
 .p-insp{background:var(--bbg);color:var(--bl)}
@@ -668,6 +669,7 @@ html[data-theme="light"] .icon-moon{display:none}
         <div><h2 id="ip-product"></h2><p id="ip-tracking"></p></div>
         <div style="display:flex;align-items:center;gap:7px"><div id="ip-platform"></div><button class="ip-close" onclick="closeInspect()">← Back</button></div>
       </div>
+      <div id="ip-disp"></div>
       <div class="ip-det"><div class="det-grid" id="ip-grid"></div><div id="ip-rtag"></div><div id="ip-comment"></div></div>
       <div class="ip-form">
         <div class="if-lbl">Physical inspection</div>
@@ -783,13 +785,14 @@ html[data-theme="light"] .icon-moon{display:none}
     <div class="toolbar">
       <div class="sw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg><input type="text" id="q-all" placeholder="Search tracking, product…" oninput="renderAll()"></div>
       <select class="fil" id="f-co" onchange="renderAll()"><option value="">All conditions</option><option>Good</option><option>Dirty/Used</option><option>Damaged</option><option>Wrong product</option><option>Missing items</option><option>Different item</option></select>
+      <select class="fil" id="f-disp" onchange="renderAll()"><option value="">All types</option><option value="Sellable">Sellable</option><option value="Unsellable">Unsellable</option></select>
       <button class="pg-export-btn" onclick="exportPageCSV('all')" style="margin-left:auto">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         Export CSV
       </button>
     </div>
     <div class="tc"><table>
-      <thead><tr><th>Logged</th><th>Tracking</th><th>Product</th><th>Platform</th><th>Condition</th><th>Claim</th><th>Status</th></tr></thead>
+      <thead><tr><th>Logged</th><th>Tracking</th><th>Product</th><th>Platform</th><th>Type</th><th>Condition</th><th>Claim</th><th>Status</th></tr></thead>
       <tbody id="all-tbody"></tbody>
     </table></div>
   </div>
@@ -1361,6 +1364,7 @@ function handleCSV(input){
     const iR=col('return_reason','reason'),iSub=col('sub_reason'),iCom=col('comments','comment');
     const iD=col('return_requested','requested_date','return_date');
     const iSt=col('return_status'),iPr=col('total_price','price');
+    const iRT=col('return_type');
     const dates=[];let added=0,dupes=0;
     for(let i=1;i<rows.length;i++){
       const r=rows[i];if(!r||r.length<2)continue;
@@ -1377,7 +1381,8 @@ function handleCSV(input){
         sku:(r[iSku]||r[iFsn]||'').trim(),fsn:(r[iFsn]||'').trim(),qty:(r[iQ]||'1').trim(),
         returnReason:reason,subReason:(r[iSub]||'').trim(),customerComment:(r[iCom]||'').trim(),
         date:ds,returnStatus:(r[iSt]||'').trim(),price:(r[iPr]||'').trim(),
-        platform:window._csvPlatformOverride||'Flipkart B2C',sugCond};
+        platform:window._csvPlatformOverride||'Flipkart B2C',sugCond,
+        returnType:(iRT>=0?(r[iRT]||'').trim().toLowerCase():'')};
       added++;
     }
     if(dates.length){const s=dates.sort((a,b)=>a-b);
@@ -1430,12 +1435,13 @@ function entryLookup(track){
     return;
   }
   const row=master[track];
-  const rec={id:uid(),tracking:track,orderId:row.orderId,product:row.product,sku:row.sku,qty:row.qty,returnReason:row.returnReason,subReason:row.subReason,customerComment:row.customerComment,date:row.date,returnStatus:row.returnStatus,price:row.price,platform:row.platform,sugCond:row.sugCond,condition:'',claimNeeded:false,claimRef:'',claimResolution:'',claimApprovedAmt:'',claimNote:'',note:'',putaway:false,maintDone:false,maintResult:'',status:'Return Pending',createdAt:new Date().toISOString()};
+  const rec={id:uid(),tracking:track,orderId:row.orderId,product:row.product,sku:row.sku,qty:row.qty,returnReason:row.returnReason,subReason:row.subReason,customerComment:row.customerComment,date:row.date,returnStatus:row.returnStatus,price:row.price,platform:row.platform,sugCond:row.sugCond,returnType:row.returnType||'',disposition:fkDisposition(row.returnType),condition:'',claimNeeded:false,claimRef:'',claimResolution:'',claimApprovedAmt:'',claimNote:'',note:'',putaway:false,maintDone:false,maintResult:'',status:'Return Pending',createdAt:new Date().toISOString()};
   returns.push(rec);persist();
   sessionCount++;sessionItems.unshift({tracking:track,product:row.product,time:new Date().toISOString()});
   updateDashboard();updateCounters();renderScanRight();
   document.getElementById('entry-box').className='scan-box found';
-  document.getElementById('entry-ok-txt').textContent='✓ '+(row.product||track).slice(0,45)+' \u2014 Return Pending';
+  const disp=fkDisposition(row.returnType);
+  document.getElementById('entry-ok-txt').innerHTML='✓ '+(row.product||track).slice(0,45)+' \u2014 Return Pending'+(disp?' '+dispBadge(disp):'');
   document.getElementById('entry-ok').classList.add('show');
   setTimeout(()=>{document.getElementById('entry-input').value='';entryReset(true);document.getElementById('entry-input').focus();},1200);
 }
@@ -1489,7 +1495,7 @@ function renderPendingList(filter){
   el.innerHTML=data.map((r,i)=>`
     <div class="pl-item" onclick="openInspect('${r.id}')">
       <div class="pl-num">${i+1}</div>
-      <div class="pl-inf"><div class="pl-pr">${r.product||r.tracking}</div><div class="pl-tr">${r.tracking}</div></div>
+      <div class="pl-inf"><div class="pl-pr">${r.product||r.tracking}</div><div class="pl-tr">${r.tracking}${r.disposition?' · '+dispBadge(r.disposition):''}</div></div>
       <div class="pl-r"><div class="pl-d">${fmtTime(r.createdAt)}</div><button class="pl-btn" onclick="event.stopPropagation();openInspect('${r.id}')">Process →</button></div>
     </div>`).join('');
 }
@@ -1503,6 +1509,13 @@ function openInspect(id){
   document.getElementById('ip-grid').innerHTML=det.map(([k,v])=>`<div class="drow"><div class="dk">${k}</div><div class="dv">${v}</div></div>`).join('');
   document.getElementById('ip-rtag').innerHTML=r.returnReason?`<div style="margin-top:7px"><span class="rtag">${fmtSnake(r.returnReason)}</span></div>`:'';
   document.getElementById('ip-comment').innerHTML=r.customerComment?`<div class="cbox">"${r.customerComment}"</div>`:'';
+  // Sellable = courier_return, never reached customer — quick verify. Unsellable = customer_return — inspect carefully.
+  const isSell=r.disposition==='Sellable';
+  document.getElementById('ip-disp').innerHTML=r.disposition?`
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:var(--rs);margin-bottom:10px;background:${isSell?'var(--gbg)':'var(--rbg)'};border:1px solid var(--${isSell?'gb':'rb'})">
+      <span style="font-size:14px;font-weight:600;color:var(--${isSell?'gn':'rd'})">${isSell?'✓ SELLABLE':'✕ UNSELLABLE'}</span>
+      <span style="font-size:13px;color:var(--${isSell?'gn':'rd'});opacity:.85">${isSell?'Courier return — never reached customer. Verify qty and condition, then putaway.':'Customer return — delivered then sent back. Inspect condition carefully.'}</span>
+    </div>`:'';
   document.querySelectorAll('.cond-grid .cc').forEach(c=>c.className='cc');
   claimNeeded=null;
   document.getElementById('btn-no').className='choice-btn';document.getElementById('btn-yes').className='choice-btn';
@@ -2357,14 +2370,16 @@ function filterAll(f){
 function renderAll(){
   const q=(document.getElementById('q-all').value||'').toLowerCase();
   const fc=document.getElementById('f-co').value;
+  const fd=document.getElementById('f-disp').value;
   const data=returns.filter(r=>{
     if(q&&!r.tracking.toLowerCase().includes(q)&&!(r.product||'').toLowerCase().includes(q))return false;
     if(allFilter!=='all'&&r.status!==allFilter)return false;
     if(fc&&r.condition!==fc)return false;
+    if(fd&&r.disposition!==fd)return false;
     return true;
   }).slice().reverse();
   const tb=document.getElementById('all-tbody');
-  if(!data.length){tb.innerHTML=`<tr><td colspan="7" class="ec"><div class="es"><div class="es-ic">📦</div><h3>No returns yet</h3><p>${returns.length?'Adjust filters':'Scan parcels at entry to begin'}</p></div></td></tr>`;return}
+  if(!data.length){tb.innerHTML=`<tr><td colspan="8" class="ec"><div class="es"><div class="es-ic">📦</div><h3>No returns yet</h3><p>${returns.length?'Adjust filters':'Scan parcels at entry to begin'}</p></div></td></tr>`;return}
   tb.innerHTML=data.map(r=>{
     const cs=claimStatus(r);
     return`<tr class="rh" onclick="openDet('${r.id}')">
@@ -2372,6 +2387,7 @@ function renderAll(){
       <td style="font-family:'DM Mono',monospace;font-size:14px">${r.tracking}</td>
       <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.product}">${r.product||'\u2014'}</td>
       <td>${platBadge(r.platform)}</td>
+      <td>${r.disposition?dispBadge(r.disposition):'<span style="color:var(--t3);font-size:14px">\u2014</span>'}</td>
       <td>${r.condition?condBadge(r.condition):'<span style="color:var(--t3);font-size:14px">\u2014</span>'}</td>
       <td>${cs?`<span class="pill ${claimPillCls(cs)}">${cs}</span>`:'<span style="color:var(--t3);font-size:14px">\u2014</span>'}</td>
       <td><span class="pill ${pillCls(r.status)}">${r.status}</span></td>
@@ -2435,11 +2451,12 @@ function openDet(id){
   document.getElementById('dm-title').textContent=r.product||r.tracking;
   document.getElementById('dm-sub').textContent=r.tracking;
   const cs=claimStatus(r);
-  const rows=[['Order ID',r.orderId||'\u2014'],['SKU',r.sku||'\u2014'],['Qty',r.qty||'\u2014'],['Price',r.price?'₹'+parseFloat(r.price).toLocaleString('en-IN'):'\u2014'],['Platform',r.platform||'\u2014'],['Return date',fmtDate(r.date)],['Return reason',fmtSnake(r.returnReason||'\u2014')],['Logged at',fmtTime(r.createdAt)],['Condition',r.condition||'Not processed'],['Claim',cs||'No claim'],['Claim ID',r.claimRef||'\u2014'],['Resolution',r.claimResolution||'\u2014'],['Approved ₹',r.claimApprovedAmt?'₹'+parseFloat(r.claimApprovedAmt).toLocaleString('en-IN'):'\u2014'],['Note',r.note||'\u2014']];
+  const rows=[['Order ID',r.orderId||'\u2014'],['SKU',r.sku||'\u2014'],['Qty',r.qty||'\u2014'],['Price',r.price?'₹'+parseFloat(r.price).toLocaleString('en-IN'):'\u2014'],['Platform',r.platform||'\u2014'],['Return type',r.disposition||'\u2014'],['Return date',fmtDate(r.date)],['Return reason',fmtSnake(r.returnReason||'\u2014')],['Logged at',fmtTime(r.createdAt)],['Condition',r.condition||'Not processed'],['Claim',cs||'No claim'],['Claim ID',r.claimRef||'\u2014'],['Resolution',r.claimResolution||'\u2014'],['Approved ₹',r.claimApprovedAmt?'₹'+parseFloat(r.claimApprovedAmt).toLocaleString('en-IN'):'\u2014'],['Note',r.note||'\u2014']];
   document.getElementById('dm-body').innerHTML=`
     <div style="padding:13px 16px">
       <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:9px">
         <span class="pill ${pillCls(r.status)}">${r.status}</span>
+        ${r.disposition?dispBadge(r.disposition):''}
         ${r.condition?condBadge(r.condition):''}
         ${cs?`<span class="pill ${claimPillCls(cs)}">${cs}</span>`:''}
       </div>
@@ -2570,8 +2587,8 @@ function confirmDangerAction(){
 function exportPageCSV(page){
   let rows=[], headers=[], filename='';
   if(page==='all'){
-    headers=['ID','Tracking','Order ID','Product','SKU','Platform','Date','Return Reason','Condition','Status','Claim Needed','Claim Ref','Claim Status','Claim Amount','Note','Created At'];
-    rows=returns.map(r=>[r.id,r.tracking,r.orderId,r.product,r.sku,r.platform,r.date,r.returnReason,r.condition,r.status,r.claimNeeded?'Yes':'No',r.claimRef||'',r.claimResolution||'',r.claimApprovedAmt||'',r.note||'',r.createdAt]);
+    headers=['ID','Tracking','Order ID','Product','SKU','Platform','Return Type','Date','Return Reason','Condition','Status','Claim Needed','Claim Ref','Claim Status','Claim Amount','Note','Created At'];
+    rows=returns.map(r=>[r.id,r.tracking,r.orderId,r.product,r.sku,r.platform,r.disposition||'',r.date,r.returnReason,r.condition,r.status,r.claimNeeded?'Yes':'No',r.claimRef||'',r.claimResolution||'',r.claimApprovedAmt||'',r.note||'',r.createdAt]);
     filename='all-returns';
   } else if(page==='claims'){
     headers=['Tracking','Product','Platform','Condition','Claim Ref','Claim Status','Approved ₹','Note','Resolved At'];
@@ -2671,7 +2688,8 @@ async function fetchFKReturnsFromSheet(){
         returnStatus:[row['Return Status'],row['Completion Status']].filter(Boolean).join(' / '),
         price:(row['Total Price']!=null?String(row['Total Price']):''),
         platform:'Flipkart B2C',
-        sugCond:fkSugCond(reason)
+        sugCond:fkSugCond(reason),
+        returnType:(row['Return Type']||'').toString().trim().toLowerCase()
       };
     });
     if(dates.length){
@@ -2812,6 +2830,15 @@ function platBadge(p){
   return`<span class="badge b-fk">${p||'Flipkart B2C'}</span>`;
 }
 function condBadge(c){const m={'Good':'b-good','Dirty/Used':'b-dirty','Damaged':'b-damaged','Wrong product':'b-wrong','Missing items':'b-missing','Different item':'b-diff'};return c?`<span class="badge ${m[c]||''}">${c}</span>`:''}
+// Return Type → Sellable/Unsellable. courier_return = came back before reaching customer (Sellable).
+// customer_return = delivered then returned by customer (Unsellable). Unknown/blank = ''.
+function fkDisposition(returnType){
+  const t=(returnType||'').toLowerCase().trim();
+  if(t==='courier_return')return'Sellable';
+  if(t==='customer_return')return'Unsellable';
+  return'';
+}
+function dispBadge(d){return d?`<span class="badge ${d==='Sellable'?'b-sell':'b-unsell'}">${d==='Sellable'?'✓ Sellable':'✕ Unsellable'}</span>`:''}
 function pillCls(s){return{'Return Pending':'p-pend','Inspected':'p-insp','Resolved':'p-res'}[s]||'p-pend'}
 function claimPillCls(s){return{'Claim Pending':'p-cp','Claim Open':'p-co','Claim Approved':'p-ca','Claim Rejected':'p-cr'}[s]||'p-cp'}
 
