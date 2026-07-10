@@ -190,8 +190,8 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--tx);font-
 .pulse{width:6px;height:6px;border-radius:50%;background:var(--gn);animation:pu 1.5s ease-in-out infinite;flex-shrink:0}
 @keyframes pu{0%,100%{opacity:1}50%{opacity:.3}}
 .siw{padding:0 20px 16px;position:relative}
-.siw svg{position:absolute;left:34px;top:50%;transform:translateY(-50%);width:16px;height:16px;color:var(--t3)}
-.scan-input{width:100%;padding:16px 16px 16px 46px;border:1px solid var(--bd);border-radius:var(--rs);font-size:16px;font-family:'DM Mono',monospace;color:var(--tx);background:var(--s2);outline:none;letter-spacing:.6px;transition:all .2s}
+.siw svg{position:absolute;left:38px;top:50%;transform:translateY(-50%);width:16px;height:16px;color:var(--t3);pointer-events:none}
+.scan-input{width:100%;padding:16px 16px 16px 58px;border:1px solid var(--bd);border-radius:var(--rs);font-size:16px;font-family:'DM Mono',monospace;color:var(--tx);background:var(--s2);outline:none;letter-spacing:.6px;transition:all .2s}
 .scan-input:focus{background:var(--sf);border-color:var(--bd2)}
 .scan-sub{text-align:center;font-size:15px;color:var(--t3);padding:0 20px 14px}
 .stmsg{padding:12px 20px;display:none;border-top:1px solid var(--bd)}
@@ -1476,6 +1476,7 @@ function entryLookup(track){
   sessionCount++;sessionItems.unshift({tracking:track,product:row.product,disposition:fkDisposition(row.returnType),time:new Date().toISOString()});
   updateDashboard();updateCounters();renderScanRight();
   showB2CScanResult(rec);
+  scheduleEntryAutoClear();
   ['entry-nf','entry-dupe'].forEach(id=>document.getElementById(id).classList.remove('show'));
   document.getElementById('entry-box').className='scan-box';
   // Auto-select input so next barcode scan immediately overwrites — result card stays visible until then
@@ -1515,6 +1516,16 @@ function entryReset(silent){
   if(!silent){document.getElementById('entry-input').value='';document.getElementById('entry-input').focus();}
   document.getElementById('entry-box').className='scan-box';
   ['entry-nf','entry-dupe'].forEach(id=>document.getElementById(id).classList.remove('show'));
+}
+let entryAutoClearTimer=null;
+function scheduleEntryAutoClear(){
+  clearTimeout(entryAutoClearTimer);
+  entryAutoClearTimer=setTimeout(()=>{
+    const el=document.getElementById('b2c-scan-result');
+    if(el){el.style.display='none';el.innerHTML='';}
+    document.getElementById('entry-input').value='';
+    entryReset(true);
+  },120000); // 2 minutes of no new scan
 }
 function updateCounters(){
   const today=new Date().toDateString();
@@ -3120,6 +3131,7 @@ function fbaEntryLookup(track){
   fbaSessionItems.unshift({tracking:track,disposition:overallDisp,lineCount:manifest.lines.length,totalQty:manifest.lines.reduce((s,l)=>s+l.qty,0),time:new Date().toISOString()});
   // Show result card (keep visible for next scan)
   showFBAScanResult(rec);
+  scheduleFbaEntryAutoClear();
   // Clear error states but keep result visible
   ['fba-entry-nf','fba-entry-dupe'].forEach(id=>document.getElementById(id).classList.remove('show'));
   document.getElementById('fba-entry-box').className='scan-box';
@@ -3167,6 +3179,16 @@ function fbaEntryReset(silent){
   if(!silent){document.getElementById('fba-entry-input').value='';document.getElementById('fba-entry-input').focus();}
   document.getElementById('fba-entry-box').className='scan-box';
   ['fba-entry-nf','fba-entry-dupe'].forEach(id=>document.getElementById(id).classList.remove('show'));
+}
+let fbaEntryAutoClearTimer=null;
+function scheduleFbaEntryAutoClear(){
+  clearTimeout(fbaEntryAutoClearTimer);
+  fbaEntryAutoClearTimer=setTimeout(()=>{
+    const el=document.getElementById('fba-scan-result');
+    if(el){el.style.display='none';el.innerHTML='';}
+    document.getElementById('fba-entry-input').value='';
+    fbaEntryReset(true);
+  },120000); // 2 minutes of no new scan
 }
 
 function updateFBAScanCounters(){
