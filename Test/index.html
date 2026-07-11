@@ -1614,9 +1614,12 @@ function closeInspect(){document.getElementById('inspect-panel').classList.remov
 
 const condSel={'Good':'s-good','Dirty/Used':'s-dirty','Damaged':'s-damaged','Wrong product':'s-wrong','Missing items':'s-missing','Different item':'s-diff'};
 // Conditions where a claim is mandatory — there's no valid "no claim" path for
-// these (Trash/Maintenance/Wrong-Product routing all depend on a claim resolving),
-// so the No-claim option is locked out entirely rather than left to orphan records.
-const CLAIM_COMPULSORY=['Damaged','Wrong product','Missing items','Different item'];
+// these (Trash/Maintenance routing depends on a claim resolving), so the
+// No-claim option is locked out entirely rather than left to orphan records.
+// Different item is NOT in this list — staff sometimes knowingly substitute
+// their own product under a different SKU to fulfill an order, so "no claim"
+// is a legitimate choice there (both products are ours, just different SKUs).
+const CLAIM_COMPULSORY=['Damaged','Wrong product','Missing items'];
 function pickCond(el){
   document.querySelectorAll('.cond-grid .cc').forEach(c=>c.className='cc');
   el.className='cc '+(condSel[el.dataset.c]||'');
@@ -3634,7 +3637,7 @@ function finalizeFBARecord(recId){
     });
     Object.values(byCondition).forEach(g=>{
       const cond=g.condition;
-      const claim=cond!=='Good';
+      const claim=!['Good','Different item'].includes(cond);
       const skuToUse=cond==='Different item'&&g.actualSkus?.length?g.actualSkus[0]:l.sku;
       const maintResult='';
       const baseId=rec.tracking.slice(-6)+'-'+l.sku.slice(0,6)+'-'+uid().slice(-4);
