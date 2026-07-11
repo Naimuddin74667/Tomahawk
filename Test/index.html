@@ -965,7 +965,11 @@ html[data-theme="light"] .icon-moon{display:none}
       <div style="background:var(--tbg);border:1px solid var(--tbb);border-radius:var(--rs);padding:10px 12px;margin-bottom:14px;font-size:15px;color:var(--tl)">
         The item received is your product but a different SKU. Enter the actual SKU found in the box — it will go to Wrong Product section and can be moved to Putaway once confirmed.
       </div>
-      <div class="fg"><label>Actual SKU received <span style="color:var(--rd)">*</span></label><input type="text" id="diff-sku-input" placeholder="Enter the SKU of the item actually received"></div>
+      <div class="fg"><label>Actual SKU received <span style="color:var(--rd)">*</span></label>
+        <input type="text" id="diff-sku-input" placeholder="Type to search UC SKU…" autocomplete="off" oninput="ucSkuFilterList(this.value,'diff-sku-list','diff-sku-hint')">
+        <select id="diff-sku-list" size="5" style="width:100%;display:none;margin-top:4px;background:var(--sf);border:1px solid var(--bd);border-radius:6px;color:var(--t1);font-family:'DM Mono',monospace;font-size:13px;padding:4px" onchange="ucSkuPicked(this.value,'diff-sku-input','diff-sku-list','diff-sku-hint')"></select>
+        <div id="diff-sku-hint" style="font-size:12px;color:var(--t3);margin-top:3px;display:none">↑ Select from list or keep typing</div>
+      </div>
       <div class="fg"><label>Note (optional)</label><input type="text" id="diff-sku-note" placeholder="Any observation…"></div>
     </div>
     <div class="mfoot"><button class="btn bg" onclick="closeModal('diff-sku-modal')">Cancel</button><button class="btn bp" onclick="saveDiffSku()">Save &amp; continue</button></div>
@@ -2768,7 +2772,50 @@ const CF_WORKER_URL = 'https://tomahawk-returns.naimuddin.workers.dev';
 let autoSyncTimer = null;
 const GS_URL_KEY = 'rm_gs_url_v2';
 
-// ── Flipkart B2C — live GSheet feed (replaces manual CSV upload) ──
+// ── UC Item Master — full SKU list for "Different item received" dropdowns ──
+// Same Apps Script deployment as FK_RETURNS_GAS_URL, routed via ?type=itemmaster.
+let ucItemMasterList = []; // [{sku, category}, ...] — loaded once, cached for the session
+
+async function loadUcItemMaster(){
+  if(!FK_RETURNS_GAS_URL || ucItemMasterList.length) return;
+  try{
+    const res = await fetch(FK_RETURNS_GAS_URL + '?type=itemmaster');
+    const d = await res.json();
+    if(!d.ok) throw new Error(d.error || 'Item master fetch failed');
+    ucItemMasterList = (d.rows||[]).filter(r=>r.sku);
+    console.log('UC Item Master loaded:', ucItemMasterList.length, 'SKUs');
+  }catch(err){
+    console.error('loadUcItemMaster:', err.message);
+  }
+}
+
+// Filters the dropdown list as the user types into a SKU combo input.
+// inputId/listId/hintId let this be reused across multiple modals.
+function ucSkuFilterList(query, listId, hintId){
+  const list = document.getElementById(listId);
+  const hint = document.getElementById(hintId);
+  const q = query.trim().toLowerCase();
+  if(!q){ list.style.display='none'; if(hint)hint.style.display='none'; return; }
+  const matches = ucItemMasterList.filter(r=>r.sku.toLowerCase().includes(q)).slice(0,20);
+  if(!matches.length){ list.style.display='none'; if(hint)hint.style.display='none'; return; }
+  list.innerHTML = matches.map(r=>{
+    const cat = r.category && r.category!=='Default' ? '  ·  '+r.category : '';
+    return `<option value="${r.sku}">${r.sku}${cat}</option>`;
+  }).join('');
+  list.style.display='block';
+  if(hint)hint.style.display='block';
+}
+
+// Called when a SKU is picked from the dropdown list — fills the paired text input.
+function ucSkuPicked(val, inputId, listId, hintId){
+  if(!val) return;
+  document.getElementById(inputId).value = val;
+  document.getElementById(listId).style.display='none';
+  const hint = document.getElementById(hintId);
+  if(hint) hint.style.display='none';
+}
+
+
 // Paste the Apps Script /exec URL here after deploying (see FK_RETURNS_GAS setup notes).
 const FK_RETURNS_GAS_URL = 'https://script.google.com/macros/s/AKfycbzWR3EMfSLBJ92wLJG8PSaA0xqIWVAlNibQHxVIQQOTZr7vQZbV_yuBXax9AAvOM3V35w/exec';
 
@@ -3580,6 +3627,7 @@ if(IS_LIVE){
 }
 if(SYNC_FK_SHEET){
   setTimeout(() => fetchFKReturnsFromSheet(), 700); // staggered so it doesn't race the D1 load
+  setTimeout(() => loadUcItemMaster(), 900); // small full SKU list, loads fast
 }
 document.getElementById('dash-greeting').textContent=greeting();
 
