@@ -2653,6 +2653,40 @@ function dangerAction(target){
   openModal('admin-modal');
   setTimeout(()=>document.getElementById('admin-pw-input').focus(),100);
 }
+// Immediate, awaited D1 save — bypasses the normal 400ms debounce.
+// Used for destructive actions (clear logs / clear CSV / clear everything)
+// so a quick refresh right after clicking can never lose the delete.
+async function forceSyncNow(){
+  if(!IS_LIVE) return true;
+  clearTimeout(autoSyncTimer);
+  setSyncStatus('syncing','Saving...');
+  try{
+    const masterStr=JSON.stringify(master);
+    const CHUNK=45000;
+    const masterPairs=[];
+    if(masterStr.length<=CHUNK){
+      masterPairs.push({key:'master_json',value:masterStr});
+      masterPairs.push({key:'master_chunks',value:'1'});
+    } else {
+      const chunks=Math.ceil(masterStr.length/CHUNK);
+      masterPairs.push({key:'master_chunks',value:String(chunks)});
+      for(let i=0;i<chunks;i++){
+        masterPairs.push({key:'master_json_'+i,value:masterStr.slice(i*CHUNK,(i+1)*CHUNK)});
+      }
+    }
+    const d=await cfPost('saveAll',{returns,fbaReturns,masterPairs});
+    if(!d.ok) throw new Error(d.error||'Save failed');
+    const t=new Date().toLocaleTimeString('en-IN');
+    setSyncStatus('synced','Synced '+t);updateSyncBadge(t);
+    clearWAL();
+    return true;
+  }catch(err){
+    console.error('forceSyncNow failed:',err.message);
+    setSyncStatus('failed','Sync failed');
+    return false;
+  }
+}
+
 async function confirmDangerAction(){
   const pw=document.getElementById('admin-pw-input').value;
   if(pw!=='Admin@8411'){
@@ -2663,14 +2697,28 @@ async function confirmDangerAction(){
   }
   closeModal('admin-modal');
   if(_dangerTarget==='logs'){
-    returns=[];persist();putawayDoneToday.clear();
+    returns=[];putawayDoneToday.clear();
     updateDashboard();renderAll();renderListStats();renderClaims();
     renderPendingList();renderMaint();renderPutaway();
-    toast('Return logs cleared');
+    if(IS_LIVE){
+      toast('Clearing on server — don\'t close this tab yet…');
+      const ok=await forceSyncNow();
+      toast(ok?'✓ Return logs cleared and confirmed saved to server':'⚠ Cleared locally but server save FAILED — reload will bring old data back. Try again.');
+    } else {
+      persist();
+      toast('Return logs cleared');
+    }
   } else if(_dangerTarget==='csv'){
-    master={};meta={uploadedAt:null};persistCSV();persist();
+    master={};meta={uploadedAt:null};
     updateCSVStatus();updateDashboard();
-    toast('CSV master data cleared');
+    if(IS_LIVE){
+      toast('Clearing on server — don\'t close this tab yet…');
+      const ok=await forceSyncNow();
+      toast(ok?'✓ CSV master data cleared and confirmed saved to server':'⚠ Cleared locally but server save FAILED — reload will bring old data back. Try again.');
+    } else {
+      persistCSV();persist();
+      toast('CSV master data cleared');
+    }
   } else if(_dangerTarget==='everything'){
     // Clears logs only — master{}/meta/fbaManifest (uploaded CSV + sync data) are untouched
     returns=[];fbaReturns=[];
@@ -2688,33 +2736,9 @@ async function confirmDangerAction(){
     if(IS_LIVE){
       // Skip the normal 400ms debounce — await the save directly so a quick
       // reload/navigation right after clicking can't lose the delete to the server.
-      clearTimeout(autoSyncTimer);
-      setSyncStatus('syncing','Saving...');
       toast('Clearing on server — don\'t close this tab yet…');
-      try{
-        const masterStr=JSON.stringify(master);
-        const CHUNK=45000;
-        const masterPairs=[];
-        if(masterStr.length<=CHUNK){
-          masterPairs.push({key:'master_json',value:masterStr});
-          masterPairs.push({key:'master_chunks',value:'1'});
-        } else {
-          const chunks=Math.ceil(masterStr.length/CHUNK);
-          masterPairs.push({key:'master_chunks',value:String(chunks)});
-          for(let i=0;i<chunks;i++){
-            masterPairs.push({key:'master_json_'+i,value:masterStr.slice(i*CHUNK,(i+1)*CHUNK)});
-          }
-        }
-        const d=await cfPost('saveAll',{returns,fbaReturns,masterPairs});
-        if(!d.ok) throw new Error(d.error||'Save failed');
-        const t=new Date().toLocaleTimeString('en-IN');
-        setSyncStatus('synced','Synced '+t);updateSyncBadge(t);
-        toast('✓ Everything cleared and confirmed saved to server');
-      }catch(err){
-        console.error('everything-clear save failed:',err.message);
-        setSyncStatus('failed','Sync failed');
-        toast('⚠ Cleared locally but server save FAILED — reload will bring old data back. Try again.');
-      }
+      const ok=await forceSyncNow();
+      toast(ok?'✓ Everything cleared and confirmed saved to server':'⚠ Cleared locally but server save FAILED — reload will bring old data back. Try again.');
     } else {
       persist();persistFBA();
       toast('All return logs cleared — CSV & sync data kept');
@@ -2722,6 +2746,7 @@ async function confirmDangerAction(){
   }
   _dangerTarget=null;
 }
+
 
 // ── Page CSV Exports ──────────────────────────────────────────
 function exportPageCSV(page){
