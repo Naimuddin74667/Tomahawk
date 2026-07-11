@@ -1738,7 +1738,7 @@ function setPutawayView(v){
   renderPutaway();
 }
 function getPutawayItems(){
-  return returns.filter(r=>(r.condition==='Good'||r.maintResult==='cleaned'||r.maintResult==='repaired')&&r.status==='Inspected'&&!r.putaway);
+  return returns.filter(r=>(r.condition==='Good'||r.maintResult==='cleaned'||r.maintResult==='repaired'||r.maintResult==='putaway-different')&&r.status==='Inspected'&&!r.putaway);
 }
 function getPutawayDoneToday(){
   const today=new Date().toDateString();
@@ -2471,7 +2471,13 @@ function saveResolution(){
     toast(resChoice==='Approved'?'Claim approved ✓ — Wrong product moved to Trash':'Claim rejected — Wrong product moved to Trash');
     return;
   }
-  // Don't mark as Resolved yet — move to maintenance
+  // Different item → goes to Wrong Product tab for manual putaway confirmation
+  if(r.condition==='Different item'){
+    persist();closeModal('res-modal');updateDashboard();renderClaims();renderWrongProduct();
+    toast(resChoice==='Approved'?'Claim approved ✓ — sent to Wrong Product tab':'Claim rejected — sent to Wrong Product tab');
+    return;
+  }
+  // Damaged → move to maintenance
   persist();closeModal('res-modal');updateDashboard();renderClaims();
   toast(resChoice==='Approved'?'Claim approved ✓ — moved to Maintenance':'Claim rejected — moved to Maintenance');
 }
