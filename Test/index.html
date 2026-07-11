@@ -1278,12 +1278,12 @@ html[data-theme="light"] .icon-moon{display:none}
 // LIVE  = GitHub Pages → GSheet is sole source of truth, no localStorage
 // LOCAL = localhost / file:// → localStorage for fast dev testing
 // IS_LIVE controls whether returns/fbaReturns/master sync to the shared D1 database.
-// The Test/ path is deliberately excluded so it's a fully isolated sandbox — deletes
-// stay deleted, and nothing here can affect the live production database.
-const IS_LIVE = location.hostname === 'naimuddin74667.github.io' && !location.pathname.includes('/Test/');
+// Test/ now behaves exactly like the live app — same D1 tables, same Worker,
+// no localStorage-only mode. A write-ahead local backup (see WAL below) is kept
+// purely as a safety net against dropped connections or power cuts mid-save.
+const IS_LIVE = location.hostname === 'naimuddin74667.github.io';
 // SYNC_FK_SHEET controls whether the live Flipkart "All Returns" GSheet is pulled in
-// for product/order lookup data. This stays true on Test/ (read-only source data,
-// no write-back risk) so scanning still works realistically while testing.
+// for product/order lookup data.
 const SYNC_FK_SHEET = location.hostname === 'naimuddin74667.github.io';
 
 // ── Storage keys (local dev only) ────────────────────────────
@@ -2935,6 +2935,7 @@ async function sbLoad(isRetry) {
     setSyncStatus('synced', 'Synced ' + t);
     updateSyncBadge(t);
     if (returns.length) toast('Loaded ' + returns.length + ' returns');
+    checkWALRecovery();
   } catch(err) {
     console.error('sbLoad:', err.message);
     if (!isRetry) {
@@ -2952,43 +2953,90 @@ async function gsLoad() {
   await sbLoad();
 }
 
+// ── Write-ahead local backup (safety net for D1 sync) ──────────
+// D1 is the single source of truth, but a local snapshot is written to
+// localStorage immediately before every save attempt. If the connection
+// drops or the machine loses power before the D1 write confirms, the
+// next page load finds this snapshot and automatically re-pushes it —
+// so no scan/inspection/claim update is ever silently lost.
+const WAL_KEY = 'rm_wal_v1';
+let walRecoveryChecked = false;
+function writeWAL(){
+  try{
+    localStorage.setItem(WAL_KEY, JSON.stringify({returns, fbaReturns, master, meta, ts: Date.now(), pending: true}));
+  }catch(err){
+    console.error('writeWAL: localStorage write failed:', err.message);
+  }
+}
+function clearWAL(){
+  try{ localStorage.removeItem(WAL_KEY); }catch(err){ /* ignore */ }
+}
+function checkWALRecovery(){
+  if (walRecoveryChecked) return;
+  walRecoveryChecked = true;
+  let wal;
+  try{ wal = JSON.parse(localStorage.getItem(WAL_KEY)); }catch{ wal = null; }
+  if (!wal || !wal.pending) return;
+  // Unconfirmed changes from a previous session — restore over the fresh
+  // D1 load and push immediately.
+  returns = wal.returns || returns;
+  fbaReturns = wal.fbaReturns || fbaReturns;
+  master = wal.master || master;
+  meta = wal.meta || meta;
+  updateCSVStatus(); updateDashboard(); renderAll();
+  toast('Recovered unsynced changes from last session — re-syncing...');
+  scheduleSync();
+}
+
 // ── scheduleSync: save all returns to Worker on every change ──
-// 400ms debounce batches rapid changes (scan → process → putaway)
+// 400ms debounce batches rapid changes (scan → process → putaway).
+// Retries automatically on failure (backoff) and immediately on reconnect.
+let syncRetryCount = 0;
 function scheduleSync() {
   if (!IS_LIVE) return;
+  writeWAL(); // snapshot now, so a crash before the debounced push still has the data
   clearTimeout(autoSyncTimer);
-  autoSyncTimer = setTimeout(async () => {
-    setSyncStatus('syncing', 'Saving...');
-    try {
-      // Build master CSV pairs
-      const masterStr = JSON.stringify(master);
-      const CHUNK = 45000;
-      const masterPairs = [];
-      if (masterStr.length <= CHUNK) {
-        masterPairs.push({ key: 'master_json', value: masterStr });
-        masterPairs.push({ key: 'master_chunks', value: '1' });
-      } else {
-        const chunks = Math.ceil(masterStr.length / CHUNK);
-        masterPairs.push({ key: 'master_chunks', value: String(chunks) });
-        for (let i = 0; i < chunks; i++) {
-          masterPairs.push({ key: 'master_json_' + i, value: masterStr.slice(i*CHUNK,(i+1)*CHUNK) });
-        }
-      }
-      const d = await cfPost('saveAll', {
-        returns,
-        fbaReturns,
-        masterPairs
-      });
-      if (!d.ok) throw new Error(d.error || 'Save failed');
-      const t = new Date().toLocaleTimeString('en-IN');
-      setSyncStatus('synced', 'Synced ' + t);
-      updateSyncBadge(t);
-    } catch(err) {
-      console.error('scheduleSync:', err.message);
-      setSyncStatus('failed', 'Sync failed');
-    }
-  }, 400);
+  autoSyncTimer = setTimeout(doSync, 400);
 }
+async function doSync() {
+  setSyncStatus('syncing', 'Saving...');
+  try {
+    // Build master CSV pairs
+    const masterStr = JSON.stringify(master);
+    const CHUNK = 45000;
+    const masterPairs = [];
+    if (masterStr.length <= CHUNK) {
+      masterPairs.push({ key: 'master_json', value: masterStr });
+      masterPairs.push({ key: 'master_chunks', value: '1' });
+    } else {
+      const chunks = Math.ceil(masterStr.length / CHUNK);
+      masterPairs.push({ key: 'master_chunks', value: String(chunks) });
+      for (let i = 0; i < chunks; i++) {
+        masterPairs.push({ key: 'master_json_' + i, value: masterStr.slice(i*CHUNK,(i+1)*CHUNK) });
+      }
+    }
+    const d = await cfPost('saveAll', {
+      returns,
+      fbaReturns,
+      masterPairs
+    });
+    if (!d.ok) throw new Error(d.error || 'Save failed');
+    const t = new Date().toLocaleTimeString('en-IN');
+    setSyncStatus('synced', 'Synced ' + t);
+    updateSyncBadge(t);
+    syncRetryCount = 0;
+    clearWAL(); // D1 confirmed — safety snapshot no longer needed
+  } catch(err) {
+    console.error('scheduleSync:', err.message);
+    syncRetryCount++;
+    const delay = Math.min(30000, 3000 * syncRetryCount); // 3s, 6s, 9s... capped at 30s
+    setSyncStatus('failed', 'Sync failed — retrying');
+    clearTimeout(autoSyncTimer);
+    autoSyncTimer = setTimeout(doSync, delay);
+  }
+}
+window.addEventListener('online', () => { if (IS_LIVE) doSync(); });
+
 
 function updateSyncBadge(t) {
   const time = t || (IS_LIVE ? null : localStorage.getItem('rm_last_sync'));
@@ -3062,7 +3110,7 @@ function handleCSVType(input, type){
 const FBAK='rm_fba_v1', FBAMK='rm_fba_manifest_v1';
 function loadFBA(){if(IS_LIVE)return[];try{return JSON.parse(localStorage.getItem(FBAK))||[]}catch{return[]}}
 function loadFBAManifest(){if(IS_LIVE)return{};try{return JSON.parse(localStorage.getItem(FBAMK))||{}}catch{return{}}}
-function persistFBA(){if(!IS_LIVE){try{localStorage.setItem(FBAK,JSON.stringify(fbaReturns));}catch(err){console.error('persistFBA: localStorage write failed:', err.message);}}updateFBABadges();}
+function persistFBA(){if(IS_LIVE){scheduleSync();}else{try{localStorage.setItem(FBAK,JSON.stringify(fbaReturns));}catch(err){console.error('persistFBA: localStorage write failed:', err.message);}}updateFBABadges();}
 function persistFBAManifest(){if(!IS_LIVE){try{localStorage.setItem(FBAMK,JSON.stringify(fbaManifest));}catch(err){console.error('persistFBAManifest: localStorage write failed:', err.message);}}}
 
 let fbaReturns=loadFBA(), fbaManifest=loadFBAManifest();
