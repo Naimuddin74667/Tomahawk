@@ -265,6 +265,7 @@ textarea{resize:vertical;min-height:48px;line-height:1.5}
 .choice-btn{border:1.5px solid var(--bd);border-radius:var(--rs);padding:9px 11px;cursor:pointer;transition:all .15s;background:var(--sf);display:flex;align-items:center;gap:7px;font-family:'DM Sans',sans-serif;width:100%;text-align:left}
 .choice-btn:hover{border-color:var(--bd2);background:var(--s2)}
 .choice-btn.sel-no{border-color:var(--gn);background:var(--gbg)}.choice-btn.sel-yes{border-color:var(--am);background:var(--abg)}
+.choice-btn.choice-disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
 .choice-ic{font-size:16px;flex-shrink:0}
 .choice-text strong{display:block;font-size:15px;font-weight:600;color:var(--tx);margin-bottom:1px}
 .choice-text span{font-size:16px;color:var(--t2)}
@@ -1600,6 +1601,7 @@ function openInspect(id){
   document.querySelectorAll('.cond-grid .cc').forEach(c=>c.className='cc');
   claimNeeded=null;
   document.getElementById('btn-no').className='choice-btn';document.getElementById('btn-yes').className='choice-btn';
+  document.getElementById('btn-no').disabled=false;document.getElementById('btn-no').title='';
   document.getElementById('claim-ref-fields').classList.remove('show');
   document.getElementById('f-claimref').value='';document.getElementById('auto-st-wrap').innerHTML='';
   document.getElementById('f-note').value='';
@@ -1611,14 +1613,25 @@ function openInspect(id){
 function closeInspect(){document.getElementById('inspect-panel').classList.remove('show');document.getElementById('pending-section').style.display='block';currentProcessId=null;renderPendingList();}
 
 const condSel={'Good':'s-good','Dirty/Used':'s-dirty','Damaged':'s-damaged','Wrong product':'s-wrong','Missing items':'s-missing','Different item':'s-diff'};
+// Conditions where a claim is mandatory — there's no valid "no claim" path for
+// these (Trash/Maintenance/Wrong-Product routing all depend on a claim resolving),
+// so the No-claim option is locked out entirely rather than left to orphan records.
+const CLAIM_COMPULSORY=['Damaged','Wrong product','Missing items','Different item'];
 function pickCond(el){
   document.querySelectorAll('.cond-grid .cc').forEach(c=>c.className='cc');
   el.className='cc '+(condSel[el.dataset.c]||'');
   const c=el.dataset.c;
+  const btnNo=document.getElementById('btn-no');
   // Auto-set claim based on condition
   if(c==='Good'){setClaim(false);}
   else if(c==='Dirty/Used'){setClaim(false);}
   else{setClaim(true);}
+  const locked=CLAIM_COMPULSORY.includes(c);
+  if(btnNo){
+    btnNo.disabled=locked;
+    btnNo.classList.toggle('choice-disabled',locked);
+    btnNo.title=locked?'A claim is required for this condition':'';
+  }
 }
 function setClaim(val){
   claimNeeded=val;
@@ -1636,6 +1649,7 @@ function saveProcess(){
   const cond=ce?ce.dataset.c:'';
   if(!cond){toast('Please select a condition');return}
   if(claimNeeded===null){toast('Please answer \u2014 claim needed?');return}
+  if(CLAIM_COMPULSORY.includes(cond)&&!claimNeeded){toast('A claim is required for '+cond);return}
   // Different item needs SKU entry first
   if(cond==='Different item'){
     pendingProcessData={cond,claimNeeded,claimRef:claimNeeded?document.getElementById('f-claimref').value.trim():'',note:document.getElementById('f-note').value.trim()};
@@ -3620,7 +3634,7 @@ function finalizeFBARecord(recId){
     });
     Object.values(byCondition).forEach(g=>{
       const cond=g.condition;
-      const claim=!['Good','Different item'].includes(cond);
+      const claim=cond!=='Good';
       const skuToUse=cond==='Different item'&&g.actualSkus?.length?g.actualSkus[0]:l.sku;
       const maintResult='';
       const baseId=rec.tracking.slice(-6)+'-'+l.sku.slice(0,6)+'-'+uid().slice(-4);
