@@ -796,11 +796,6 @@ html[data-theme="light"] .icon-moon{display:none}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         Export CSV
       </button>
-      <!-- TEMP: testing-phase quick access to Clear return logs, remove once testing is done -->
-      <button class="pg-export-btn" style="border-color:var(--rb);color:var(--rd)" onclick="dangerAction('logs')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-        Clear all logs
-      </button>
     </div>
     <div class="tc"><table>
       <thead><tr><th>Logged</th><th>Tracking</th><th>Product</th><th>Platform</th><th>Type</th><th>Condition</th><th>Claim</th><th>Status</th></tr></thead>
@@ -1170,26 +1165,12 @@ html[data-theme="light"] .icon-moon{display:none}
             <span id="dz-arrow" style="font-size:12px">▶</span>
           </div>
           <div id="dz-panel" style="display:none;border-top:1px solid var(--rb);padding:12px">
-            <div class="settings-item" style="margin-bottom:10px">
-              <div class="settings-item-info">
-                <h4>Clear return logs</h4>
-                <p>Delete all scanned &amp; processed returns. CSV master data is kept.</p>
-              </div>
-              <button class="btn bg" style="font-size:13px;padding:5px 10px;flex-shrink:0;border-color:var(--rb);color:var(--rd)" onclick="dangerAction('logs')">Clear logs</button>
-            </div>
             <div class="settings-item">
               <div class="settings-item-info">
-                <h4>Clear CSV master data</h4>
-                <p>Wipe the uploaded Flipkart/Amazon CSV database.</p>
+                <h4>Wipe all return data</h4>
+                <p>Deletes every B2C + FBA return log across every tab \u2014 Process, Claims, Maintenance, Putaway, Trash, All Returns. Uploaded CSV master data and Flipkart API sync are untouched (re-fetched fresh on next scan). \u26a0 This writes to the same live database as production \u2014 use only when you mean it.</p>
               </div>
-              <button class="btn bg" style="font-size:13px;padding:5px 10px;flex-shrink:0;border-color:var(--rb);color:var(--rd)" onclick="dangerAction('csv')">Clear CSV</button>
-            </div>
-            <div class="settings-item" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--rb)">
-              <div class="settings-item-info">
-                <h4>Delete everything (testing)</h4>
-                <p>Wipes ALL B2C + FBA return logs across every tab \u2014 Process, Claims, Maintenance, Putaway, Trash, All Returns. Uploaded CSV master data and sync settings are kept. \u26a0 This writes to the same live database as production \u2014 use only when you mean it.</p>
-              </div>
-              <button class="btn bg" style="font-size:13px;padding:5px 10px;flex-shrink:0;background:var(--rd);color:#fff;border-color:var(--rd)" onclick="dangerAction('everything')">Delete everything</button>
+              <button class="btn bg" style="font-size:13px;padding:5px 10px;flex-shrink:0;background:var(--rd);color:#fff;border-color:var(--rd)" onclick="dangerAction('everything')">Wipe all data</button>
             </div>
           </div>
         </div>
@@ -2696,31 +2677,8 @@ async function confirmDangerAction(){
     return;
   }
   closeModal('admin-modal');
-  if(_dangerTarget==='logs'){
-    returns=[];putawayDoneToday.clear();
-    updateDashboard();renderAll();renderListStats();renderClaims();
-    renderPendingList();renderMaint();renderPutaway();
-    if(IS_LIVE){
-      toast('Clearing on server — don\'t close this tab yet…');
-      const ok=await forceSyncNow();
-      toast(ok?'✓ Return logs cleared and confirmed saved to server':'⚠ Cleared locally but server save FAILED — reload will bring old data back. Try again.');
-    } else {
-      persist();
-      toast('Return logs cleared');
-    }
-  } else if(_dangerTarget==='csv'){
-    master={};meta={uploadedAt:null};
-    updateCSVStatus();updateDashboard();
-    if(IS_LIVE){
-      toast('Clearing on server — don\'t close this tab yet…');
-      const ok=await forceSyncNow();
-      toast(ok?'✓ CSV master data cleared and confirmed saved to server':'⚠ Cleared locally but server save FAILED — reload will bring old data back. Try again.');
-    } else {
-      persistCSV();persist();
-      toast('CSV master data cleared');
-    }
-  } else if(_dangerTarget==='everything'){
-    // Clears logs only — master{}/meta/fbaManifest (uploaded CSV + sync data) are untouched
+  if(_dangerTarget==='everything'){
+    // Clears return logs only — master{}/meta/fbaManifest (uploaded CSV + API sync data) are untouched
     returns=[];fbaReturns=[];
     putawayDoneToday.clear();
     sessionCount=0;sessionItems=[];
@@ -2738,7 +2696,7 @@ async function confirmDangerAction(){
       // reload/navigation right after clicking can't lose the delete to the server.
       toast('Clearing on server — don\'t close this tab yet…');
       const ok=await forceSyncNow();
-      toast(ok?'✓ Everything cleared and confirmed saved to server':'⚠ Cleared locally but server save FAILED — reload will bring old data back. Try again.');
+      toast(ok?'✓ All data wiped and confirmed saved to server':'⚠ Cleared locally but server save FAILED — reload will bring old data back. Try again.');
     } else {
       persist();persistFBA();
       toast('All return logs cleared — CSV & sync data kept');
