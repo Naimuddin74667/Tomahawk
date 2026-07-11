@@ -1335,10 +1335,14 @@ function claimStatus(r){
 // Condition routing logic
 // Good → Putaway immediately
 // Dirty/Used → Maintenance (Cleaning) immediately (no claim usually)
-// Damaged/Different → Claim → after claim closes → Maintenance → Repair
-//   (if no claim was needed for Damaged, skip straight to Maintenance/Repair)
+// Damaged → Claim → after claim closes → Maintenance (Repair)
+//   (no claim needed → skip straight to Maintenance/Repair)
+// Different item → Claim → after claim closes → Wrong Product tab (confirm → Putaway)
+//   (no claim needed → skip straight to Wrong Product tab)
 // Missing items → Claim → after claim closes → Trash directly
-// Wrong product → Claim → after claim closes → Wrong Product section
+//   (no claim needed → skip straight to Trash)
+// Wrong product → Claim → after claim closes → Trash directly
+//   (no claim needed → skip straight to Trash)
 function maintTag(condition){
   if(condition==='Dirty/Used')return'cleaning';
   return'repair'; // Damaged
@@ -1656,14 +1660,32 @@ function _finalizeProcess(r,cond,claim,claimRef,note,actualSku){
   r.condition=cond;r.claimNeeded=claim;r.claimRef=claimRef;r.note=note;
   if(actualSku)r.actualSku=actualSku;
   r.status='Inspected';r.processedAt=new Date().toISOString();
-  persist();updateDashboard();
-  const cs=claimStatus(r);
+
   let dest='';
-  if(cond==='Good')dest='→ Added to Putaway';
-  else if(cond==='Dirty/Used')dest='→ Added to Maintenance (Cleaning)';
-  else if(cond==='Different item')dest='→ Putaway queue (actual SKU: '+actualSku+')';
-  else if(cond==='Damaged'&&!claim)dest='→ Added to Maintenance (Repair)';
-  else dest=cs?'· '+cs:'';
+  if(!claim&&cond==='Wrong product'){
+    // No claim needed — nothing to wait on, send straight to Trash (same end
+    // state as after a claim would've closed)
+    r.maintDone=true;r.maintResult='trash';r.status='Resolved';r.resolvedAt=new Date().toISOString();
+    r.trashReason='Wrong product — not ours';r.trashedAt=new Date().toISOString();
+    dest='→ Moved to Trash (no claim needed — not ours)';
+  } else if(!claim&&cond==='Missing items'){
+    r.maintDone=true;r.maintResult='trash';r.status='Resolved';r.resolvedAt=new Date().toISOString();
+    r.trashReason='Missing items';r.trashedAt=new Date().toISOString();
+    dest='→ Moved to Trash (no claim needed — missing items)';
+  } else if(cond==='Good'){
+    dest='→ Added to Putaway';
+  } else if(cond==='Dirty/Used'){
+    dest='→ Added to Maintenance (Cleaning)';
+  } else if(cond==='Different item'){
+    dest='→ Sent to Wrong Product tab (actual SKU: '+actualSku+') — confirm to move to Putaway';
+  } else if(cond==='Damaged'&&!claim){
+    dest='→ Added to Maintenance (Repair)';
+  } else {
+    const cs=claimStatus(r);
+    dest=cs?'· '+cs:'';
+  }
+
+  persist();updateDashboard();
   toast('Saved ✓ '+dest);
   closeInspect();
   setTimeout(()=>document.getElementById('process-input').focus(),100);
@@ -2220,9 +2242,9 @@ function receiveRepair(outcome){
 
 // ── Wrong Product section ────────────────────────────────────
 function shouldGoWrongProduct(r){
-  // Different item (your product, wrong SKU) \u2014 after inspection AND claim resolved
-  // Wrong product (not your product) \u2014 after claim closes
-  if(r.condition==='Different item'&&r.status==='Inspected'&&!r.maintDone&&(claimStatus(r)==='Claim Approved'||claimStatus(r)==='Claim Rejected'))return true;
+  // Different item (your product, wrong SKU) — after inspection, and either
+  // no claim was needed or the claim has resolved
+  if(r.condition==='Different item'&&r.status==='Inspected'&&!r.maintDone&&(!r.claimNeeded||claimStatus(r)==='Claim Approved'||claimStatus(r)==='Claim Rejected'))return true;
   if(r.condition==='Wrong product'&&(claimStatus(r)==='Claim Approved'||claimStatus(r)==='Claim Rejected')&&!r.maintDone)return true;
   return false;
 }
