@@ -1336,6 +1336,7 @@ function claimStatus(r){
 // Good → Putaway immediately
 // Dirty/Used → Maintenance (Cleaning) immediately (no claim usually)
 // Damaged/Different → Claim → after claim closes → Maintenance → Repair
+//   (if no claim was needed for Damaged, skip straight to Maintenance/Repair)
 // Missing items → Claim → after claim closes → Trash directly
 // Wrong product → Claim → after claim closes → Wrong Product section
 function maintTag(condition){
@@ -1347,7 +1348,9 @@ function shouldGoMaint(r){
   const cs=claimStatus(r);
   // Dirty/Used — goes to Maintenance (Cleaning) immediately after inspection
   if(r.condition==='Dirty/Used'&&r.status==='Inspected')return true;
-  // Damaged — goes to Maintenance (Repair) after claim closes
+  // Damaged, no claim needed — goes to Maintenance (Repair) immediately, no claim to wait on
+  if(r.condition==='Damaged'&&!r.claimNeeded&&r.status==='Inspected')return true;
+  // Damaged, claim needed — goes to Maintenance (Repair) after claim closes
   if(r.condition==='Damaged'&&(cs==='Claim Approved'||cs==='Claim Rejected'))return true;
   // Different item — goes to Wrong Product section (handled separately)
   // Wrong product — goes to Wrong Product section (handled separately)
@@ -1659,6 +1662,7 @@ function _finalizeProcess(r,cond,claim,claimRef,note,actualSku){
   if(cond==='Good')dest='→ Added to Putaway';
   else if(cond==='Dirty/Used')dest='→ Added to Maintenance (Cleaning)';
   else if(cond==='Different item')dest='→ Putaway queue (actual SKU: '+actualSku+')';
+  else if(cond==='Damaged'&&!claim)dest='→ Added to Maintenance (Repair)';
   else dest=cs?'· '+cs:'';
   toast('Saved ✓ '+dest);
   closeInspect();
