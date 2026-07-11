@@ -2635,8 +2635,7 @@ function dangerAction(target){
   setTimeout(()=>document.getElementById('admin-pw-input').focus(),100);
 }
 // Immediate, awaited D1 save — bypasses the normal 400ms debounce.
-// Used for destructive actions (clear logs / clear CSV / clear everything)
-// so a quick refresh right after clicking can never lose the delete.
+// Used for routine syncs after any edit, and for the CSV-clear path.
 async function forceSyncNow(){
   if(!IS_LIVE) return true;
   clearTimeout(autoSyncTimer);
@@ -2668,6 +2667,29 @@ async function forceSyncNow(){
   }
 }
 
+// Real server-side delete for the "Wipe all data" button.
+// saveAll only upserts rows present in the array it's given — sending an
+// empty array deletes nothing. This calls a dedicated worker action that
+// issues an actual DELETE FROM returns / fba_returns. meta (CSV master +
+// API sync data) is untouched on the server, matching the local clear above.
+async function wipeAllOnServer(){
+  if(!IS_LIVE) return true;
+  clearTimeout(autoSyncTimer);
+  setSyncStatus('syncing','Wiping...');
+  try{
+    const d=await cfPost('wipeAllReturns',{});
+    if(!d.ok) throw new Error(d.error||'Wipe failed');
+    const t=new Date().toLocaleTimeString('en-IN');
+    setSyncStatus('synced','Synced '+t);updateSyncBadge(t);
+    clearWAL();
+    return true;
+  }catch(err){
+    console.error('wipeAllOnServer failed:',err.message);
+    setSyncStatus('failed','Wipe failed');
+    return false;
+  }
+}
+
 async function confirmDangerAction(){
   const pw=document.getElementById('admin-pw-input').value;
   if(pw!=='Admin@8411'){
@@ -2692,10 +2714,11 @@ async function confirmDangerAction(){
     renderScanRight();updateCounters();
     renderFBAProcess();renderFBAScanRight();updateFBAScanCounters();
     if(IS_LIVE){
-      // Skip the normal 400ms debounce — await the save directly so a quick
-      // reload/navigation right after clicking can't lose the delete to the server.
-      toast('Clearing on server — don\'t close this tab yet…');
-      const ok=await forceSyncNow();
+      // Real DELETE on the server (not saveAll's upsert-only semantics) —
+      // so a quick reload/navigation right after clicking can't lose the delete,
+      // and the rows are actually gone from D1, not just skipped in an upsert.
+      toast('Wiping on server — don\'t close this tab yet…');
+      const ok=await wipeAllOnServer();
       toast(ok?'✓ All data wiped and confirmed saved to server':'⚠ Cleared locally but server save FAILED — reload will bring old data back. Try again.');
     } else {
       persist();persistFBA();
