@@ -762,12 +762,11 @@ html[data-theme="light"] .icon-moon{display:none}
 <div class="page" id="page-maint">
   <div class="list-pg">
     <div class="pg-t">Maintenance</div>
-    <div class="pg-s">Returns requiring cleaning, repair, or holding in wrong product. Items appear here after claim is closed.</div>
+    <div class="pg-s">Returns requiring cleaning or repair. Items appear here after inspection, or after a claim closes.</div>
     <div class="stats-row">
       <div class="sc" id="msc-all" onclick="filterMaint('all')"><div class="sc-l">All</div><div class="sc-v" id="ms-all">0</div></div>
       <div class="sc" id="msc-clean" onclick="filterMaint('cleaning')"><div class="sc-l">Cleaning</div><div class="sc-v" id="ms-clean" style="color:var(--am)">0</div></div>
       <div class="sc" id="msc-repair" onclick="filterMaint('repair')"><div class="sc-l">Repair</div><div class="sc-v" id="ms-repair" style="color:var(--rd)">0</div></div>
-      <div class="sc" id="msc-wrong" onclick="filterMaint('wrong')"><div class="sc-l">Wrong product</div><div class="sc-v" id="ms-wrong" style="color:var(--pu)">0</div></div>
     </div>
     <div class="toolbar">
       <button class="pg-export-btn" onclick="exportPageCSV('maint')" style="margin-left:auto">
@@ -1689,12 +1688,18 @@ function _finalizeProcess(r,cond,claim,claimRef,note,actualSku){
     r.maintDone=true;r.maintResult='trash';r.status='Resolved';r.resolvedAt=new Date().toISOString();
     r.trashReason='Missing items';r.trashedAt=new Date().toISOString();
     dest='→ Moved to Trash (no claim needed — missing items)';
+  } else if(!claim&&cond==='Different item'){
+    // No claim needed — swap in the actual SKU received and send straight to
+    // Putaway, no manual confirmation step
+    r.maintDone=true;r.maintResult='putaway-different';r.putaway=false;
+    if(actualSku)r.sku=actualSku;
+    dest='→ Added to Putaway (actual SKU: '+r.sku+')';
   } else if(cond==='Good'){
     dest='→ Added to Putaway';
   } else if(cond==='Dirty/Used'){
     dest='→ Added to Maintenance (Cleaning)';
   } else if(cond==='Different item'){
-    dest='→ Sent to Wrong Product tab (actual SKU: '+actualSku+') — confirm to move to Putaway';
+    dest='→ Claim raised — will move to Putaway with actual SKU once resolved';
   } else if(cond==='Damaged'&&!claim){
     dest='→ Added to Maintenance (Repair)';
   } else {
@@ -1964,9 +1969,9 @@ function getMaintWithRepairerItems(){
 
 function filterMaint(f){
   maintFilter=f;
-  ['all','clean','repair','wrong'].forEach(k=>{
+  ['all','clean','repair'].forEach(k=>{
     const el=document.getElementById('msc-'+k);
-    if(el)el.classList.toggle('af',f===(k==='clean'?'cleaning':k==='wrong'?'wrong':k==='repair'?'repair':'all'));
+    if(el)el.classList.toggle('af',f===(k==='clean'?'cleaning':k==='repair'?'repair':'all'));
   });
   renderMaint();
 }
@@ -1981,8 +1986,6 @@ function renderMaint(){
   document.getElementById('ms-all').textContent=all.length;
   document.getElementById('ms-clean').textContent=cleanItems.length;
   document.getElementById('ms-repair').textContent=repairItems.length+withRepairer.length;
-  const wrongItems=returns.filter(r=>shouldGoWrongProduct(r));
-  document.getElementById('ms-wrong').textContent=wrongItems.length;
   const container=document.getElementById('maint-container');
   let data=all;
   if(maintFilter==='cleaning')data=cleanItems;
@@ -2471,10 +2474,12 @@ function saveResolution(){
     toast(resChoice==='Approved'?'Claim approved ✓ — Wrong product moved to Trash':'Claim rejected — Wrong product moved to Trash');
     return;
   }
-  // Different item → goes to Wrong Product tab for manual putaway confirmation
+  // Different item → claim resolved, swap in actual SKU and send straight to Putaway
   if(r.condition==='Different item'){
-    persist();closeModal('res-modal');updateDashboard();renderClaims();renderWrongProduct();
-    toast(resChoice==='Approved'?'Claim approved ✓ — sent to Wrong Product tab':'Claim rejected — sent to Wrong Product tab');
+    r.maintDone=true;r.maintResult='putaway-different';r.putaway=false;
+    if(r.actualSku)r.sku=r.actualSku;
+    persist();closeModal('res-modal');updateDashboard();renderClaims();renderPutaway();
+    toast((resChoice==='Approved'?'Claim approved ✓':'Claim rejected')+' — moved to Putaway with actual SKU: '+r.sku);
     return;
   }
   // Damaged → move to maintenance
