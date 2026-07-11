@@ -1464,7 +1464,18 @@ function entryLookup(track){
   if(!master[track]){
     document.getElementById('entry-box').className='scan-box notfound';
     document.getElementById('entry-nf-t').textContent=track;
-    document.getElementById('entry-nf').classList.add('show');
+    const nf=document.getElementById('entry-nf');
+    const msEl=nf.querySelector('.ms');
+    if(fkSheetState==='loading'){
+      nf.querySelector('.mt').textContent='Still loading item data…';
+      msEl.firstChild.textContent='Flipkart sheet sync is still in progress. Tracking ';
+      msEl.lastChild.textContent=' — wait a few seconds and scan again.';
+    }else{
+      nf.querySelector('.mt').textContent='Tracking not found in CSV';
+      msEl.firstChild.textContent='No record for ';
+      msEl.lastChild.textContent='. Upload latest Flipkart report.';
+    }
+    nf.classList.add('show');
     return;
   }
   const existing=returns.find(r=>r.tracking===track);
@@ -2776,6 +2787,11 @@ const GS_URL_KEY = 'rm_gs_url_v2';
 // Same Apps Script deployment as FK_RETURNS_GAS_URL, routed via ?type=itemmaster.
 let ucItemMasterList = []; // [{sku, category}, ...] — loaded once, cached for the session
 
+// Tracks whether the live Flipkart sheet fetch has finished, so a scan that
+// happens too early (before master{} is populated) gets an honest
+// "still loading" message instead of a false "not found in CSV".
+let fkSheetState = SYNC_FK_SHEET ? 'loading' : 'loaded';
+
 async function loadUcItemMaster(){
   if(!FK_RETURNS_GAS_URL || ucItemMasterList.length) return;
   try{
@@ -2874,9 +2890,11 @@ async function fetchFKReturnsFromSheet(){
     meta.total=Object.keys(master).length;
     persist();persistCSV();updateCSVStatus();updateDashboard();
     console.log(`FK Returns sheet sync: ${added} new, ${updated} updated`);
+    fkSheetState='loaded';
   }catch(err){
     console.error('fetchFKReturnsFromSheet:', err.message);
     toast('Flipkart sheet sync failed: '+err.message);
+    fkSheetState='failed';
   }
 }
 
