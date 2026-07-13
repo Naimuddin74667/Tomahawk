@@ -1002,12 +1002,12 @@ function zoom(delta) {
 zoom(0);
 
 // ── TOAST ──
-function toast(msg, type) {
+function toast(msg, type, dur) {
   var t = document.getElementById('toast');
   t.textContent = msg;
   t.className = 'toast '+(type||'info')+' show';
   clearTimeout(t._t);
-  t._t = setTimeout(function(){ t.classList.remove('show'); }, 2500);
+  t._t = setTimeout(function(){ t.classList.remove('show'); }, dur || 2500);
 }
 
 // ── BARCODE ──
@@ -2855,10 +2855,57 @@ function invSaveRecord(roNum, invNum, seq) {
   // Get the saved HTML from localStorage to persist in D1
   var invHtml = '';
   try { invHtml = localStorage.getItem('blinkit_inv_html_' + invNum) || ''; } catch(e) {}
+  var payload = {ro_number: roNum, inv_number: invNum, seq: seq, warehouse: warehouse, inv_date: inv_date, inv_html: invHtml, sku_count: sku_count, total_qty: total_qty, items_json: items_json};
+  blinkitSaveInvWithRetry(payload, 0);
+}
+
+// ── Reliable D1 save for invoices ──────────────────────────────
+// invSaveRecord used to fire-and-forget this POST (empty .catch) — if it failed once,
+// nothing retried and nothing told anyone. That's how a ledger row can exist with no
+// stored PDF behind it. This retries with backoff, and if it still fails after 3 tries,
+// queues the payload so it auto-resyncs the next time this same browser opens the app.
+var INV_SYNC_QUEUE_KEY = 'blinkit_pending_inv_sync';
+function blinkitSaveInvWithRetry(payload, attempt) {
   fetch(WORKER_URL + '?action=blinkitSaveInv', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ro_number: roNum, inv_number: invNum, seq: seq, warehouse: warehouse, inv_date: inv_date, inv_html: invHtml, sku_count: sku_count, total_qty: total_qty, items_json: items_json})
-  }).catch(function(){});
+    body: JSON.stringify(payload)
+  }).then(function(res){
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }).then(function(d){
+    if (d && d.ok === false) throw new Error(d.error || 'Save rejected');
+    removeFromInvSyncQueue(payload.inv_number);
+  }).catch(function(err){
+    console.error('blinkitSaveInv attempt ' + (attempt+1) + ' failed:', err && err.message);
+    if (attempt < 2) {
+      var delay = [3000, 8000][attempt] || 8000;
+      setTimeout(function(){ blinkitSaveInvWithRetry(payload, attempt + 1); }, delay);
+    } else {
+      queueFailedInvoiceSync(payload);
+      toast('\u26a0 Invoice ' + payload.inv_number + ' saved locally but NOT synced to cloud after 3 tries \u2014 keep this browser handy, it will auto-retry next visit', 'err', 10000);
+    }
+  });
+}
+function queueFailedInvoiceSync(payload) {
+  var q = [];
+  try { q = JSON.parse(localStorage.getItem(INV_SYNC_QUEUE_KEY) || '[]'); } catch(e) {}
+  q = q.filter(function(p){ return p.inv_number !== payload.inv_number; });
+  q.push(payload);
+  try { localStorage.setItem(INV_SYNC_QUEUE_KEY, JSON.stringify(q)); } catch(e) {}
+}
+function removeFromInvSyncQueue(invNumber) {
+  var q = [];
+  try { q = JSON.parse(localStorage.getItem(INV_SYNC_QUEUE_KEY) || '[]'); } catch(e) {}
+  var next = q.filter(function(p){ return p.inv_number !== invNumber; });
+  try { localStorage.setItem(INV_SYNC_QUEUE_KEY, JSON.stringify(next)); } catch(e) {}
+}
+function flushPendingInvoiceSyncs() {
+  if (!IS_LIVE) return;
+  var q = [];
+  try { q = JSON.parse(localStorage.getItem(INV_SYNC_QUEUE_KEY) || '[]'); } catch(e) {}
+  if (!q.length) return;
+  toast('Resyncing ' + q.length + ' invoice(s) that failed to save earlier\u2026', 'info');
+  q.forEach(function(payload){ blinkitSaveInvWithRetry(payload, 0); });
 }
 
 // ── Tax calculation ──
@@ -3568,12 +3615,22 @@ function ledgerDownload(r) {
   fetch(WORKER_URL + '?action=blinkitGetInvHtml&inv=' + encodeURIComponent(r.inv_number))
     .then(function(res){ return res.json(); })
     .then(function(d) {
-      if (!d.inv_html) { toast('No stored invoice — re-upload RO ' + r.ro_number, 'err'); return; }
+      if (!d.inv_html) {
+        var pending = [];
+        try { pending = JSON.parse(localStorage.getItem('blinkit_pending_inv_sync') || '[]'); } catch(e) {}
+        var isQueued = pending.some(function(p){ return p.inv_number === r.inv_number; });
+        if (isQueued) {
+          toast('Invoice ' + r.inv_number + ' hasn\'t synced to the cloud yet — open it on the browser it was created on and it will resync automatically', 'err', 6000);
+        } else {
+          toast('Invoice ' + r.inv_number + ' PDF was never saved to the cloud and isn\'t on this device either — it will need to be regenerated', 'err', 6000);
+        }
+        return;
+      }
       // Cache locally for next time
       try { localStorage.setItem('blinkit_inv_html_' + r.inv_number, d.inv_html); } catch(e) {}
       _docRenderPDF(r.inv_number, d.inv_html, 'Invoice');
     })
-    .catch(function() { toast('Network error — re-upload RO ' + r.ro_number, 'err'); });
+    .catch(function() { toast('Network error fetching invoice — try again', 'err'); });
 }
 
 function cnDownload(cnNumber) {
@@ -4076,6 +4133,7 @@ function cnBuildHTML(d) {
 
 loadGSheetLookup();
 initLib(); // load SKU library from D1 (live) or localStorage (dev)
+flushPendingInvoiceSyncs(); // retry any invoice saves that failed to sync last session
 
 
 </script>
