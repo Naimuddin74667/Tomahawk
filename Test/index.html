@@ -661,6 +661,53 @@
   </div>
 </div>
 
+<!-- LEDGER ITEMS MODAL (read-only drill-in) -->
+<div class="modal-bg" id="ledgerItemsModal">
+  <div class="modal" style="width:440px;max-height:80vh;overflow-y:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem">
+      <div class="modal-title" style="margin-bottom:0">&#128203; Items &mdash; <span id="li-cn" style="color:var(--accent)"></span></div>
+      <button onclick="closeLedgerItemsModal()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
+    </div>
+    <div id="li-body"></div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="closeLedgerItemsModal()">Close</button></div>
+  </div>
+</div>
+<script>document.getElementById('ledgerItemsModal').addEventListener('click',function(e){if(e.target===this)closeLedgerItemsModal();});</script>
+
+<!-- LEDGER SHORTAGE MODAL — which SKU(s) account for Send Qty < Total Qty -->
+<div class="modal-bg" id="shortageModal">
+  <div class="modal" style="width:520px;max-height:80vh;overflow-y:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem">
+      <div class="modal-title" style="margin-bottom:0">&#9888; Specify Shortage &mdash; <span id="sh-cn" style="color:var(--accent)"></span></div>
+      <button onclick="closeShortageModal()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:.8rem">Total Qty <b id="sh-total" style="color:var(--text)"></b> vs Send Qty <b id="sh-send" style="color:var(--text)"></b> &mdash; mention which SKU(s) account for the difference.</div>
+    <div id="sh-body"></div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="closeShortageModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveShortage()">Save</button>
+    </div>
+  </div>
+</div>
+<script>document.getElementById('shortageModal').addEventListener('click',function(e){if(e.target===this)closeShortageModal();});</script>
+
+<!-- WAREHOUSE CONFIRM MODAL — asked once per new Ship-To pincode, then remembered -->
+<div class="modal-bg" id="whConfirmModal">
+  <div class="modal" style="width:420px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem">
+      <div class="modal-title" style="margin-bottom:0">&#127970; Confirm Warehouse</div>
+      <button onclick="closeWarehouseConfirmModal()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:.8rem">New pincode detected: <b id="whc-pincode" style="color:var(--accent)"></b>. Confirm the warehouse name once &mdash; it'll be remembered for this pincode going forward.</div>
+    <div class="field"><label class="field-lbl">Warehouse Name</label><input type="text" id="whc-name" placeholder="e.g. Sunsat warehousing Pvt. Ltd."></div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="closeWarehouseConfirmModal()">Skip for now</button>
+      <button class="btn btn-primary" onclick="confirmWarehouseSave()">Save &amp; Continue</button>
+    </div>
+  </div>
+</div>
+<script>document.getElementById('whConfirmModal').addEventListener('click',function(e){if(e.target===this)closeWarehouseConfirmModal();});</script>
+
 <!-- SETTINGS MODAL -->
 <div class="modal-bg" id="settingsModal">
   <div class="modal" style="width:360px">
@@ -837,14 +884,17 @@ function switchTab(name, btn) {
 }
 
 // ── LEDGER ──
-// Fields for now: consignment_no, dc_date, appointment_date, warehouse,
-// no_of_sku, total_qty, send_qty, received_qty, status.
-// dc_date / warehouse / appointment_date / received_qty / status are manual-entry
-// placeholders until we wire up real detection — infra first, logic step by step.
+// Fields: consignment_no, dc_date, appointment_date, warehouse, no_of_sku,
+// total_qty, send_qty, received_qty, status, items_json, shortage_json.
+// appointment_date / received_qty / status remain manual. dc_date / warehouse /
+// send_qty / items_json are parsed from the Stock Transfer Invoice PDF.
 var _ledgerRows = [];
 var _ledgerPage = 1;
 var LEDGER_PAGE_SIZE = 10;
 var LEDGER_KEY = 'fk_ledger_v1';
+var WH_MAP_KEY = 'fk_warehouse_map_v1';
+var _warehouseMap = {}; // pincode -> confirmed warehouse name
+var _pendingLedgerPrint = null; // holds print data while the warehouse-confirm modal is open
 
 function getWorkerBase() {
   var isLive = location.hostname === 'naimuddin74667.github.io';
@@ -871,7 +921,26 @@ function ledgerLoad() {
       _ledgerPage = 1;
       ledgerRender();
     });
+  loadWarehouseMap();
 }
+
+function loadWarehouseMap() {
+  fetch(getWorkerBase() + '?action=fkWarehouseMapLoad')
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      if(data && data.ok && data.map){
+        _warehouseMap = data.map;
+        try{ localStorage.setItem(WH_MAP_KEY, JSON.stringify(_warehouseMap)); }catch(e){}
+      } else {
+        try{ _warehouseMap = JSON.parse(localStorage.getItem(WH_MAP_KEY)) || {}; }catch(e){ _warehouseMap = {}; }
+      }
+    })
+    .catch(function(){
+      try{ _warehouseMap = JSON.parse(localStorage.getItem(WH_MAP_KEY)) || {}; }catch(e){ _warehouseMap = {}; }
+    });
+}
+// Load once at startup too, so the map is ready even before the Ledger tab is opened.
+loadWarehouseMap();
 
 function ledgerRender() {
   var q = (document.getElementById('ledgerSearch').value || '').trim().toLowerCase();
@@ -902,14 +971,27 @@ function ledgerRender() {
   } else {
     tbody.innerHTML = pageRows.map(function(r){
       var cn = r.consignment_no;
+      var hasItems = r.items_json && r.items_json !== '[]';
+      var noSkuCell = (r.no_of_sku!=null?r.no_of_sku:'\u2014')
+        + (hasItems ? ' <button onclick="ledgerViewItems(\''+esc(cn)+'\')" title="View items" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);cursor:pointer;font-size:10px;padding:1px 5px;margin-left:3px" onmouseover="this.style.borderColor=\'var(--accent)\';this.style.color=\'var(--accent)\'" onmouseout="this.style.borderColor=\'var(--border)\';this.style.color=\'var(--muted)\'">&#128065;</button>' : '');
+
+      var shortageEntries = [];
+      try{ shortageEntries = JSON.parse(r.shortage_json||'[]'); }catch(e){}
+      var isShort = r.total_qty!=null && r.send_qty!=null && r.send_qty < r.total_qty;
+      var sendCell = (r.send_qty!=null?r.send_qty:'\u2014');
+      if(isShort){
+        var flagged = shortageEntries.length>0;
+        sendCell += ' <button onclick="ledgerOpenShortage(\''+esc(cn)+'\')" title="'+(flagged?'Shortage details recorded \u2014 click to edit':'Specify which SKU(s) account for the shortage')+'" style="background:none;border:1px solid '+(flagged?'#3a6b3a':'#6b2020')+';border-radius:4px;color:'+(flagged?'#6dc87a':'#ff8080')+';cursor:pointer;font-size:10px;padding:1px 5px;margin-left:3px">'+(flagged?'&#10003;':'&#9888;')+'</button>';
+      }
+
       return '<tr>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);font-weight:600;color:var(--accent)">'+esc(cn)+'</td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border)">'+esc(r.dc_date||'\u2014')+'</td>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border)"><input type="text" value="'+esc(r.appointment_date||'')+'" placeholder="dd-mm-yyyy" style="width:110px;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)" onchange="ledgerSaveField(\''+esc(cn)+'\',\'appointment_date\',this.value)"></td>'
+        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border)"><input type="date" value="'+esc(toDateInputValue(r.appointment_date))+'" style="width:130px;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text);color-scheme:dark" onchange="ledgerSaveField(\''+esc(cn)+'\',\'appointment_date\',this.value)"></td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border)"><input type="text" value="'+esc(r.warehouse||'')+'" placeholder="\u2014" style="width:130px;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)" onchange="ledgerSaveField(\''+esc(cn)+'\',\'warehouse\',this.value)"></td>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center">'+(r.no_of_sku!=null?r.no_of_sku:'\u2014')+'</td>'
+        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center;white-space:nowrap">'+noSkuCell+'</td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center">'+(r.total_qty!=null?r.total_qty:'\u2014')+'</td>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center">'+(r.send_qty!=null?r.send_qty:'\u2014')+'</td>'
+        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center;white-space:nowrap">'+sendCell+'</td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center"><input type="number" min="0" value="'+(r.received_qty!=null?r.received_qty:'')+'" style="width:70px;text-align:center;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)" onchange="ledgerSaveField(\''+esc(cn)+'\',\'received_qty\',this.value)"></td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center"><input type="text" value="'+esc(r.status||'')+'" placeholder="\u2014" style="width:110px;text-align:center;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)" onchange="ledgerSaveField(\''+esc(cn)+'\',\'status\',this.value)"></td>'
         +'</tr>';
@@ -919,6 +1001,21 @@ function ledgerRender() {
 }
 
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// Appointment date is stored as dd-mm-yyyy (to match DC Date's display format)
+// but <input type="date"> needs yyyy-mm-dd — convert for display only.
+function toDateInputValue(ddmmyyyy) {
+  if(!ddmmyyyy) return '';
+  var parts = ddmmyyyy.split('-');
+  if(parts.length!==3) return '';
+  return parts[2]+'-'+parts[1]+'-'+parts[0];
+}
+function fromDateInputValue(yyyymmdd) {
+  if(!yyyymmdd) return '';
+  var parts = yyyymmdd.split('-');
+  if(parts.length!==3) return '';
+  return parts[2]+'-'+parts[1]+'-'+parts[0];
+}
 
 function ledgerRenderPagination(totalRows, totalPages) {
   var el = document.getElementById('ledgerPagerControls');
@@ -940,7 +1037,7 @@ function ledgerGoToPage(p) {
 function ledgerSaveField(cn, field, value) {
   var row = _ledgerRows.find(function(r){ return r.consignment_no===cn; });
   if(!row) return;
-  row[field] = value;
+  row[field] = (field==='appointment_date') ? fromDateInputValue(value) : value;
   row.updated_at = new Date().toISOString();
   try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
   fetch(getWorkerBase() + '?action=fkLedgerSave', {
@@ -958,12 +1055,121 @@ function ledgerDeleteAllPrompt() {
     .catch(function(){ toast('Delete failed','err'); });
 }
 
-// Called once a bulk print batch finishes generating its PDF — upserts a ledger
-// row using what we now parse from the PDF (consignment no, DC date, warehouse,
-// SKU count, qty, send qty) plus whatever's already there for the fields that
-// are still manual: Appointment Date, Received Qty, Status.
-function ledgerRecordPrint(printableRows, queueLength) {
+// ── Items drill-in (read-only view of what was actually printed) ──
+function ledgerViewItems(cn) {
+  var row = _ledgerRows.find(function(r){ return r.consignment_no===cn; });
+  if(!row) return;
+  var items = [];
+  try{ items = JSON.parse(row.items_json||'[]'); }catch(e){}
+  document.getElementById('li-cn').textContent = cn;
+  document.getElementById('li-body').innerHTML = items.length ? items.map(function(it){
+    return '<div style="display:flex;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:12px">'
+      +'<span>'+esc(it.model||it.sku)+' <span style="color:var(--muted);font-size:10px">('+esc(it.sku)+')</span></span>'
+      +'<span style="color:var(--accent);font-weight:700">x'+it.qty+'</span></div>';
+  }).join('') : '<div style="color:var(--muted);font-size:11px;padding:1rem;text-align:center">No item breakdown stored for this consignment.</div>';
+  document.getElementById('ledgerItemsModal').classList.add('show');
+}
+function closeLedgerItemsModal(){ document.getElementById('ledgerItemsModal').classList.remove('show'); }
+
+// ── Shortage breakdown (which SKU(s) account for Send Qty < Total Qty) ──
+var _shortageCN = null, _shortageItemsCache = [];
+function ledgerOpenShortage(cn) {
+  var row = _ledgerRows.find(function(r){ return r.consignment_no===cn; });
+  if(!row) return;
+  _shortageCN = cn;
+  var items = [];
+  try{ items = JSON.parse(row.items_json||'[]'); }catch(e){}
+  _shortageItemsCache = items;
+  var shortages = {};
+  try{ (JSON.parse(row.shortage_json||'[]')).forEach(function(s){ shortages[s.sku]=s; }); }catch(e){}
+  document.getElementById('sh-cn').textContent = cn;
+  document.getElementById('sh-total').textContent = row.total_qty;
+  document.getElementById('sh-send').textContent = row.send_qty;
+  document.getElementById('sh-body').innerHTML = items.length ? items.map(function(it,i){
+    var existing = shortages[it.sku];
+    return '<div style="display:flex;align-items:center;gap:.5rem;padding:.4rem 0;border-bottom:1px solid var(--border);font-size:12px">'
+      +'<span style="flex:1">'+esc(it.model||it.sku)+' <span style="color:var(--muted)">(sent qty '+it.qty+')</span></span>'
+      +'<input type="number" min="0" max="'+it.qty+'" placeholder="short qty" value="'+(existing?existing.shortQty:'')+'" id="sh-qty-'+i+'" style="width:70px;text-align:center;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
+      +'<input type="text" placeholder="reason" value="'+(existing?esc(existing.reason):'')+'" id="sh-reason-'+i+'" style="width:130px;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
+      +'</div>';
+  }).join('') : '<div style="color:var(--muted);font-size:11px;padding:1rem;text-align:center">No item breakdown stored for this consignment \u2014 can\'t attribute the shortage per-SKU.</div>';
+  document.getElementById('shortageModal').classList.add('show');
+}
+function closeShortageModal(){ document.getElementById('shortageModal').classList.remove('show'); }
+function saveShortage() {
+  var items = _shortageItemsCache || [];
+  var out = [], sum = 0;
+  items.forEach(function(it,i){
+    var qEl = document.getElementById('sh-qty-'+i);
+    var rEl = document.getElementById('sh-reason-'+i);
+    var qv = qEl ? (parseInt(qEl.value)||0) : 0;
+    if(qv>0){ sum+=qv; out.push({sku:it.sku, model:it.model, shortQty:qv, reason:rEl?rEl.value.trim():''}); }
+  });
+  var row = _ledgerRows.find(function(r){ return r.consignment_no===_shortageCN; });
+  if(!row) return;
+  var expectedDiff = (row.total_qty||0) - (row.send_qty||0);
+  if(expectedDiff>0 && sum!==expectedDiff){
+    if(!confirm('Shortage entries total '+sum+', but Total Qty \u2212 Send Qty = '+expectedDiff+'. Save anyway?')) return;
+  }
+  row.shortage_json = JSON.stringify(out);
+  row.updated_at = new Date().toISOString();
+  try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
+  fetch(getWorkerBase() + '?action=fkLedgerSave', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
+  }).catch(function(){});
+  closeShortageModal();
+  ledgerRender();
+  toast('Shortage details saved','ok');
+}
+
+// ── Warehouse pincode confirmation (asked once per new pincode, then remembered) ──
+function openWarehouseConfirmModal(pincode, guess) {
+  document.getElementById('whc-pincode').textContent = pincode;
+  document.getElementById('whc-name').value = guess || '';
+  document.getElementById('whConfirmModal').classList.add('show');
+}
+function confirmWarehouseSave() {
+  var name = document.getElementById('whc-name').value.trim();
+  if(!name){ toast('Enter a warehouse name','err'); return; }
+  _warehouseMap[_bulkPincode] = name;
+  _bulkWarehouse = name;
+  try{ localStorage.setItem(WH_MAP_KEY, JSON.stringify(_warehouseMap)); }catch(e){}
+  fetch(getWorkerBase() + '?action=fkWarehouseMapSave', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({pincode:_bulkPincode, warehouse_name:name})
+  }).catch(function(){});
+  document.getElementById('whConfirmModal').classList.remove('show');
+  if(_pendingLedgerPrint){
+    ledgerRecordPrint(_pendingLedgerPrint.printableRows, _pendingLedgerPrint.queueLength, _pendingLedgerPrint.itemsJson);
+    _pendingLedgerPrint = null;
+  }
+}
+function closeWarehouseConfirmModal(){
+  // Cancelling still records the print (with whatever warehouse guess we parsed) —
+  // we don't want a skipped confirmation to silently drop the ledger row.
+  document.getElementById('whConfirmModal').classList.remove('show');
+  if(_pendingLedgerPrint){
+    ledgerRecordPrint(_pendingLedgerPrint.printableRows, _pendingLedgerPrint.queueLength, _pendingLedgerPrint.itemsJson);
+    _pendingLedgerPrint = null;
+  }
+}
+
+// Called once a bulk print batch finishes generating its PDF. Gates on the
+// warehouse pincode: known pincode → record immediately with the saved name;
+// new pincode → ask once via modal, save the mapping, then record.
+function handlePostPrintLedger(printableRows, queueLength, itemsJson) {
   if(!_bulkCN) return; // no consignment number detected (e.g. CSV-only import) — skip for now
+  if(_bulkPincode && _warehouseMap[_bulkPincode]){
+    _bulkWarehouse = _warehouseMap[_bulkPincode];
+    ledgerRecordPrint(printableRows, queueLength, itemsJson);
+  } else if(_bulkPincode){
+    _pendingLedgerPrint = {printableRows:printableRows, queueLength:queueLength, itemsJson:itemsJson};
+    openWarehouseConfirmModal(_bulkPincode, _bulkWarehouse);
+  } else {
+    ledgerRecordPrint(printableRows, queueLength, itemsJson);
+  }
+}
+
+function ledgerRecordPrint(printableRows, queueLength, itemsJson) {
   var existing = _ledgerRows.find(function(r){ return r.consignment_no===_bulkCN; });
   var row = {
     consignment_no: _bulkCN,
@@ -975,6 +1181,8 @@ function ledgerRecordPrint(printableRows, queueLength) {
     send_qty: (_bulkSendQtyPdf != null ? _bulkSendQtyPdf : queueLength),
     received_qty: existing ? existing.received_qty : null,
     status: existing ? existing.status : '',
+    items_json: JSON.stringify(itemsJson || []),
+    shortage_json: existing ? (existing.shortage_json || '[]') : '[]',
     created_at: existing ? existing.created_at : new Date().toISOString(),
     updated_at: new Date().toISOString()
   };
@@ -987,6 +1195,7 @@ function ledgerRecordPrint(printableRows, queueLength) {
   fetch(getWorkerBase() + '?action=fkLedgerSave', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
   }).catch(function(){});
+  if(document.getElementById('tab-ledger').style.display !== 'none') ledgerRender();
 }
 
 // ── LOGOS ──
@@ -1262,10 +1471,10 @@ function parseBulkPDF(file) {
 //   "...Reference No: fk_mp_204685956 Consignment Note No: 204685956 ...
 //    Invoice Date: 2026-07-13 ... Ship To INDUSTRIAL TOOLS AND HARDWARE,
 //    Sunsat warehousing Pvt. Ltd., Hadbast No. 23... TOTAL 112.0 171128 ..."
-var _bulkDcDate = '', _bulkWarehouse = '', _bulkSendQtyPdf = null;
+var _bulkDcDate = '', _bulkWarehouse = '', _bulkSendQtyPdf = null, _bulkPincode = '';
 
 function parseLedgerMetaFromText(text) {
-  _bulkDcDate = ''; _bulkWarehouse = ''; _bulkSendQtyPdf = null;
+  _bulkDcDate = ''; _bulkWarehouse = ''; _bulkSendQtyPdf = null; _bulkPincode = '';
 
   // Consignment Note No — prefer the PDF's own field; the filename regex
   // (_bulkCN, set in processBulkFile) stays as the fallback if this misses.
@@ -1282,6 +1491,12 @@ function parseLedgerMetaFromText(text) {
   // boilerplate line inside "Bill To" further down the page.
   var whMatch = text.match(/Ship\s*To[\s\S]*?INDUSTRIAL\s+TOOLS\s+AND\s+HARDWARE,\s*([^,]+),/i);
   if (whMatch) _bulkWarehouse = whMatch[1].trim();
+
+  // Pincode — first 6-digit code inside the Ship To block (bounded the same way
+  // as Warehouse above), used as the key for the warehouse name mapping so we
+  // only ask once per destination facility.
+  var pinMatch = text.match(/Ship\s*To[\s\S]{0,400}?(\d{6})/i);
+  if (pinMatch) _bulkPincode = pinMatch[1];
 
   // Send Qty — the TOTAL row's Qty column: what Flipkart's invoice declares
   // was sent (kept separate from Total Qty, which reflects what we actually
@@ -1702,9 +1917,11 @@ function generateBulkPDF() {
   var printable=_bulkRows.filter(function(r){ return r.status==='saved'; });
   closePrintConfirm();
   var queue=[];
+  var itemsJson=[]; // additive — per-SKU qty actually used, for the Ledger's item drill-in
   printable.forEach(function(r,i){
     var el=document.getElementById('cqty-'+i);
     var qty=el?(parseInt(el.value)||r.qty):r.qty;
+    itemsJson.push({sku:r.skuId, model:r.model.model, qty:qty});
     var _pe2=r.model.fnskuMap&&r.model.fnskuMap[r.skuId];
     var fsn=typeof _pe2==='object'?_pe2.f||'':_pe2||'';
     if(!fsn){ var gRow2b=lookupGSheetSKU(r.skuId); fsn=gRow2b?gRow2b.f:''; }
@@ -1732,7 +1949,7 @@ function generateBulkPDF() {
       prog.classList.remove('show');
       fill.style.width='0%';
       toast('PDF saved \u2014 '+queue.length+' labels ✓','ok');
-      ledgerRecordPrint(printable, queue.length);
+      handlePostPrintLedger(printable, queue.length, itemsJson);
       return;
     }
     var s=queue[current];
