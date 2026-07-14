@@ -959,29 +959,26 @@ function ledgerDeleteAllPrompt() {
 }
 
 // Called once a bulk print batch finishes generating its PDF — upserts a ledger
-// row using what we already know (consignment no, SKU count, qty). Other fields
-// (DC date, warehouse, appointment date, received qty, status) start blank and
-// are manually filled in for now; we'll wire up auto-detection step by step.
+// row using what we now parse from the PDF (consignment no, DC date, warehouse,
+// SKU count, qty, send qty) plus whatever's already there for the fields that
+// are still manual: Appointment Date, Received Qty, Status.
 function ledgerRecordPrint(printableRows, queueLength) {
   if(!_bulkCN) return; // no consignment number detected (e.g. CSV-only import) — skip for now
+  var existing = _ledgerRows.find(function(r){ return r.consignment_no===_bulkCN; });
   var row = {
     consignment_no: _bulkCN,
-    dc_date: '',
-    appointment_date: '',
-    warehouse: '',
+    dc_date: _bulkDcDate || (existing ? existing.dc_date : ''),
+    appointment_date: existing ? existing.appointment_date : '',
+    warehouse: _bulkWarehouse || (existing ? existing.warehouse : ''),
     no_of_sku: printableRows.length,
     total_qty: queueLength,
-    send_qty: queueLength,
-    received_qty: null,
-    status: '',
-    created_at: new Date().toISOString(),
+    send_qty: (_bulkSendQtyPdf != null ? _bulkSendQtyPdf : queueLength),
+    received_qty: existing ? existing.received_qty : null,
+    status: existing ? existing.status : '',
+    created_at: existing ? existing.created_at : new Date().toISOString(),
     updated_at: new Date().toISOString()
   };
-  var existing = _ledgerRows.find(function(r){ return r.consignment_no===_bulkCN; });
   if(existing){
-    row.dc_date = existing.dc_date; row.appointment_date = existing.appointment_date;
-    row.warehouse = existing.warehouse; row.received_qty = existing.received_qty;
-    row.status = existing.status; row.created_at = existing.created_at;
     _ledgerRows = _ledgerRows.map(function(r){ return r.consignment_no===_bulkCN ? row : r; });
   } else {
     _ledgerRows.push(row);
@@ -1252,11 +1249,47 @@ function parseBulkPDF(file) {
             });
           });
         });
-      }, Promise.resolve()).then(function(){ parsePDFText(allText); });
+      }, Promise.resolve()).then(function(){ parseLedgerMetaFromText(allText); parsePDFText(allText); });
     }).catch(function(err){ toast('PDF error: '+err.message,'err'); });
   };
   reader.readAsArrayBuffer(file);
 }
+
+// ── LEDGER META extraction (Consignment No / DC Date / Warehouse / Send Qty) ──
+// Runs alongside parsePDFText() but never touches _bulkRows or SKU/HSN matching —
+// purely additive, so the existing Label Print flow is untouched.
+// Based on the Stock Transfer Invoice layout:
+//   "...Reference No: fk_mp_204685956 Consignment Note No: 204685956 ...
+//    Invoice Date: 2026-07-13 ... Ship To INDUSTRIAL TOOLS AND HARDWARE,
+//    Sunsat warehousing Pvt. Ltd., Hadbast No. 23... TOTAL 112.0 171128 ..."
+var _bulkDcDate = '', _bulkWarehouse = '', _bulkSendQtyPdf = null;
+
+function parseLedgerMetaFromText(text) {
+  _bulkDcDate = ''; _bulkWarehouse = ''; _bulkSendQtyPdf = null;
+
+  // Consignment Note No — prefer the PDF's own field; the filename regex
+  // (_bulkCN, set in processBulkFile) stays as the fallback if this misses.
+  var cnMatch = text.match(/Consignment\s*Note\s*No[.:]*\s*(\d{6,15})/i);
+  if (cnMatch) _bulkCN = cnMatch[1];
+
+  // Invoice Date → used as DC Date, reformatted from yyyy-mm-dd to dd-mm-yyyy
+  var dateMatch = text.match(/Invoice\s*Date:\s*(\d{4})-(\d{2})-(\d{2})/i);
+  if (dateMatch) _bulkDcDate = dateMatch[3] + '-' + dateMatch[2] + '-' + dateMatch[1];
+
+  // Warehouse — the facility name inside the "Ship To" block, right after
+  // the boilerplate "INDUSTRIAL TOOLS AND HARDWARE," line that always leads it.
+  // Bounded to the first hit after "Ship To" so it can't match the identical
+  // boilerplate line inside "Bill To" further down the page.
+  var whMatch = text.match(/Ship\s*To[\s\S]*?INDUSTRIAL\s+TOOLS\s+AND\s+HARDWARE,\s*([^,]+),/i);
+  if (whMatch) _bulkWarehouse = whMatch[1].trim();
+
+  // Send Qty — the TOTAL row's Qty column: what Flipkart's invoice declares
+  // was sent (kept separate from Total Qty, which reflects what we actually
+  // matched + printed — a mismatch between the two is a useful signal later).
+  var totalMatch = text.match(/TOTAL\s+(\d+(?:\.\d+)?)/i);
+  if (totalMatch) _bulkSendQtyPdf = Math.round(parseFloat(totalMatch[1]));
+}
+
 function parsePDFText(text) {
   var skuQtyMap={};
   // PDF.js getTextContent: items within a page are joined with spaces (no \n).
