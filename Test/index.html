@@ -561,7 +561,7 @@
         <span class="bulk-summary" id="bulkSummary"></span>
         <div style="display:flex;gap:.4rem">
           <button class="btn btn-secondary btn-sm" onclick="exportBulkCSV()">&#8595; Export</button>
-          <button class="btn btn-primary btn-sm" onclick="openPrintConfirm()">&#9113; Print All</button>
+          <button class="btn btn-primary btn-sm" onclick="openPrintConfirm()">&#9113; Save &amp; Print</button>
         </div>
       </div>
       <div class="bulk-table-wrap">
@@ -2004,6 +2004,38 @@ function closePrintConfirm(){ document.getElementById('printConfirmModal').class
 document.getElementById('printConfirmModal').addEventListener('click',function(e){if(e.target===this)closePrintConfirm();});
 
 // ── BULK PDF GENERATION ──
+// ── Background keep-alive during large print jobs ──
+// Chrome (and other browsers) throttle timers and can eventually freeze a tab's
+// JS entirely once it's been hidden for a while — which is exactly what stalls a
+// 1000-label batch if you switch to another browser tab to do something else.
+// A near-silent Web Audio oscillator is the standard workaround: an actively
+// "playing" AudioContext exempts the tab from that throttling, so the print
+// loop keeps running at full speed in the background. Silent to the ear
+// (gain ~0), stopped the moment the batch finishes.
+var _keepAliveCtx = null, _keepAliveOsc = null, _keepAliveGain = null;
+function startBackgroundKeepAlive() {
+  try {
+    if (_keepAliveCtx) return; // already running
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    _keepAliveCtx = new AC();
+    _keepAliveOsc = _keepAliveCtx.createOscillator();
+    _keepAliveGain = _keepAliveCtx.createGain();
+    _keepAliveGain.gain.value = 0.00001; // effectively silent
+    _keepAliveOsc.connect(_keepAliveGain);
+    _keepAliveGain.connect(_keepAliveCtx.destination);
+    _keepAliveOsc.start();
+  } catch(e) { /* worst case: large batches just need the tab kept in focus, same as before */ }
+}
+function stopBackgroundKeepAlive() {
+  try {
+    if (_keepAliveOsc) { _keepAliveOsc.stop(); _keepAliveOsc.disconnect(); }
+    if (_keepAliveGain) _keepAliveGain.disconnect();
+    if (_keepAliveCtx) _keepAliveCtx.close();
+  } catch(e) {}
+  _keepAliveCtx = null; _keepAliveOsc = null; _keepAliveGain = null;
+}
+
 function generateBulkPDF() {
   var printable=_bulkRows.filter(function(r){ return r.status==='saved'; });
   closePrintConfirm();
@@ -2027,6 +2059,7 @@ function generateBulkPDF() {
   var fill=document.getElementById('bulkFill');
   var progText=document.getElementById('bulkProgressText');
   prog.classList.add('show');
+  startBackgroundKeepAlive();
   var jsPDF=window.jspdf.jsPDF;
   var pdf=new jsPDF({orientation:'landscape',unit:'mm',format:[75,50],compress:false});
   var current=0;
@@ -2040,6 +2073,7 @@ function generateBulkPDF() {
       prog.classList.remove('show');
       fill.style.width='0%';
       toast('PDF saved \u2014 '+queue.length+' labels ✓','ok');
+      stopBackgroundKeepAlive();
       handlePostPrintLedger(printable, queue.length, itemsJson);
       return;
     }
