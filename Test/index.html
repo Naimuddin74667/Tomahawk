@@ -664,13 +664,20 @@
 
 <!-- LEDGER ITEMS MODAL (read-only drill-in) -->
 <div class="modal-bg" id="ledgerItemsModal">
-  <div class="modal" style="width:440px;max-height:80vh;overflow-y:auto">
+  <div class="modal" style="width:540px;max-height:85vh;overflow-y:auto">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem">
-      <div class="modal-title" style="margin-bottom:0">&#128203; Items &mdash; <span id="li-cn" style="color:var(--accent)"></span></div>
+      <div class="modal-title" style="margin-bottom:0">&#128203; Consignment &mdash; <span id="li-cn" style="color:var(--accent)"></span></div>
       <button onclick="closeLedgerItemsModal()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
     </div>
+    <div id="li-summary" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;margin-bottom:1rem;padding:.7rem;background:var(--surface2);border-radius:7px;border:1px solid var(--border)"></div>
+    <div id="li-dispatch-shortage" style="display:none;margin-bottom:1rem"></div>
+    <div id="li-transit-shortage" style="display:none;margin-bottom:1rem"></div>
+    <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;margin-bottom:.4rem">Items</div>
     <div id="li-body"></div>
-    <div class="btn-row"><button class="btn btn-secondary" onclick="closeLedgerItemsModal()">Close</button></div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="ledgerEditFromItemsModal()">Edit</button>
+      <button class="btn btn-primary" onclick="closeLedgerItemsModal()">Close</button>
+    </div>
   </div>
 </div>
 <script>document.getElementById('ledgerItemsModal').addEventListener('click',function(e){if(e.target===this)closeLedgerItemsModal();});</script>
@@ -1038,7 +1045,7 @@ function ledgerRender() {
         : '<button class="btn btn-secondary btn-sm" style="width:auto;padding:3px 10px;font-size:10px" onclick="ledgerEditRow(\''+esc(cn)+'\')">Edit</button>';
 
       return '<tr>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);font-weight:600;color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-color:transparent;transition:text-decoration-color .15s" onmouseover="this.style.textDecorationColor=\'var(--accent)\'" onmouseout="this.style.textDecorationColor=\'transparent\'" onclick="ledgerViewItems(\''+esc(cn)+'\')" title="View items in this consignment">'+esc(cn)+'</td>'
+        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);font-weight:600;color:var(--accent)">'+esc(cn)+'</td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border)">'+esc(r.dc_date||'\u2014')+'</td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border)">'+pickupCell+'</td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border)">'+esc(r.warehouse||'\u2014')+'</td>'
@@ -1131,13 +1138,51 @@ function ledgerDeleteAllPrompt() {
     .catch(function(){ toast('Delete failed','err'); });
 }
 
-// ── Items drill-in (read-only view of what was actually printed) ──
+// ── Consignment detail drill-in — everything about one consignment at a glance ──
+var _itemsModalCN = null;
 function ledgerViewItems(cn) {
   var row = _ledgerRows.find(function(r){ return r.consignment_no===cn; });
   if(!row) return;
+  _itemsModalCN = cn;
+  document.getElementById('li-cn').textContent = cn;
+
+  function field(label, value){
+    return '<div><div style="font-size:9px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase">'+label+'</div>'
+      +'<div style="font-size:12px;font-weight:600;color:var(--text);margin-top:2px">'+esc(value==null||value===''?'\u2014':value)+'</div></div>';
+  }
+  document.getElementById('li-summary').innerHTML =
+    field('DC Date', row.dc_date) + field('Pickup Date', row.appointment_date) + field('Warehouse', row.warehouse)
+    + field('No. of SKU', row.no_of_sku) + field('Total Qty', row.total_qty) + field('Send Qty', row.send_qty)
+    + field('Received Qty', row.received_qty) + field('Status', row.status) + '<div></div>';
+
+  var dispatchShortage = [];
+  try{ dispatchShortage = JSON.parse(row.shortage_json||'[]'); }catch(e){}
+  var dsEl = document.getElementById('li-dispatch-shortage');
+  if(dispatchShortage.length){
+    dsEl.style.display = 'block';
+    dsEl.innerHTML = '<div style="font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;margin-bottom:.4rem">&#9888; Dispatch Shortage (Total \u2192 Send)</div>'
+      + dispatchShortage.map(function(s){
+          return '<div style="display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--border);font-size:11px">'
+            +'<span>'+esc(s.model||s.sku)+(s.reason?' <span style="color:var(--muted)">\u2014 '+esc(s.reason)+'</span>':'')+'</span>'
+            +'<span style="color:#ff8080;font-weight:700">-'+s.shortQty+'</span></div>';
+        }).join('');
+  } else { dsEl.style.display = 'none'; dsEl.innerHTML = ''; }
+
+  var receiptShortage = [];
+  try{ receiptShortage = JSON.parse(row.receipt_shortage_json||'[]'); }catch(e){}
+  var rsEl = document.getElementById('li-transit-shortage');
+  if(receiptShortage.length){
+    rsEl.style.display = 'block';
+    rsEl.innerHTML = '<div style="font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;margin-bottom:.4rem">&#9888; Transit Shortage (Send \u2192 Received)</div>'
+      + receiptShortage.map(function(s){
+          return '<div style="display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--border);font-size:11px">'
+            +'<span>'+esc(s.model||s.sku)+(s.action?' <span style="color:var(--muted)">\u2014 '+esc(s.action)+'</span>':'')+'</span>'
+            +'<span style="color:#ff8080;font-weight:700">-'+s.shortQty+'</span></div>';
+        }).join('');
+  } else { rsEl.style.display = 'none'; rsEl.innerHTML = ''; }
+
   var items = [];
   try{ items = JSON.parse(row.items_json||'[]'); }catch(e){}
-  document.getElementById('li-cn').textContent = cn;
   document.getElementById('li-body').innerHTML = items.length ? items.map(function(it){
     return '<div style="display:flex;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:12px">'
       +'<span>'+esc(it.model||it.sku)+' <span style="color:var(--muted);font-size:10px">('+esc(it.sku)+')</span></span>'
@@ -1146,6 +1191,11 @@ function ledgerViewItems(cn) {
   document.getElementById('ledgerItemsModal').classList.add('show');
 }
 function closeLedgerItemsModal(){ document.getElementById('ledgerItemsModal').classList.remove('show'); }
+function ledgerEditFromItemsModal(){
+  var cn = _itemsModalCN;
+  closeLedgerItemsModal();
+  if(cn) ledgerEditRow(cn);
+}
 
 // ── Shortage breakdown (which SKU(s) account for Send Qty < Total Qty) ──
 var _shortageCN = null, _shortageItemsCache = [];
