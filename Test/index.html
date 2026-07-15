@@ -379,7 +379,8 @@
         <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128203; Consignment Ledger</div>
         <input type="text" id="ledgerSearch" placeholder="Search Consignment No..." oninput="_ledgerPage=1;ledgerRender()" style="width:220px;font-size:11px;padding:5px 10px">
         <button class="btn btn-secondary btn-sm" onclick="ledgerLoad()" style="width:auto">&#8635; Refresh</button>
-        <button class="btn btn-secondary btn-sm" onclick="openLedgerSettings()" title="Ledger settings" style="width:auto;padding:6px 10px">&#9881;</button>
+        <!-- TEMP — dev/testing only. Remove this button (and ledgerDeleteAllPrompt() below) once app is out of active development. -->
+        <button class="btn btn-sm" onclick="ledgerDeleteAllPrompt()" style="width:auto;background:#3a1414;border:1px solid #6b2020;color:#ff8080">&#128465; Delete All (Temp)</button>
       </div>
 
       <div style="flex-shrink:0;display:flex;gap:0;border-bottom:1px solid var(--border);background:#111">
@@ -732,23 +733,6 @@
 </div>
 <script>document.getElementById('whConfirmModal').addEventListener('click',function(e){if(e.target===this)closeWarehouseConfirmModal();});</script>
 
-<!-- LEDGER SETTINGS MODAL — pincode/warehouse mapping view + password-gated Delete All -->
-<div class="modal-bg" id="ledgerSettingsModal">
-  <div class="modal" style="width:480px;max-height:80vh;overflow-y:auto">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem">
-      <div class="modal-title" style="margin-bottom:0">&#9881; Ledger Settings</div>
-      <button onclick="closeLedgerSettings()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
-    </div>
-    <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;margin-bottom:.5rem">Pincode &rarr; Warehouse Mapping</div>
-    <div id="whmap-body" style="margin-bottom:1rem"></div>
-    <div style="padding-top:1rem;border-top:1px solid var(--border)">
-      <!-- TEMP — dev/testing only. Remove this button (and ledgerDeleteAllPrompt() below) once app is out of active development. -->
-      <button class="btn btn-red" style="width:100%;font-size:11px" onclick="ledgerDeleteAllPrompt()">&#128465; Delete All Ledger Rows (Temp)</button>
-    </div>
-  </div>
-</div>
-<script>document.getElementById('ledgerSettingsModal').addEventListener('click',function(e){if(e.target===this)closeLedgerSettings();});</script>
-
 <!-- SETTINGS MODAL -->
 <div class="modal-bg" id="settingsModal">
   <div class="modal" style="width:360px">
@@ -1013,9 +997,7 @@ function ledgerRender() {
   } else {
     tbody.innerHTML = pageRows.map(function(r){
       var cn = r.consignment_no;
-      var hasItems = r.items_json && r.items_json !== '[]';
-      var noSkuCell = (r.no_of_sku!=null?r.no_of_sku:'\u2014')
-        + (hasItems ? ' <button onclick="ledgerViewItems(\''+esc(cn)+'\')" title="View items" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);cursor:pointer;font-size:10px;padding:1px 5px;margin-left:3px" onmouseover="this.style.borderColor=\'var(--accent)\';this.style.color=\'var(--accent)\'" onmouseout="this.style.borderColor=\'var(--border)\';this.style.color=\'var(--muted)\'">&#128065;</button>' : '');
+      var noSkuCell = (r.no_of_sku!=null?r.no_of_sku:'\u2014');
 
       var shortageEntries = [];
       try{ shortageEntries = JSON.parse(r.shortage_json||'[]'); }catch(e){}
@@ -1146,47 +1128,12 @@ function ledgerSaveRow(cn) {
   }).catch(function(){ toast('Ledger sync error (offline?)', 'err'); });
 }
 
-// Same admin password used across the other apps' "Delete All (Temp)" actions.
 function ledgerDeleteAllPrompt() {
-  var pwd = prompt('Enter admin password to delete ALL ledger rows:');
-  if(pwd === null) return;
-  if(pwd !== 'Admin@8411'){ toast('Incorrect password','err'); return; }
   if(!confirm('Delete ALL ledger rows? This cannot be undone.')) return;
   fetch(getWorkerBase() + '?action=fkLedgerDeleteAll', { method:'POST' })
     .then(function(r){ return r.json(); })
-    .then(function(){ _ledgerRows=[]; try{ localStorage.removeItem(LEDGER_KEY); }catch(e){} ledgerRender(); closeLedgerSettings(); toast('All ledger rows deleted','ok'); })
+    .then(function(){ _ledgerRows=[]; try{ localStorage.removeItem(LEDGER_KEY); }catch(e){} ledgerRender(); toast('All ledger rows deleted','ok'); })
     .catch(function(){ toast('Delete failed','err'); });
-}
-
-// ── Ledger Settings — pincode/warehouse mapping view + Delete All entry point ──
-function openLedgerSettings() {
-  renderWarehouseMapList();
-  document.getElementById('ledgerSettingsModal').classList.add('show');
-}
-function closeLedgerSettings(){ document.getElementById('ledgerSettingsModal').classList.remove('show'); }
-function renderWarehouseMapList() {
-  var pincodes = Object.keys(_warehouseMap).sort();
-  var body = document.getElementById('whmap-body');
-  if(!pincodes.length){
-    body.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:.8rem;text-align:center;border:1px solid var(--border);border-radius:6px">No pincode mappings saved yet \u2014 you\'ll be asked to confirm the first time each new pincode shows up.</div>';
-    return;
-  }
-  body.innerHTML = pincodes.map(function(pin){
-    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:.5rem .6rem;border-bottom:1px solid var(--border);font-size:12px">'
-      +'<span><b style="color:var(--accent);font-family:\'DM Mono\',monospace">'+esc(pin)+'</b> <span style="color:var(--muted)">&rarr;</span> '+esc(_warehouseMap[pin])+'</span>'
-      +'<button onclick="ledgerDeleteWarehouseMap(\''+esc(pin)+'\')" title="Remove this mapping" style="background:none;border:1px solid #6b2020;border-radius:4px;color:#ff8080;cursor:pointer;font-size:10px;padding:2px 7px">&#128465;</button>'
-      +'</div>';
-  }).join('');
-}
-function ledgerDeleteWarehouseMap(pincode) {
-  if(!confirm('Remove the saved warehouse name for pincode '+pincode+'? You\'ll be asked to confirm again next time this pincode appears.')) return;
-  delete _warehouseMap[pincode];
-  try{ localStorage.setItem(WH_MAP_KEY, JSON.stringify(_warehouseMap)); }catch(e){}
-  fetch(getWorkerBase() + '?action=fkWarehouseMapDelete', {
-    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({pincode:pincode})
-  }).catch(function(){});
-  renderWarehouseMapList();
-  toast('Mapping removed','ok');
 }
 
 // ── Consignment detail drill-in — everything about one consignment at a glance ──
