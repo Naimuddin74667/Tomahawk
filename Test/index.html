@@ -691,6 +691,23 @@
 </div>
 <script>document.getElementById('shortageModal').addEventListener('click',function(e){if(e.target===this)closeShortageModal();});</script>
 
+<!-- RECEIPT (TRANSIT) SHORTAGE MODAL — Send Qty \u2192 Received Qty gap, per-SKU action -->
+<div class="modal-bg" id="receiptShortageModal">
+  <div class="modal" style="width:560px;max-height:80vh;overflow-y:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem">
+      <div class="modal-title" style="margin-bottom:0">&#9888; Transit Shortage &mdash; <span id="rsh-cn" style="color:var(--accent)"></span></div>
+      <button onclick="closeReceiptShortageModal()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:.8rem">Send Qty <b id="rsh-send" style="color:var(--text)"></b> vs Received Qty <b id="rsh-received" style="color:var(--text)"></b> &mdash; specify which SKU(s) came up short in transit and what action was taken.</div>
+    <div id="rsh-body"></div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="closeReceiptShortageModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveReceiptShortage()">Save</button>
+    </div>
+  </div>
+</div>
+<script>document.getElementById('receiptShortageModal').addEventListener('click',function(e){if(e.target===this)closeReceiptShortageModal();});</script>
+
 <!-- WAREHOUSE CONFIRM MODAL — asked once per new Ship-To pincode, then remembered -->
 <div class="modal-bg" id="whConfirmModal">
   <div class="modal" style="width:420px">
@@ -984,6 +1001,15 @@ function ledgerRender() {
         sendCell += ' <button onclick="ledgerOpenShortage(\''+esc(cn)+'\')" title="'+(flagged?'Shortage details recorded \u2014 click to edit':'Specify which SKU(s) account for the shortage')+'" style="background:none;border:1px solid '+(flagged?'#3a6b3a':'#6b2020')+';border-radius:4px;color:'+(flagged?'#6dc87a':'#ff8080')+';cursor:pointer;font-size:10px;padding:1px 5px;margin-left:3px">'+(flagged?'&#10003;':'&#9888;')+'</button>';
       }
 
+      var receiptShortageEntries = [];
+      try{ receiptShortageEntries = JSON.parse(r.receipt_shortage_json||'[]'); }catch(e){}
+      var isReceiptShort = r.send_qty!=null && r.received_qty!=null && r.received_qty < r.send_qty;
+      var receivedCell = '<input type="number" min="0" value="'+(r.received_qty!=null?r.received_qty:'')+'" style="width:70px;text-align:center;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)" onchange="ledgerSaveField(\''+esc(cn)+'\',\'received_qty\',this.value)">';
+      if(isReceiptShort){
+        var rFlagged = receiptShortageEntries.length>0;
+        receivedCell += ' <button onclick="ledgerOpenReceiptShortage(\''+esc(cn)+'\')" title="'+(rFlagged?'Transit shortage details recorded \u2014 click to edit':'Specify which SKU(s) were short on receipt')+'" style="background:none;border:1px solid '+(rFlagged?'#3a6b3a':'#6b2020')+';border-radius:4px;color:'+(rFlagged?'#6dc87a':'#ff8080')+';cursor:pointer;font-size:10px;padding:1px 5px;margin-left:3px">'+(rFlagged?'&#10003;':'&#9888;')+'</button>';
+      }
+
       return '<tr>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);font-weight:600;color:var(--accent)">'+esc(cn)+'</td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border)">'+esc(r.dc_date||'\u2014')+'</td>'
@@ -992,7 +1018,7 @@ function ledgerRender() {
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center;white-space:nowrap">'+noSkuCell+'</td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center">'+(r.total_qty!=null?r.total_qty:'\u2014')+'</td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center;white-space:nowrap">'+sendCell+'</td>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center"><input type="number" min="0" value="'+(r.received_qty!=null?r.received_qty:'')+'" style="width:70px;text-align:center;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)" onchange="ledgerSaveField(\''+esc(cn)+'\',\'received_qty\',this.value)"></td>'
+        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center;white-space:nowrap">'+receivedCell+'</td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center"><input type="text" value="'+esc(r.status||'')+'" placeholder="\u2014" style="width:110px;text-align:center;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)" onchange="ledgerSaveField(\''+esc(cn)+'\',\'status\',this.value)"></td>'
         +'</tr>';
     }).join('');
@@ -1040,6 +1066,7 @@ function ledgerSaveField(cn, field, value) {
   row[field] = (field==='appointment_date') ? fromDateInputValue(value) : value;
   row.updated_at = new Date().toISOString();
   try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
+  ledgerRender(); // onchange fires on blur, not per keystroke — safe to re-render immediately
   fetch(getWorkerBase() + '?action=fkLedgerSave', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
   }).then(function(r){ return r.json(); }).then(function(data){
@@ -1122,6 +1149,69 @@ function saveShortage() {
   toast('Shortage details saved','ok');
 }
 
+// Actual qty sent per SKU, after subtracting whatever stage-1 (Total\u2192Send)
+// shortage was already recorded — this is the base the transit-shortage
+// modal works off, per your instruction to reuse rather than start fresh.
+function getEffectiveSentItems(row) {
+  var items = [];
+  try{ items = JSON.parse(row.items_json||'[]'); }catch(e){}
+  var shortages = {};
+  try{ (JSON.parse(row.shortage_json||'[]')).forEach(function(s){ shortages[s.sku] = s.shortQty||0; }); }catch(e){}
+  return items.map(function(it){
+    return { sku: it.sku, model: it.model, sentQty: Math.max(0, it.qty - (shortages[it.sku]||0)) };
+  });
+}
+
+// ── Transit shortage (Send Qty → Received Qty gap) — free-text action per SKU ──
+var _receiptShortageCN = null, _receiptShortageItemsCache = [];
+function ledgerOpenReceiptShortage(cn) {
+  var row = _ledgerRows.find(function(r){ return r.consignment_no===cn; });
+  if(!row) return;
+  _receiptShortageCN = cn;
+  var items = getEffectiveSentItems(row);
+  _receiptShortageItemsCache = items;
+  var existingMap = {};
+  try{ (JSON.parse(row.receipt_shortage_json||'[]')).forEach(function(s){ existingMap[s.sku]=s; }); }catch(e){}
+  document.getElementById('rsh-cn').textContent = cn;
+  document.getElementById('rsh-send').textContent = row.send_qty;
+  document.getElementById('rsh-received').textContent = row.received_qty;
+  document.getElementById('rsh-body').innerHTML = items.length ? items.map(function(it,i){
+    var existing = existingMap[it.sku];
+    return '<div style="display:flex;align-items:center;gap:.5rem;padding:.4rem 0;border-bottom:1px solid var(--border);font-size:12px">'
+      +'<span style="flex:1">'+esc(it.model||it.sku)+' <span style="color:var(--muted)">(sent qty '+it.sentQty+')</span></span>'
+      +'<input type="number" min="0" max="'+it.sentQty+'" placeholder="short qty" value="'+(existing?existing.shortQty:'')+'" id="rsh-qty-'+i+'" style="width:70px;text-align:center;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
+      +'<input type="text" placeholder="action taken" value="'+(existing?esc(existing.action):'')+'" id="rsh-action-'+i+'" style="width:160px;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
+      +'</div>';
+  }).join('') : '<div style="color:var(--muted);font-size:11px;padding:1rem;text-align:center">No item breakdown available for this consignment.</div>';
+  document.getElementById('receiptShortageModal').classList.add('show');
+}
+function closeReceiptShortageModal(){ document.getElementById('receiptShortageModal').classList.remove('show'); }
+function saveReceiptShortage() {
+  var items = _receiptShortageItemsCache || [];
+  var out = [], sum = 0;
+  items.forEach(function(it,i){
+    var qEl = document.getElementById('rsh-qty-'+i);
+    var aEl = document.getElementById('rsh-action-'+i);
+    var qv = qEl ? (parseInt(qEl.value)||0) : 0;
+    if(qv>0){ sum+=qv; out.push({sku:it.sku, model:it.model, shortQty:qv, action:aEl?aEl.value.trim():''}); }
+  });
+  var row = _ledgerRows.find(function(r){ return r.consignment_no===_receiptShortageCN; });
+  if(!row) return;
+  var expectedDiff = (row.send_qty||0) - (row.received_qty||0);
+  if(expectedDiff>0 && sum!==expectedDiff){
+    if(!confirm('Shortage entries total '+sum+', but Send Qty \u2212 Received Qty = '+expectedDiff+'. Save anyway?')) return;
+  }
+  row.receipt_shortage_json = JSON.stringify(out);
+  row.updated_at = new Date().toISOString();
+  try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
+  fetch(getWorkerBase() + '?action=fkLedgerSave', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
+  }).catch(function(){});
+  closeReceiptShortageModal();
+  ledgerRender();
+  toast('Transit shortage details saved','ok');
+}
+
 // ── Warehouse pincode confirmation (asked once per new pincode, then remembered) ──
 function openWarehouseConfirmModal(pincode, guess) {
   document.getElementById('whc-pincode').textContent = pincode;
@@ -1183,6 +1273,7 @@ function ledgerRecordPrint(printableRows, queueLength, itemsJson) {
     status: existing ? existing.status : '',
     items_json: JSON.stringify(itemsJson || []),
     shortage_json: existing ? (existing.shortage_json || '[]') : '[]',
+    receipt_shortage_json: existing ? (existing.receipt_shortage_json || '[]') : '[]',
     created_at: existing ? existing.created_at : new Date().toISOString(),
     updated_at: new Date().toISOString()
   };
