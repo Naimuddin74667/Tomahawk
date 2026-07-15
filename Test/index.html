@@ -1084,8 +1084,15 @@ function ledgerDeleteAllPrompt() {
   if(!confirm('Delete ALL ledger rows? This cannot be undone.')) return;
   fetch(getWorkerBase() + '?action=fkLedgerDeleteAll', { method:'POST' })
     .then(function(r){ return r.json(); })
-    .then(function(){ _ledgerRows=[]; try{ localStorage.removeItem(LEDGER_KEY); }catch(e){} ledgerRender(); closeLedgerSettings(); toast('All ledger rows deleted','ok'); })
-    .catch(function(){ toast('Delete failed','err'); });
+    .then(function(data){
+      if(!data || !data.ok){
+        toast('Delete failed on server \u2014 worker may need redeploying','err');
+        return;
+      }
+      _ledgerRows=[]; try{ localStorage.removeItem(LEDGER_KEY); }catch(e){}
+      ledgerRender(); closeLedgerSettings(); toast('All ledger rows deleted','ok');
+    })
+    .catch(function(){ toast('Delete failed (network/offline)','err'); });
 }
 
 // ── Ledger Settings — pincode/warehouse mapping view + Delete All entry point ──
@@ -1114,9 +1121,11 @@ function ledgerDeleteWarehouseMap(pincode) {
   try{ localStorage.setItem(WH_MAP_KEY, JSON.stringify(_warehouseMap)); }catch(e){}
   fetch(getWorkerBase() + '?action=fkWarehouseMapDelete', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({pincode:pincode})
-  }).catch(function(){});
+  }).then(function(r){ return r.json(); }).then(function(data){
+    if(!data || !data.ok){ toast('Removed locally, but server delete failed \u2014 may reappear on refresh', 'err'); return; }
+    toast('Mapping removed','ok');
+  }).catch(function(){ toast('Removed locally, but sync failed (offline?)', 'err'); });
   renderWarehouseMapList();
-  toast('Mapping removed','ok');
 }
 
 // ── Consignment detail drill-in — everything about one consignment at a glance ──
@@ -1354,10 +1363,12 @@ function saveReceiptShortage() {
   try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
   fetch(getWorkerBase() + '?action=fkLedgerSave', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
-  }).catch(function(){});
+  }).then(function(r){ return r.json(); }).then(function(data){
+    if(!data || !data.ok) toast('Saved locally, but server save failed \u2014 will retry on next edit', 'err');
+    else toast('Transit shortage details saved','ok');
+  }).catch(function(){ toast('Saved locally, but sync failed (offline?)', 'err'); });
   closeReceiptShortageModal();
   ledgerRender();
-  toast('Transit shortage details saved','ok');
 }
 
 // ── Warehouse pincode confirmation (asked once per new pincode, then remembered) ──
@@ -1374,7 +1385,9 @@ function confirmWarehouseSave() {
   try{ localStorage.setItem(WH_MAP_KEY, JSON.stringify(_warehouseMap)); }catch(e){}
   fetch(getWorkerBase() + '?action=fkWarehouseMapSave', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({pincode:_bulkPincode, warehouse_name:name})
-  }).catch(function(){});
+  }).then(function(r){ return r.json(); }).then(function(data){
+    if(!data || !data.ok) toast('Mapping saved locally, but server save failed \u2014 you may be asked again next time', 'err');
+  }).catch(function(){ toast('Mapping saved locally, but sync failed (offline?)', 'err'); });
   document.getElementById('whConfirmModal').classList.remove('show');
   if(_pendingLedgerPrint){
     ledgerRecordPrint(_pendingLedgerPrint.printableRows, _pendingLedgerPrint.queueLength, _pendingLedgerPrint.itemsJson);
@@ -1438,7 +1451,9 @@ function ledgerRecordPrint(printableRows, queueLength, itemsJson) {
   try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
   fetch(getWorkerBase() + '?action=fkLedgerSave', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
-  }).catch(function(){});
+  }).then(function(r){ return r.json(); }).then(function(data){
+    if(!data || !data.ok) toast('Consignment '+_bulkCN+' saved locally only \u2014 server save failed (check worker deployment)', 'err');
+  }).catch(function(){ toast('Consignment '+_bulkCN+' saved locally only \u2014 sync failed (offline?)', 'err'); });
   if(document.getElementById('tab-ledger').style.display !== 'none') ledgerRender();
 }
 
