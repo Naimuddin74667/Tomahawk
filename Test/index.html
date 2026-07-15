@@ -404,17 +404,18 @@
             <tr>
               <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Consignment No.</th>
               <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">DC Date</th>
-              <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Appointment Date</th>
+              <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Pickup Date</th>
               <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Warehouse</th>
               <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">No. of SKU</th>
               <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Total Qty</th>
               <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Send Qty</th>
               <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Received Qty</th>
               <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Status</th>
+              <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Actions</th>
             </tr>
           </thead>
           <tbody id="ledgerTbody">
-            <tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+            <tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
           </tbody>
         </table>
       </div>
@@ -912,6 +913,7 @@ var LEDGER_KEY = 'fk_ledger_v1';
 var WH_MAP_KEY = 'fk_warehouse_map_v1';
 var _warehouseMap = {}; // pincode -> confirmed warehouse name
 var _pendingLedgerPrint = null; // holds print data while the warehouse-confirm modal is open
+var _ledgerEditingCN = null; // consignment_no of the row currently unlocked for editing (only one at a time)
 
 function getWorkerBase() {
   var isLive = location.hostname === 'naimuddin74667.github.io';
@@ -920,7 +922,7 @@ function getWorkerBase() {
 
 function ledgerLoad() {
   var tbody = document.getElementById('ledgerTbody');
-  if(tbody) tbody.innerHTML = '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+  if(tbody) tbody.innerHTML = '<tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
   fetch(getWorkerBase() + '?action=fkLedgerLoad')
     .then(function(r){ return r.json(); })
     .then(function(data){
@@ -984,7 +986,7 @@ function ledgerRender() {
 
   var tbody = document.getElementById('ledgerTbody');
   if(!pageRows.length){
-    tbody.innerHTML = '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No consignments yet.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No consignments yet.</td></tr>';
   } else {
     tbody.innerHTML = pageRows.map(function(r){
       var cn = r.consignment_no;
@@ -995,31 +997,57 @@ function ledgerRender() {
       var shortageEntries = [];
       try{ shortageEntries = JSON.parse(r.shortage_json||'[]'); }catch(e){}
       var isShort = r.total_qty!=null && r.send_qty!=null && r.send_qty < r.total_qty;
-      var sendCell = (r.send_qty!=null?r.send_qty:'\u2014');
+
+      var receiptShortageEntries = [];
+      try{ receiptShortageEntries = JSON.parse(r.receipt_shortage_json||'[]'); }catch(e){}
+      var isReceiptShort = r.send_qty!=null && r.received_qty!=null && r.received_qty < r.send_qty;
+
+      var editing = (_ledgerEditingCN === cn);
+
+      // Send Qty — static text normally; number input only while this row is being edited
+      var sendCell = editing
+        ? '<input type="number" min="0" id="edit-send" value="'+(r.send_qty!=null?r.send_qty:'')+'" style="width:70px;text-align:center;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
+        : (r.send_qty!=null?r.send_qty:'\u2014');
       if(isShort){
         var flagged = shortageEntries.length>0;
         sendCell += ' <button onclick="ledgerOpenShortage(\''+esc(cn)+'\')" title="'+(flagged?'Shortage details recorded \u2014 click to edit':'Specify which SKU(s) account for the shortage')+'" style="background:none;border:1px solid '+(flagged?'#3a6b3a':'#6b2020')+';border-radius:4px;color:'+(flagged?'#6dc87a':'#ff8080')+';cursor:pointer;font-size:10px;padding:1px 5px;margin-left:3px">'+(flagged?'&#10003;':'&#9888;')+'</button>';
       }
 
-      var receiptShortageEntries = [];
-      try{ receiptShortageEntries = JSON.parse(r.receipt_shortage_json||'[]'); }catch(e){}
-      var isReceiptShort = r.send_qty!=null && r.received_qty!=null && r.received_qty < r.send_qty;
-      var receivedCell = '<input type="number" min="0" value="'+(r.received_qty!=null?r.received_qty:'')+'" style="width:70px;text-align:center;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)" onchange="ledgerSaveField(\''+esc(cn)+'\',\'received_qty\',this.value)">';
+      // Received Qty — static text normally; number input only while editing
+      var receivedCell = editing
+        ? '<input type="number" min="0" id="edit-recv" value="'+(r.received_qty!=null?r.received_qty:'')+'" style="width:70px;text-align:center;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
+        : (r.received_qty!=null?r.received_qty:'\u2014');
       if(isReceiptShort){
         var rFlagged = receiptShortageEntries.length>0;
         receivedCell += ' <button onclick="ledgerOpenReceiptShortage(\''+esc(cn)+'\')" title="'+(rFlagged?'Transit shortage details recorded \u2014 click to edit':'Specify which SKU(s) were short on receipt')+'" style="background:none;border:1px solid '+(rFlagged?'#3a6b3a':'#6b2020')+';border-radius:4px;color:'+(rFlagged?'#6dc87a':'#ff8080')+';cursor:pointer;font-size:10px;padding:1px 5px;margin-left:3px">'+(rFlagged?'&#10003;':'&#9888;')+'</button>';
       }
 
+      // Pickup Date (stored as appointment_date) — static text normally; date input only while editing
+      var pickupCell = editing
+        ? '<input type="date" id="edit-appt" value="'+esc(toDateInputValue(r.appointment_date))+'" style="width:130px;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text);color-scheme:dark">'
+        : esc(r.appointment_date||'\u2014');
+
+      // Status — static text normally; text input only while editing
+      var statusCell = editing
+        ? '<input type="text" id="edit-status" value="'+esc(r.status||'')+'" placeholder="\u2014" style="width:110px;text-align:center;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
+        : esc(r.status||'\u2014');
+
+      var actionsCell = editing
+        ? '<button class="btn btn-primary btn-sm" style="width:auto;padding:3px 10px;font-size:10px" onclick="ledgerSaveRow(\''+esc(cn)+'\')">Save</button> '
+          +'<button class="btn btn-secondary btn-sm" style="width:auto;padding:3px 10px;font-size:10px" onclick="ledgerCancelEdit()">Cancel</button>'
+        : '<button class="btn btn-secondary btn-sm" style="width:auto;padding:3px 10px;font-size:10px" onclick="ledgerEditRow(\''+esc(cn)+'\')">Edit</button>';
+
       return '<tr>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);font-weight:600;color:var(--accent)">'+esc(cn)+'</td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border)">'+esc(r.dc_date||'\u2014')+'</td>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border)"><input type="date" value="'+esc(toDateInputValue(r.appointment_date))+'" style="width:130px;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text);color-scheme:dark" onchange="ledgerSaveField(\''+esc(cn)+'\',\'appointment_date\',this.value)"></td>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border)"><input type="text" value="'+esc(r.warehouse||'')+'" placeholder="\u2014" style="width:130px;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)" onchange="ledgerSaveField(\''+esc(cn)+'\',\'warehouse\',this.value)"></td>'
+        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border)">'+pickupCell+'</td>'
+        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border)">'+esc(r.warehouse||'\u2014')+'</td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center;white-space:nowrap">'+noSkuCell+'</td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center">'+(r.total_qty!=null?r.total_qty:'\u2014')+'</td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center;white-space:nowrap">'+sendCell+'</td>'
         +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center;white-space:nowrap">'+receivedCell+'</td>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center"><input type="text" value="'+esc(r.status||'')+'" placeholder="\u2014" style="width:110px;text-align:center;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)" onchange="ledgerSaveField(\''+esc(cn)+'\',\'status\',this.value)"></td>'
+        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center">'+statusCell+'</td>'
+        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center;white-space:nowrap">'+actionsCell+'</td>'
         +'</tr>';
     }).join('');
   }
@@ -1060,17 +1088,38 @@ function ledgerGoToPage(p) {
   ledgerRender();
 }
 
-function ledgerSaveField(cn, field, value) {
+// Only Pickup Date, Send Qty, Received Qty, and Status are ever editable — and
+// only for the one row currently unlocked via the Edit button. Consignment No,
+// DC Date, Warehouse, No. of SKU, and Total Qty all come from the PDF and are
+// never editable through the UI.
+function ledgerEditRow(cn) {
+  _ledgerEditingCN = cn;
+  ledgerRender();
+}
+function ledgerCancelEdit() {
+  _ledgerEditingCN = null;
+  ledgerRender();
+}
+function ledgerSaveRow(cn) {
   var row = _ledgerRows.find(function(r){ return r.consignment_no===cn; });
   if(!row) return;
-  row[field] = (field==='appointment_date') ? fromDateInputValue(value) : value;
+  var apptEl = document.getElementById('edit-appt');
+  var sendEl = document.getElementById('edit-send');
+  var recvEl = document.getElementById('edit-recv');
+  var statusEl = document.getElementById('edit-status');
+  if(apptEl) row.appointment_date = fromDateInputValue(apptEl.value);
+  if(sendEl) row.send_qty = sendEl.value==='' ? row.send_qty : (parseInt(sendEl.value)||0);
+  if(recvEl) row.received_qty = recvEl.value==='' ? null : (parseInt(recvEl.value)||0);
+  if(statusEl) row.status = statusEl.value;
   row.updated_at = new Date().toISOString();
   try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
-  ledgerRender(); // onchange fires on blur, not per keystroke — safe to re-render immediately
+  _ledgerEditingCN = null;
+  ledgerRender();
   fetch(getWorkerBase() + '?action=fkLedgerSave', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
   }).then(function(r){ return r.json(); }).then(function(data){
     if(!data || !data.ok) toast('Save failed \u2014 will retry on next edit', 'err');
+    else toast('Saved','ok');
   }).catch(function(){ toast('Ledger sync error (offline?)', 'err'); });
 }
 
@@ -1243,11 +1292,19 @@ function closeWarehouseConfirmModal(){
   }
 }
 
-// Called once a bulk print batch finishes generating its PDF. Gates on the
-// warehouse pincode: known pincode → record immediately with the saved name;
-// new pincode → ask once via modal, save the mapping, then record.
+// Called once a bulk print batch finishes generating its PDF. Consignment No.
+// is unique — if it's already in the ledger, the print still happens but we
+// don't touch the existing row (which may carry manual edits by now); we just
+// tell the person it's already recorded. Otherwise gates on the warehouse
+// pincode: known pincode → record immediately with the saved name; new
+// pincode → ask once via modal, save the mapping, then record.
 function handlePostPrintLedger(printableRows, queueLength, itemsJson) {
   if(!_bulkCN) return; // no consignment number detected (e.g. CSV-only import) — skip for now
+  var existing = _ledgerRows.find(function(r){ return r.consignment_no===_bulkCN; });
+  if(existing){
+    toast('Consignment No. already saved','err');
+    return;
+  }
   if(_bulkPincode && _warehouseMap[_bulkPincode]){
     _bulkWarehouse = _warehouseMap[_bulkPincode];
     ledgerRecordPrint(printableRows, queueLength, itemsJson);
@@ -1259,29 +1316,26 @@ function handlePostPrintLedger(printableRows, queueLength, itemsJson) {
   }
 }
 
+// Only ever called for a genuinely new consignment_no now (duplicates are
+// caught in handlePostPrintLedger above), so no existing-row merge needed.
 function ledgerRecordPrint(printableRows, queueLength, itemsJson) {
-  var existing = _ledgerRows.find(function(r){ return r.consignment_no===_bulkCN; });
   var row = {
     consignment_no: _bulkCN,
-    dc_date: _bulkDcDate || (existing ? existing.dc_date : ''),
-    appointment_date: existing ? existing.appointment_date : '',
-    warehouse: _bulkWarehouse || (existing ? existing.warehouse : ''),
+    dc_date: _bulkDcDate || '',
+    appointment_date: '',
+    warehouse: _bulkWarehouse || '',
     no_of_sku: printableRows.length,
     total_qty: queueLength,
     send_qty: (_bulkSendQtyPdf != null ? _bulkSendQtyPdf : queueLength),
-    received_qty: existing ? existing.received_qty : null,
-    status: existing ? existing.status : '',
+    received_qty: null,
+    status: '',
     items_json: JSON.stringify(itemsJson || []),
-    shortage_json: existing ? (existing.shortage_json || '[]') : '[]',
-    receipt_shortage_json: existing ? (existing.receipt_shortage_json || '[]') : '[]',
-    created_at: existing ? existing.created_at : new Date().toISOString(),
+    shortage_json: '[]',
+    receipt_shortage_json: '[]',
+    created_at: new Date().toISOString(),
     updated_at: new Date().toISOString()
   };
-  if(existing){
-    _ledgerRows = _ledgerRows.map(function(r){ return r.consignment_no===_bulkCN ? row : r; });
-  } else {
-    _ledgerRows.push(row);
-  }
+  _ledgerRows.push(row);
   try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
   fetch(getWorkerBase() + '?action=fkLedgerSave', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
