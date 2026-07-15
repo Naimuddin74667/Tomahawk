@@ -1083,16 +1083,20 @@ function ledgerDeleteAllPrompt() {
   if(pwd !== 'Admin@8411'){ toast('Incorrect password','err'); return; }
   if(!confirm('Delete ALL ledger rows? This cannot be undone.')) return;
   fetch(getWorkerBase() + '?action=fkLedgerDeleteAll', { method:'POST' })
-    .then(function(r){ return r.json(); })
-    .then(function(data){
-      if(!data || !data.ok){
-        toast('Delete failed on server \u2014 worker may need redeploying','err');
+    .then(function(r){
+      return r.json().then(function(data){ return { status:r.status, data:data }; });
+    })
+    .then(function(res){
+      console.log('fkLedgerDeleteAll response:', res.status, res.data);
+      if(!res.data || !res.data.ok){
+        var detail = (res.data && res.data.error) ? res.data.error : ('HTTP '+res.status);
+        toast('Delete failed on server: '+detail,'err');
         return;
       }
       _ledgerRows=[]; try{ localStorage.removeItem(LEDGER_KEY); }catch(e){}
       ledgerRender(); closeLedgerSettings(); toast('All ledger rows deleted','ok');
     })
-    .catch(function(){ toast('Delete failed (network/offline)','err'); });
+    .catch(function(err){ console.error('fkLedgerDeleteAll network error:', err); toast('Delete failed (network/offline): '+err.message,'err'); });
 }
 
 // ── Ledger Settings — pincode/warehouse mapping view + Delete All entry point ──
