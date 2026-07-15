@@ -2225,23 +2225,74 @@ function renderLibrary() {
     var isActive=_activeLibModel===m.model;
     var isPreview=_libMode==='preview'&&isActive;
     var isEdit=_libMode==='edit'&&isActive;
+
+    var fsnEntries=getModelFsnEntries(m);
+    var isFsnExpanded=_fsnExpandedModel===m.model;
+    var fsnCell;
+    if(!fsnEntries.length){
+      fsnCell='<span style="color:var(--muted);font-size:10px">\u2014</span>';
+    } else if(fsnEntries.length===1){
+      fsnCell='<span style="font-family:\'DM Mono\',monospace;font-size:10px;color:var(--text)">'+esc(fsnEntries[0].fsn||'\u2014')+'</span>';
+    } else {
+      fsnCell='<button onclick="event.stopPropagation();toggleFsnExpand(\''+safeModel+'\')" title="Show all FSNs for this model" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--text);cursor:pointer;font-size:10px;padding:2px 7px;font-family:\'DM Mono\',monospace;white-space:nowrap">'
+        +esc(fsnEntries[0].fsn||'\u2014')+' +'+(fsnEntries.length-1)+' more '+(isFsnExpanded?'&#9652;':'&#9662;')+'</button>';
+    }
+
+    var expandedBlock='';
+    if(isFsnExpanded && fsnEntries.length>1){
+      expandedBlock='<div style="padding:.5rem .8rem;margin:-6px 0 8px;background:var(--surface2);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px">'
+        + fsnEntries.map(function(e){
+            return '<div style="display:flex;justify-content:space-between;gap:.6rem;padding:.35rem 0;border-bottom:1px solid var(--border);font-size:11px">'
+              +'<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(e.skuId)+'</span>'
+              +'<span style="color:var(--muted);white-space:nowrap">'+esc(e.color||'\u2014')+'</span>'
+              +'<span style="font-family:\'DM Mono\',monospace;color:var(--accent);white-space:nowrap">'+esc(e.fsn||'\u2014')+'</span>'
+              +'</div>';
+          }).join('')
+        +'</div>';
+    }
+
     return '<div class="sku-item" style="'+(isActive?'border-color:var(--accent);background:rgba(245,168,0,0.05)':'')+'">'
       +'<div class="sku-info" style="cursor:pointer;min-width:0" onclick="openLibMode(\''+safeModel+'\',\'preview\')">'
         +'<div class="sku-name">'+m.model+' &nbsp;<span style="color:var(--muted);font-weight:400;font-size:10px">Rs.'+m.mrp+'</span></div>'
         +'<div class="sku-sub">'+(m.category||'—')+' · '+fkCount+' FK SKU'+(fkCount!==1?'s':'')+' · '+m.colors.join(', ')+'</div>'
       +'</div>'
-      +'<div style="display:flex;gap:4px;flex-shrink:0">'
-        +'<button class="icon-btn" onclick="event.stopPropagation();openLibMode(\''+safeModel+'\',\'preview\')" style="font-size:11px;'+(isPreview?'border-color:var(--accent);color:var(--accent)':'')+'">&#128065;</button>'
-        +'<button class="icon-btn" onclick="event.stopPropagation();openLibMode(\''+safeModel+'\',\'edit\')" style="font-size:11px;'+(isEdit?'border-color:var(--accent);color:var(--accent)':'')+'">&#9998;</button>'
-        +'<button class="icon-btn del" onclick="event.stopPropagation();deleteModel(\''+safeModel+'\')">&#10005;</button>'
+      +'<div style="display:flex;align-items:center;gap:10px;flex-shrink:0">'
+        +fsnCell
+        +'<div style="display:flex;gap:4px">'
+          +'<button class="icon-btn" onclick="event.stopPropagation();openLibMode(\''+safeModel+'\',\'preview\')" style="font-size:11px;'+(isPreview?'border-color:var(--accent);color:var(--accent)':'')+'">&#128065;</button>'
+          +'<button class="icon-btn" onclick="event.stopPropagation();openLibMode(\''+safeModel+'\',\'edit\')" style="font-size:11px;'+(isEdit?'border-color:var(--accent);color:var(--accent)':'')+'">&#9998;</button>'
+          +'<button class="icon-btn del" onclick="event.stopPropagation();deleteModel(\''+safeModel+'\')">&#10005;</button>'
+        +'</div>'
       +'</div>'
-    +'</div>';
+    +'</div>'
+    +expandedBlock;
   }).join('');
 
   el.innerHTML=html;
 }
 
 var _activeLibModel=null, _libMode='preview', _libColors=[], _libFkSkus=[];
+var _fsnExpandedModel=null; // model name currently showing its full FSN breakdown
+
+// Every FK SKU under a model has its own unique FSN — this collects them,
+// falling back to the live GSheet lookup if fnskuMap hasn't cached one yet.
+function getModelFsnEntries(m) {
+  var skus = m.fkSkus || [];
+  return skus.map(function(skuId){
+    var entry = m.fnskuMap && m.fnskuMap[skuId];
+    var fsn = (entry && entry.f) ? entry.f : '';
+    var color = (entry && entry.color) ? entry.color : '';
+    if(!fsn){
+      var gRow = lookupGSheetSKU(skuId);
+      if(gRow) fsn = gRow.f || '';
+    }
+    return { skuId: skuId, fsn: fsn, color: color };
+  });
+}
+function toggleFsnExpand(modelName){
+  _fsnExpandedModel = (_fsnExpandedModel === modelName) ? null : modelName;
+  renderLibrary();
+}
 
 function switchLibMode(mode) {
   _libMode = mode;
