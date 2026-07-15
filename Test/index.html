@@ -1143,6 +1143,7 @@ function ledgerDeleteAllPrompt() {
 // ── Consignment detail drill-in — everything about one consignment at a glance ──
 var _itemsModalCN = null;
 var _itemsModalEditing = false;
+var _itemsModalItemsCache = [];
 
 function ledgerViewItems(cn) {
   var row = _ledgerRows.find(function(r){ return r.consignment_no===cn; });
@@ -1151,6 +1152,7 @@ function ledgerViewItems(cn) {
   _itemsModalEditing = false;
   document.getElementById('li-cn').textContent = cn;
   renderItemsModalSummary(row);
+  renderItemsModalBody(row);
   document.getElementById('li-footer-view').style.display = 'flex';
   document.getElementById('li-footer-edit').style.display = 'none';
 
@@ -1180,25 +1182,20 @@ function ledgerViewItems(cn) {
         }).join('');
   } else { rsEl.style.display = 'none'; rsEl.innerHTML = ''; }
 
-  var items = [];
-  try{ items = JSON.parse(row.items_json||'[]'); }catch(e){}
-  document.getElementById('li-body').innerHTML = items.length ? items.map(function(it){
-    return '<div style="display:flex;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:12px">'
-      +'<span>'+esc(it.model||it.sku)+' <span style="color:var(--muted);font-size:10px">('+esc(it.sku)+')</span></span>'
-      +'<span style="color:var(--accent);font-weight:700">x'+it.qty+'</span></div>';
-  }).join('') : '<div style="color:var(--muted);font-size:11px;padding:1rem;text-align:center">No item breakdown stored for this consignment.</div>';
   document.getElementById('ledgerItemsModal').classList.add('show');
 }
 function closeLedgerItemsModal(){ document.getElementById('ledgerItemsModal').classList.remove('show'); }
 
-// Builds the summary grid — read-only normally, with live inputs for the four
-// editable fields (Pickup Date, Send Qty, Received Qty, Status) while _itemsModalEditing.
-// Consignment No, DC Date, Warehouse, No. of SKU, Total Qty never become inputs — PDF-sourced.
+// Builds the summary grid. Send Qty is never a direct input here anymore — it's
+// a live, read-only sum of the per-item Send Qty fields down in the Items list
+// (see renderItemsModalBody / recomputeModalSendQtyTotal). Pickup Date, Received
+// Qty, and Status stay editable at the summary level. Consignment No, DC Date,
+// Warehouse, No. of SKU, Total Qty never become inputs — PDF-sourced.
 function renderItemsModalSummary(row) {
   var editing = _itemsModalEditing;
-  function field(label, value){
+  function field(label, value, id){
     return '<div><div style="font-size:9px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase">'+label+'</div>'
-      +'<div style="font-size:12px;font-weight:600;color:var(--text);margin-top:2px">'+esc(value==null||value===''?'\u2014':value)+'</div></div>';
+      +'<div'+(id?' id="'+id+'"':'')+' style="font-size:12px;font-weight:600;color:var(--text);margin-top:2px">'+esc(value==null||value===''?'\u2014':value)+'</div></div>';
   }
   function editField(label, inputHtml){
     return '<div><div style="font-size:9px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase">'+label+'</div>'
@@ -1213,9 +1210,7 @@ function renderItemsModalSummary(row) {
   html += field('Warehouse', row.warehouse);
   html += field('No. of SKU', row.no_of_sku);
   html += field('Total Qty', row.total_qty);
-  html += editing
-    ? editField('Send Qty', '<input type="number" min="0" id="li-edit-send" value="'+(row.send_qty!=null?row.send_qty:'')+'" style="'+inputStyle+'">')
-    : field('Send Qty', row.send_qty);
+  html += field('Send Qty', row.send_qty, 'li-sendqty-value'); // always read-only — driven by per-item sum
   html += editing
     ? editField('Received Qty', '<input type="number" min="0" id="li-edit-recv" value="'+(row.received_qty!=null?row.received_qty:'')+'" style="'+inputStyle+'">')
     : field('Received Qty', row.received_qty);
@@ -1226,11 +1221,46 @@ function renderItemsModalSummary(row) {
   document.getElementById('li-summary').innerHTML = html;
 }
 
+// Items list — each row shows the printed Total Qty (static) and a Send Qty
+// field that defaults to that same value but is independently editable while
+// in edit mode. The summary's Send Qty is just the live sum of these.
+function renderItemsModalBody(row) {
+  var items = [];
+  try{ items = JSON.parse(row.items_json||'[]'); }catch(e){}
+  _itemsModalItemsCache = items;
+  var editing = _itemsModalEditing;
+  document.getElementById('li-body').innerHTML = items.length ? items.map(function(it,i){
+    var sendVal = (it.sendQty!=null ? it.sendQty : it.qty);
+    var sendCell = editing
+      ? '<input type="number" min="0" id="li-item-send-'+i+'" value="'+sendVal+'" oninput="recomputeModalSendQtyTotal()" style="width:64px;text-align:center;font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
+      : '<span style="font-weight:700;color:'+(sendVal<it.qty?'#ff8080':'var(--accent)')+'">'+sendVal+'</span>';
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:12px">'
+      +'<span style="flex:1">'+esc(it.model||it.sku)+' <span style="color:var(--muted);font-size:10px">('+esc(it.sku)+')</span></span>'
+      +'<span style="color:var(--muted);font-size:10px;margin-right:12px;white-space:nowrap">Total '+it.qty+'</span>'
+      +'<span style="min-width:64px;text-align:center">'+sendCell+'</span>'
+      +'</div>';
+  }).join('') : '<div style="color:var(--muted);font-size:11px;padding:1rem;text-align:center">No item breakdown stored for this consignment.</div>';
+}
+
+// Live-updates the summary's Send Qty display while typing per-item values —
+// doesn't touch _ledgerRows, only reflects what Save will compute.
+function recomputeModalSendQtyTotal() {
+  var items = _itemsModalItemsCache || [];
+  var sum = 0;
+  items.forEach(function(it,i){
+    var el = document.getElementById('li-item-send-'+i);
+    sum += el ? (parseInt(el.value)||0) : (it.sendQty!=null?it.sendQty:it.qty);
+  });
+  var el = document.getElementById('li-sendqty-value');
+  if(el) el.textContent = sum;
+}
+
 function ledgerModalEnterEdit() {
   var row = _ledgerRows.find(function(r){ return r.consignment_no===_itemsModalCN; });
   if(!row) return;
   _itemsModalEditing = true;
   renderItemsModalSummary(row);
+  renderItemsModalBody(row);
   document.getElementById('li-footer-view').style.display = 'none';
   document.getElementById('li-footer-edit').style.display = 'flex';
 }
@@ -1239,6 +1269,7 @@ function ledgerModalCancelEdit() {
   if(!row) return;
   _itemsModalEditing = false;
   renderItemsModalSummary(row);
+  renderItemsModalBody(row);
   document.getElementById('li-footer-view').style.display = 'flex';
   document.getElementById('li-footer-edit').style.display = 'none';
 }
@@ -1246,17 +1277,29 @@ function ledgerModalSaveEdit() {
   var row = _ledgerRows.find(function(r){ return r.consignment_no===_itemsModalCN; });
   if(!row) return;
   var apptEl = document.getElementById('li-edit-appt');
-  var sendEl = document.getElementById('li-edit-send');
   var recvEl = document.getElementById('li-edit-recv');
   var statusEl = document.getElementById('li-edit-status');
   if(apptEl) row.appointment_date = fromDateInputValue(apptEl.value);
-  if(sendEl) row.send_qty = sendEl.value==='' ? row.send_qty : (parseInt(sendEl.value)||0);
   if(recvEl) row.received_qty = recvEl.value==='' ? null : (parseInt(recvEl.value)||0);
   if(statusEl) row.status = statusEl.value;
+
+  // Read per-item Send Qty inputs, write back into items_json, sum into row.send_qty
+  var items = _itemsModalItemsCache || [];
+  var sum = 0;
+  items.forEach(function(it,i){
+    var el = document.getElementById('li-item-send-'+i);
+    var v = el ? (parseInt(el.value)||0) : (it.sendQty!=null?it.sendQty:it.qty);
+    it.sendQty = v;
+    sum += v;
+  });
+  row.items_json = JSON.stringify(items);
+  row.send_qty = sum;
+
   row.updated_at = new Date().toISOString();
   try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
   _itemsModalEditing = false;
   renderItemsModalSummary(row);
+  renderItemsModalBody(row);
   document.getElementById('li-footer-view').style.display = 'flex';
   document.getElementById('li-footer-edit').style.display = 'none';
   ledgerRender(); // keep the table behind the modal in sync
