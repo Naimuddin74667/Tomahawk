@@ -840,7 +840,45 @@ var LIB_KEY = 'tomahawk_sku_lib_v5';
 var SETTINGS_KEY = 'tomahawk_settings_v5';
 
 function loadLib() { try { return JSON.parse(localStorage.getItem(LIB_KEY)) || {}; } catch(e) { return {}; } }
-function saveLib(lib) { localStorage.setItem(LIB_KEY, JSON.stringify(lib)); }
+// localStorage stays as the instant local cache (so the UI never blocks on
+// network), but every save now also pushes the whole library to D1 as one
+// JSON blob — same pattern already proven for Blinkit's SKU library
+// (bk_libSave/bk_libLoad), just under an fk_ prefix here.
+function saveLib(lib) {
+  localStorage.setItem(LIB_KEY, JSON.stringify(lib));
+  fetch(getWorkerBase() + '?action=fkLibSave', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({data: JSON.stringify(lib)})
+  }).then(function(r){ return r.json(); }).then(function(data){
+    if(!data || !data.ok) toast('SKU Library saved locally only \u2014 server sync failed (check worker deployment)', 'err');
+  }).catch(function(){ toast('SKU Library saved locally only \u2014 sync failed (offline?)', 'err'); });
+}
+// Called once at startup: D1 is the cross-device source of truth. If D1 has
+// a library, it wins and overwrites this browser's local cache — this is
+// exactly what was missing before, causing a fresh browser/incognito to show
+// an empty library even though other devices had data. If D1 is empty but
+// this browser already has local data, push it up once to seed D1.
+function syncLibFromD1() {
+  fetch(getWorkerBase() + '?action=fkLibLoad')
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      if(data && data.ok && data.data && data.data !== '{}'){
+        try{
+          var remote = JSON.parse(data.data);
+          localStorage.setItem(LIB_KEY, JSON.stringify(remote));
+          renderLibrary();
+        }catch(e){}
+      } else {
+        var local = loadLib();
+        if(Object.keys(local).length){
+          fetch(getWorkerBase() + '?action=fkLibSave', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({data: JSON.stringify(local)})
+          }).catch(function(){});
+        }
+      }
+    })
+    .catch(function(){ /* offline — keep using whatever's in localStorage */ });
+}
+syncLibFromD1();
 function loadSettings() { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {mfgdate:'01/01/2026'}; } catch(e) { return {mfgdate:'01/01/2026'}; } }
 
 function saveSettings() {
