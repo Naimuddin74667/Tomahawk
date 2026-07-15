@@ -2021,7 +2021,13 @@ function startBackgroundKeepAlive() {
     _keepAliveCtx = new AC();
     _keepAliveOsc = _keepAliveCtx.createOscillator();
     _keepAliveGain = _keepAliveCtx.createGain();
-    _keepAliveGain.gain.value = 0.00001; // effectively silent
+    // Near-zero gain (0.00001) turned out too quiet — Chrome's "is this tab
+    // actually playing audio" exemption check needs genuine amplitude above a
+    // threshold, not just a technically-running AudioContext. 20Hz is below
+    // most laptop/phone speakers' usable range so it stays effectively
+    // inaudible in practice, while the gain is high enough to register.
+    _keepAliveOsc.frequency.value = 20;
+    _keepAliveGain.gain.value = 0.03;
     _keepAliveOsc.connect(_keepAliveGain);
     _keepAliveGain.connect(_keepAliveCtx.destination);
     _keepAliveOsc.start();
