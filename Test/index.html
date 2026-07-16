@@ -339,7 +339,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
 table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .stock-table thead th {
   text-align: left; padding: 11px 14px; font-size: 10px; letter-spacing: .08em;
-  text-transform: uppercase; color: var(--text-muted); font-weight: 600;
+  text-transform: uppercase; color: var(--text-secondary); font-weight: 700;
   border-bottom: 1px solid var(--border-subtle); white-space: nowrap;
   background: var(--bg-raised);
 }
@@ -372,6 +372,8 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 }
 .qty-input:focus { outline: none; border-color: var(--accent); }
 .qty-input:disabled { opacity: .4; }
+.qty-input.qty-error { border-color: #f87171; background: #f8717115; }
+.rec-qty-na { color: var(--text-muted); font-size: 12px; font-style: italic; cursor: help; }
 
 input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
 
@@ -544,11 +546,12 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
           <th>Category</th>
           <th class="sortable" id="sort-g4">G4 stock (idle) ↓</th>
           <th>Total stock</th>
-          <th style="width:90px;">Transfer qty</th>
+          <th style="width:110px;">Recommended qty</th>
+          <th style="width:100px;">Transfer qty</th>
         </tr>
       </thead>
       <tbody id="table-body">
-        <tr><td colspan="8"><div class="loading-state">Fetching UC_Inventory…</div></td></tr>
+        <tr><td colspan="9"><div class="loading-state">Fetching UC_Inventory…</div></td></tr>
       </tbody>
     </table>
   </div>
@@ -604,7 +607,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   var allRows = [];          // raw rows from UC_Inventory
   var idleRows = [];         // rows where G4_stock > 0 && E3_stock === 0
   var visibleRows = [];      // idleRows after search/category/brand/toggle filters
-  var selections = {};       // { skuCode: qty }
+  var selectedSkus = {};     // { skuCode: true } — which rows are checked for transfer
+  var qtyValues = {};        // { skuCode: number } — typed transfer qty, defaults to 0 until edited
   var sortDesc = true;
 
   var isPlaceholderSku = function (sku) {
@@ -641,7 +645,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     refreshBtn.classList.add('is-loading');
     statusDot.classList.remove('is-error');
     statusText.textContent = 'Loading UC_Inventory…';
-    tableBody.innerHTML = '<tr><td colspan="8"><div class="loading-state">Fetching UC_Inventory…</div></td></tr>';
+    tableBody.innerHTML = '<tr><td colspan="9"><div class="loading-state">Fetching UC_Inventory…</div></td></tr>';
 
     fetch(UC_INVENTORY_GAS_URL)
       .then(function (r) {
@@ -661,7 +665,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       .catch(function (err) {
         statusDot.classList.add('is-error');
         statusText.textContent = 'Failed to load';
-        tableBody.innerHTML = '<tr><td colspan="8"><div class="error-state">Couldn\'t reach the UC_Inventory feed.<br>' + escapeHtml(err.message) + '<br><br>Try Refresh, or check the GAS deployment URL.</div></td></tr>';
+        tableBody.innerHTML = '<tr><td colspan="9"><div class="error-state">Couldn\'t reach the UC_Inventory feed.<br>' + escapeHtml(err.message) + '<br><br>Try Refresh, or check the GAS deployment URL.</div></td></tr>';
       })
       .finally(function () {
         refreshBtn.classList.remove('is-loading');
@@ -749,7 +753,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
   function renderTable() {
     if (visibleRows.length === 0) {
-      tableBody.innerHTML = '<tr><td colspan="8"><div class="empty-state">No idle-stock SKUs match this view.<br>Everything currently in G4 either has matching E3 stock, or your filters are hiding it.</div></td></tr>';
+      tableBody.innerHTML = '<tr><td colspan="9"><div class="empty-state">No idle-stock SKUs match this view.<br>Everything currently in G4 either has matching E3 stock, or your filters are hiding it.</div></td></tr>';
       selectAll.checked = false;
       return;
     }
@@ -762,8 +766,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       var g4 = Number(r.G4_stock) || 0;
       var total = Number(r.total_stock) || 0;
       var pct = maxG4 > 0 ? Math.round((g4 / maxG4) * 100) : 0;
-      var isSelected = selections.hasOwnProperty(sku);
-      var qty = isSelected ? selections[sku] : g4;
+      var isSelected = selectedSkus.hasOwnProperty(sku);
+      var qty = qtyValues.hasOwnProperty(sku) ? qtyValues[sku] : 0;
       var placeholder = isPlaceholderSku(sku);
       var disabled = r.enabled === false;
 
@@ -777,7 +781,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       html += '<td>' + escapeHtml(r.categoryCode||'—') + '</td>';
       html += '<td><div class="g4-magnitude"><div class="mag-bar-track"><div class="mag-bar-fill" style="width:' + pct + '%;"></div></div><span class="mag-value">' + g4 + '</span></div></td>';
       html += '<td>' + total + '</td>';
-      html += '<td><input type="number" min="1" max="' + g4 + '" class="qty-input" data-sku="' + escapeHtml(sku) + '" value="' + qty + '" ' + (isSelected ? '' : 'disabled') + '></td>';
+      html += '<td class="rec-qty-na" title="Needs sales velocity data — coming once the shipments sync is fixed">NA</td>';
+      html += '<td><input type="number" min="0" max="' + g4 + '" class="qty-input" data-sku="' + escapeHtml(sku) + '" value="' + qty + '"></td>';
       html += '</tr>';
     });
 
@@ -791,14 +796,10 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     for (var i = 0; i < rowChecks.length; i++) {
       rowChecks[i].addEventListener('change', function (e) {
         var sku = e.target.getAttribute('data-sku');
-        var row = visibleRows.filter(function (r) { return r.skuCode === sku; })[0];
-        var qtyInput = tableBody.querySelector('.qty-input[data-sku="' + cssEscape(sku) + '"]');
         if (e.target.checked) {
-          selections[sku] = row ? (Number(row.G4_stock) || 0) : 1;
-          if (qtyInput) qtyInput.disabled = false;
+          selectedSkus[sku] = true;
         } else {
-          delete selections[sku];
-          if (qtyInput) qtyInput.disabled = true;
+          delete selectedSkus[sku];
         }
         e.target.closest('tr').classList.toggle('is-selected', e.target.checked);
         syncSelectAllState();
@@ -810,22 +811,21 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     for (var j = 0; j < qtyInputs.length; j++) {
       qtyInputs[j].addEventListener('input', function (e) {
         var sku = e.target.getAttribute('data-sku');
-        if (selections.hasOwnProperty(sku)) {
-          var v = parseInt(e.target.value, 10);
-          selections[sku] = (v > 0) ? v : 1;
-        }
+        var v = parseInt(e.target.value, 10);
+        qtyValues[sku] = (v > 0) ? v : 0;
+        e.target.classList.remove('qty-error');
       });
     }
   }
 
   function syncSelectAllState() {
     var visibleSkus = visibleRows.map(function (r) { return r.skuCode; });
-    var allSelected = visibleSkus.length > 0 && visibleSkus.every(function (s) { return selections.hasOwnProperty(s); });
+    var allSelected = visibleSkus.length > 0 && visibleSkus.every(function (s) { return selectedSkus.hasOwnProperty(s); });
     selectAll.checked = allSelected;
   }
 
   function updateActionBar() {
-    var count = Object.keys(selections).length;
+    var count = Object.keys(selectedSkus).length;
     selCountNum.textContent = count;
     actionBar.style.display = count > 0 ? 'flex' : 'none';
   }
@@ -833,16 +833,16 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   // ---- SELECT ALL --------------------------------------------------
   selectAll.addEventListener('change', function (e) {
     if (e.target.checked) {
-      visibleRows.forEach(function (r) { selections[r.skuCode] = Number(r.G4_stock) || 0; });
+      visibleRows.forEach(function (r) { selectedSkus[r.skuCode] = true; });
     } else {
-      visibleRows.forEach(function (r) { delete selections[r.skuCode]; });
+      visibleRows.forEach(function (r) { delete selectedSkus[r.skuCode]; });
     }
     renderTable();
     updateActionBar();
   });
 
   clearSelectionBtn.addEventListener('click', function () {
-    selections = {};
+    selectedSkus = {};
     renderTable();
     updateActionBar();
   });
@@ -912,6 +912,16 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
   // ---- GATEPASS CSV MODAL ------------------------------------------------
   generateCsvBtn.addEventListener('click', function () {
+    var zeroQtySkus = Object.keys(selectedSkus).filter(function (sku) {
+      return !(qtyValues.hasOwnProperty(sku) && qtyValues[sku] > 0);
+    });
+    if (zeroQtySkus.length > 0) {
+      zeroQtySkus.forEach(function (sku) {
+        var input = tableBody.querySelector('.qty-input[data-sku="' + cssEscape(sku) + '"]');
+        if (input) { input.classList.add('qty-error'); input.focus(); }
+      });
+      return;
+    }
     modalOverlay.style.display = 'flex';
     gatepassCodeInput.value = '';
     gatepassCodeInput.focus();
@@ -929,8 +939,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   function downloadGatepassCsv(gatepassCode) {
     var header = ['Gatepass Code','Item Or Sku Code','Qty','Inventory Type','Shelf Code','Unit Price','Batch Code','Force Allocate'];
     var lines = [header.join(',')];
-    Object.keys(selections).forEach(function (sku) {
-      var qty = selections[sku];
+    Object.keys(selectedSkus).forEach(function (sku) {
+      var qty = qtyValues[sku] || 0;
       var row = [
         csvField(gatepassCode),
         csvField(sku),
