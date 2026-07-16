@@ -479,7 +479,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     <div class="stat-card">
       <div class="stat-label">Excluded (hidden)</div>
       <div class="stat-value" id="stat-excluded">—</div>
-      <div class="stat-sub">disabled / placeholder SKUs</div>
+      <div class="stat-sub">disabled / placeholder / spares-others</div>
     </div>
   </div>
 
@@ -489,6 +489,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     <select class="tb-select" id="brand-filter"><option value="">All brands</option></select>
     <label class="tb-check"><input type="checkbox" id="show-disabled"> Include disabled SKUs</label>
     <label class="tb-check"><input type="checkbox" id="show-placeholder"> Include Block-/placeholder SKUs</label>
+    <label class="tb-check"><input type="checkbox" id="show-spares-others"> Show Spares-Others</label>
     <button class="tb-refresh" id="refresh-btn">
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12.25 7A5.25 5.25 0 112.87 3.5M2.87 3.5V1M2.87 3.5H5.37" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Refresh
@@ -583,6 +584,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   var brandFilter = document.getElementById('brand-filter');
   var showDisabled = document.getElementById('show-disabled');
   var showPlaceholder = document.getElementById('show-placeholder');
+  var showSparesOthers = document.getElementById('show-spares-others');
   var refreshBtn = document.getElementById('refresh-btn');
   var lastUpdated = document.getElementById('last-updated');
   var statusDot = document.getElementById('status-dot');
@@ -665,6 +667,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     var brand = brandFilter.value;
     var includeDisabled = showDisabled.checked;
     var includePlaceholder = showPlaceholder.checked;
+    var includeSparesOthers = showSparesOthers.checked;
 
     var excludedCount = 0;
 
@@ -673,6 +676,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       var disabled = r.enabled === false;
       if (placeholder && !includePlaceholder) { excludedCount++; return false; }
       if (disabled && !includeDisabled) { excludedCount++; return false; }
+      if (r.categoryCode === 'Spares-Others' && !includeSparesOthers) { excludedCount++; return false; }
       if (cat && r.categoryCode !== cat) return false;
       if (brand && r.brand !== brand) return false;
       if (q) {
@@ -817,6 +821,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   brandFilter.addEventListener('change', applyFilters);
   showDisabled.addEventListener('change', function () { populateFilterOptionsIfNeeded(); applyFilters(); });
   showPlaceholder.addEventListener('change', function () { populateFilterOptionsIfNeeded(); applyFilters(); });
+  showSparesOthers.addEventListener('change', function () { populateFilterOptionsIfNeeded(); applyFilters(); });
   refreshBtn.addEventListener('click', loadData);
 
   function populateFilterOptionsIfNeeded() { /* categories/brands are stable regardless of these toggles */ }
