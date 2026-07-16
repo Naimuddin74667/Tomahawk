@@ -185,7 +185,10 @@ html[data-theme="light"]       .icon-moon { display: none; }
 <style>
 .site-body { max-width: 1240px; margin: 0 auto; padding: 0 28px 48px; }
 
-.hero-section { padding: 32px 0 26px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 28px; }
+.hero-section {
+  padding: 24px 0; border-bottom: 1px solid var(--border-subtle); margin-bottom: 28px;
+  display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap;
+}
 .hero-headline {
   font-family: var(--font-slab); font-weight: 700; font-size: 27px;
   color: var(--text-primary); letter-spacing: -.01em; line-height: 1.15;
@@ -193,20 +196,21 @@ html[data-theme="light"]       .icon-moon { display: none; }
 }
 .hero-headline em { font-style: normal; color: var(--accent); }
 
-/* — Flow signature: G4 -> E3 warehouse diagram, the page's one visual signature — */
+/* — Flow signature: G4 -> E3 warehouse diagram, the page's one visual signature —
+   Compact inline treatment sitting beside the title, not stacked below it. */
 .flow-signature {
-  display: flex; align-items: center; gap: 14px;
-  margin-top: 22px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
 }
 .flow-node {
-  display: flex; flex-direction: column; align-items: center; gap: 8px;
-  padding: 14px 20px; border-radius: var(--radius-lg);
+  display: flex; align-items: center; gap: 7px;
+  padding: 6px 12px; border-radius: var(--radius-xl);
   border: 1px solid var(--border-default); background: var(--bg-surface);
 }
 .flow-node.g4 { color: var(--accent); }
 .flow-node.e3 { color: var(--c-green); }
 .warehouse-icon {
-  width: 46px; height: 26px;
+  width: 26px; height: 15px;
   animation: icon-float 2.8s ease-in-out infinite;
 }
 .flow-node.e3 .warehouse-icon { animation-delay: 1.4s; }
@@ -215,13 +219,13 @@ html[data-theme="light"]       .icon-moon { display: none; }
   50%      { transform: translateY(-4px); }
 }
 .flow-label {
-  font-size: 12px; font-weight: 700; color: var(--text-secondary);
+  font-size: 11px; font-weight: 700; color: var(--text-secondary);
   white-space: nowrap;
 }
 .flow-track {
-  position: relative; width: 88px; height: 2px;
-  background: repeating-linear-gradient(90deg, var(--border-strong) 0 6px, transparent 6px 12px);
-  flex-shrink: 0; align-self: center;
+  position: relative; width: 40px; height: 2px;
+  background: repeating-linear-gradient(90deg, var(--border-strong) 0 5px, transparent 5px 10px);
+  flex-shrink: 0;
 }
 .flow-track::after {
   content: ''; position: absolute; top: -3px; right: -2px;
@@ -238,10 +242,10 @@ html[data-theme="light"]       .icon-moon { display: none; }
   0%   { left: 0;   opacity: 0; }
   10%  { opacity: 1; }
   90%  { opacity: 1; }
-  100% { left: 88px; opacity: 0; }
+  100% { left: 40px; opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .flow-track .flow-dot { animation: none; opacity: .6; left: 40px; }
+  .flow-track .flow-dot { animation: none; opacity: .6; left: 18px; }
   .warehouse-icon { animation: none; }
 }
 
@@ -821,18 +825,21 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   // so the numbers stay stable while browsing/searching.
   function renderGlobalStats() {
     var idleCount = 0, idleUnits = 0, archivedCount = 0;
+    var notArchivedCount = 0;
     idleRows.forEach(function (r) {
-      if (archivedSkus.hasOwnProperty(r.skuCode)) {
-        archivedCount++;
-      } else {
-        idleCount++;
-        idleUnits += Number(r.G4_stock) || 0;
-      }
+      idleCount++;
+      idleUnits += Number(r.G4_stock) || 0;
+      if (archivedSkus.hasOwnProperty(r.skuCode)) archivedCount++;
+      else notArchivedCount++;
     });
+    // These two cards represent the TOTAL idle-stock problem — archiving a
+    // SKU is just triage/visibility, the stock is still physically sitting
+    // idle in G4, so it should keep counting toward these totals.
     document.getElementById('stat-idle-skus').textContent = idleCount;
     document.getElementById('stat-idle-units').textContent = idleUnits.toLocaleString('en-IN');
     document.getElementById('stat-archived').textContent = archivedCount;
-    document.getElementById('tab-idle-count').textContent = '(' + idleCount + ')';
+    // Tab labels genuinely split by archive status — that's what each tab shows.
+    document.getElementById('tab-idle-count').textContent = '(' + notArchivedCount + ')';
     document.getElementById('tab-archived-count').textContent = '(' + archivedCount + ')';
   }
 
