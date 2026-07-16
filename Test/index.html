@@ -250,7 +250,10 @@ html[data-theme="light"]       .icon-moon { display: none; }
   background: var(--bg-surface); border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg); padding: 16px 18px;
   display: flex; flex-direction: column; gap: 6px;
+  cursor: pointer; transition: border-color .15s ease, background .15s ease, transform .1s ease;
 }
+.stat-card:hover { border-color: var(--accent-border); background: var(--bg-raised); }
+.stat-card:active { transform: scale(0.99); }
 .stat-card.is-accent { border-color: var(--accent-border); }
 .stat-label { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-secondary); font-weight: 600; }
 .stat-value { font-family: var(--font-display); font-weight: 800; font-size: 26px; color: var(--text-primary); }
@@ -485,27 +488,28 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   </div>
 
   <div class="stats-row" id="stats-row">
-    <div class="stat-card is-accent">
+    <div class="stat-card is-accent" id="card-idle-skus">
       <div class="stat-label">Idle SKUs</div>
       <div class="stat-value accent" id="stat-idle-skus">—</div>
       <div class="stat-sub">G4 &gt; 0, E3 = 0</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" id="card-idle-units">
       <div class="stat-label">Idle units in G4</div>
       <div class="stat-value" id="stat-idle-units">—</div>
       <div class="stat-sub">total across idle SKUs</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" id="card-categories">
       <div class="stat-label">Categories affected</div>
       <div class="stat-value" id="stat-categories">—</div>
       <div class="stat-sub">distinct category codes</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" id="card-excluded">
       <div class="stat-label">Excluded (hidden)</div>
       <div class="stat-value" id="stat-excluded">—</div>
-      <div class="stat-sub">disabled / placeholder / spare-parts / spares-others</div>
+      <div class="stat-sub">disabled / placeholder / spare-parts / spares-others · click to reveal</div>
     </div>
   </div>
+
 
   <div class="toolbar">
     <input type="text" class="tb-search" id="search-input" placeholder="Search SKU, name, or brand…">
@@ -883,6 +887,28 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     hiddenFilterCount.textContent = n > 0 ? '(' + n + ' shown)' : '';
   }
   updateHiddenFilterCount();
+
+  // ---- STAT CARD CLICKS ----------------------------------------------
+  // "Excluded (hidden)" card: reveal everything currently hidden by the
+  // dropdown toggles (disabled / placeholder / spare-parts / spares-others)
+  // and scroll to the table so the person can actually see them.
+  document.getElementById('card-excluded').addEventListener('click', function () {
+    showDisabled.checked = true;
+    showPlaceholder.checked = true;
+    showSpareParts.checked = true;
+    showSparesOthers.checked = true;
+    updateHiddenFilterCount();
+    applyFilters();
+    document.getElementById('stock-table').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  // The other three cards describe the current table view directly —
+  // clicking them just jumps down to it.
+  ['card-idle-skus', 'card-idle-units', 'card-categories'].forEach(function (id) {
+    document.getElementById(id).addEventListener('click', function () {
+      document.getElementById('stock-table').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
 
   // ---- GATEPASS CSV MODAL ------------------------------------------------
   generateCsvBtn.addEventListener('click', function () {
