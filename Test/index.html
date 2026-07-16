@@ -283,20 +283,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
      BLOCK 5 — TOOLBAR + TABLE
 ============================================================ -->
 <style>
-.view-tabs {
-  display: flex; gap: 4px; margin-bottom: 16px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.view-tab {
-  background: transparent; border: none; cursor: pointer;
-  padding: 10px 4px; margin-right: 20px;
-  font-family: var(--font-body); font-size: 13px; font-weight: 700;
-  color: var(--text-muted); border-bottom: 2px solid transparent;
-  transition: color .15s, border-color .15s;
-}
-.view-tab:hover { color: var(--text-secondary); }
-.view-tab.is-active { color: var(--accent); border-bottom-color: var(--accent); }
-.view-tab span { color: inherit; opacity: .75; font-weight: 600; }
+.stat-card.is-active-view { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 
 .toolbar {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -583,11 +570,6 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     </div>
   </div>
 
-  <div class="view-tabs">
-    <button type="button" class="view-tab is-active" id="tab-idle" data-view="idle">Idle SKUs <span id="tab-idle-count"></span></button>
-    <button type="button" class="view-tab" id="tab-archived" data-view="archived">Archived SKUs <span id="tab-archived-count"></span></button>
-  </div>
-
   <div class="toolbar">
     <input type="text" class="tb-search" id="search-input" placeholder="Search SKU, name, or brand…">
     <select class="tb-select" id="category-filter"><option value="">All categories</option></select>
@@ -825,22 +807,17 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   // so the numbers stay stable while browsing/searching.
   function renderGlobalStats() {
     var idleCount = 0, idleUnits = 0, archivedCount = 0;
-    var notArchivedCount = 0;
     idleRows.forEach(function (r) {
-      idleCount++;
-      idleUnits += Number(r.G4_stock) || 0;
-      if (archivedSkus.hasOwnProperty(r.skuCode)) archivedCount++;
-      else notArchivedCount++;
+      if (archivedSkus.hasOwnProperty(r.skuCode)) {
+        archivedCount++;
+      } else {
+        idleCount++;
+        idleUnits += Number(r.G4_stock) || 0;
+      }
     });
-    // These two cards represent the TOTAL idle-stock problem — archiving a
-    // SKU is just triage/visibility, the stock is still physically sitting
-    // idle in G4, so it should keep counting toward these totals.
     document.getElementById('stat-idle-skus').textContent = idleCount;
     document.getElementById('stat-idle-units').textContent = idleUnits.toLocaleString('en-IN');
     document.getElementById('stat-archived').textContent = archivedCount;
-    // Tab labels genuinely split by archive status — that's what each tab shows.
-    document.getElementById('tab-idle-count').textContent = '(' + notArchivedCount + ')';
-    document.getElementById('tab-archived-count').textContent = '(' + archivedCount + ')';
   }
 
   function renderQtyPerBoxCell(r) {
@@ -970,21 +947,17 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       });
   }
 
-  // ---- VIEW TABS ------------------------------------------------------
-  var tabIdle = document.getElementById('tab-idle');
-  var tabArchived = document.getElementById('tab-archived');
-
+  // ---- VIEW SWITCHING (driven by the stat cards themselves, no separate tab bar) --
   function setView(view) {
     currentView = view;
-    tabIdle.classList.toggle('is-active', view === 'idle');
-    tabArchived.classList.toggle('is-active', view === 'archived');
-    selectedSkus = {}; // selection only makes sense in the Idle tab
+    document.getElementById('card-idle-skus').classList.toggle('is-active-view', view === 'idle');
+    document.getElementById('card-idle-units').classList.toggle('is-active-view', view === 'idle');
+    document.getElementById('card-archived').classList.toggle('is-active-view', view === 'archived');
+    selectedSkus = {}; // selection only makes sense in the Idle view
     selectAll.disabled = (view === 'archived');
     selectAll.checked = false;
     applyFilters();
   }
-  tabIdle.addEventListener('click', function () { setView('idle'); });
-  tabArchived.addEventListener('click', function () { setView('archived'); });
 
   function renderTable() {
     if (visibleRows.length === 0) {
@@ -1198,6 +1171,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   }
 
   // ---- INIT --------------------------------------------------------------
+  document.getElementById('card-idle-skus').classList.add('is-active-view');
+  document.getElementById('card-idle-units').classList.add('is-active-view');
   loadData();
 
 })();
