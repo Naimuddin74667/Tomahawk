@@ -458,6 +458,16 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 .modal-input:focus { outline: none; border-color: var(--accent); }
 .modal-hint { font-size: 11px; color: var(--text-secondary); margin-bottom: 18px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
+
+.modal-box-wide { max-width: 560px; }
+.modal-textarea {
+  width: 100%; min-height: 220px; resize: vertical;
+  background: var(--bg-raised); border: 1px solid var(--border-default);
+  border-radius: var(--radius-md); padding: 10px 12px; color: var(--text-primary);
+  font-family: 'DM Mono', monospace, var(--font-body); font-size: 12px;
+  margin-bottom: 10px; line-height: 1.6;
+}
+.modal-textarea:focus { outline: none; border-color: var(--accent); }
 </style>
 
 </head>
@@ -555,6 +565,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     <input type="text" class="tb-search" id="search-input" placeholder="Search SKU, name, or brand…">
     <select class="tb-select" id="category-filter"><option value="">All categories</option></select>
     <select class="tb-select" id="brand-filter"><option value="">All brands</option></select>
+    <button type="button" class="btn-ghost" id="bulk-import-btn">Bulk import Qty/box</button>
     <button class="tb-refresh" id="refresh-btn">
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12.25 7A5.25 5.25 0 112.87 3.5M2.87 3.5V1M2.87 3.5H5.37" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Refresh
@@ -606,6 +617,22 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     <div class="modal-actions">
       <button class="btn-ghost" id="modal-cancel-btn">Cancel</button>
       <button class="btn-primary" id="modal-confirm-btn">Download CSV</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     MODAL — Bulk import Qty/box overrides
+============================================================ -->
+<div class="modal-overlay" id="bulk-import-overlay" style="display:none;">
+  <div class="modal-box modal-box-wide">
+    <div class="modal-title">Bulk import Qty/box</div>
+    <div class="modal-sub">Paste rows as <code>SKU&lt;tab or comma&gt;Qty per box</code> — one per line. Only SKUs that exist in the current catalog will be saved; anything else is skipped and listed so nothing is silently lost.</div>
+    <textarea class="modal-textarea" id="bulk-import-textarea" placeholder="738-24-Handsaw-HT	60&#10;ARC-2001-Welding-Machine	4&#10;..."></textarea>
+    <div class="modal-hint" id="bulk-import-status"></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="bulk-import-cancel-btn">Cancel</button>
+      <button class="btn-primary" id="bulk-import-confirm-btn">Import</button>
     </div>
   </div>
 </div>
@@ -1007,6 +1034,81 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     if (!code) { gatepassCodeInput.focus(); gatepassCodeInput.style.borderColor = '#f87171'; return; }
     downloadGatepassCsv(code);
     modalOverlay.style.display = 'none';
+  });
+
+  // ---- BULK IMPORT QTY/BOX MODAL ------------------------------------------
+  var bulkImportBtn = document.getElementById('bulk-import-btn');
+  var bulkImportOverlay = document.getElementById('bulk-import-overlay');
+  var bulkImportTextarea = document.getElementById('bulk-import-textarea');
+  var bulkImportStatus = document.getElementById('bulk-import-status');
+  var bulkImportCancelBtn = document.getElementById('bulk-import-cancel-btn');
+  var bulkImportConfirmBtn = document.getElementById('bulk-import-confirm-btn');
+
+  bulkImportBtn.addEventListener('click', function () {
+    bulkImportTextarea.value = '';
+    bulkImportStatus.textContent = '';
+    bulkImportOverlay.style.display = 'flex';
+    bulkImportTextarea.focus();
+  });
+  bulkImportCancelBtn.addEventListener('click', function () { bulkImportOverlay.style.display = 'none'; });
+  bulkImportOverlay.addEventListener('click', function (e) { if (e.target === bulkImportOverlay) bulkImportOverlay.style.display = 'none'; });
+
+  bulkImportConfirmBtn.addEventListener('click', function () {
+    var text = bulkImportTextarea.value.trim();
+    if (!text) return;
+
+    // Build a lookup of every SKU currently known (idle or not — allRows
+    // holds the full UC_Inventory pull) so we only import real SKUs.
+    var knownSkus = {};
+    allRows.forEach(function (r) { knownSkus[r.skuCode] = r.name || ''; });
+
+    var lines = text.split(/\r?\n/);
+    var toImport = [];
+    var skippedLines = [];
+
+    lines.forEach(function (line) {
+      if (!line.trim()) return;
+      var parts = line.split(/\t|,/);
+      if (parts.length < 2) { skippedLines.push(line + '  (couldn\'t parse)'); return; }
+      var sku = parts[0].trim();
+      var qty = parseInt(parts[1].trim(), 10);
+      if (!knownSkus.hasOwnProperty(sku)) { skippedLines.push(line + '  (SKU not found in catalog)'); return; }
+      if (!(qty >= 0)) { skippedLines.push(line + '  (invalid qty)'); return; }
+      toImport.push({ skuCode: sku, name: knownSkus[sku], qtyPerBox: qty });
+    });
+
+    if (toImport.length === 0) {
+      bulkImportStatus.textContent = 'Nothing valid to import. ' + skippedLines.length + ' line(s) skipped.';
+      bulkImportStatus.style.color = '#f87171';
+      return;
+    }
+
+    bulkImportConfirmBtn.disabled = true;
+    bulkImportStatus.style.color = '';
+    bulkImportStatus.textContent = 'Importing ' + toImport.length + ' rows…';
+
+    fetch(WORKER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'sa_bulkImportQtyOverrides', rows: toImport })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data || data.ok === false) throw new Error((data && data.error) || 'Import failed');
+        toImport.forEach(function (row) { qtyOverrides[row.skuCode] = row.qtyPerBox; });
+        var msg = 'Imported ' + toImport.length + ' rows.';
+        if (skippedLines.length) msg += ' Skipped ' + skippedLines.length + ': ' + skippedLines.slice(0, 5).join(' | ') + (skippedLines.length > 5 ? ' …' : '');
+        bulkImportStatus.textContent = msg;
+        renderTable();
+        setTimeout(function () { bulkImportOverlay.style.display = 'none'; }, 2200);
+      })
+      .catch(function (err) {
+        bulkImportStatus.style.color = '#f87171';
+        bulkImportStatus.textContent = 'Import failed: ' + err.message;
+      })
+      .finally(function () {
+        bulkImportConfirmBtn.disabled = false;
+      });
   });
 
   function downloadGatepassCsv(gatepassCode) {
