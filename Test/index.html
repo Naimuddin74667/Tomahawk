@@ -358,6 +358,7 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .badge.disabled { border-color: var(--border-default); color: var(--text-muted); background: transparent; }
 
 .mag-value { font-weight: 700; color: var(--accent); font-size: 14px; }
+.e3-hint { font-size: 10px; color: var(--c-green); margin-left: 6px; font-weight: 600; }
 
 .qty-input {
   width: 66px; background: var(--bg-raised); border: 1px solid var(--border-default);
@@ -561,7 +562,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       <div class="stat-value accent" id="stat-idle-skus">—</div>
       <div class="stat-sub">G4 &gt; 0, E3 = 0 · click to view</div>
     </div>
-    <div class="stat-card no-click" id="card-low-stock-e3">
+    <div class="stat-card" id="card-low-stock-e3">
       <div class="stat-label">Low Stock in E3</div>
       <div class="stat-value" id="stat-low-stock-e3">—</div>
       <div class="stat-sub">0 &lt; E3 &lt; 10, G4 has stock to send</div>
@@ -780,10 +781,21 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     var cat = categoryFilter.value;
     var brand = brandFilter.value;
 
-    var baseRows = idleRows.filter(function (r) {
-      var isArchivedRow = archivedSkus.hasOwnProperty(r.skuCode);
-      return currentView === 'archived' ? isArchivedRow : !isArchivedRow;
-    });
+    var baseRows;
+    if (currentView === 'lowstock') {
+      // Different population entirely — not the idle set (E3 = 0). This is
+      // SKUs where E3 has *some* stock but not enough, and G4 can top it up.
+      baseRows = allRows.filter(function (r) {
+        var e3 = Number(r.E3_stock) || 0;
+        var g4 = Number(r.G4_stock) || 0;
+        return e3 > 0 && e3 < 10 && g4 > 0;
+      });
+    } else {
+      baseRows = idleRows.filter(function (r) {
+        var isArchivedRow = archivedSkus.hasOwnProperty(r.skuCode);
+        return currentView === 'archived' ? isArchivedRow : !isArchivedRow;
+      });
+    }
 
     visibleRows = baseRows.filter(function (r) {
       if (cat && r.categoryCode !== cat) return false;
@@ -961,8 +973,9 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   function setView(view) {
     currentView = view;
     document.getElementById('card-idle-skus').classList.toggle('is-active-view', view === 'idle');
+    document.getElementById('card-low-stock-e3').classList.toggle('is-active-view', view === 'lowstock');
     document.getElementById('card-archived').classList.toggle('is-active-view', view === 'archived');
-    selectedSkus = {}; // selection only makes sense in the Idle view
+    selectedSkus = {}; // selection only makes sense in Idle / Low Stock views
     selectAll.disabled = (view === 'archived');
     selectAll.checked = false;
     applyFilters();
@@ -970,9 +983,14 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
   function renderTable() {
     if (visibleRows.length === 0) {
-      var emptyMsg = currentView === 'archived'
-        ? 'Nothing archived right now.<br>Use the Archive button on an idle SKU to move it here.'
-        : 'No idle-stock SKUs match this view.<br>Everything currently in G4 either has matching E3 stock, or your filters are hiding it.';
+      var emptyMsg;
+      if (currentView === 'archived') {
+        emptyMsg = 'Nothing archived right now.<br>Use the Archive button on an idle SKU to move it here.';
+      } else if (currentView === 'lowstock') {
+        emptyMsg = 'No SKUs currently have low E3 stock with G4 available to send.';
+      } else {
+        emptyMsg = 'No idle-stock SKUs match this view.<br>Everything currently in G4 either has matching E3 stock, or your filters are hiding it.';
+      }
       tableBody.innerHTML = '<tr><td colspan="10"><div class="empty-state">' + emptyMsg + '</div></td></tr>';
       selectAll.checked = false;
       return;
@@ -980,10 +998,12 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
     var html = '';
     var isArchivedView = (currentView === 'archived');
+    var isLowStockView = (currentView === 'lowstock');
 
     visibleRows.forEach(function (r) {
       var sku = r.skuCode;
       var g4 = Number(r.G4_stock) || 0;
+      var e3 = Number(r.E3_stock) || 0;
       var isSelected = selectedSkus.hasOwnProperty(sku);
       var qty = qtyValues.hasOwnProperty(sku) ? qtyValues[sku] : 0;
       var placeholder = isPlaceholderSku(sku);
@@ -1003,7 +1023,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       html += '<td><span class="sku-name" title="' + escapeHtml(r.name||'') + '">' + escapeHtml(r.name||'—') + '</span></td>';
       html += '<td>' + escapeHtml(r.brand||'—') + '</td>';
       html += '<td>' + escapeHtml(r.categoryCode||'—') + '</td>';
-      html += '<td><span class="mag-value">' + g4 + '</span></td>';
+      html += '<td><span class="mag-value">' + g4 + '</span>' +
+              (isLowStockView ? '<span class="e3-hint" title="Current E3 stock">E3: ' + e3 + '</span>' : '') + '</td>';
       html += '<td class="rec-qty-na" title="Needs sales velocity data — coming once the shipments sync is fixed">NA</td>';
       html += renderQtyPerBoxCell(r);
 
@@ -1012,7 +1033,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         html += '<td><button type="button" class="unarchive-btn" data-sku="' + escapeHtml(sku) + '">↩ Unarchive</button></td>';
       } else {
         html += '<td><input type="number" min="0" max="' + g4 + '" class="qty-input" data-sku="' + escapeHtml(sku) + '" value="' + qty + '"></td>';
-        html += '<td><button type="button" class="archive-btn" data-sku="' + escapeHtml(sku) + '">Archive</button></td>';
+        html += isLowStockView ? '<td>—</td>' : '<td><button type="button" class="archive-btn" data-sku="' + escapeHtml(sku) + '">Archive</button></td>';
       }
 
       html += '</tr>';
@@ -1059,7 +1080,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   function updateActionBar() {
     var count = Object.keys(selectedSkus).length;
     selCountNum.textContent = count;
-    actionBar.style.display = (count > 0 && currentView === 'idle') ? 'flex' : 'none';
+    actionBar.style.display = (count > 0 && currentView !== 'archived') ? 'flex' : 'none';
   }
 
   // ---- SELECT ALL --------------------------------------------------
@@ -1095,6 +1116,10 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   // ---- STAT CARD CLICKS ------------------------------------------------
   document.getElementById('card-idle-skus').addEventListener('click', function () {
     setView('idle');
+    document.getElementById('stock-table').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  document.getElementById('card-low-stock-e3').addEventListener('click', function () {
+    setView('lowstock');
     document.getElementById('stock-table').scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
   document.getElementById('card-archived').addEventListener('click', function () {
