@@ -269,6 +269,9 @@ html[data-theme="light"]       .icon-moon { display: none; }
 }
 .stat-card:hover { border-color: var(--accent-border); background: var(--bg-raised); }
 .stat-card:active { transform: scale(0.99); }
+.stat-card.no-click { cursor: default; }
+.stat-card.no-click:hover { border-color: var(--border-subtle); background: var(--bg-surface); }
+.stat-card.no-click:active { transform: none; }
 .stat-card.is-accent { border-color: var(--accent-border); }
 .stat-label { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-secondary); font-weight: 600; }
 .stat-value { font-family: var(--font-display); font-weight: 800; font-size: 26px; color: var(--text-primary); }
@@ -554,14 +557,14 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
   <div class="stats-row" id="stats-row">
     <div class="stat-card is-accent" id="card-idle-skus">
-      <div class="stat-label">Idle SKUs</div>
+      <div class="stat-label">No Stock in E3</div>
       <div class="stat-value accent" id="stat-idle-skus">—</div>
-      <div class="stat-sub">G4 &gt; 0, E3 = 0</div>
+      <div class="stat-sub">G4 &gt; 0, E3 = 0 · click to view</div>
     </div>
-    <div class="stat-card" id="card-idle-units">
-      <div class="stat-label">Idle units in G4</div>
-      <div class="stat-value" id="stat-idle-units">—</div>
-      <div class="stat-sub">total across idle SKUs</div>
+    <div class="stat-card no-click" id="card-low-stock-e3">
+      <div class="stat-label">Low Stock in E3</div>
+      <div class="stat-value" id="stat-low-stock-e3">—</div>
+      <div class="stat-sub">0 &lt; E3 &lt; 10, G4 has stock to send</div>
     </div>
     <div class="stat-card" id="card-archived">
       <div class="stat-label">Archived SKUs</div>
@@ -806,17 +809,24 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   // independent of the active tab and any search/category/brand filters,
   // so the numbers stay stable while browsing/searching.
   function renderGlobalStats() {
-    var idleCount = 0, idleUnits = 0, archivedCount = 0;
+    var idleCount = 0, archivedCount = 0;
     idleRows.forEach(function (r) {
-      if (archivedSkus.hasOwnProperty(r.skuCode)) {
-        archivedCount++;
-      } else {
-        idleCount++;
-        idleUnits += Number(r.G4_stock) || 0;
-      }
+      if (archivedSkus.hasOwnProperty(r.skuCode)) archivedCount++;
+      else idleCount++;
     });
+
+    // "Low Stock in E3" is a different population entirely — not the idle
+    // set (which requires E3 = 0). This is SKUs where E3 has *some* stock
+    // but not enough (< 10, hardcoded for now), and G4 has stock to send.
+    var lowStockCount = 0;
+    allRows.forEach(function (r) {
+      var e3 = Number(r.E3_stock) || 0;
+      var g4 = Number(r.G4_stock) || 0;
+      if (e3 > 0 && e3 < 10 && g4 > 0) lowStockCount++;
+    });
+
     document.getElementById('stat-idle-skus').textContent = idleCount;
-    document.getElementById('stat-idle-units').textContent = idleUnits.toLocaleString('en-IN');
+    document.getElementById('stat-low-stock-e3').textContent = lowStockCount;
     document.getElementById('stat-archived').textContent = archivedCount;
   }
 
@@ -951,7 +961,6 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   function setView(view) {
     currentView = view;
     document.getElementById('card-idle-skus').classList.toggle('is-active-view', view === 'idle');
-    document.getElementById('card-idle-units').classList.toggle('is-active-view', view === 'idle');
     document.getElementById('card-archived').classList.toggle('is-active-view', view === 'archived');
     selectedSkus = {}; // selection only makes sense in the Idle view
     selectAll.disabled = (view === 'archived');
@@ -1084,11 +1093,9 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   refreshBtn.addEventListener('click', loadData);
 
   // ---- STAT CARD CLICKS ------------------------------------------------
-  ['card-idle-skus', 'card-idle-units'].forEach(function (id) {
-    document.getElementById(id).addEventListener('click', function () {
-      setView('idle');
-      document.getElementById('stock-table').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
+  document.getElementById('card-idle-skus').addEventListener('click', function () {
+    setView('idle');
+    document.getElementById('stock-table').scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
   document.getElementById('card-archived').addEventListener('click', function () {
     setView('archived');
@@ -1172,7 +1179,6 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
   // ---- INIT --------------------------------------------------------------
   document.getElementById('card-idle-skus').classList.add('is-active-view');
-  document.getElementById('card-idle-units').classList.add('is-active-view');
   loadData();
 
 })();
