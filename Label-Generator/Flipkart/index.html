@@ -675,7 +675,11 @@
     <div id="li-dispatch-shortage" style="display:none;margin-bottom:1rem"></div>
     <div id="li-transit-shortage" style="display:none;margin-bottom:1rem"></div>
     <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:.4rem;border-bottom:1px solid var(--border);margin-bottom:.2rem">
-      <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600">Items</div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600">Items</div>
+        <input type="file" id="li-pdf-input" accept="application/pdf" style="display:none" onchange="ledgerModalPdfSelected(this)">
+        <button onclick="document.getElementById('li-pdf-input').click()" title="Upload PDF to re-match &amp; refresh this consignment's items" style="width:16px;height:16px;padding:0;display:flex;align-items:center;justify-content:center;background:none;border:1px solid var(--border);border-radius:3px;color:var(--muted);cursor:pointer;font-size:9px;line-height:1">&#128196;</button>
+      </div>
       <div style="display:flex;gap:0">
         <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center">Total Qty</div>
         <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Send Qty</div>
@@ -1387,10 +1391,118 @@ function handlePostPrintLedger(printableRows, queueLength, itemsJson) {
   if(!_bulkCN) return; // no consignment number detected (e.g. CSV-only import) — skip for now
   var existing = _ledgerRows.find(function(r){ return r.consignment_no===_bulkCN; });
   if(existing){
-    toast('Consignment No. already saved','err');
+    updateLedgerRowFromPrint(existing, printableRows, queueLength, itemsJson);
     return;
   }
   ledgerRecordPrint(printableRows, queueLength, itemsJson);
+}
+
+// Re-print / re-upload for a CN already in the ledger: overwrite the
+// PDF-sourced fields with the latest parse instead of silently blocking.
+// This is what makes "confirm the pending SKUs, then re-upload" actually
+// reach the ledger.
+function updateLedgerRowFromPrint(row, printableRows, queueLength, itemsJson) {
+  row.no_of_sku = printableRows.length;
+  row.total_qty = queueLength;
+  if (_bulkSendQtyPdf != null) row.send_qty = _bulkSendQtyPdf;
+  row.items_json = JSON.stringify(itemsJson || []);
+  row.updated_at = new Date().toISOString();
+  try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
+  fetch(getWorkerBase() + '?action=fkLedgerSave', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
+  }).then(function(r){ return r.json(); }).then(function(data){
+    if(!data || !data.ok) toast('Consignment '+row.consignment_no+' updated locally only \u2014 server save failed (check worker deployment)', 'err');
+    else toast('Consignment '+row.consignment_no+' ledger updated \u2014 '+printableRows.length+' SKUs \u00b7 '+queueLength+' qty', 'ok');
+  }).catch(function(){ toast('Consignment '+row.consignment_no+' updated locally only \u2014 sync failed (offline?)', 'err'); });
+  if(document.getElementById('tab-ledger').style.display !== 'none') ledgerRender();
+}
+
+// Fallback: upload the Stock Transfer Invoice PDF directly from the Ledger's
+// edit modal, for consignments where Bulk Print already ran but the ledger
+// row itself is stale (e.g. after confirming previously-pending SKUs).
+function ledgerModalPdfSelected(input) {
+  var file = input.files && input.files[0];
+  input.value = ''; // allow re-selecting the same file
+  if (!file) return;
+  var row = _ledgerRows.find(function(r){ return r.consignment_no === _itemsModalCN; });
+  if (!row) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    pdfjsLib.getDocument({data: e.target.result}).promise.then(function(pdf) {
+      var allText = '', pages = [];
+      for (var i = 1; i <= pdf.numPages; i++) pages.push(i);
+      pages.reduce(function(p, n) {
+        return p.then(function() {
+          return pdf.getPage(n).then(function(pg) {
+            return pg.getTextContent().then(function(c) {
+              allText += c.items.map(function(i){ return i.str; }).join(' ') + '\n';
+            });
+          });
+        });
+      }, Promise.resolve()).then(function() { applyLedgerModalPdfText(row, allText); });
+    }).catch(function(err){ toast('PDF error: '+err.message, 'err'); });
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// Parses SKU/qty pairs + PDF TOTAL, matches against the SKU Library (exact
+// FK SKU or model-name prefix), and pushes matched items straight into this
+// ledger row. Anything unmatched is skipped and named in a toast — it does
+// NOT open the pending-SKU confirm UI, so this is meant as a quick refresh,
+// not a replacement for the Bulk Print matching flow.
+function applyLedgerModalPdfText(row, text) {
+  var skuRegex = /SKU:\s*([\s\S]*?)\s*HSN:\s*(\d+)([\s\S]*?)(?=SKU:|$)/gi;
+  var m, skuQtyMap = {};
+  while ((m = skuRegex.exec(text)) !== null) {
+    var skuId = m[1].trim().replace(/\s+/g, ' ');
+    if (!skuId) continue;
+    var block = m[3];
+    var qm = block.match(/\b(\d{1,3})\.0\b/);
+    var qty = qm ? parseInt(qm[1]) : 1;
+    if (!skuQtyMap[skuId]) skuQtyMap[skuId] = { skuId: skuId, qty: qty };
+  }
+  var totalMatch = text.match(/TOTAL\s+(\d+(?:\.\d+)?)/i);
+  var sendQtyPdf = totalMatch ? Math.round(parseFloat(totalMatch[1])) : null;
+
+  var itemsJson = [], matchedCount = 0, totalQty = 0, unmatched = [];
+  Object.values(skuQtyMap).forEach(function(item) {
+    var model = findModelByFkSku(item.skuId) || findModelByPrefix(item.skuId);
+    if (model) {
+      itemsJson.push({ sku: item.skuId, model: model.model, qty: item.qty });
+      matchedCount++; totalQty += item.qty;
+    } else {
+      unmatched.push(item.skuId);
+    }
+  });
+
+  if (!matchedCount) {
+    toast('No SKUs from this PDF matched the SKU Library \u2014 nothing updated', 'err');
+    return;
+  }
+
+  row.no_of_sku = matchedCount;
+  row.total_qty = totalQty;
+  if (sendQtyPdf != null) row.send_qty = sendQtyPdf;
+  row.items_json = JSON.stringify(itemsJson);
+  row.updated_at = new Date().toISOString();
+  try { localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); } catch(e){}
+
+  fetch(getWorkerBase() + '?action=fkLedgerSave', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(row)
+  }).then(function(r){ return r.json(); }).then(function(data) {
+    if (!data || !data.ok) toast('Updated locally only \u2014 server save failed', 'err');
+  }).catch(function(){ toast('Updated locally only \u2014 sync failed (offline?)', 'err'); });
+
+  renderItemsModalSummary(row);
+  renderItemsModalBody(row);
+  ledgerRender();
+
+  if (unmatched.length) {
+    toast(matchedCount+' SKUs updated \u00b7 '+unmatched.length+' unmatched: '+unmatched.slice(0,3).join(', ')+(unmatched.length>3?'\u2026':''), 'err');
+  } else {
+    toast('Ledger updated from PDF \u2014 '+matchedCount+' SKUs \u00b7 '+totalQty+' qty', 'ok');
+  }
 }
 
 // Only ever called for a genuinely new consignment_no now (duplicates are
