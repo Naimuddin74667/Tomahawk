@@ -260,7 +260,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
      BLOCK 4 — STAT CARDS
 ============================================================ -->
 <style>
-.stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+.stats-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 24px; }
 .stat-card {
   background: var(--bg-surface); border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg); padding: 16px 18px;
@@ -278,6 +278,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
 .stat-value.accent { color: var(--accent); }
 .stat-sub { font-size: 11px; color: var(--text-secondary); }
 
+@media (max-width: 1100px) { .stats-row { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 900px) { .stats-row { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 480px) { .stats-row { grid-template-columns: 1fr 1fr; gap: 8px; } .stat-value { font-size: 21px; } }
 </style>
@@ -572,6 +573,11 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       <div class="stat-value" id="stat-ideal-stock">—</div>
       <div class="stat-sub">E3 &gt; 0, not linked to any channel · click to view</div>
     </div>
+    <div class="stat-card" id="card-bundle-sku">
+      <div class="stat-label">Bundle SKU</div>
+      <div class="stat-value" id="stat-bundle-sku">—</div>
+      <div class="stat-sub">component of a linked bundle · click to view</div>
+    </div>
     <div class="stat-card" id="card-archived">
       <div class="stat-label">Archived SKUs</div>
       <div class="stat-value" id="stat-archived">—</div>
@@ -668,6 +674,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   var qtyValues = {};        // { skuCode: number } — typed transfer qty, defaults to 0 until edited
   var qtyOverrides = {};     // { skuCode: number } — manually saved Qty/box, from D1 (sa_qty_overrides)
   var archivedSkus = {};     // { skuCode: true } — manually archived SKUs, from D1 (sa_archived_skus)
+  var bundleComponentMap = {}; // { skuCode: masterSkuCode } — components whose inferred master SKU is channel-linked
   var currentView = 'idle';  // 'idle' | 'archived'
   var sortDesc = true;
 
@@ -735,6 +742,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
         allRows = data.rows || [];
         buildIdleSet();
+        computeBundleComponents();
         populateFilterOptions();
         applyFilters();
         statusText.textContent = allRows.length + ' SKUs · live';
@@ -756,6 +764,52 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       var g4 = Number(r.G4_stock) || 0;
       var e3 = Number(r.E3_stock) || 0;
       return g4 > 0 && e3 === 0;
+    });
+  }
+
+  // ---- BUNDLE COMPONENT DETECTION ------------------------------------------
+  // Unicommerce has NO structured bundle/kit/master-SKU field anywhere in the
+  // synced data (checked UC_ItemMaster.type, UC_Catalog.skuType,
+  // itemDetailFieldDTOList, tags — all empty or uniform). This is inferred
+  // purely from SKU naming patterns:
+  //   SPR_<Part>_<Master>   -> base = <Master>  (e.g. SPR_Motor_TCLB-A20 -> TCLB-A20)
+  //   <Master>-Bare-Tool(s) -> base = <Master>  (e.g. T32052-Bare-Tools -> T32052)
+  // A component only counts as a "Bundle SKU" if some OTHER sku containing
+  // that base string is found AND that other sku has a real channel listing —
+  // i.e. the bundle itself is actually sellable somewhere, so the loose
+  // component doesn't need its own listing. This is a heuristic, not fact —
+  // worth a human sanity check before trusting it fully.
+  function getSkuBase(sku) {
+    if (!sku) return null;
+    if (/^SPR[_-]/i.test(sku)) {
+      var parts = sku.split('_');
+      return parts.length > 1 ? parts[parts.length - 1] : null;
+    }
+    var stripped = sku.replace(/[-_]Bare[-_]Tools?$/i, '');
+    return (stripped !== sku) ? stripped : null;
+  }
+
+  function computeBundleComponents() {
+    bundleComponentMap = {};
+    var allSkuList = allRows.map(function (r) { return r.skuCode; });
+    var skuByCode = {};
+    allRows.forEach(function (r) { skuByCode[r.skuCode] = r; });
+
+    allRows.forEach(function (r) {
+      var e3 = Number(r.E3_stock) || 0;
+      // Only relevant for current Ideal Stock candidates (E3>0, unlinked)
+      if (e3 <= 0 || r.hasChannelListing !== false) return;
+      var base = getSkuBase(r.skuCode);
+      if (!base) return;
+      for (var i = 0; i < allSkuList.length; i++) {
+        var candidate = allSkuList[i];
+        if (candidate === r.skuCode || candidate.indexOf(base) === -1) continue;
+        var candidateRow = skuByCode[candidate];
+        if (candidateRow && candidateRow.hasChannelListing === true) {
+          bundleComponentMap[r.skuCode] = candidate;
+          break;
+        }
+      }
     });
   }
 
@@ -797,10 +851,15 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       });
     } else if (currentView === 'idealstock') {
       // E3 has stock (live to sell) but no channel listing exists anywhere —
-      // a listing problem, unrelated to G4/E3 warehouse balance.
+      // a listing problem, unrelated to G4/E3 warehouse balance. Excludes
+      // Bundle SKU components (covered by their master's listing).
       baseRows = allRows.filter(function (r) {
         var e3 = Number(r.E3_stock) || 0;
-        return e3 > 0 && r.hasChannelListing === false;
+        return e3 > 0 && r.hasChannelListing === false && !bundleComponentMap.hasOwnProperty(r.skuCode);
+      });
+    } else if (currentView === 'bundlesku') {
+      baseRows = allRows.filter(function (r) {
+        return bundleComponentMap.hasOwnProperty(r.skuCode);
       });
     } else {
       baseRows = idleRows.filter(function (r) {
@@ -820,7 +879,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     });
 
     visibleRows.sort(function (a, b) {
-      var field = (currentView === 'idealstock') ? 'E3_stock' : 'G4_stock';
+      var field = (currentView === 'idealstock' || currentView === 'bundlesku') ? 'E3_stock' : 'G4_stock';
       var av = Number(a[field]) || 0, bv = Number(b[field]) || 0;
       return sortDesc ? bv - av : av - bv;
     });
@@ -853,15 +912,22 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     // "Ideal Stock" — E3 has stock (live to sell) but the SKU isn't linked
     // to any marketplace channel at all, so it literally can't be sold
     // anywhere. A listing problem, not a warehouse-transfer problem.
+    // Excludes SKUs identified as Bundle SKU components (see below) — those
+    // are covered by their master's listing and don't need their own.
     var idealStockCount = 0;
     allRows.forEach(function (r) {
       var e3 = Number(r.E3_stock) || 0;
-      if (e3 > 0 && r.hasChannelListing === false) idealStockCount++;
+      if (e3 > 0 && r.hasChannelListing === false && !bundleComponentMap.hasOwnProperty(r.skuCode)) {
+        idealStockCount++;
+      }
     });
+
+    var bundleSkuCount = Object.keys(bundleComponentMap).length;
 
     document.getElementById('stat-idle-skus').textContent = idleCount;
     document.getElementById('stat-low-stock-e3').textContent = lowStockCount;
     document.getElementById('stat-ideal-stock').textContent = idealStockCount;
+    document.getElementById('stat-bundle-sku').textContent = bundleSkuCount;
     document.getElementById('stat-archived').textContent = archivedCount;
   }
 
@@ -998,9 +1064,10 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     document.getElementById('card-idle-skus').classList.toggle('is-active-view', view === 'idle');
     document.getElementById('card-low-stock-e3').classList.toggle('is-active-view', view === 'lowstock');
     document.getElementById('card-ideal-stock').classList.toggle('is-active-view', view === 'idealstock');
+    document.getElementById('card-bundle-sku').classList.toggle('is-active-view', view === 'bundlesku');
     document.getElementById('card-archived').classList.toggle('is-active-view', view === 'archived');
     selectedSkus = {}; // selection only makes sense in Idle / Low Stock views
-    selectAll.disabled = (view === 'archived' || view === 'idealstock');
+    selectAll.disabled = (view === 'archived' || view === 'idealstock' || view === 'bundlesku');
     selectAll.checked = false;
     applyFilters();
   }
@@ -1014,6 +1081,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         emptyMsg = 'No SKUs currently have low E3 stock with G4 available to send.';
       } else if (currentView === 'idealstock') {
         emptyMsg = 'No SKUs currently have E3 stock with zero channel listings.';
+      } else if (currentView === 'bundlesku') {
+        emptyMsg = 'No bundle components detected right now.';
       } else {
         emptyMsg = 'No idle-stock SKUs match this view.<br>Everything currently in G4 either has matching E3 stock, or your filters are hiding it.';
       }
@@ -1026,7 +1095,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     var isArchivedView = (currentView === 'archived');
     var isLowStockView = (currentView === 'lowstock');
     var isIdealStockView = (currentView === 'idealstock');
-    var isViewOnly = isArchivedView || isIdealStockView;
+    var isBundleSkuView = (currentView === 'bundlesku');
+    var isViewOnly = isArchivedView || isIdealStockView || isBundleSkuView;
 
     visibleRows.forEach(function (r) {
       var sku = r.skuCode;
@@ -1052,7 +1122,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       html += '<td>' + escapeHtml(r.brand||'—') + '</td>';
       html += '<td>' + escapeHtml(r.categoryCode||'—') + '</td>';
 
-      if (isIdealStockView) {
+      if (isIdealStockView || isBundleSkuView) {
         // E3 stock is the number that matters here, not G4
         html += '<td><span class="mag-value">' + e3 + '</span><span class="e3-hint" title="Current G4 stock">G4: ' + g4 + '</span></td>';
       } else {
@@ -1060,13 +1130,17 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
                 (isLowStockView ? '<span class="e3-hint" title="Current E3 stock">E3: ' + e3 + '</span>' : '') + '</td>';
       }
 
-      html += '<td class="rec-qty-na" title="Needs sales velocity data — coming once the shipments sync is fixed">NA</td>';
+      if (isBundleSkuView) {
+        html += '<td class="rec-qty-na" title="Inferred from SKU naming pattern — not verified data">Master: ' + escapeHtml(bundleComponentMap[sku] || '—') + '</td>';
+      } else {
+        html += '<td class="rec-qty-na" title="Needs sales velocity data — coming once the shipments sync is fixed">NA</td>';
+      }
       html += renderQtyPerBoxCell(r);
 
       if (isArchivedView) {
         html += '<td>—</td>';
         html += '<td><button type="button" class="unarchive-btn" data-sku="' + escapeHtml(sku) + '">↩ Unarchive</button></td>';
-      } else if (isIdealStockView) {
+      } else if (isIdealStockView || isBundleSkuView) {
         html += '<td>—</td>';
         html += '<td>—</td>';
       } else {
@@ -1118,7 +1192,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   function updateActionBar() {
     var count = Object.keys(selectedSkus).length;
     selCountNum.textContent = count;
-    var isViewOnlyMode = (currentView === 'archived' || currentView === 'idealstock');
+    var isViewOnlyMode = (currentView === 'archived' || currentView === 'idealstock' || currentView === 'bundlesku');
     actionBar.style.display = (count > 0 && !isViewOnlyMode) ? 'flex' : 'none';
   }
 
@@ -1163,6 +1237,10 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   });
   document.getElementById('card-ideal-stock').addEventListener('click', function () {
     setView('idealstock');
+    document.getElementById('stock-table').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  document.getElementById('card-bundle-sku').addEventListener('click', function () {
+    setView('bundlesku');
     document.getElementById('stock-table').scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
   document.getElementById('card-archived').addEventListener('click', function () {
