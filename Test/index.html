@@ -375,6 +375,8 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .qty-input:disabled { opacity: .4; }
 .qty-input.qty-error { border-color: #f87171; background: #f8717115; }
 .rec-qty-na { color: var(--text-muted); font-size: 12px; font-style: italic; cursor: help; }
+.linked-sku-cell { font-size: 12.5px; line-height: 1.6; max-width: 520px; }
+.linked-qty { color: var(--accent); font-weight: 700; font-size: 11px; }
 
 .qty-box-cell { white-space: nowrap; }
 .qty-box-value { font-weight: 600; color: var(--text-primary); margin-right: 6px; }
@@ -576,7 +578,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     <div class="stat-card" id="card-bundle-sku">
       <div class="stat-label">Bundle SKU</div>
       <div class="stat-value" id="stat-bundle-sku">—</div>
-      <div class="stat-sub">component of a linked bundle · click to view</div>
+      <div class="stat-sub">master SKUs from Item Master · click to view</div>
     </div>
     <div class="stat-card" id="card-archived">
       <div class="stat-label">Archived SKUs</div>
@@ -601,15 +603,15 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       <thead>
         <tr>
           <th style="width:32px;"><input type="checkbox" class="select-all" id="select-all"></th>
-          <th>SKU</th>
+          <th id="th-sku">SKU</th>
           <th>Name</th>
-          <th>Brand</th>
+          <th id="th-brand">Brand</th>
           <th>Category</th>
           <th class="sortable" id="sort-g4">G4 stock ↓</th>
-          <th style="width:90px;">Rec. qty</th>
-          <th style="width:80px;">Qty/box</th>
-          <th style="width:100px;">Transfer qty</th>
-          <th style="width:90px;">Actions</th>
+          <th style="width:90px;" id="th-recqty">Rec. qty</th>
+          <th style="width:80px;" id="th-qtybox">Qty/box</th>
+          <th style="width:100px;" id="th-transferqty">Transfer qty</th>
+          <th style="width:90px;" id="th-actions">Actions</th>
         </tr>
       </thead>
       <tbody id="table-body">
@@ -654,6 +656,30 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   // ---- CONFIG -------------------------------------------------
   var UC_INVENTORY_GAS_URL = 'https://script.google.com/macros/s/AKfycbwPnZl404I0IVHgIxy6QRxSCdep3XbqufE73w8ZdA1qugPEdygzoRhtht10RWT6fkjGTQ/exec';
   var WORKER_URL = 'https://tomahawk-returns.naimuddin.workers.dev';
+
+  // ---- BUNDLE MASTER DATA (from UC Item Master export, 20-Jul-2026) --------
+  // TEMPORARY: UC_Inventory/UC_ItemMaster sync does not yet carry structured
+  // bundle/component data (Type / Component Product Code / Component Quantity
+  // columns are planned for the UC_BundleComposition tab per the API sync
+  // roadmap, not live yet). Until that lands, this object is hand-embedded
+  // from a manual Item Master CSV export and used as the source of truth for
+  // the Bundle SKU section below. Re-export + regenerate this block whenever
+  // bundle composition changes materially.
+  // Shape: { masterSku: { name, category, enabled, components: [{sku, qty}] } }
+  var BUNDLE_MASTER_DATA = {"BLB-8130_2B-3Ah":{"name":"BLB-8130 Leaf Blower + 2× 3Ah Battery (TBA-3000)","category":"Leaf-Blower","enabled":true,"components":[{"sku":"TBA-3000-Battery-20V-3AH","qty":2},{"sku":"BLB-8130-Bare-Tool","qty":1}]},"BLB-8130_2B-4Ah":{"name":"Tomahawk BLB-8130 20V Brushless Cordless Leaf Blower with 2x4Ah Batteries","category":"Blower-Cordless","enabled":true,"components":[{"sku":"TBA-4000-Battery-20V-4AH","qty":2},{"sku":"BLB-8130-Bare-Tool","qty":1}]},"DC.Wheel.4.Black.25pc":{"name":"Grinding-Wheel","category":"Default","enabled":false,"components":[{"sku":"DC.Wheel.4.Black.1pc","qty":25}]},"DC.Wheel.4.Black.50pc":{"name":"Grinding-Wheel","category":"Default","enabled":false,"components":[{"sku":"DC.Wheel.4.Black.1pc","qty":50}]},"DMD-4100-Combo":{"name":"Tomahawk DMD-4100 Cordless Drill Kit | TCD-12G Drill + 1 Battery + BMC Box with Accessories","category":"Default","enabled":true,"components":[{"sku":"TCD-12G-1B","qty":1},{"sku":"BMC-Box-B","qty":1}]},"DSS4222_TRV0065":{"name":"DSS-4222 Drill + TRV-0065 Bit Combo","category":"Default","enabled":true,"components":[{"sku":"TRV-0065-Screwdriver-Bit-HT","qty":1},{"sku":"DSS-4222-Drill-CL","qty":1}]},"FC.COW.4.Green.100pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"FC.COW.4.Green.1pc","qty":100}]},"FC.COW.4.Green.200pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"FC.COW.4.Green.1pc","qty":200}]},"FC.COW.4.Green.400pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"FC.COW.4.Green.1pc","qty":400}]},"FC.COW.4.Green.50pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"FC.COW.4.Green.1pc","qty":50}]},"FC.COW.4.Green.600pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"FC.COW.4.Green.1pc","qty":600}]},"GCS-4618-Chainsaw-Petrol-Combo":{"name":"GCS-4618 Petrol Chainsaw (Engine + 18 inch Bar)","category":"Default","enabled":true,"components":[{"sku":"GCS-Engine-Petrol","qty":1},{"sku":"GCS-Bar-18","qty":1}]},"GCS-4622-Chainsaw-Petrol-Combo":{"name":"GCS-4622 Petrol Chainsaw (Engine + 22 inch Bar)","category":"Default","enabled":true,"components":[{"sku":"GCS-Engine-Petrol","qty":1},{"sku":"GCS-Bar-22","qty":1}]},"Grinding-Wheel-50pc-Combo":{"name":"Grinding Wheel 4inch Pack of 50 (2x25 Combo)","category":"Grinding-Wheel","enabled":true,"components":[{"sku":"Grinding-Wheel-4-Inch","qty":2}]},"OCD12G_DSC0065":{"name":"OCD-12G Drill + DSC-0065 Bit Combo","category":"Default","enabled":true,"components":[{"sku":"DSC-0065-Screwdriver-Bit-HT","qty":1},{"sku":"OCD-12G-1B","qty":1}]},"REC-5230-2B-2Ah":{"name":"REC-5230 Reciprocal Saw + 2x 2Ah Battery (Combo)","category":"Default","enabled":true,"components":[{"sku":"TBA-2000-Battery-20V-2AH","qty":2},{"sku":"REC-5230-Reciprocal-Saw","qty":1}]},"SC.COW.14.Black.10pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.14.Black.1pc","qty":10}]},"SC.COW.14.Black.20pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.14.Black.1pc","qty":20}]},"SC.COW.14.Green.10pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.14.Green.1pc","qty":10}]},"SC.COW.14.Green.20pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.14.Green.1pc","qty":20}]},"SC.COW.4.Black.100pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.4.Black.1pc","qty":100}]},"SC.COW.4.Black.200pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.4.Black.1pc","qty":200}]},"SC.COW.4.Black.25pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.4.Black.1pc","qty":25}]},"SC.COW.4.Black.50pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.4.Black.1pc","qty":50}]},"SC.COW.4.Brown.100pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.4.Brown.1pc","qty":100}]},"SC.COW.4.Brown.200pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.4.Brown.1pc","qty":200}]},"SC.COW.4.Brown.25pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.4.Brown.1pc","qty":25}]},"SC.COW.4.Brown.50pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.4.Brown.1pc","qty":50}]},"SC.COW.4.Green.100pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.4.Green.1pc","qty":100}]},"SC.COW.4.Green.200pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.4.Green.1pc","qty":200}]},"SC.COW.4.Green.400pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.4.Green.1pc","qty":400}]},"SC.COW.4.Green.50pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.4.Green.1pc","qty":50}]},"SC.COW.4.Green.600pc":{"name":"Cut-Off-Wheels","category":"Default","enabled":false,"components":[{"sku":"SC.COW.4.Green.1pc","qty":600}]},"T-7020-Brush-Cutter-Combo":{"name":"T-7020 Brush Cutter Combo (Engine + Rod)","category":"Default","enabled":true,"components":[{"sku":"T-7020-Engine","qty":1},{"sku":"T-7020-Rod","qty":1}]},"T32052-1B-3Ah-Combo":{"name":"T32052/TAG-1155 Grinder + 1x 3Ah Batt (20V)","category":"Default","enabled":true,"components":[{"sku":"TBA-3000-Battery-20V-3AH","qty":1},{"sku":"T32052-Bare-Tools","qty":1}]},"T32052-2B-3Ah-Combo":{"name":"T32052 Grinder + 2x 3Ah Batt (20V)","category":"Default","enabled":true,"components":[{"sku":"TBA-3000-Battery-20V-3AH","qty":2},{"sku":"T32052-Bare-Tools","qty":1}]},"TBA1500-1B_CHA500":{"name":"12V Battery & Charger Combo - TBA-1500 + CHA-500","category":"Default","enabled":true,"components":[{"sku":"TBA-1500-Battery-12V-1.5Ah","qty":1},{"sku":"CHA-500-Charger-12V","qty":1}]},"TBA1500-2B_CHA500":{"name":"12V Battery & Charger Kit - 2x TBA-1500 + CHA-500","category":"Default","enabled":true,"components":[{"sku":"TBA-1500-Battery-12V-1.5Ah","qty":2},{"sku":"CHA-500-Charger-12V","qty":1}]},"TCD-12A-1B-1.5Ah-Combo":{"name":"TCD-12A Drill + 1x 1.5Ah Batt (12V)","category":"Default","enabled":true,"components":[{"sku":"TBA-1500-Battery-12V-1.5Ah","qty":1},{"sku":"TCD-12A-Bare","qty":1}]},"TCD-12A-1B_BMC-Box-1.5Ah-Combo":{"name":"TCD-12A Drill + 1x 1.5Ah Batt + BMC Box (12V)","category":"Default","enabled":true,"components":[{"sku":"TBA-1500-Battery-12V-1.5Ah","qty":1},{"sku":"TCD-12A-Bare","qty":1},{"sku":"BMC-Box-Drill-A","qty":1}]},"TCD-12A-2B-1.5Ah-Combo":{"name":"TCD-12A Drill + 2x 1.5Ah Batt (12V)","category":"Default","enabled":true,"components":[{"sku":"TBA-1500-Battery-12V-1.5Ah","qty":2},{"sku":"TCD-12A-Bare","qty":1}]},"TCD-12A-2B_BMC-Box-1.5Ah-Combo":{"name":"TCD-12A Drill + 2x 1.5Ah Batt + BMC Box (12V)","category":"Default","enabled":true,"components":[{"sku":"TBA-1500-Battery-12V-1.5Ah","qty":2},{"sku":"TCD-12A-Bare","qty":1},{"sku":"BMC-Box-Drill-A","qty":1}]},"TCD-12A-2B_BMC-Box-B-1.5Ah-Combo":{"name":"TCD-12A Drill + 2x 1.5Ah Batt + BMC Box B with Accessories (12V)","category":"Default","enabled":true,"components":[{"sku":"TBA-1500-Battery-12V-1.5Ah","qty":2},{"sku":"TCD-12A-Bare","qty":1},{"sku":"BMC-Box-Set-Drill-B","qty":1}]},"TCD-12G-2B-Set":{"name":"Tomahawk TCD-12G Cordless Drill 2-Battery Kit | Drill + 2 Batteries + BMC Box with Accessories","category":"Default","enabled":true,"components":[{"sku":"TBA-1500-Battery-12V-1.5Ah","qty":1},{"sku":"TCD-12G-1B","qty":1},{"sku":"BMC-Box-Set-Drill-B","qty":1}]},"TCL0020-2Ah-4Ah_CHA2500":{"name":"TCL-0020 Work Light + 2Ah + 4Ah Battery + Fast Charger","category":"Default","enabled":true,"components":[{"sku":"TBA-4000-Battery-20V-4AH","qty":1},{"sku":"TBA-2000-Battery-20V-2AH","qty":1},{"sku":"CHA-2500-Charger-20V","qty":1},{"sku":"TCL-0020","qty":1}]},"TCL0020-2B-2Ah_CHA1500":{"name":"TCL-0020 Work Light + 2x 2Ah Battery + Charger","category":"Default","enabled":true,"components":[{"sku":"TBA-2000-Battery-20V-2AH","qty":2},{"sku":"CHA-1500-Charger-20V","qty":1},{"sku":"TCL-0020","qty":1}]},"TCL0040-1B-2Ah_CHA1500":{"name":"TCL-0040 Work Light + 2Ah Battery + Charger","category":"Default","enabled":true,"components":[{"sku":"TBA-2000-Battery-20V-2AH","qty":1},{"sku":"CHA-1500-Charger-20V","qty":1},{"sku":"TCL0040","qty":1}]},"TCL0040-1B-3Ah_CHA1500":{"name":"TCL-0040 Work Light + 3Ah Battery + Charger","category":"Default","enabled":true,"components":[{"sku":"TBA-3000-Battery-20V-3AH","qty":1},{"sku":"CHA-1500-Charger-20V","qty":1},{"sku":"TCL0040","qty":1}]},"TCL0040-2Ah-4Ah_CHA2500":{"name":"TCL-0040 Work Light + 2Ah + 4Ah Battery + Fast Charger","category":"Default","enabled":true,"components":[{"sku":"TBA-4000-Battery-20V-4AH","qty":1},{"sku":"TBA-2000-Battery-20V-2AH","qty":1},{"sku":"CHA-2500-Charger-20V","qty":1},{"sku":"TCL0040","qty":1}]},"TCL0040-2B-2Ah_CHA1500":{"name":"TCL-0040 Work Light + 2x 2Ah Battery + Charger","category":"Default","enabled":true,"components":[{"sku":"TBA-2000-Battery-20V-2AH","qty":2},{"sku":"CHA-1500-Charger-20V","qty":1},{"sku":"TCL0040","qty":1}]},"TCPR-B42-2B-1.5Ah":{"name":"TCPR-B42 Cordless Pruner + 2x 20V 1.5Ah Batteries","category":"Pruner-CL","enabled":true,"components":[{"sku":"TBA-1500-Battery-20V-1.5Ah","qty":2},{"sku":"TCPR-B42-Bare-Tool","qty":1}]},"TCPR-B42-2B-2Ah":{"name":"TCPR-B42 + 2x 2Ah Battery (Combo)","category":"Default","enabled":true,"components":[{"sku":"TBA-2000-Battery-20V-2AH","qty":2},{"sku":"TCPR-B42-Bare-Tool","qty":1}]},"TCPR-B42_2B-1.5Ah":{"name":"TCPR-B42 Cordless Pruner + 2x 20V 1.5Ah Batteries","category":"Pruner-CL","enabled":true,"components":[{"sku":"TBA-1500-Battery-20V-1.5Ah","qty":2},{"sku":"TCPR-B42-Bare-Tool","qty":1}]},"TCRG_2B-3Ah":{"name":"Tomahawk Cordless Rivet Gun + 2x 20V 3.0Ah Batteries - 2100 LBF, 0-500 RPM Variable Speed","category":"Default","enabled":true,"components":[{"sku":"TBA-3000-Battery-20V-3AH","qty":2},{"sku":"TCRG_Bare-Tool","qty":1}]},"TCS-12A_2B-3Ah":{"name":"TCS-12A Cordless Chainsaw + 2x 20V 3Ah Batteries","category":"Chainsaw-Cordless","enabled":true,"components":[{"sku":"TBA-3000-Battery-20V-3AH","qty":2},{"sku":"TCS-12A_Bare-Tool","qty":1}]},"TCS-401-2B-1.5Ah":{"name":"TCS-401 4\" Cordless Chainsaw + 2x 20V 1.5Ah Batteries","category":"Default","enabled":true,"components":[{"sku":"TBA-1500-Battery-20V-1.5Ah","qty":2},{"sku":"TCS-401-Bare-Tool","qty":1}]},"TCS-8A_2B-1.5Ah":{"name":"TCS-8A Cordless 8-inch Chainsaw + 2x 20V 1.5Ah Batteries","category":"Chainsaw-Cordless","enabled":true,"components":[{"sku":"TBA-1500-Battery-20V-1.5Ah","qty":2},{"sku":"TCS-8A_Bare-Tool","qty":1}]},"TCT.4.40.10pc":{"name":"","category":"TCT","enabled":true,"components":[{"sku":"TCT.4.40.1pc","qty":10}]},"TCT.5.40.10pc":{"name":"","category":"TCT","enabled":true,"components":[{"sku":"TCT.5.40.1pc","qty":10}]},"TIS-699-2B-3Ah-Combo":{"name":"TIS-699 Impact Wrench + 2x 3Ah Batt (20V)","category":"Default","enabled":true,"components":[{"sku":"TBA-3000-Battery-20V-3AH","qty":2},{"sku":"TIS-699-Bare-Tools","qty":1}]},"TIW-20B-1B-3Ah":{"name":"Tomahawk TIW-20B 20V Cordless Impact Wrench with 1 Professional 3.0Ah Battery (= TSW-9548) | 300Nm Brushless","category":"Default","enabled":true,"components":[{"sku":"TPBA-3000-Battery-20V-3Ah","qty":1},{"sku":"TIW-20B","qty":1}]},"TIW-20B-2B-3Ah":{"name":"Tomahawk TIW-20B 20V Cordless Impact Wrench with 2 Professional 3.0Ah Batteries (= TSW-5300) | 300Nm Brushless","category":"Default","enabled":true,"components":[{"sku":"TPBA-3000-Battery-20V-3Ah","qty":2},{"sku":"TIW-20B","qty":1}]},"TLL-16_BMC-Case":{"name":"TLL-16 16-Line Level + BMC Case (Combo)","category":"Laser-Level","enabled":true,"components":[{"sku":"TLL-16-16-Line-Level-LT","qty":1},{"sku":"BMC-Box-Laser-Level","qty":1}]},"TLL-C-02-Combo":{"name":"TLL-C-02 2-Line Laser Level (base + magnetic bracket)","category":"Default","enabled":true,"components":[{"sku":"Spare-Magnetic-Bracket","qty":1},{"sku":"TLL-2C","qty":1}]},"TLP-02-2P-Combo":{"name":"TLP-02 2-Pack 2-Line Laser Level (2 base + 2 bracket)","category":"Default","enabled":true,"components":[{"sku":"Spare-Magnetic-Bracket","qty":2},{"sku":"TLL-2C","qty":2}]},"TLP-02-3P-Combo":{"name":"TLP-02 3-Pack 2-Line Laser Level (3 base + 3 bracket)","category":"Default","enabled":true,"components":[{"sku":"Spare-Magnetic-Bracket","qty":3},{"sku":"TLL-2C","qty":3}]},"TLP-8005-2B-3Ah":{"name":"TLP-8005-2B-3Ah","category":"Leaf-Picker","enabled":true,"components":[{"sku":"TLP-8005-Leaf-Picker","qty":1},{"sku":"TBA-3000-Battery-20V-3AH","qty":2}]},"TLP-8005_1B-2Ah":{"name":"Tomahawk TLP-8005 Tea Leaf Plucker 20V with 1x2Ah Battery","category":"Leaf-Picker","enabled":true,"components":[{"sku":"TBA-2000-Battery-20V-2AH","qty":1},{"sku":"TLP-8005-Bare-Tool","qty":1}]},"TLP-8005_2B-3Ah":{"name":"TLP-8005 Leaf Picker + 2x 3.0Ah Batteries (20V)","category":"Default","enabled":true,"components":[{"sku":"TBA-3000-Battery-20V-3AH","qty":2},{"sku":"TLP-8005-Bare-Tool","qty":1}]},"TSPB-Water-Brush_Rod-Combo-6M":{"name":"Tomahawk Solar Panel Brush (TSPB) - Water Brush + 6m Rod (Combo)","category":"Default","enabled":true,"components":[{"sku":"TSPB-Brush-Water","qty":1},{"sku":"TSPB-Rod-6M","qty":1}]},"TSPB-Wiper_Rod-Kit-6M":{"name":"Tomahawk Solar Panel Brush (TSPB) - Wiper + 6m Rod (Kit)","category":"Default","enabled":true,"components":[{"sku":"TSPB-Wiper","qty":1},{"sku":"TSPB-Rod-6M","qty":1}]},"ZZ-NEWBUNDLE-TEST":{"name":"fresh bundle","category":"Default","enabled":true,"components":[{"sku":"TBA-3000-Battery-20V-3AH","qty":2},{"sku":"T32052-Bare-Tools","qty":1}]},"ZZTEST-Bundle-1":{"name":"TEST","category":"Default","enabled":true,"components":[{"sku":"TSPB-Brush-Water","qty":1},{"sku":"TSPB-Rod-6M","qty":1}]}};
+
+  // Flat array form, built once — used to drive the Bundle SKU table view.
+  var bundleMasterRows = Object.keys(BUNDLE_MASTER_DATA).map(function (code) {
+    var b = BUNDLE_MASTER_DATA[code];
+    return { skuCode: code, name: b.name, categoryCode: b.category, enabled: b.enabled, components: b.components };
+  });
+
+  function formatLinkedSkus(components) {
+    if (!components || !components.length) return '—';
+    return components.map(function (c) {
+      return escapeHtml(c.sku) + ' <span class="linked-qty">×' + c.qty + '</span>';
+    }).join(', ');
+  }
 
   // ---- THEME TOGGLE (identical pattern to other apps) --------
   var html = document.documentElement;
@@ -858,9 +884,10 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         return e3 > 0 && r.hasChannelListing === false && !bundleComponentMap.hasOwnProperty(r.skuCode);
       });
     } else if (currentView === 'bundlesku') {
-      baseRows = allRows.filter(function (r) {
-        return bundleComponentMap.hasOwnProperty(r.skuCode);
-      });
+      // All master/bundle SKUs from the Item Master export (see
+      // BUNDLE_MASTER_DATA above) — independent of G4/E3 stock, since
+      // bundle SKUs are compositions, not warehouse-stocked items.
+      baseRows = bundleMasterRows;
     } else {
       baseRows = idleRows.filter(function (r) {
         var isArchivedRow = archivedSkus.hasOwnProperty(r.skuCode);
@@ -868,21 +895,30 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       });
     }
 
+    var isBundleView = (currentView === 'bundlesku');
+
     visibleRows = baseRows.filter(function (r) {
       if (cat && r.categoryCode !== cat) return false;
-      if (brand && r.brand !== brand) return false;
+      if (!isBundleView && brand && r.brand !== brand) return false;
       if (q) {
         var hay = (String(r.skuCode||'') + ' ' + String(r.name||'') + ' ' + String(r.brand||'')).toLowerCase();
+        if (isBundleView && r.components) {
+          hay += ' ' + r.components.map(function (c) { return c.sku; }).join(' ').toLowerCase();
+        }
         if (hay.indexOf(q) === -1) return false;
       }
       return true;
     });
 
-    visibleRows.sort(function (a, b) {
-      var field = (currentView === 'idealstock' || currentView === 'bundlesku') ? 'E3_stock' : 'G4_stock';
-      var av = Number(a[field]) || 0, bv = Number(b[field]) || 0;
-      return sortDesc ? bv - av : av - bv;
-    });
+    if (isBundleView) {
+      visibleRows.sort(function (a, b) { return a.skuCode.localeCompare(b.skuCode); });
+    } else {
+      visibleRows.sort(function (a, b) {
+        var field = (currentView === 'idealstock') ? 'E3_stock' : 'G4_stock';
+        var av = Number(a[field]) || 0, bv = Number(b[field]) || 0;
+        return sortDesc ? bv - av : av - bv;
+      });
+    }
 
     renderGlobalStats();
     renderTable();
@@ -922,7 +958,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       }
     });
 
-    var bundleSkuCount = Object.keys(bundleComponentMap).length;
+    var bundleSkuCount = bundleMasterRows.length;
 
     document.getElementById('stat-idle-skus').textContent = idleCount;
     document.getElementById('stat-low-stock-e3').textContent = lowStockCount;
@@ -1069,7 +1105,22 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     selectedSkus = {}; // selection only makes sense in Idle / Low Stock views
     selectAll.disabled = (view === 'archived' || view === 'idealstock' || view === 'bundlesku');
     selectAll.checked = false;
+    updateBundleColumns(view === 'bundlesku');
     applyFilters();
+  }
+
+  // Bundle SKU view has a different shape (master SKU + linked simple SKUs,
+  // no brand/stock/qty-box/transfer/actions), so swap the shared header row
+  // instead of maintaining a second table.
+  function updateBundleColumns(isBundle) {
+    document.getElementById('th-brand').style.display = isBundle ? 'none' : '';
+    document.getElementById('th-recqty').style.display = isBundle ? 'none' : '';
+    document.getElementById('th-qtybox').style.display = isBundle ? 'none' : '';
+    document.getElementById('th-transferqty').style.display = isBundle ? 'none' : '';
+    document.getElementById('th-actions').style.display = isBundle ? 'none' : '';
+    document.getElementById('th-sku').textContent = isBundle ? 'Bundle / Master SKU' : 'SKU';
+    document.getElementById('sort-g4').textContent = isBundle ? 'Simple SKU (linked)' : ('G4 stock ' + (sortDesc ? '↓' : '↑'));
+    document.getElementById('sort-g4').classList.toggle('sortable', !isBundle);
   }
 
   function renderTable() {
@@ -1082,7 +1133,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       } else if (currentView === 'idealstock') {
         emptyMsg = 'No SKUs currently have E3 stock with zero channel listings.';
       } else if (currentView === 'bundlesku') {
-        emptyMsg = 'No bundle components detected right now.';
+        emptyMsg = 'No bundle/master SKUs match this search.';
       } else {
         emptyMsg = 'No idle-stock SKUs match this view.<br>Everything currently in G4 either has matching E3 stock, or your filters are hiding it.';
       }
@@ -1097,6 +1148,25 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     var isIdealStockView = (currentView === 'idealstock');
     var isBundleSkuView = (currentView === 'bundlesku');
     var isViewOnly = isArchivedView || isIdealStockView || isBundleSkuView;
+
+    if (isBundleSkuView) {
+      // Different shape entirely: master SKU + its linked simple SKUs.
+      // No checkbox / brand / stock / qty-box / transfer / actions columns.
+      visibleRows.forEach(function (r) {
+        var disabled = r.enabled === false;
+        html += '<tr data-sku="' + escapeHtml(r.skuCode) + '">';
+        html += '<td></td>';
+        html += '<td><span class="sku-code">' + escapeHtml(r.skuCode) + '</span>' +
+                (disabled ? '<span class="badge disabled">Disabled</span>' : '') + '</td>';
+        html += '<td><span class="sku-name" title="' + escapeHtml(r.name||'') + '">' + escapeHtml(r.name||'—') + '</span></td>';
+        html += '<td>' + escapeHtml(r.categoryCode||'—') + '</td>';
+        html += '<td class="linked-sku-cell">' + formatLinkedSkus(r.components) + '</td>';
+        html += '</tr>';
+      });
+      tableBody.innerHTML = html;
+      syncSelectAllState();
+      return;
+    }
 
     visibleRows.forEach(function (r) {
       var sku = r.skuCode;
@@ -1122,7 +1192,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       html += '<td>' + escapeHtml(r.brand||'—') + '</td>';
       html += '<td>' + escapeHtml(r.categoryCode||'—') + '</td>';
 
-      if (isIdealStockView || isBundleSkuView) {
+      if (isIdealStockView) {
         // E3 stock is the number that matters here, not G4
         html += '<td><span class="mag-value">' + e3 + '</span><span class="e3-hint" title="Current G4 stock">G4: ' + g4 + '</span></td>';
       } else {
@@ -1130,17 +1200,13 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
                 (isLowStockView ? '<span class="e3-hint" title="Current E3 stock">E3: ' + e3 + '</span>' : '') + '</td>';
       }
 
-      if (isBundleSkuView) {
-        html += '<td class="rec-qty-na" title="Inferred from SKU naming pattern — not verified data">Master: ' + escapeHtml(bundleComponentMap[sku] || '—') + '</td>';
-      } else {
-        html += '<td class="rec-qty-na" title="Needs sales velocity data — coming once the shipments sync is fixed">NA</td>';
-      }
+      html += '<td class="rec-qty-na" title="Needs sales velocity data — coming once the shipments sync is fixed">NA</td>';
       html += renderQtyPerBoxCell(r);
 
       if (isArchivedView) {
         html += '<td>—</td>';
         html += '<td><button type="button" class="unarchive-btn" data-sku="' + escapeHtml(sku) + '">↩ Unarchive</button></td>';
-      } else if (isIdealStockView || isBundleSkuView) {
+      } else if (isIdealStockView) {
         html += '<td>—</td>';
         html += '<td>—</td>';
       } else {
@@ -1215,6 +1281,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
   // ---- SORT ----------------------------------------------------------
   document.getElementById('sort-g4').addEventListener('click', function () {
+    if (currentView === 'bundlesku') return; // header is repurposed as "Simple SKU (linked)" here, not sortable
     sortDesc = !sortDesc;
     this.textContent = 'G4 stock ' + (sortDesc ? '↓' : '↑');
     applyFilters();
