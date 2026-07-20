@@ -702,7 +702,23 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     }).join('');
   }
 
-  // ---- THEME TOGGLE (identical pattern to other apps) --------
+  // How many complete bundles can be assembled from current E3 stock —
+  // limited by whichever component runs out first.
+  // e.g. needs 2x Battery (15 in stock -> 7 combos) + 1x Bare-Tool (5 in
+  // stock -> 5 combos) => bottleneck is Bare-Tool => Combo Qty = 5.
+  function computeComboQty(components) {
+    if (!components || !components.length) return 0;
+    var min = null;
+    for (var i = 0; i < components.length; i++) {
+      var c = components[i];
+      var invRow = inventoryBySku[c.sku];
+      var e3 = invRow ? (Number(invRow.E3_stock) || 0) : 0;
+      var qtyNeeded = Number(c.qty) || 1;
+      var possible = Math.floor(e3 / qtyNeeded);
+      if (min === null || possible < min) min = possible;
+    }
+    return min || 0;
+  }
   var html = document.documentElement;
   var toggle = document.getElementById('theme-toggle');
   var saved = localStorage.getItem('tm_theme');
@@ -1141,7 +1157,6 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   function updateBundleColumns(isBundle) {
     document.getElementById('th-name').style.display = isBundle ? 'none' : '';
     document.getElementById('th-brand').style.display = isBundle ? 'none' : '';
-    document.getElementById('th-qtybox').style.display = isBundle ? 'none' : '';
     document.getElementById('th-transferqty').style.display = isBundle ? 'none' : '';
     document.getElementById('th-actions').style.display = isBundle ? 'none' : '';
     document.getElementById('th-sku').textContent = isBundle ? 'Bundle / Master SKU' : 'SKU';
@@ -1151,6 +1166,10 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     thRecQty.style.display = '';
     thRecQty.style.width = isBundle ? '110px' : '90px';
     thRecQty.textContent = isBundle ? 'Stock' : 'Rec. qty';
+    var thQtyBox = document.getElementById('th-qtybox');
+    thQtyBox.style.display = '';
+    thQtyBox.style.width = isBundle ? '100px' : '80px';
+    thQtyBox.textContent = isBundle ? 'Combo Qty' : 'Qty/box';
   }
 
   function renderTable() {
@@ -1183,10 +1202,12 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       // Different shape entirely: master SKU + category + its linked simple
       // SKUs + each simple SKU's own live stock from UC_Inventory (bundle/
       // master SKUs themselves don't carry real stock — the physical stock
-      // lives on the components). No name / brand / qty-box / transfer /
-      // actions columns.
+      // lives on the components) + Combo Qty, the number of complete
+      // bundles sellable right now given current component E3 stock.
+      // No name / brand / transfer / actions columns.
       visibleRows.forEach(function (r) {
         var disabled = r.enabled === false;
+        var comboQty = computeComboQty(r.components);
         html += '<tr data-sku="' + escapeHtml(r.skuCode) + '">';
         html += '<td></td>';
         html += '<td><span class="sku-code">' + escapeHtml(r.skuCode) + '</span>' +
@@ -1194,6 +1215,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         html += '<td>' + escapeHtml(r.categoryCode||'—') + '</td>';
         html += '<td class="linked-sku-cell">' + formatLinkedSkus(r.components) + '</td>';
         html += '<td class="linked-sku-cell">' + formatComponentStocks(r.components) + '</td>';
+        html += '<td><span class="mag-value" title="Complete bundles sellable now, limited by the scarcest component">' + comboQty + '</span></td>';
         html += '</tr>';
       });
       tableBody.innerHTML = html;
