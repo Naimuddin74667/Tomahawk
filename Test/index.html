@@ -706,6 +706,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   var qtyOverrides = {};     // { skuCode: number } — manually saved Qty/box, from D1 (sa_qty_overrides)
   var archivedSkus = {};     // { skuCode: true } — manually archived SKUs, from D1 (sa_archived_skus)
   var bundleComponentMap = {}; // { skuCode: masterSkuCode } — components whose inferred master SKU is channel-linked
+  var inventoryBySku = {};   // { skuCode: row } — quick lookup into allRows, used by Bundle SKU view's Stock column
   var currentView = 'idle';  // 'idle' | 'archived'
   var sortDesc = true;
 
@@ -796,6 +797,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       var e3 = Number(r.E3_stock) || 0;
       return g4 > 0 && e3 === 0;
     });
+    inventoryBySku = {};
+    allRows.forEach(function (r) { inventoryBySku[r.skuCode] = r; });
   }
 
   // ---- BUNDLE COMPONENT DETECTION ------------------------------------------
@@ -1114,35 +1117,24 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     applyFilters();
   }
 
-  // Bundle SKU view has a different shape (master SKU + linked simple SKUs,
-  // no brand/stock/qty-box/transfer/actions), so swap the shared header row
-  // instead of maintaining a second table.
+  // Bundle SKU view has a different shape (master SKU + category + linked
+  // simple SKUs + stock, no brand/qty-box/transfer/actions), so swap the
+  // shared header row instead of maintaining a second table. Natural DOM
+  // order already gives us SKU → Category → G4(relabeled Simple SKU) once
+  // Name/Brand are hidden, and Rec.Qty is repurposed as the Stock column.
   function updateBundleColumns(isBundle) {
-    var thName = document.getElementById('th-name');
-    var thBrand = document.getElementById('th-brand');
-    var thCategory = document.getElementById('th-category');
-    var thG4 = document.getElementById('sort-g4');
-    var thRecQty = document.getElementById('th-recqty');
-
-    thName.style.display = isBundle ? 'none' : '';
-    thBrand.style.display = isBundle ? 'none' : '';
-    document.getElementById('th-recqty').style.display = isBundle ? 'none' : '';
+    document.getElementById('th-name').style.display = isBundle ? 'none' : '';
+    document.getElementById('th-brand').style.display = isBundle ? 'none' : '';
     document.getElementById('th-qtybox').style.display = isBundle ? 'none' : '';
     document.getElementById('th-transferqty').style.display = isBundle ? 'none' : '';
     document.getElementById('th-actions').style.display = isBundle ? 'none' : '';
     document.getElementById('th-sku').textContent = isBundle ? 'Bundle / Master SKU' : 'SKU';
-    thG4.textContent = isBundle ? 'Simple SKU (linked)' : ('G4 stock ' + (sortDesc ? '↓' : '↑'));
-    thG4.classList.toggle('sortable', !isBundle);
-
-    // Physically relocate the linked-SKU header to sit right after SKU
-    // (2nd column) for Bundle view; move it back to its normal spot
-    // (after Category) otherwise. Moving nodes (not recreating them)
-    // preserves existing event listeners (checkbox, sort click, etc).
-    if (isBundle) {
-      thName.parentNode.insertBefore(thG4, thName);
-    } else if (thG4.nextSibling !== thRecQty) {
-      thRecQty.parentNode.insertBefore(thG4, thRecQty);
-    }
+    document.getElementById('sort-g4').textContent = isBundle ? 'Simple SKU (linked)' : ('G4 stock ' + (sortDesc ? '↓' : '↑'));
+    document.getElementById('sort-g4').classList.toggle('sortable', !isBundle);
+    var thRecQty = document.getElementById('th-recqty');
+    thRecQty.style.display = '';
+    thRecQty.style.width = isBundle ? '110px' : '90px';
+    thRecQty.textContent = isBundle ? 'Stock' : 'Rec. qty';
   }
 
   function renderTable() {
@@ -1172,17 +1164,27 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     var isViewOnly = isArchivedView || isIdealStockView || isBundleSkuView;
 
     if (isBundleSkuView) {
-      // Different shape entirely: master SKU + its linked simple SKUs
-      // (2nd column) + category. No name / brand / stock / qty-box /
+      // Different shape entirely: master SKU + category + its linked simple
+      // SKUs + live stock (looked up from UC_Inventory by master SKU code,
+      // since bundle SKUs can carry their own stock record even though the
+      // "real" stock lives in the components). No name / brand / qty-box /
       // transfer / actions columns.
       visibleRows.forEach(function (r) {
         var disabled = r.enabled === false;
+        var invRow = inventoryBySku[r.skuCode];
+        var e3 = invRow ? (Number(invRow.E3_stock) || 0) : null;
+        var g4 = invRow ? (Number(invRow.G4_stock) || 0) : null;
         html += '<tr data-sku="' + escapeHtml(r.skuCode) + '">';
         html += '<td></td>';
         html += '<td><span class="sku-code">' + escapeHtml(r.skuCode) + '</span>' +
                 (disabled ? '<span class="badge disabled">Disabled</span>' : '') + '</td>';
-        html += '<td class="linked-sku-cell">' + formatLinkedSkus(r.components) + '</td>';
         html += '<td>' + escapeHtml(r.categoryCode||'—') + '</td>';
+        html += '<td class="linked-sku-cell">' + formatLinkedSkus(r.components) + '</td>';
+        if (invRow) {
+          html += '<td><span class="mag-value">E3: ' + e3 + '</span><span class="e3-hint" title="Current G4 stock">G4: ' + g4 + '</span></td>';
+        } else {
+          html += '<td class="rec-qty-na" title="No matching SKU found in UC_Inventory">—</td>';
+        }
         html += '</tr>';
       });
       tableBody.innerHTML = html;
