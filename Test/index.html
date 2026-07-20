@@ -686,6 +686,22 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     }).join('');
   }
 
+  // One line per component, in the same order as formatLinkedSkus, so rows
+  // line up visually. Shows the SIMPLE (component) SKU's own E3/G4 stock —
+  // not the bundle/master SKU's, since bundles don't carry real stock.
+  function formatComponentStocks(components) {
+    if (!components || !components.length) return '—';
+    return components.map(function (c) {
+      var invRow = inventoryBySku[c.sku];
+      if (!invRow) {
+        return '<div class="linked-sku-line rec-qty-na" title="No matching SKU found in UC_Inventory">—</div>';
+      }
+      var e3 = Number(invRow.E3_stock) || 0;
+      var g4 = Number(invRow.G4_stock) || 0;
+      return '<div class="linked-sku-line"><span class="mag-value">E3: ' + e3 + '</span> <span class="e3-hint" title="Current G4 stock">G4: ' + g4 + '</span></div>';
+    }).join('');
+  }
+
   // ---- THEME TOGGLE (identical pattern to other apps) --------
   var html = document.documentElement;
   var toggle = document.getElementById('theme-toggle');
@@ -1165,26 +1181,19 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
     if (isBundleSkuView) {
       // Different shape entirely: master SKU + category + its linked simple
-      // SKUs + live stock (looked up from UC_Inventory by master SKU code,
-      // since bundle SKUs can carry their own stock record even though the
-      // "real" stock lives in the components). No name / brand / qty-box /
-      // transfer / actions columns.
+      // SKUs + each simple SKU's own live stock from UC_Inventory (bundle/
+      // master SKUs themselves don't carry real stock — the physical stock
+      // lives on the components). No name / brand / qty-box / transfer /
+      // actions columns.
       visibleRows.forEach(function (r) {
         var disabled = r.enabled === false;
-        var invRow = inventoryBySku[r.skuCode];
-        var e3 = invRow ? (Number(invRow.E3_stock) || 0) : null;
-        var g4 = invRow ? (Number(invRow.G4_stock) || 0) : null;
         html += '<tr data-sku="' + escapeHtml(r.skuCode) + '">';
         html += '<td></td>';
         html += '<td><span class="sku-code">' + escapeHtml(r.skuCode) + '</span>' +
                 (disabled ? '<span class="badge disabled">Disabled</span>' : '') + '</td>';
         html += '<td>' + escapeHtml(r.categoryCode||'—') + '</td>';
         html += '<td class="linked-sku-cell">' + formatLinkedSkus(r.components) + '</td>';
-        if (invRow) {
-          html += '<td><span class="mag-value">E3: ' + e3 + '</span><span class="e3-hint" title="Current G4 stock">G4: ' + g4 + '</span></td>';
-        } else {
-          html += '<td class="rec-qty-na" title="No matching SKU found in UC_Inventory">—</td>';
-        }
+        html += '<td class="linked-sku-cell">' + formatComponentStocks(r.components) + '</td>';
         html += '</tr>';
       });
       tableBody.innerHTML = html;
