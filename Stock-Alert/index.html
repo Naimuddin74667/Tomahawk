@@ -395,8 +395,6 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 }
 .box-qty-input:focus { outline: none; border-color: var(--accent); }
 .box-qty-input:disabled { opacity: .4; }
-.total-qty-value { font-weight: 700; color: var(--accent); font-size: 13px; }
-.total-qty-na { color: var(--text-muted); font-size: 12px; font-style: italic; font-weight: 400; cursor: help; }
 .rec-qty-na { color: var(--text-muted); font-size: 12px; font-style: italic; cursor: help; }
 .linked-sku-cell { font-size: 12.5px; max-width: 420px; }
 .linked-sku-line { padding: 1px 0; white-space: nowrap; }
@@ -688,13 +686,12 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
           <th style="width:90px;" id="th-recqty">Rec. qty</th>
           <th style="width:80px;" id="th-qtybox">Qty/box</th>
           <th style="width:110px;" id="th-boxtransferqty">Transfer Box Qty</th>
-          <th style="width:90px;" id="th-totalqty">Total Qty</th>
-          <th style="width:100px;" id="th-transferqty">Transfer qty</th>
+          <th style="width:130px;" id="th-transferqty">Total Transfer qty</th>
           <th style="width:90px;" id="th-actions">Actions</th>
         </tr>
       </thead>
       <tbody id="table-body">
-        <tr><td colspan="11"><div class="loading-state">Fetching UC_Inventory…</div></td></tr>
+        <tr><td colspan="10"><div class="loading-state">Fetching UC_Inventory…</div></td></tr>
       </tbody>
     </table>
   </div>
@@ -923,7 +920,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     refreshBtn.classList.add('is-loading');
     statusDot.classList.remove('is-error');
     statusText.textContent = 'Loading UC_Inventory…';
-    tableBody.innerHTML = '<tr><td colspan="11"><div class="loading-state">Fetching UC_Inventory…</div></td></tr>';
+    tableBody.innerHTML = '<tr><td colspan="10"><div class="loading-state">Fetching UC_Inventory…</div></td></tr>';
 
     var invFetch = fetch(UC_INVENTORY_GAS_URL).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -1001,7 +998,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       .catch(function (err) {
         statusDot.classList.add('is-error');
         statusText.textContent = 'Failed to load';
-        tableBody.innerHTML = '<tr><td colspan="11"><div class="error-state">Couldn\'t reach the UC_Inventory feed.<br>' + escapeHtml(err.message) + '<br><br>Try Refresh, or check the GAS deployment URL.</div></td></tr>';
+        tableBody.innerHTML = '<tr><td colspan="10"><div class="error-state">Couldn\'t reach the UC_Inventory feed.<br>' + escapeHtml(err.message) + '<br><br>Try Refresh, or check the GAS deployment URL.</div></td></tr>';
       })
       .finally(function () {
         refreshBtn.classList.remove('is-loading');
@@ -1205,24 +1202,18 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     return 0;
   }
 
-  // "Transfer Box Qty" (number of boxes) + "Total Qty" (auto-computed = boxes × Qty/box).
-  // Total Qty also feeds qtyValues (the same value the Transfer qty column and Gatepass
-  // CSV use) so entering a box count here does the unit-math automatically — see the
-  // .box-qty-input listener in bindRowEvents.
+  // "Transfer Box Qty" (number of boxes). Its value auto-computes into the
+  // "Total Transfer qty" column (boxes × Qty/box) — see the .box-qty-input
+  // listener in bindRowEvents, which is what actually drives the Gatepass CSV.
   function renderTransferBoxCells(r) {
     var sku = r.skuCode;
     var perBox = getQtyPerBoxValue(r);
     var boxQty = boxQtyValues.hasOwnProperty(sku) ? boxQtyValues[sku] : 0;
-    var total = perBox > 0 ? (boxQty * perBox) : null;
 
     var boxInputHtml = '<input type="number" min="0" class="box-qty-input" data-sku="' + escapeHtml(sku) + '" value="' + boxQty + '"' +
       (perBox > 0 ? '' : ' disabled title="Set Qty/box first"') + '>';
 
-    var totalHtml = (total !== null)
-      ? '<span class="total-qty-value">' + total + '</span>'
-      : '<span class="total-qty-value total-qty-na" title="Set Qty/box first">—</span>';
-
-    return '<td>' + boxInputHtml + '</td><td>' + totalHtml + '</td>';
+    return '<td>' + boxInputHtml + '</td>';
   }
 
   function renderQtyPerBoxCell(r) {
@@ -1474,7 +1465,6 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   function updateBundleColumns(isBundle) {
     document.getElementById('th-name').style.display = isBundle ? 'none' : '';
     document.getElementById('th-boxtransferqty').style.display = isBundle ? 'none' : '';
-    document.getElementById('th-totalqty').style.display = isBundle ? 'none' : '';
     document.getElementById('th-transferqty').style.display = isBundle ? 'none' : '';
     document.getElementById('th-actions').style.display = isBundle ? 'none' : '';
     document.getElementById('th-sku').textContent = isBundle ? 'Bundle / Master SKU' : 'SKU';
@@ -1504,7 +1494,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       } else {
         emptyMsg = 'No idle-stock SKUs match this view.<br>Everything currently in G4 either has matching E3 stock, or your filters are hiding it.';
       }
-      tableBody.innerHTML = '<tr><td colspan="11"><div class="empty-state">' + emptyMsg + '</div></td></tr>';
+      tableBody.innerHTML = '<tr><td colspan="10"><div class="empty-state">' + emptyMsg + '</div></td></tr>';
       selectAll.checked = false;
       return;
     }
@@ -1576,7 +1566,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       html += renderQtyPerBoxCell(r);
 
       if (isArchivedView || isIdealStockView) {
-        html += '<td>—</td><td>—</td>'; // Transfer Box Qty + Total Qty — not applicable in view-only tabs
+        html += '<td>—</td>'; // Transfer Box Qty — not applicable in view-only tabs
       } else {
         html += renderTransferBoxCells(r);
       }
@@ -1626,9 +1616,9 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       });
     }
 
-    // "Transfer Box Qty" input — auto-computes Total Qty (boxes × Qty/box) and
-    // pushes that total into qtyValues, so it also drives the Transfer qty
-    // column and the Gatepass CSV without a separate manual entry.
+    // "Transfer Box Qty" input — auto-computes the total (boxes × Qty/box) and
+    // writes it straight into the "Total Transfer qty" column, so it also
+    // drives the Gatepass CSV without a separate manual entry.
     var boxQtyInputs = tableBody.querySelectorAll('.box-qty-input');
     for (var k = 0; k < boxQtyInputs.length; k++) {
       boxQtyInputs[k].addEventListener('input', function (e) {
@@ -1641,12 +1631,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         var perBox = row ? getQtyPerBoxValue(row) : 0;
         var total = perBox * boxQty;
 
-        var tr = e.target.closest('tr');
-        var totalCell = tr.querySelector('.total-qty-value');
-        if (totalCell) totalCell.textContent = total;
-
         qtyValues[sku] = total;
-        var transferInput = tr.querySelector('.qty-input');
+        var transferInput = e.target.closest('tr').querySelector('.qty-input');
         if (transferInput) {
           transferInput.value = total;
           transferInput.classList.remove('qty-error');
