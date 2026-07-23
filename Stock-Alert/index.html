@@ -383,6 +383,20 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .qty-input:focus { outline: none; border-color: var(--accent); }
 .qty-input:disabled { opacity: .4; }
 .qty-input.qty-error { border-color: #f87171; background: #f8717115; }
+.box-qty-input {
+  width: 60px; background: var(--bg-raised); border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm); padding: 5px 7px; color: var(--text-primary);
+  font-family: var(--font-body); font-size: 12px; text-align: right;
+  -moz-appearance: textfield;
+}
+.box-qty-input::-webkit-outer-spin-button,
+.box-qty-input::-webkit-inner-spin-button {
+  -webkit-appearance: none; margin: 0;
+}
+.box-qty-input:focus { outline: none; border-color: var(--accent); }
+.box-qty-input:disabled { opacity: .4; }
+.total-qty-value { font-weight: 700; color: var(--accent); font-size: 13px; }
+.total-qty-na { color: var(--text-muted); font-size: 12px; font-style: italic; font-weight: 400; cursor: help; }
 .rec-qty-na { color: var(--text-muted); font-size: 12px; font-style: italic; cursor: help; }
 .linked-sku-cell { font-size: 12.5px; max-width: 420px; }
 .linked-sku-line { padding: 1px 0; white-space: nowrap; }
@@ -669,17 +683,18 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
           <th style="width:32px;"><input type="checkbox" class="select-all" id="select-all"></th>
           <th id="th-sku">SKU</th>
           <th id="th-name">Name</th>
-          <th id="th-brand">Brand</th>
           <th id="th-category">Category</th>
           <th class="sortable" id="sort-g4">G4 stock ↓</th>
           <th style="width:90px;" id="th-recqty">Rec. qty</th>
           <th style="width:80px;" id="th-qtybox">Qty/box</th>
+          <th style="width:110px;" id="th-boxtransferqty">Transfer Box Qty</th>
+          <th style="width:90px;" id="th-totalqty">Total Qty</th>
           <th style="width:100px;" id="th-transferqty">Transfer qty</th>
           <th style="width:90px;" id="th-actions">Actions</th>
         </tr>
       </thead>
       <tbody id="table-body">
-        <tr><td colspan="10"><div class="loading-state">Fetching UC_Inventory…</div></td></tr>
+        <tr><td colspan="11"><div class="loading-state">Fetching UC_Inventory…</div></td></tr>
       </tbody>
     </table>
   </div>
@@ -857,6 +872,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   var visibleRows = [];      // idleRows after search/category/brand/toggle filters
   var selectedSkus = {};     // { skuCode: true } — which rows are checked for transfer
   var qtyValues = {};        // { skuCode: number } — typed transfer qty, defaults to 0 until edited
+  var boxQtyValues = {};     // { skuCode: number } — typed "Transfer Box Qty" (number of boxes), used to auto-compute Total Qty
   var qtyOverrides = {};     // { skuCode: number } — manually saved Qty/box, from D1 (sa_qty_overrides)
   var archivedSkus = {};     // { skuCode: true } — manually archived SKUs, from D1 (sa_archived_skus)
   var recQtyOverrides = {};  // { skuCode: number } — manually saved Rec. Qty, from D1 (sa_recqty_overrides)
@@ -907,7 +923,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     refreshBtn.classList.add('is-loading');
     statusDot.classList.remove('is-error');
     statusText.textContent = 'Loading UC_Inventory…';
-    tableBody.innerHTML = '<tr><td colspan="10"><div class="loading-state">Fetching UC_Inventory…</div></td></tr>';
+    tableBody.innerHTML = '<tr><td colspan="11"><div class="loading-state">Fetching UC_Inventory…</div></td></tr>';
 
     var invFetch = fetch(UC_INVENTORY_GAS_URL).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -985,7 +1001,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       .catch(function (err) {
         statusDot.classList.add('is-error');
         statusText.textContent = 'Failed to load';
-        tableBody.innerHTML = '<tr><td colspan="10"><div class="error-state">Couldn\'t reach the UC_Inventory feed.<br>' + escapeHtml(err.message) + '<br><br>Try Refresh, or check the GAS deployment URL.</div></td></tr>';
+        tableBody.innerHTML = '<tr><td colspan="11"><div class="error-state">Couldn\'t reach the UC_Inventory feed.<br>' + escapeHtml(err.message) + '<br><br>Try Refresh, or check the GAS deployment URL.</div></td></tr>';
       })
       .finally(function () {
         refreshBtn.classList.remove('is-loading');
@@ -1174,6 +1190,39 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     document.getElementById('stat-ideal-stock').textContent = idealStockCount;
     document.getElementById('stat-bundle-sku').textContent = bundleSkuCount;
     document.getElementById('stat-archived').textContent = archivedCount;
+  }
+
+  // Resolves the effective Qty/box for a row — same priority as renderQtyPerBoxCell:
+  // manual D1 override first, then Unicommerce's PiecesPerCarton. Returns 0 if neither is set.
+  function getQtyPerBoxValue(r) {
+    var sku = r.skuCode;
+    if (qtyOverrides.hasOwnProperty(sku) && qtyOverrides[sku] !== null && qtyOverrides[sku] !== '') {
+      return Number(qtyOverrides[sku]) || 0;
+    }
+    if (r.piecesPerCarton !== null && r.piecesPerCarton !== undefined && r.piecesPerCarton !== '') {
+      return Number(r.piecesPerCarton) || 0;
+    }
+    return 0;
+  }
+
+  // "Transfer Box Qty" (number of boxes) + "Total Qty" (auto-computed = boxes × Qty/box).
+  // Total Qty also feeds qtyValues (the same value the Transfer qty column and Gatepass
+  // CSV use) so entering a box count here does the unit-math automatically — see the
+  // .box-qty-input listener in bindRowEvents.
+  function renderTransferBoxCells(r) {
+    var sku = r.skuCode;
+    var perBox = getQtyPerBoxValue(r);
+    var boxQty = boxQtyValues.hasOwnProperty(sku) ? boxQtyValues[sku] : 0;
+    var total = perBox > 0 ? (boxQty * perBox) : null;
+
+    var boxInputHtml = '<input type="number" min="0" class="box-qty-input" data-sku="' + escapeHtml(sku) + '" value="' + boxQty + '"' +
+      (perBox > 0 ? '' : ' disabled title="Set Qty/box first"') + '>';
+
+    var totalHtml = (total !== null)
+      ? '<span class="total-qty-value">' + total + '</span>'
+      : '<span class="total-qty-value total-qty-na" title="Set Qty/box first">—</span>';
+
+    return '<td>' + boxInputHtml + '</td><td>' + totalHtml + '</td>';
   }
 
   function renderQtyPerBoxCell(r) {
@@ -1424,7 +1473,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   // Name/Brand are hidden, and Rec.Qty is repurposed as the Stock column.
   function updateBundleColumns(isBundle) {
     document.getElementById('th-name').style.display = isBundle ? 'none' : '';
-    document.getElementById('th-brand').style.display = isBundle ? 'none' : '';
+    document.getElementById('th-boxtransferqty').style.display = isBundle ? 'none' : '';
+    document.getElementById('th-totalqty').style.display = isBundle ? 'none' : '';
     document.getElementById('th-transferqty').style.display = isBundle ? 'none' : '';
     document.getElementById('th-actions').style.display = isBundle ? 'none' : '';
     document.getElementById('th-sku').textContent = isBundle ? 'Bundle / Master SKU' : 'SKU';
@@ -1454,7 +1504,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       } else {
         emptyMsg = 'No idle-stock SKUs match this view.<br>Everything currently in G4 either has matching E3 stock, or your filters are hiding it.';
       }
-      tableBody.innerHTML = '<tr><td colspan="10"><div class="empty-state">' + emptyMsg + '</div></td></tr>';
+      tableBody.innerHTML = '<tr><td colspan="11"><div class="empty-state">' + emptyMsg + '</div></td></tr>';
       selectAll.checked = false;
       return;
     }
@@ -1512,7 +1562,6 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
               (placeholder ? '<span class="badge">Placeholder</span>' : '') +
               (disabled ? '<span class="badge disabled">Disabled</span>' : '') + '</td>';
       html += '<td><span class="sku-name" title="' + escapeHtml(r.name||'') + '">' + escapeHtml(r.name||'—') + '</span></td>';
-      html += '<td>' + escapeHtml(r.brand||'—') + '</td>';
       html += '<td>' + escapeHtml(r.categoryCode||'—') + '</td>';
 
       if (isIdealStockView) {
@@ -1525,6 +1574,12 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
       html += renderRecQtyCell(r);
       html += renderQtyPerBoxCell(r);
+
+      if (isArchivedView || isIdealStockView) {
+        html += '<td>—</td><td>—</td>'; // Transfer Box Qty + Total Qty — not applicable in view-only tabs
+      } else {
+        html += renderTransferBoxCells(r);
+      }
 
       if (isArchivedView) {
         html += '<td>—</td>';
@@ -1568,6 +1623,34 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         var v = parseInt(e.target.value, 10);
         qtyValues[sku] = (v > 0) ? v : 0;
         e.target.classList.remove('qty-error');
+      });
+    }
+
+    // "Transfer Box Qty" input — auto-computes Total Qty (boxes × Qty/box) and
+    // pushes that total into qtyValues, so it also drives the Transfer qty
+    // column and the Gatepass CSV without a separate manual entry.
+    var boxQtyInputs = tableBody.querySelectorAll('.box-qty-input');
+    for (var k = 0; k < boxQtyInputs.length; k++) {
+      boxQtyInputs[k].addEventListener('input', function (e) {
+        var sku = e.target.getAttribute('data-sku');
+        var v = parseInt(e.target.value, 10);
+        var boxQty = (v > 0) ? v : 0;
+        boxQtyValues[sku] = boxQty;
+
+        var row = visibleRows.filter(function (r) { return r.skuCode === sku; })[0];
+        var perBox = row ? getQtyPerBoxValue(row) : 0;
+        var total = perBox * boxQty;
+
+        var tr = e.target.closest('tr');
+        var totalCell = tr.querySelector('.total-qty-value');
+        if (totalCell) totalCell.textContent = total;
+
+        qtyValues[sku] = total;
+        var transferInput = tr.querySelector('.qty-input');
+        if (transferInput) {
+          transferInput.value = total;
+          transferInput.classList.remove('qty-error');
+        }
       });
     }
   }
