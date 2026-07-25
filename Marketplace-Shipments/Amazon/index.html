@@ -830,8 +830,8 @@ function loadGSheetLookup() {
     });
 }
 
-var LIB_KEY = 'tomahawk_sku_lib_v5';
-var SETTINGS_KEY = 'tomahawk_settings_v5';
+var LIB_KEY = 'amazon_sku_lib_v1';
+var SETTINGS_KEY = 'amazon_settings_v1';
 
 function loadLib() { try { return JSON.parse(localStorage.getItem(LIB_KEY)) || {}; } catch(e) { return {}; } }
 // localStorage stays as the instant local cache (so the UI never blocks on
@@ -840,7 +840,7 @@ function loadLib() { try { return JSON.parse(localStorage.getItem(LIB_KEY)) || {
 // (bk_libSave/bk_libLoad), just under an fk_ prefix here.
 function saveLib(lib) {
   localStorage.setItem(LIB_KEY, JSON.stringify(lib));
-  fetch(getWorkerBase() + '?action=fkLibSave', {
+  fetch(getWorkerBase() + '?action=azLibSave', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({data: JSON.stringify(lib)})
   }).then(function(r){ return r.json(); }).then(function(data){
     if(!data || !data.ok) toast('SKU Library saved locally only \u2014 server sync failed (check worker deployment)', 'err');
@@ -852,7 +852,7 @@ function saveLib(lib) {
 // an empty library even though other devices had data. If D1 is empty but
 // this browser already has local data, push it up once to seed D1.
 function syncLibFromD1() {
-  fetch(getWorkerBase() + '?action=fkLibLoad')
+  fetch(getWorkerBase() + '?action=azLibLoad')
     .then(function(r){ return r.json(); })
     .then(function(data){
       if(data && data.ok && data.data && data.data !== '{}'){
@@ -864,7 +864,7 @@ function syncLibFromD1() {
       } else {
         var local = loadLib();
         if(Object.keys(local).length){
-          fetch(getWorkerBase() + '?action=fkLibSave', {
+          fetch(getWorkerBase() + '?action=azLibSave', {
             method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({data: JSON.stringify(local)})
           }).catch(function(){});
         }
@@ -939,7 +939,7 @@ function switchTab(name, btn) {
 var _ledgerRows = [];
 var _ledgerPage = 1;
 var LEDGER_PAGE_SIZE = 10;
-var LEDGER_KEY = 'fk_ledger_v1';
+var LEDGER_KEY = 'az_ledger_v1';
 
 function getWorkerBase() {
   var isLive = location.hostname === 'naimuddin74667.github.io';
@@ -949,7 +949,7 @@ function getWorkerBase() {
 function ledgerLoad() {
   var tbody = document.getElementById('ledgerTbody');
   if(tbody) tbody.innerHTML = '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
-  fetch(getWorkerBase() + '?action=fkLedgerLoad')
+  fetch(getWorkerBase() + '?action=azLedgerLoad')
     .then(function(r){ return r.json(); })
     .then(function(data){
       if(data && data.ok && Array.isArray(data.rows)){
@@ -1093,14 +1093,14 @@ function ledgerDeleteAllPrompt() {
   if(pwd === null) return;
   if(pwd !== 'Admin@8411'){ toast('Incorrect password','err'); return; }
   if(!confirm('Delete ALL ledger rows? This cannot be undone.')) return;
-  fetch(getWorkerBase() + '?action=fkLedgerDeleteAll', {
+  fetch(getWorkerBase() + '?action=azLedgerDeleteAll', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})
   })
     .then(function(r){
       return r.json().then(function(data){ return { status:r.status, data:data }; });
     })
     .then(function(res){
-      console.log('fkLedgerDeleteAll response:', res.status, res.data);
+      console.log('azLedgerDeleteAll response:', res.status, res.data);
       if(!res.data || !res.data.ok){
         var detail = (res.data && res.data.error) ? res.data.error : ('HTTP '+res.status);
         toast('Delete failed on server: '+detail,'err');
@@ -1109,7 +1109,7 @@ function ledgerDeleteAllPrompt() {
       _ledgerRows=[]; try{ localStorage.removeItem(LEDGER_KEY); }catch(e){}
       ledgerRender(); closeLedgerSettings(); toast('All ledger rows deleted','ok');
     })
-    .catch(function(err){ console.error('fkLedgerDeleteAll network error:', err); toast('Delete failed (network/offline): '+err.message,'err'); });
+    .catch(function(err){ console.error('azLedgerDeleteAll network error:', err); toast('Delete failed (network/offline): '+err.message,'err'); });
 }
 
 // ── Ledger Settings — Delete All entry point (pincode mapping retired — warehouse
@@ -1432,7 +1432,7 @@ function ledgerModalSaveEdit() {
   _itemsModalEditing = false;
   closeLedgerItemsModal();
   ledgerRender(); // keep the table behind the modal in sync
-  fetch(getWorkerBase() + '?action=fkLedgerSave', {
+  fetch(getWorkerBase() + '?action=azLedgerSave', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
   }).then(function(r){ return r.json(); }).then(function(data){
     if(!data || !data.ok) toast('Save failed \u2014 will retry on next edit', 'err');
@@ -1476,7 +1476,7 @@ function updateLedgerRowFromPrint(row, printableRows, queueLength, itemsJson) {
   row.items_json = JSON.stringify(itemsJson || []);
   row.updated_at = new Date().toISOString();
   try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
-  fetch(getWorkerBase() + '?action=fkLedgerSave', {
+  fetch(getWorkerBase() + '?action=azLedgerSave', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
   }).then(function(r){ return r.json(); }).then(function(data){
     if(!data || !data.ok) toast('Consignment '+row.consignment_no+' updated locally only \u2014 server save failed (check worker deployment)', 'err');
@@ -1556,7 +1556,7 @@ function applyLedgerModalPdfText(row, text) {
   row.updated_at = new Date().toISOString();
   try { localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); } catch(e){}
 
-  fetch(getWorkerBase() + '?action=fkLedgerSave', {
+  fetch(getWorkerBase() + '?action=azLedgerSave', {
     method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(row)
   }).then(function(r){ return r.json(); }).then(function(data) {
     if (!data || !data.ok) toast('Updated locally only \u2014 server save failed', 'err');
@@ -1594,7 +1594,7 @@ function ledgerRecordPrint(printableRows, queueLength, itemsJson) {
   };
   _ledgerRows.push(row);
   try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
-  fetch(getWorkerBase() + '?action=fkLedgerSave', {
+  fetch(getWorkerBase() + '?action=azLedgerSave', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
   }).then(function(r){ return r.json(); }).then(function(data){
     if(!data || !data.ok) toast('Consignment '+_bulkCN+' saved locally only \u2014 server save failed (check worker deployment)', 'err');
@@ -3104,7 +3104,7 @@ loadGSheetLookup();
 // and outputs a new PDF with each label cropped to its own page.
 // Namespaced with bl_ / bl* to avoid clashing with the rest of the app.
 (function(){
-  var BL_SETTINGS_KEY = 'flg_cropper_v1';
+  var BL_SETTINGS_KEY = 'azg_cropper_v1';
   var BL_DETECT_SCALE = 2.2;
   var BL_EXTRA_PAD_MM = 2.5; // extra breathing room outside the drawn border, all sides
 
