@@ -1029,18 +1029,37 @@ function ledgerRender() {
 
       // Received Qty — still static in the table; the popup (Send \u2192 Received,
       // plus per-SKU QC Reject) is the way to specify shortfall/reject + action.
-      // Button shows whenever there's a transit gap OR any QC reject entries
-      // already recorded (even if fully received) OR anything has been received
-      // at all, so people can log a QC reject on a fully-intact shipment.
+      // saveReceiptShortage() now always records every item on save (even 0/0),
+      // so entries.length>0 reliably means "someone has reviewed this" — that's
+      // tracked separately from whether an actual issue was found, giving four
+      // real states instead of collapsing "clean" and "untouched" together:
+      //   reviewed + issue found   → red, shows the issue counts
+      //   reviewed + nothing wrong → green check
+      //   not reviewed, short      → red, flags the unresolved gap
+      //   not reviewed, full       → neutral grey, just a prompt to check
       var totalQcReject = receiptShortageEntries.reduce(function(s,e){ return s+(e.rejectQty||0); }, 0);
+      var totalShort = receiptShortageEntries.reduce(function(s,e){ return s+(e.shortQty||0); }, 0);
+      var reviewed = receiptShortageEntries.length>0;
       var receivedCell = (r.received_qty!=null?r.received_qty:'\u2014');
       if(r.received_qty!=null){
-        var rFlagged = receiptShortageEntries.length>0;
-        var rLabel = totalQcReject>0 ? (totalQcReject+' QC rejected \u2014 click to edit')
-          : (rFlagged ? 'Details recorded \u2014 click to edit' : 'Specify short-in-transit / QC reject per SKU');
-        var rColor = (rFlagged||isReceiptShort) ? '#6dc87a' : '#ff8080';
-        var rBorder = (rFlagged||isReceiptShort) ? '#3a6b3a' : '#6b2020';
-        var rIcon = totalQcReject>0 ? ('&#9888; '+totalQcReject) : (rFlagged ? '&#10003;' : '&#9888;');
+        var rColor, rBorder, rIcon, rLabel;
+        if(reviewed && (totalQcReject>0 || totalShort>0)){
+          rColor = '#ff8080'; rBorder = '#6b2020';
+          var bits = [];
+          if(totalShort>0) bits.push(totalShort+' short');
+          if(totalQcReject>0) bits.push(totalQcReject+' QC rejected');
+          rIcon = '&#9888; '+bits.join(' / ');
+          rLabel = 'Issues recorded \u2014 click to edit';
+        } else if(reviewed){
+          rColor = '#6dc87a'; rBorder = '#3a6b3a'; rIcon = '&#10003;';
+          rLabel = 'Reviewed \u2014 no issues found \u2014 click to edit';
+        } else if(isReceiptShort){
+          rColor = '#ff8080'; rBorder = '#6b2020'; rIcon = '&#9888;';
+          rLabel = 'Received short of Send \u2014 needs review';
+        } else {
+          rColor = 'var(--muted)'; rBorder = 'var(--border)'; rIcon = '&#9675;';
+          rLabel = 'Not yet reviewed \u2014 click to log shortage/QC reject';
+        }
         receivedCell += ' <button onclick="ledgerOpenReceiptShortage(\''+esc(cn)+'\')" title="'+rLabel+'" style="background:none;border:1px solid '+rBorder+';border-radius:4px;color:'+rColor+';cursor:pointer;font-size:10px;padding:1px 5px;margin-left:3px">'+rIcon+'</button>';
       }
 
@@ -1158,8 +1177,14 @@ function ledgerViewItems(cn) {
         }).join('');
   } else { dsEl.style.display = 'none'; dsEl.innerHTML = ''; }
 
-  var receiptShortage = [];
-  try{ receiptShortage = JSON.parse(row.receipt_shortage_json||'[]'); }catch(e){}
+  // receipt_shortage_json now always contains one entry per item once someone
+  // hits Save on the shortage/QC modal (even 0/0 rows) — that's how "reviewed"
+  // gets tracked. So filter down to only the rows that actually flag something
+  // for this panel, but still show a quiet "reviewed, clean" note if the
+  // consignment was checked and nothing was wrong.
+  var receiptShortageAll = [];
+  try{ receiptShortageAll = JSON.parse(row.receipt_shortage_json||'[]'); }catch(e){}
+  var receiptShortage = receiptShortageAll.filter(function(s){ return (s.shortQty>0)||(s.rejectQty>0)||(s.action&&s.action.trim()); });
   var rsEl = document.getElementById('li-transit-shortage');
   if(receiptShortage.length){
     rsEl.style.display = 'block';
@@ -1172,6 +1197,9 @@ function ledgerViewItems(cn) {
             +'<span>'+esc(s.model||s.sku)+(s.action?' <span style="color:var(--muted)">\u2014 '+esc(s.action)+'</span>':'')+'</span>'
             +'<span>'+bits.join(' &middot; ')+'</span></div>';
         }).join('');
+  } else if(receiptShortageAll.length){
+    rsEl.style.display = 'block';
+    rsEl.innerHTML = '<div style="font-size:11px;color:#6dc87a;font-weight:600">&#10003; Transit / QC reviewed \u2014 no issues found</div>';
   } else { rsEl.style.display = 'none'; rsEl.innerHTML = ''; }
 
   document.getElementById('ledgerItemsModal').classList.add('show');
@@ -1214,10 +1242,10 @@ function renderItemsModalSummary(row) {
 }
 
 // Items list — each row shows the printed Total Qty (static), a Send Qty
-// field that defaults to that same value, and a Received Qty field that
-// defaults to whatever Send Qty currently is (until someone overrides it) —
-// both independently editable while in edit mode. The summary's Send Qty
-// and Received Qty are just the live sums of these.
+// field that defaults to that same value, and a Received Qty field that is
+// manual-only — it no longer auto-fills from Send Qty. A small checkbox next
+// to it is a quick shortcut: check it to copy the current Send Qty in as a
+// starting point (still freely editable after), uncheck to clear it back out.
 function renderItemsModalBody(row) {
   var items = [];
   try{ items = JSON.parse(row.items_json||'[]'); }catch(e){}
@@ -1225,13 +1253,17 @@ function renderItemsModalBody(row) {
   var editing = _itemsModalEditing;
   document.getElementById('li-body').innerHTML = items.length ? items.map(function(it,i){
     var sendVal = (it.sendQty!=null ? it.sendQty : it.qty);
-    var recvVal = (it.receivedQty!=null ? it.receivedQty : sendVal); // default = Send Qty until entered
+    var recvEntered = (it.receivedQty!=null);
+    var recvVal = recvEntered ? it.receivedQty : null; // no auto-fill — must be typed or copied via the checkbox
     var sendCell = editing
       ? '<input type="number" min="0" id="li-item-send-'+i+'" value="'+sendVal+'" oninput="recomputeModalSendQtyTotal()" style="width:56px;text-align:center;font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
       : '<span style="font-weight:700;color:'+sendQtyColor(sendVal, it.qty)+'">'+sendVal+'</span>';
     var recvCell = editing
-      ? '<input type="number" min="0" id="li-item-recv-'+i+'" value="'+recvVal+'" oninput="recomputeModalReceivedQtyTotal()" style="width:56px;text-align:center;font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
-      : '<span style="font-weight:700;color:'+sendQtyColor(recvVal, sendVal)+'">'+recvVal+'</span>';
+      ? '<span style="display:inline-flex;align-items:center;gap:4px">'
+        +'<input type="checkbox" id="li-item-recv-chk-'+i+'"'+(recvEntered && it.receivedQty===sendVal ? ' checked' : '')+' onchange="toggleModalRecvSameAsSend('+i+')" title="Copy Send Qty in" style="cursor:pointer;margin:0">'
+        +'<input type="number" min="0" id="li-item-recv-'+i+'" value="'+(recvEntered?it.receivedQty:'')+'" placeholder="\u2014" oninput="recomputeModalReceivedQtyTotal()" style="width:52px;text-align:center;font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
+        +'</span>'
+      : '<span style="font-weight:700;color:'+sendQtyColor(recvVal, sendVal)+'">'+(recvEntered?recvVal:'\u2014')+'</span>';
     return '<div style="display:flex;justify-content:space-between;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:12px">'
       +'<span style="flex:1">'+esc(it.model||it.sku)+' <span style="color:var(--muted);font-size:10px">('+esc(it.sku)+')</span></span>'
       +'<span style="min-width:70px;text-align:center;color:var(--text);font-weight:600">'+it.qty+'</span>'
@@ -1251,14 +1283,21 @@ function sendQtyColor(sent, total) {
 }
 
 // Status is now fully automatic — no manual entry anywhere. Derived purely
-// from Received Qty and Pickup Date, in this priority order:
-//   Received Qty entered → Rejected (0) / Inwarded (orange if short, green if full)
+// from Received Qty, QC reject entries, and Pickup Date, in this priority order:
+//   Received Qty entered → Nothing Received (0) / Short Received (< Send) /
+//     Inwarded — QC Issues (full qty back, but QC rejects logged) / Inwarded (clean)
 //   else Pickup Date set → Intransit (date has passed) / Ready To Dispatch (upcoming)
 //   else → Created
+// Note: "Nothing Received" (0 units back) and "QC reject" (units arrived but
+// failed inspection) used to share one "Rejected" label — they're different
+// failure modes and are now reported separately.
 function computeLedgerStatus(row) {
   if(row.received_qty != null){
-    if(row.received_qty <= 0) return { label:'Rejected', color:'#ff8080' };
-    if(row.send_qty != null && row.received_qty < row.send_qty) return { label:'Inwarded', color:'var(--accent)' };
+    if(row.received_qty <= 0) return { label:'Nothing Received', color:'#ff8080' };
+    if(row.send_qty != null && row.received_qty < row.send_qty) return { label:'Short Received', color:'var(--accent)' };
+    var totalQcReject = 0;
+    try{ (JSON.parse(row.receipt_shortage_json||'[]')).forEach(function(s){ totalQcReject += (s.rejectQty||0); }); }catch(e){}
+    if(totalQcReject > 0) return { label:'Inwarded — QC Issues', color:'var(--accent)' };
     return { label:'Inwarded', color:'#6dc87a' };
   }
   if(row.appointment_date){
@@ -1303,6 +1342,18 @@ function recomputeModalReceivedQtyTotal() {
   var el = document.getElementById('li-recvqty-value');
   if(el) el.textContent = sum;
 }
+// Handles the per-row "copy Send Qty in" checkbox next to Received Qty.
+// Checking it fills the Received input with the current Send value (still
+// freely editable afterward, not locked together); unchecking clears it
+// back to blank so it goes back to needing a manual entry.
+function toggleModalRecvSameAsSend(i) {
+  var chk = document.getElementById('li-item-recv-chk-'+i);
+  var sendEl = document.getElementById('li-item-send-'+i);
+  var recvEl = document.getElementById('li-item-recv-'+i);
+  if(!chk || !recvEl) return;
+  recvEl.value = chk.checked ? (sendEl ? (sendEl.value||0) : 0) : '';
+  recomputeModalReceivedQtyTotal();
+}
 
 function ledgerModalEnterEdit() {
   var row = _ledgerRows.find(function(r){ return r.consignment_no===_itemsModalCN; });
@@ -1333,6 +1384,13 @@ function ledgerModalSaveEdit() {
   // sum each into row.send_qty / row.received_qty.
   var items = _itemsModalItemsCache || [];
   var sendSum = 0, recvSum = 0;
+  // Dispatch Shortage (Total → Send) used to be fixed at bulk-print time and
+  // never touched again — so if someone later hand-edited Send Qty here, the
+  // shortage panel silently went stale. Regenerate it from qty vs sendQty
+  // every save instead, carrying forward any reason already recorded per SKU.
+  var oldShortageReasons = {};
+  try{ (JSON.parse(row.shortage_json||'[]')).forEach(function(s){ oldShortageReasons[s.sku] = s.reason||''; }); }catch(e){}
+  var newDispatchShortage = [];
   items.forEach(function(it,i){
     var sendEl = document.getElementById('li-item-send-'+i);
     var recvEl = document.getElementById('li-item-recv-'+i);
@@ -1342,8 +1400,13 @@ function ledgerModalSaveEdit() {
     it.receivedQty = rv;
     sendSum += sv;
     recvSum += rv;
+    var shortQty = Math.max(0, (it.qty||0) - sv);
+    if(shortQty > 0){
+      newDispatchShortage.push({ sku: it.sku, model: it.model, shortQty: shortQty, reason: oldShortageReasons[it.sku]||'' });
+    }
   });
   row.items_json = JSON.stringify(items);
+  row.shortage_json = JSON.stringify(newDispatchShortage);
   row.send_qty = sendSum;
   row.received_qty = recvSum;
 
@@ -1431,9 +1494,10 @@ function saveReceiptShortage() {
     var rv = rEl ? (parseInt(rEl.value)||0) : 0;
     var recvQty = Math.max(0, it.sentQty - qv);
     sumShort += qv;
-    if(qv>0 || rv>0){
-      out.push({ sku:it.sku, model:it.model, sentQty:it.sentQty, shortQty:qv, receivedQty:recvQty, rejectQty:rv, action:aEl?aEl.value.trim():'' });
-    }
+    // Always record every item, even 0/0 — this stamps the consignment as
+    // "reviewed", letting the UI distinguish "reviewed, no issues found"
+    // from "nobody has checked this yet" instead of treating both as blank.
+    out.push({ sku:it.sku, model:it.model, sentQty:it.sentQty, shortQty:qv, receivedQty:recvQty, rejectQty:rv, action:aEl?aEl.value.trim():'' });
   });
   var row = _ledgerRows.find(function(r){ return r.consignment_no===_receiptShortageCN; });
   if(!row) return;
