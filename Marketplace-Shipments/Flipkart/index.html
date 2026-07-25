@@ -688,6 +688,7 @@
           <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center">Total Qty</div>
           <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Send Qty</div>
           <div id="li-header-qcreject" style="display:none;font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Qty Rejected</div>
+          <div id="li-header-qcreason" style="display:none;font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:120px;text-align:center;margin-left:6px">Reason</div>
         </div>
       </div>
       <div id="li-body"></div>
@@ -1134,28 +1135,51 @@ function ledgerViewItems(cn, hideItems) {
   document.getElementById('li-footer-view').style.display = 'flex';
   document.getElementById('li-footer-edit').style.display = 'none';
   // Coming from the QC-rejected badge: this is just "here's what got
-  // rejected", not a general drill-in — skip the Items breakdown so it
-  // doesn't bury the QC panel right above it. Edit is still available if
-  // they need to change anything (it brings the Items list back).
+  // rejected", not a general drill-in — skip the header summary and Items
+  // breakdown so it's just the rejection detail. Edit is still available if
+  // they need to change anything (it brings the full view back).
+  document.getElementById('li-summary').style.display = hideItems ? 'none' : '';
   document.getElementById('li-items-section').style.display = hideItems ? 'none' : '';
 
   // receipt_shortage_json now always contains one entry per item once someone
   // hits Save on the QC modal (even at 0 rejected) — that's how "reviewed"
   // gets tracked. So filter down to only the rows that actually flag a
   // rejection for this panel, but still show a quiet "reviewed, clean" note
-  // if QC was checked and nothing was wrong.
+  // if QC was checked and nothing was wrong. For each rejected SKU, show
+  // what was actually sent, what that implies got inwarded (sent − rejected),
+  // how many were rejected, and why.
+  var itemsAll = [];
+  try{ itemsAll = JSON.parse(row.items_json||'[]'); }catch(e){}
+  var sendMap = {};
+  itemsAll.forEach(function(it){ sendMap[it.sku] = (it.sendQty!=null?it.sendQty:it.qty); });
+
   var receiptShortageAll = [];
   try{ receiptShortageAll = JSON.parse(row.receipt_shortage_json||'[]'); }catch(e){}
   var receiptShortage = receiptShortageAll.filter(function(s){ return (s.rejectQty>0); });
   var rsEl = document.getElementById('li-transit-shortage');
   if(receiptShortage.length){
     rsEl.style.display = 'block';
-    rsEl.innerHTML = '<div style="font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;margin-bottom:.4rem">&#9888; QC Rejections</div>'
+    rsEl.innerHTML = '<div style="font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;margin-bottom:.5rem">&#9888; QC Rejections</div>'
+      + '<table style="width:100%;border-collapse:collapse;font-size:12px">'
+      + '<thead><tr style="color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.05em">'
+      +   '<th style="text-align:left;padding:0 .3rem .3rem 0">SKU</th>'
+      +   '<th style="text-align:center;padding:0 .3rem .3rem">Sent Qty</th>'
+      +   '<th style="text-align:center;padding:0 .3rem .3rem">Inwarded Qty</th>'
+      +   '<th style="text-align:center;padding:0 .3rem .3rem;color:#ff8080">Rejected Qty</th>'
+      +   '<th style="text-align:left;padding:0 0 .3rem .3rem">Reason</th>'
+      + '</tr></thead><tbody>'
       + receiptShortage.map(function(s){
-          return '<div style="display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--border);font-size:11px">'
-            +'<span>'+esc(s.model||s.sku)+'</span>'
-            +'<span style="color:#ff8080;font-weight:700">-'+s.rejectQty+' QC reject</span></div>';
-        }).join('');
+          var sentQty = sendMap[s.sku];
+          var inwardQty = (sentQty!=null) ? Math.max(0, sentQty - (s.rejectQty||0)) : null;
+          return '<tr style="border-top:1px solid var(--border)">'
+            +'<td style="padding:.4rem .3rem .4rem 0;color:var(--text);font-weight:600">'+esc(s.model||s.sku)+'</td>'
+            +'<td style="text-align:center;padding:.4rem .3rem;color:var(--text)">'+(sentQty!=null?sentQty:'\u2014')+'</td>'
+            +'<td style="text-align:center;padding:.4rem .3rem;color:#6dc87a;font-weight:600">'+(inwardQty!=null?inwardQty:'\u2014')+'</td>'
+            +'<td style="text-align:center;padding:.4rem .3rem;color:#ff8080;font-weight:700">'+s.rejectQty+'</td>'
+            +'<td style="padding:.4rem 0 .4rem .3rem;color:var(--muted)">'+(s.reason?esc(s.reason):'\u2014')+'</td>'
+            +'</tr>';
+        }).join('')
+      + '</tbody></table>';
   } else if(receiptShortageAll.length){
     rsEl.style.display = 'block';
     rsEl.innerHTML = '<div style="font-size:11px;color:#6dc87a;font-weight:600">&#10003; QC reviewed \u2014 no rejections</div>';
@@ -1218,11 +1242,11 @@ function renderItemsModalSummary(row) {
 }
 
 // Items list — each row shows the printed Total Qty (static) and a Send Qty
-// field that defaults to that same value, editable while in edit mode. A Qty
-// Rejected column also appears here, but only while editing AND "Has QC
-// Rejections?" (in the summary above) is set to Yes — otherwise it's hidden.
-// Received Qty is not tracked per item here — it's a single manual entry at
-// the header level (see renderItemsModalSummary).
+// field that defaults to that same value, editable while in edit mode. Qty
+// Rejected + Reason columns also appear here, but only while editing AND
+// "Has QC Rejections?" (in the summary above) is set to Yes — otherwise
+// they're hidden. Received Qty is not tracked per item here — it's a single
+// manual entry at the header level (see renderItemsModalSummary).
 function renderItemsModalBody(row) {
   var items = [];
   try{ items = JSON.parse(row.items_json||'[]'); }catch(e){}
@@ -1232,8 +1256,10 @@ function renderItemsModalBody(row) {
   var showQc = editing && !!(qcSel && qcSel.value==='yes');
   var qcHeader = document.getElementById('li-header-qcreject');
   if(qcHeader) qcHeader.style.display = showQc ? '' : 'none';
-  var existingRejectMap = {};
-  try{ (JSON.parse(row.receipt_shortage_json||'[]')).forEach(function(s){ existingRejectMap[s.sku] = s.rejectQty||0; }); }catch(e){}
+  var qcReasonHeader = document.getElementById('li-header-qcreason');
+  if(qcReasonHeader) qcReasonHeader.style.display = showQc ? '' : 'none';
+  var existingRejectMap = {}, existingReasonMap = {};
+  try{ (JSON.parse(row.receipt_shortage_json||'[]')).forEach(function(s){ existingRejectMap[s.sku] = s.rejectQty||0; existingReasonMap[s.sku] = s.reason||''; }); }catch(e){}
   document.getElementById('li-body').innerHTML = items.length ? items.map(function(it,i){
     var sendVal = (it.sendQty!=null ? it.sendQty : it.qty);
     var sendCell = editing
@@ -1242,11 +1268,15 @@ function renderItemsModalBody(row) {
     var rejectCell = showQc
       ? '<span style="min-width:64px;text-align:center"><input type="number" min="0" id="li-item-reject-'+i+'" value="'+(existingRejectMap[it.sku]||'')+'" placeholder="0" style="width:56px;text-align:center;font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:#ff8080"></span>'
       : '';
+    var reasonCell = showQc
+      ? '<span style="min-width:120px;text-align:center;margin-left:6px"><input type="text" id="li-item-reason-'+i+'" value="'+esc(existingReasonMap[it.sku]||'')+'" placeholder="reason" style="width:110px;font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)"></span>'
+      : '';
     return '<div style="display:flex;justify-content:space-between;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:12px">'
       +'<span style="flex:1">'+esc(it.model||it.sku)+' <span style="color:var(--muted);font-size:10px">('+esc(it.sku)+')</span></span>'
       +'<span style="min-width:70px;text-align:center;color:var(--text);font-weight:600">'+it.qty+'</span>'
       +'<span style="min-width:64px;text-align:center">'+sendCell+'</span>'
       +rejectCell
+      +reasonCell
       +'</div>';
   }).join('') : '<div style="color:var(--muted);font-size:11px;padding:1rem;text-align:center">No item breakdown stored for this consignment.</div>';
 }
@@ -1316,6 +1346,7 @@ function ledgerModalEnterEdit() {
   var row = _ledgerRows.find(function(r){ return r.consignment_no===_itemsModalCN; });
   if(!row) return;
   _itemsModalEditing = true;
+  document.getElementById('li-summary').style.display = ''; // editing needs the full header, always show it
   document.getElementById('li-items-section').style.display = ''; // editing needs the item breakdown, always show it
   renderItemsModalSummary(row);
   renderItemsModalBody(row);
@@ -1385,12 +1416,14 @@ function ledgerModalSaveEdit() {
   var hasQc = !!(qcSel && qcSel.value==='yes');
   var qcOut = [];
   items.forEach(function(it,i){
-    var rv = 0;
+    var rv = 0, reason = '';
     if(hasQc){
       var rEl = document.getElementById('li-item-reject-'+i);
+      var reasonEl = document.getElementById('li-item-reason-'+i);
       rv = rEl ? (parseInt(rEl.value)||0) : 0;
+      reason = reasonEl ? reasonEl.value.trim() : '';
     }
-    qcOut.push({ sku: it.sku, model: it.model, rejectQty: rv });
+    qcOut.push({ sku: it.sku, model: it.model, rejectQty: rv, reason: reason });
   });
   row.receipt_shortage_json = JSON.stringify(qcOut);
 
