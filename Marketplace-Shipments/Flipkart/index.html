@@ -683,7 +683,6 @@
       <div style="display:flex;gap:0">
         <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center">Total Qty</div>
         <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Send Qty</div>
-        <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Received Qty</div>
       </div>
     </div>
     <div id="li-body"></div>
@@ -1247,11 +1246,10 @@ function renderItemsModalSummary(row) {
   document.getElementById('li-summary').innerHTML = html;
 }
 
-// Items list — each row shows the printed Total Qty (static), a Send Qty
-// field that defaults to that same value, and a Received Qty field that is
-// manual-only — it no longer auto-fills from Send Qty. A small checkbox next
-// to it is a quick shortcut: check it to copy the current Send Qty in as a
-// starting point (still freely editable after), uncheck to clear it back out.
+// Items list — each row shows the printed Total Qty (static) and a Send Qty
+// field that defaults to that same value, editable while in edit mode.
+// Received Qty is no longer tracked per item here — it's a single manual
+// entry at the header level (see renderItemsModalSummary).
 function renderItemsModalBody(row) {
   var items = [];
   try{ items = JSON.parse(row.items_json||'[]'); }catch(e){}
@@ -1259,22 +1257,13 @@ function renderItemsModalBody(row) {
   var editing = _itemsModalEditing;
   document.getElementById('li-body').innerHTML = items.length ? items.map(function(it,i){
     var sendVal = (it.sendQty!=null ? it.sendQty : it.qty);
-    var recvEntered = (it.receivedQty!=null);
-    var recvVal = recvEntered ? it.receivedQty : null; // no auto-fill — must be typed or copied via the checkbox
     var sendCell = editing
       ? '<input type="number" min="0" id="li-item-send-'+i+'" value="'+sendVal+'" oninput="recomputeModalSendQtyTotal()" style="width:56px;text-align:center;font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
       : '<span style="font-weight:700;color:'+sendQtyColor(sendVal, it.qty)+'">'+sendVal+'</span>';
-    var recvCell = editing
-      ? '<span style="display:inline-flex;align-items:center;gap:4px">'
-        +'<input type="checkbox" id="li-item-recv-chk-'+i+'"'+(recvEntered && it.receivedQty===sendVal ? ' checked' : '')+' onchange="toggleModalRecvSameAsSend('+i+')" title="Copy Send Qty in" style="cursor:pointer;margin:0">'
-        +'<input type="number" min="0" id="li-item-recv-'+i+'" value="'+(recvEntered?it.receivedQty:'')+'" placeholder="\u2014" oninput="recomputeModalReceivedQtyTotal()" style="width:52px;text-align:center;font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
-        +'</span>'
-      : '<span style="font-weight:700;color:'+sendQtyColor(recvVal, sendVal)+'">'+(recvEntered?recvVal:'\u2014')+'</span>';
     return '<div style="display:flex;justify-content:space-between;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:12px">'
       +'<span style="flex:1">'+esc(it.model||it.sku)+' <span style="color:var(--muted);font-size:10px">('+esc(it.sku)+')</span></span>'
       +'<span style="min-width:70px;text-align:center;color:var(--text);font-weight:600">'+it.qty+'</span>'
       +'<span style="min-width:64px;text-align:center">'+sendCell+'</span>'
-      +'<span style="min-width:64px;text-align:center">'+recvCell+'</span>'
       +'</div>';
   }).join('') : '<div style="color:var(--muted);font-size:11px;padding:1rem;text-align:center">No item breakdown stored for this consignment.</div>';
 }
@@ -1342,31 +1331,6 @@ function recomputeModalSendQtyTotal() {
   var el = document.getElementById('li-sendqty-value');
   if(el) el.textContent = sum;
 }
-// Same idea for Received Qty — live sum of the per-item Received Qty inputs.
-function recomputeModalReceivedQtyTotal() {
-  var items = _itemsModalItemsCache || [];
-  var sum = 0;
-  items.forEach(function(it,i){
-    var el = document.getElementById('li-item-recv-'+i);
-    var sendEl = document.getElementById('li-item-send-'+i);
-    var fallback = sendEl ? (parseInt(sendEl.value)||0) : (it.sendQty!=null?it.sendQty:it.qty);
-    sum += el ? (parseInt(el.value)||0) : fallback;
-  });
-  var el = document.getElementById('li-recvqty-value');
-  if(el) el.textContent = sum;
-}
-// Handles the per-row "copy Send Qty in" checkbox next to Received Qty.
-// Checking it fills the Received input with the current Send value (still
-// freely editable afterward, not locked together); unchecking clears it
-// back to blank so it goes back to needing a manual entry.
-function toggleModalRecvSameAsSend(i) {
-  var chk = document.getElementById('li-item-recv-chk-'+i);
-  var sendEl = document.getElementById('li-item-send-'+i);
-  var recvEl = document.getElementById('li-item-recv-'+i);
-  if(!chk || !recvEl) return;
-  recvEl.value = chk.checked ? (sendEl ? (sendEl.value||0) : 0) : '';
-  recomputeModalReceivedQtyTotal();
-}
 
 function ledgerModalEnterEdit() {
   var row = _ledgerRows.find(function(r){ return r.consignment_no===_itemsModalCN; });
@@ -1426,11 +1390,8 @@ function ledgerModalSaveEdit() {
   var newDispatchShortage = [];
   items.forEach(function(it,i){
     var sendEl = document.getElementById('li-item-send-'+i);
-    var recvEl = document.getElementById('li-item-recv-'+i);
     var sv = sendEl ? (parseInt(sendEl.value)||0) : (it.sendQty!=null?it.sendQty:it.qty);
-    var rv = recvEl ? (parseInt(recvEl.value)||0) : sv; // defaults to Send Qty if untouched
     it.sendQty = sv;
-    it.receivedQty = rv;
     sendSum += sv;
     var shortQty = Math.max(0, (it.qty||0) - sv);
     if(shortQty > 0){
