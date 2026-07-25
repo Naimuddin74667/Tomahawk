@@ -677,19 +677,21 @@
     </div>
     <div id="li-summary" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;margin-bottom:1rem;padding:.7rem;background:var(--surface2);border-radius:7px;border:1px solid var(--border)"></div>
     <div id="li-transit-shortage" style="display:none;margin-bottom:1rem"></div>
-    <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:.4rem;border-bottom:1px solid var(--border);margin-bottom:.2rem">
-      <div style="display:flex;align-items:center;gap:6px">
-        <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600">Items</div>
-        <input type="file" id="li-pdf-input" accept="application/pdf" style="display:none" onchange="ledgerModalPdfSelected(this)">
-        <button onclick="document.getElementById('li-pdf-input').click()" title="Upload PDF to re-match &amp; refresh this consignment's items" style="width:16px;height:16px;padding:0;display:flex;align-items:center;justify-content:center;background:none;border:1px solid var(--border);border-radius:3px;color:var(--muted);cursor:pointer;font-size:9px;line-height:1">&#128196;</button>
+    <div id="li-items-section">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:.4rem;border-bottom:1px solid var(--border);margin-bottom:.2rem">
+        <div style="display:flex;align-items:center;gap:6px">
+          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600">Items</div>
+          <input type="file" id="li-pdf-input" accept="application/pdf" style="display:none" onchange="ledgerModalPdfSelected(this)">
+          <button onclick="document.getElementById('li-pdf-input').click()" title="Upload PDF to re-match &amp; refresh this consignment's items" style="width:16px;height:16px;padding:0;display:flex;align-items:center;justify-content:center;background:none;border:1px solid var(--border);border-radius:3px;color:var(--muted);cursor:pointer;font-size:9px;line-height:1">&#128196;</button>
+        </div>
+        <div style="display:flex;gap:0">
+          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center">Total Qty</div>
+          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Send Qty</div>
+          <div id="li-header-qcreject" style="display:none;font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Qty Rejected</div>
+        </div>
       </div>
-      <div style="display:flex;gap:0">
-        <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center">Total Qty</div>
-        <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Send Qty</div>
-        <div id="li-header-qcreject" style="display:none;font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Qty Rejected</div>
-      </div>
+      <div id="li-body"></div>
     </div>
-    <div id="li-body"></div>
     <div class="btn-row" id="li-footer-view">
       <button class="btn btn-secondary" onclick="ledgerModalEnterEdit()">Edit</button>
       <button class="btn btn-primary" onclick="closeLedgerItemsModal()">Close</button>
@@ -1121,7 +1123,7 @@ var _itemsModalCN = null;
 var _itemsModalEditing = false;
 var _itemsModalItemsCache = [];
 
-function ledgerViewItems(cn) {
+function ledgerViewItems(cn, hideItems) {
   var row = _ledgerRows.find(function(r){ return r.consignment_no===cn; });
   if(!row) return;
   _itemsModalCN = cn;
@@ -1131,6 +1133,11 @@ function ledgerViewItems(cn) {
   renderItemsModalBody(row);
   document.getElementById('li-footer-view').style.display = 'flex';
   document.getElementById('li-footer-edit').style.display = 'none';
+  // Coming from the QC-rejected badge: this is just "here's what got
+  // rejected", not a general drill-in — skip the Items breakdown so it
+  // doesn't bury the QC panel right above it. Edit is still available if
+  // they need to change anything (it brings the Items list back).
+  document.getElementById('li-items-section').style.display = hideItems ? 'none' : '';
 
   // receipt_shortage_json now always contains one entry per item once someone
   // hits Save on the QC modal (even at 0 rejected) — that's how "reviewed"
@@ -1309,6 +1316,7 @@ function ledgerModalEnterEdit() {
   var row = _ledgerRows.find(function(r){ return r.consignment_no===_itemsModalCN; });
   if(!row) return;
   _itemsModalEditing = true;
+  document.getElementById('li-items-section').style.display = ''; // editing needs the item breakdown, always show it
   renderItemsModalSummary(row);
   renderItemsModalBody(row);
   document.getElementById('li-footer-view').style.display = 'none';
@@ -1403,10 +1411,11 @@ function ledgerModalSaveEdit() {
 // (see renderItemsModalSummary / renderItemsModalBody / ledgerModalSaveEdit)
 // instead of a separate modal. The table's shortage/QC button opens that
 // popup in its normal read-only view — which already lists the rejected
-// SKU(s) and qty for the whole shipment via the QC Rejections panel — rather
-// than jumping straight into edit mode. Edit is still one click away if needed.
+// SKU(s) and qty for the whole shipment via the QC Rejections panel — with
+// the Items breakdown skipped so it doesn't bury that panel. Edit is still
+// one click away if needed (it brings the Items list back).
 function ledgerOpenReceiptShortage(cn) {
-  ledgerViewItems(cn);
+  ledgerViewItems(cn, true);
 }
 
 // Called once a bulk print batch finishes generating its PDF. Consignment No.
