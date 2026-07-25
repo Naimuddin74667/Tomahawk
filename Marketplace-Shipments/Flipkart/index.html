@@ -682,6 +682,7 @@
       <div style="display:flex;gap:0">
         <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center">Total Qty</div>
         <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Send Qty</div>
+        <div id="li-header-qcreject" style="display:none;font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Qty Rejected</div>
       </div>
     </div>
     <div id="li-body"></div>
@@ -696,41 +697,6 @@
   </div>
 </div>
 <script>document.getElementById('ledgerItemsModal').addEventListener('click',function(e){if(e.target===this)closeLedgerItemsModal();});</script>
-
-<!-- QC REJECTION MODAL — Send vs Received shortfall is fully automatic now
-     (see Status / computeLedgerStatus, driven off the header Send/Received
-     numbers). This modal only handles the one thing that still needs a
-     person to say so: did any of what arrived fail QC, and how many units
-     per SKU. Defaults to "No" so nothing gets flagged unless someone
-     deliberately says otherwise. -->
-<div class="modal-bg" id="receiptShortageModal">
-  <div class="modal" style="width:520px;max-height:80vh;overflow-y:auto">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem">
-      <div class="modal-title" style="margin-bottom:0">QC Rejections &mdash; <span id="rsh-cn" style="color:var(--accent)"></span></div>
-      <button onclick="closeReceiptShortageModal()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
-    </div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:.8rem">Send Qty <b id="rsh-send" style="color:var(--text)"></b> vs Received Qty <b id="rsh-received" style="color:var(--text)"></b> &mdash; any gap between those is already flagged automatically by Status. This is only for units that physically arrived but failed inspection.</div>
-    <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.8rem">
-      <label style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Has QC Rejections?</label>
-      <select id="rsh-qc-yesno" onchange="rshToggleQcSection()" style="font-size:12px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;color:var(--text)">
-        <option value="no">No</option>
-        <option value="yes">Yes</option>
-      </select>
-    </div>
-    <div id="rsh-qc-section" style="display:none">
-      <div style="display:flex;gap:.4rem;padding:0 0 .3rem;font-size:9px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase;font-weight:600">
-        <span style="flex:1">SKU</span>
-        <span style="width:90px;text-align:center">Qty Rejected</span>
-      </div>
-      <div id="rsh-body"></div>
-    </div>
-    <div class="btn-row">
-      <button class="btn btn-secondary" onclick="closeReceiptShortageModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveReceiptShortage()">Save</button>
-    </div>
-  </div>
-</div>
-<script>document.getElementById('receiptShortageModal').addEventListener('click',function(e){if(e.target===this)closeReceiptShortageModal();});</script>
 
 <!-- LEDGER SETTINGS MODAL — password-gated Delete All (pincode mapping retired — warehouse is read directly off the PDF) -->
 <div class="modal-bg" id="ledgerSettingsModal">
@@ -1035,7 +1001,7 @@ function ledgerRender() {
 
       // Received Qty vs Send Qty IS a real issue when it falls short — that's
       // already surfaced prominently via the Status column ("Short Received").
-      // This button is purely about QC: saveReceiptShortage() always records
+      // This button is purely about QC: ledgerModalSaveEdit() always records
       // every item on save (even at 0 rejected), so entries.length>0 reliably
       // means "someone has reviewed QC for this" — distinct from whether an
       // actual rejection was found:
@@ -1193,10 +1159,10 @@ function closeLedgerItemsModal(){ document.getElementById('ledgerItemsModal').cl
 // (see renderItemsModalBody / recomputeModalSendQtyTotal). Received Qty is the
 // opposite: it's a direct manual entry at the header level (not auto-summed
 // from the item rows below — that per-item breakdown is separate, informational
-// bookkeeping and no longer drives this number). Pickup Date and Received Qty
-// stay editable at the summary level. Consignment No, DC Date, Warehouse,
-// No. of SKU, Total Qty never become inputs — PDF-sourced. Status is always
-// automatic, never an input.
+// bookkeeping and no longer drives this number). Pickup Date, Received Qty, and
+// Has QC Rejections? stay editable at the summary level. Consignment No, DC
+// Date, Warehouse, No. of SKU, Total Qty never become inputs — PDF-sourced.
+// Status is always automatic, never an input.
 function renderItemsModalSummary(row) {
   var editing = _itemsModalEditing;
   function field(label, value, id){
@@ -1225,30 +1191,59 @@ function renderItemsModalSummary(row) {
     ? editField('Received Qty', '<input type="number" min="0" id="li-edit-recv" placeholder="\u2014" value="'+esc(row.received_qty!=null?row.received_qty:'')+'" style="'+inputStyle+'">')
     : field('Received Qty', row.received_qty, 'li-recvqty-value'); // manual entry — no longer auto-summed from items
   html += fieldHtml('Status', statusBadge(row)); // fully automatic — never an input, even while editing
-  html += '<div></div>';
+
+  // Has QC Rejections? — a straight Yes/No, defaulting to No. Selecting Yes
+  // reveals a Qty Rejected column in the Items list below for per-SKU entry.
+  var qcEntries = [];
+  try{ qcEntries = JSON.parse(row.receipt_shortage_json||'[]'); }catch(e){}
+  var qcReviewed = qcEntries.length>0;
+  var totalQcReject = qcEntries.reduce(function(s,e){ return s+(e.rejectQty||0); }, 0);
+  var qcHasRejections = totalQcReject>0; // default selection when opening Edit
+  html += editing
+    ? editField('Has QC Rejections?', '<select id="li-edit-qc" onchange="itemsModalQcChanged()" style="'+inputStyle+'"><option value="no"'+(qcHasRejections?'':' selected')+'>No</option><option value="yes"'+(qcHasRejections?' selected':'')+'>Yes</option></select>')
+    : field('Has QC Rejections?', !qcReviewed ? '\u2014' : (totalQcReject>0 ? ('Yes ('+totalQcReject+' rejected)') : 'No'));
+
   document.getElementById('li-summary').innerHTML = html;
 }
 
 // Items list — each row shows the printed Total Qty (static) and a Send Qty
-// field that defaults to that same value, editable while in edit mode.
-// Received Qty is no longer tracked per item here — it's a single manual
-// entry at the header level (see renderItemsModalSummary).
+// field that defaults to that same value, editable while in edit mode. A Qty
+// Rejected column also appears here, but only while editing AND "Has QC
+// Rejections?" (in the summary above) is set to Yes — otherwise it's hidden.
+// Received Qty is not tracked per item here — it's a single manual entry at
+// the header level (see renderItemsModalSummary).
 function renderItemsModalBody(row) {
   var items = [];
   try{ items = JSON.parse(row.items_json||'[]'); }catch(e){}
   _itemsModalItemsCache = items;
   var editing = _itemsModalEditing;
+  var qcSel = document.getElementById('li-edit-qc');
+  var showQc = editing && !!(qcSel && qcSel.value==='yes');
+  var qcHeader = document.getElementById('li-header-qcreject');
+  if(qcHeader) qcHeader.style.display = showQc ? '' : 'none';
+  var existingRejectMap = {};
+  try{ (JSON.parse(row.receipt_shortage_json||'[]')).forEach(function(s){ existingRejectMap[s.sku] = s.rejectQty||0; }); }catch(e){}
   document.getElementById('li-body').innerHTML = items.length ? items.map(function(it,i){
     var sendVal = (it.sendQty!=null ? it.sendQty : it.qty);
     var sendCell = editing
       ? '<input type="number" min="0" id="li-item-send-'+i+'" value="'+sendVal+'" oninput="recomputeModalSendQtyTotal()" style="width:56px;text-align:center;font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
       : '<span style="font-weight:700;color:var(--text)">'+sendVal+'</span>';
+    var rejectCell = showQc
+      ? '<span style="min-width:64px;text-align:center"><input type="number" min="0" id="li-item-reject-'+i+'" value="'+(existingRejectMap[it.sku]||'')+'" placeholder="0" style="width:56px;text-align:center;font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:#ff8080"></span>'
+      : '';
     return '<div style="display:flex;justify-content:space-between;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:12px">'
       +'<span style="flex:1">'+esc(it.model||it.sku)+' <span style="color:var(--muted);font-size:10px">('+esc(it.sku)+')</span></span>'
       +'<span style="min-width:70px;text-align:center;color:var(--text);font-weight:600">'+it.qty+'</span>'
       +'<span style="min-width:64px;text-align:center">'+sendCell+'</span>'
+      +rejectCell
       +'</div>';
   }).join('') : '<div style="color:var(--muted);font-size:11px;padding:1rem;text-align:center">No item breakdown stored for this consignment.</div>';
+}
+// Fires when the "Has QC Rejections?" select changes — just re-renders the
+// Items list so the Qty Rejected column shows/hides accordingly.
+function itemsModalQcChanged() {
+  var row = _ledgerRows.find(function(r){ return r.consignment_no===_itemsModalCN; });
+  if(row) renderItemsModalBody(row);
 }
 
 // Shared parser for the dd-mm-yyyy strings appointment_date is stored as.
@@ -1371,6 +1366,22 @@ function ledgerModalSaveEdit() {
   var recvRaw = recvEl ? recvEl.value.trim() : '';
   row.received_qty = recvRaw === '' ? null : (parseInt(recvRaw) || 0);
 
+  // Has QC Rejections? — always records every item (even at 0), whichever way
+  // Yes/No goes, so the row is stamped "reviewed": lets the UI tell "reviewed,
+  // no QC issues" apart from "nobody has checked this yet".
+  var qcSel = document.getElementById('li-edit-qc');
+  var hasQc = !!(qcSel && qcSel.value==='yes');
+  var qcOut = [];
+  items.forEach(function(it,i){
+    var rv = 0;
+    if(hasQc){
+      var rEl = document.getElementById('li-item-reject-'+i);
+      rv = rEl ? (parseInt(rEl.value)||0) : 0;
+    }
+    qcOut.push({ sku: it.sku, model: it.model, rejectQty: rv });
+  });
+  row.receipt_shortage_json = JSON.stringify(qcOut);
+
   row.updated_at = new Date().toISOString();
   try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
   _itemsModalEditing = false;
@@ -1384,83 +1395,13 @@ function ledgerModalSaveEdit() {
   }).catch(function(){ toast('Ledger sync error (offline?)', 'err'); });
 }
 
-// Actual qty sent per SKU — read directly from each item's own sendQty
-// (edited per-item in the Consignment No. popup).
-function getEffectiveSentItems(row) {
-  var items = [];
-  try{ items = JSON.parse(row.items_json||'[]'); }catch(e){}
-  return items.map(function(it){
-    var sentQty = (it.sendQty!=null) ? it.sendQty : it.qty;
-    return { sku: it.sku, model: it.model, sentQty: sentQty };
-  });
-}
-
-// ── QC Rejections — a straight Yes/No question, defaulting to No. Send vs
-// Received shortfall is not asked about here anymore: that's an automatic
-// fact from the header numbers (see computeLedgerStatus's Short Received),
-// not something requiring manual explanation. Selecting Yes reveals a
-// per-SKU Qty Rejected list for whatever arrived but failed inspection.
-var _receiptShortageCN = null, _receiptShortageItemsCache = [];
+// "Has QC Rejections?" now lives inline in the Consignment No. popup itself
+// (see renderItemsModalSummary / renderItemsModalBody / ledgerModalSaveEdit)
+// instead of a separate modal. The table's shortage/QC button just jumps
+// straight into that popup's edit mode.
 function ledgerOpenReceiptShortage(cn) {
-  var row = _ledgerRows.find(function(r){ return r.consignment_no===cn; });
-  if(!row) return;
-  _receiptShortageCN = cn;
-  var items = getEffectiveSentItems(row);
-  _receiptShortageItemsCache = items;
-  var existingMap = {};
-  try{ (JSON.parse(row.receipt_shortage_json||'[]')).forEach(function(s){ existingMap[s.sku]=s; }); }catch(e){}
-  var anyRejects = Object.keys(existingMap).some(function(sku){ return (existingMap[sku].rejectQty||0)>0; });
-  document.getElementById('rsh-cn').textContent = cn;
-  document.getElementById('rsh-send').textContent = row.send_qty;
-  document.getElementById('rsh-received').textContent = row.received_qty;
-  document.getElementById('rsh-qc-yesno').value = anyRejects ? 'yes' : 'no';
-  document.getElementById('rsh-body').innerHTML = items.length ? items.map(function(it,i){
-    var existing = existingMap[it.sku];
-    var rejectVal = (existing && existing.rejectQty) ? existing.rejectQty : '';
-    return '<div style="display:flex;align-items:center;gap:.4rem;padding:.4rem 0;border-bottom:1px solid var(--border);font-size:12px">'
-      +'<span style="flex:1">'+esc(it.model||it.sku)+' <span style="color:var(--muted)">(sent qty '+it.sentQty+')</span></span>'
-      +'<input type="number" min="0" max="'+it.sentQty+'" placeholder="0" value="'+rejectVal+'" id="rsh-reject-'+i+'" style="width:80px;text-align:center;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:#ff8080">'
-      +'</div>';
-  }).join('') : '<div style="color:var(--muted);font-size:11px;padding:1rem;text-align:center">No item breakdown available for this consignment.</div>';
-  rshToggleQcSection();
-  document.getElementById('receiptShortageModal').classList.add('show');
-}
-// Shows/hides the per-SKU Qty Rejected list based on the Yes/No select.
-function rshToggleQcSection() {
-  var yn = document.getElementById('rsh-qc-yesno');
-  var sec = document.getElementById('rsh-qc-section');
-  if(sec) sec.style.display = (yn && yn.value==='yes') ? 'block' : 'none';
-}
-function closeReceiptShortageModal(){ document.getElementById('receiptShortageModal').classList.remove('show'); }
-function saveReceiptShortage() {
-  var yn = document.getElementById('rsh-qc-yesno');
-  var hasQc = !!(yn && yn.value==='yes');
-  var items = _receiptShortageItemsCache || [];
-  var out = [];
-  // Always record every item (even at 0) whichever way Yes/No goes — this
-  // stamps the consignment as "reviewed", letting the UI distinguish
-  // "reviewed, no QC issues" from "nobody has checked this yet".
-  items.forEach(function(it,i){
-    var rv = 0;
-    if(hasQc){
-      var rEl = document.getElementById('rsh-reject-'+i);
-      rv = rEl ? (parseInt(rEl.value)||0) : 0;
-    }
-    out.push({ sku:it.sku, model:it.model, rejectQty: rv });
-  });
-  var row = _ledgerRows.find(function(r){ return r.consignment_no===_receiptShortageCN; });
-  if(!row) return;
-  row.receipt_shortage_json = JSON.stringify(out);
-  row.updated_at = new Date().toISOString();
-  try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
-  fetch(getWorkerBase() + '?action=fkLedgerSave', {
-    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
-  }).then(function(r){ return r.json(); }).then(function(data){
-    if(!data || !data.ok) toast('Saved locally, but server save failed \u2014 will retry on next edit', 'err');
-    else toast('QC rejection details saved','ok');
-  }).catch(function(){ toast('Saved locally, but sync failed (offline?)', 'err'); });
-  closeReceiptShortageModal();
-  ledgerRender();
+  ledgerViewItems(cn);
+  ledgerModalEnterEdit();
 }
 
 // Called once a bulk print batch finishes generating its PDF. Consignment No.
