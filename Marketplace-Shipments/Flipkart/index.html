@@ -1288,6 +1288,17 @@ function sendQtyColor(sent, total) {
   return '#6dc87a';
 }
 
+// Shared parser for the dd-mm-yyyy strings appointment_date is stored as.
+// Returns a Date at local midnight, or null if unparseable/empty.
+function parseDdMmYyyy(str) {
+  if(!str) return null;
+  var parts = str.split('-');
+  if(parts.length !== 3) return null;
+  var d = new Date(parseInt(parts[2]), parseInt(parts[1])-1, parseInt(parts[0]));
+  d.setHours(0,0,0,0);
+  return d;
+}
+
 // Status is now fully automatic — no manual entry anywhere. Derived purely
 // from Received Qty, QC reject entries, and Pickup Date, in this priority order:
 //   Received Qty entered → Nothing Received (0) / Short Received (< Send) /
@@ -1306,15 +1317,11 @@ function computeLedgerStatus(row) {
     if(totalQcReject > 0) return { label:'Inwarded — QC Issues', color:'var(--accent)' };
     return { label:'Inwarded', color:'#6dc87a' };
   }
-  if(row.appointment_date){
-    var parts = row.appointment_date.split('-'); // stored as dd-mm-yyyy
-    if(parts.length === 3){
-      var pickup = new Date(parseInt(parts[2]), parseInt(parts[1])-1, parseInt(parts[0]));
-      pickup.setHours(0,0,0,0);
-      var today = new Date(); today.setHours(0,0,0,0);
-      if(pickup < today) return { label:'Intransit', color:'#4a90d9' };
-      return { label:'Ready To Dispatch', color:'#8fd98f' };
-    }
+  var pickup = parseDdMmYyyy(row.appointment_date);
+  if(pickup){
+    var today = new Date(); today.setHours(0,0,0,0);
+    if(pickup < today) return { label:'Intransit', color:'#4a90d9' };
+    return { label:'Ready To Dispatch', color:'#8fd98f' };
   }
   return { label:'Created', color:'var(--muted)' };
 }
@@ -1385,6 +1392,26 @@ function ledgerModalSaveEdit() {
   var apptEl = document.getElementById('li-edit-appt');
   if(apptEl) row.appointment_date = fromDateInputValue(apptEl.value);
   // Status is fully automatic (computeLedgerStatus) — nothing to read here.
+
+  // The status flow is meant to always walk Created → Ready To Dispatch →
+  // Intransit → Inwarded, never skipping a step. computeLedgerStatus derives
+  // Ready To Dispatch/Intransit purely from Pickup Date, so the one way to
+  // actually skip straight to Inwarded is entering Received Qty on a row that
+  // never had a Pickup Date set — block that here instead of letting it save.
+  var recvElCheck = document.getElementById('li-edit-recv');
+  var recvRawCheck = recvElCheck ? recvElCheck.value.trim() : '';
+  if(recvRawCheck !== ''){
+    if(!row.appointment_date){
+      toast('Set Pickup Date first \u2014 a consignment must go Ready To Dispatch / Intransit before it can be Inwarded', 'err');
+      return;
+    }
+    var pickupCheck = parseDdMmYyyy(row.appointment_date);
+    var todayCheck = new Date(); todayCheck.setHours(0,0,0,0);
+    if(pickupCheck && pickupCheck > todayCheck){
+      toast('Pickup Date hasn\'t passed yet \u2014 this consignment is still Ready To Dispatch, not Intransit', 'err');
+      return;
+    }
+  }
 
   // Read per-item Send Qty + Received Qty inputs, write back into items_json,
   // sum each into row.send_qty / row.received_qty.
