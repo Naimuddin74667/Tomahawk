@@ -1208,9 +1208,13 @@ function closeLedgerItemsModal(){ document.getElementById('ledgerItemsModal').cl
 
 // Builds the summary grid. Send Qty is never a direct input here anymore — it's
 // a live, read-only sum of the per-item Send Qty fields down in the Items list
-// (see renderItemsModalBody / recomputeModalSendQtyTotal). Pickup Date, Received
-// Qty, and Status stay editable at the summary level. Consignment No, DC Date,
-// Warehouse, No. of SKU, Total Qty never become inputs — PDF-sourced.
+// (see renderItemsModalBody / recomputeModalSendQtyTotal). Received Qty is the
+// opposite: it's a direct manual entry at the header level (not auto-summed
+// from the item rows below — that per-item breakdown is separate, informational
+// bookkeeping and no longer drives this number). Pickup Date and Received Qty
+// stay editable at the summary level. Consignment No, DC Date, Warehouse,
+// No. of SKU, Total Qty never become inputs — PDF-sourced. Status is always
+// automatic, never an input.
 function renderItemsModalSummary(row) {
   var editing = _itemsModalEditing;
   function field(label, value, id){
@@ -1235,7 +1239,9 @@ function renderItemsModalSummary(row) {
   html += field('No. of SKU', row.no_of_sku);
   html += field('Total Qty', row.total_qty);
   html += field('Send Qty', row.send_qty, 'li-sendqty-value'); // always read-only — driven by per-item sum
-  html += field('Received Qty', row.received_qty, 'li-recvqty-value'); // always read-only — driven by per-item sum
+  html += editing
+    ? editField('Received Qty', '<input type="number" min="0" id="li-edit-recv" placeholder="\u2014" value="'+esc(row.received_qty!=null?row.received_qty:'')+'" style="'+inputStyle+'">')
+    : field('Received Qty', row.received_qty, 'li-recvqty-value'); // manual entry — no longer auto-summed from items
   html += fieldHtml('Status', statusBadge(row)); // fully automatic — never an input, even while editing
   html += '<div></div>';
   document.getElementById('li-summary').innerHTML = html;
@@ -1383,7 +1389,7 @@ function ledgerModalSaveEdit() {
   // Read per-item Send Qty + Received Qty inputs, write back into items_json,
   // sum each into row.send_qty / row.received_qty.
   var items = _itemsModalItemsCache || [];
-  var sendSum = 0, recvSum = 0;
+  var sendSum = 0;
   // Dispatch Shortage (Total → Send) used to be fixed at bulk-print time and
   // never touched again — so if someone later hand-edited Send Qty here, the
   // shortage panel silently went stale. Regenerate it from qty vs sendQty
@@ -1399,7 +1405,6 @@ function ledgerModalSaveEdit() {
     it.sendQty = sv;
     it.receivedQty = rv;
     sendSum += sv;
-    recvSum += rv;
     var shortQty = Math.max(0, (it.qty||0) - sv);
     if(shortQty > 0){
       newDispatchShortage.push({ sku: it.sku, model: it.model, shortQty: shortQty, reason: oldShortageReasons[it.sku]||'' });
@@ -1408,7 +1413,12 @@ function ledgerModalSaveEdit() {
   row.items_json = JSON.stringify(items);
   row.shortage_json = JSON.stringify(newDispatchShortage);
   row.send_qty = sendSum;
-  row.received_qty = recvSum;
+  // Received Qty is now a direct manual entry at the header level (see
+  // renderItemsModalSummary) — not summed from the item rows above, which
+  // stay purely informational bookkeeping. Blank input → not yet received.
+  var recvEl = document.getElementById('li-edit-recv');
+  var recvRaw = recvEl ? recvEl.value.trim() : '';
+  row.received_qty = recvRaw === '' ? null : (parseInt(recvRaw) || 0);
 
   row.updated_at = new Date().toISOString();
   try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
