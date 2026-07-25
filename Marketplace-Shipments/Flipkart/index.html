@@ -672,7 +672,6 @@
       <div class="modal-title" style="margin:8px 0 0;color:rgba(255,255,255,0.92);font-size:12px;font-weight:600;letter-spacing:.04em">&#128203; Consignment No. &mdash; <span id="li-cn" style="color:#FFE11B;font-weight:800"></span></div>
     </div>
     <div id="li-summary" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;margin-bottom:1rem;padding:.7rem;background:var(--surface2);border-radius:7px;border:1px solid var(--border)"></div>
-    <div id="li-dispatch-shortage" style="display:none;margin-bottom:1rem"></div>
     <div id="li-transit-shortage" style="display:none;margin-bottom:1rem"></div>
     <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:.4rem;border-bottom:1px solid var(--border);margin-bottom:.2rem">
       <div style="display:flex;align-items:center;gap:6px">
@@ -698,23 +697,33 @@
 </div>
 <script>document.getElementById('ledgerItemsModal').addEventListener('click',function(e){if(e.target===this)closeLedgerItemsModal();});</script>
 
-<!-- RECEIPT (TRANSIT) SHORTAGE + QC REJECT MODAL — per-SKU: Short Qty (transit),
-     auto Received Qty, and QC Reject (received but rejected on inspection) -->
+<!-- QC REJECTION MODAL — Send vs Received shortfall is fully automatic now
+     (see Status / computeLedgerStatus, driven off the header Send/Received
+     numbers). This modal only handles the one thing that still needs a
+     person to say so: did any of what arrived fail QC, and how many units
+     per SKU. Defaults to "No" so nothing gets flagged unless someone
+     deliberately says otherwise. -->
 <div class="modal-bg" id="receiptShortageModal">
-  <div class="modal" style="width:700px;max-height:80vh;overflow-y:auto">
+  <div class="modal" style="width:520px;max-height:80vh;overflow-y:auto">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem">
-      <div class="modal-title" style="margin-bottom:0">&#9888; Transit Shortage &mdash; <span id="rsh-cn" style="color:var(--accent)"></span></div>
+      <div class="modal-title" style="margin-bottom:0">QC Rejections &mdash; <span id="rsh-cn" style="color:var(--accent)"></span></div>
       <button onclick="closeReceiptShortageModal()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
     </div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:.8rem">Send Qty <b id="rsh-send" style="color:var(--text)"></b> vs Received Qty <b id="rsh-received" style="color:var(--text)"></b> &mdash; specify which SKU(s) came up short in transit and what action was taken. Received Qty updates live as you enter Short Qty. Use QC Reject for units that arrived but failed inspection.</div>
-    <div style="display:flex;gap:.4rem;padding:0 0 .3rem;font-size:9px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase;font-weight:600">
-      <span style="flex:1"></span>
-      <span style="width:72px;text-align:center">Short Qty</span>
-      <span style="width:150px;text-align:center">Action Taken</span>
-      <span style="width:72px;text-align:center">Received Qty</span>
-      <span style="width:72px;text-align:center">QC Reject</span>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:.8rem">Send Qty <b id="rsh-send" style="color:var(--text)"></b> vs Received Qty <b id="rsh-received" style="color:var(--text)"></b> &mdash; any gap between those is already flagged automatically by Status. This is only for units that physically arrived but failed inspection.</div>
+    <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.8rem">
+      <label style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Has QC Rejections?</label>
+      <select id="rsh-qc-yesno" onchange="rshToggleQcSection()" style="font-size:12px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;color:var(--text)">
+        <option value="no">No</option>
+        <option value="yes">Yes</option>
+      </select>
     </div>
-    <div id="rsh-body"></div>
+    <div id="rsh-qc-section" style="display:none">
+      <div style="display:flex;gap:.4rem;padding:0 0 .3rem;font-size:9px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase;font-weight:600">
+        <span style="flex:1">SKU</span>
+        <span style="width:90px;text-align:center">Qty Rejected</span>
+      </div>
+      <div id="rsh-body"></div>
+    </div>
     <div class="btn-row">
       <button class="btn btn-secondary" onclick="closeReceiptShortageModal()">Cancel</button>
       <button class="btn btn-primary" onclick="saveReceiptShortage()">Save</button>
@@ -1019,45 +1028,35 @@ function ledgerRender() {
 
       var receiptShortageEntries = [];
       try{ receiptShortageEntries = JSON.parse(r.receipt_shortage_json||'[]'); }catch(e){}
-      var isReceiptShort = r.send_qty!=null && r.received_qty!=null && r.received_qty < r.send_qty;
 
-      // Send Qty is now edited per-item inside the Consignment No. popup — the
-      // table just shows the resulting total, color-coded: green = fully sent,
-      // orange = partially short, red = nothing sent.
-      var sendCell = '<span style="font-weight:700;color:'+sendQtyColor(r.send_qty, r.total_qty)+'">'+(r.send_qty!=null?r.send_qty:'\u2014')+'</span>';
+      // Send Qty vs Total Qty is a normal, expected gap (partial shipments,
+      // holdbacks, etc.) — not an error, so no red/amber warning coloring here.
+      var sendCell = '<span style="font-weight:700;color:var(--text)">'+(r.send_qty!=null?r.send_qty:'\u2014')+'</span>';
 
-      // Received Qty — still static in the table; the popup (Send \u2192 Received,
-      // plus per-SKU QC Reject) is the way to specify shortfall/reject + action.
-      // saveReceiptShortage() now always records every item on save (even 0/0),
-      // so entries.length>0 reliably means "someone has reviewed this" — that's
-      // tracked separately from whether an actual issue was found, giving four
-      // real states instead of collapsing "clean" and "untouched" together:
-      //   reviewed + issue found   → red, shows the issue counts
-      //   reviewed + nothing wrong → green check
-      //   not reviewed, short      → red, flags the unresolved gap
-      //   not reviewed, full       → neutral grey, just a prompt to check
+      // Received Qty vs Send Qty IS a real issue when it falls short — that's
+      // already surfaced prominently via the Status column ("Short Received").
+      // This button is purely about QC: saveReceiptShortage() always records
+      // every item on save (even at 0 rejected), so entries.length>0 reliably
+      // means "someone has reviewed QC for this" — distinct from whether an
+      // actual rejection was found:
+      //   reviewed + rejection found → red, shows the reject count
+      //   reviewed + nothing wrong   → green check
+      //   not yet reviewed           → neutral grey, prompts a check
       var totalQcReject = receiptShortageEntries.reduce(function(s,e){ return s+(e.rejectQty||0); }, 0);
-      var totalShort = receiptShortageEntries.reduce(function(s,e){ return s+(e.shortQty||0); }, 0);
       var reviewed = receiptShortageEntries.length>0;
       var receivedCell = (r.received_qty!=null?r.received_qty:'\u2014');
       if(r.received_qty!=null){
         var rColor, rBorder, rIcon, rLabel;
-        if(reviewed && (totalQcReject>0 || totalShort>0)){
+        if(reviewed && totalQcReject>0){
           rColor = '#ff8080'; rBorder = '#6b2020';
-          var bits = [];
-          if(totalShort>0) bits.push(totalShort+' short');
-          if(totalQcReject>0) bits.push(totalQcReject+' QC rejected');
-          rIcon = '&#9888; '+bits.join(' / ');
-          rLabel = 'Issues recorded \u2014 click to edit';
+          rIcon = '&#9888; '+totalQcReject+' QC rejected';
+          rLabel = 'QC rejections recorded \u2014 click to edit';
         } else if(reviewed){
           rColor = '#6dc87a'; rBorder = '#3a6b3a'; rIcon = '&#10003;';
-          rLabel = 'Reviewed \u2014 no issues found \u2014 click to edit';
-        } else if(isReceiptShort){
-          rColor = '#ff8080'; rBorder = '#6b2020'; rIcon = '&#9888;';
-          rLabel = 'Received short of Send \u2014 needs review';
+          rLabel = 'Reviewed \u2014 no QC issues \u2014 click to edit';
         } else {
           rColor = 'var(--muted)'; rBorder = 'var(--border)'; rIcon = '&#9675;';
-          rLabel = 'Not yet reviewed \u2014 click to log shortage/QC reject';
+          rLabel = 'Not yet reviewed \u2014 click to log QC rejections';
         }
         receivedCell += ' <button onclick="ledgerOpenReceiptShortage(\''+esc(cn)+'\')" title="'+rLabel+'" style="background:none;border:1px solid '+rBorder+';border-radius:4px;color:'+rColor+';cursor:pointer;font-size:10px;padding:1px 5px;margin-left:3px">'+rIcon+'</button>';
       }
@@ -1163,42 +1162,26 @@ function ledgerViewItems(cn) {
   document.getElementById('li-footer-view').style.display = 'flex';
   document.getElementById('li-footer-edit').style.display = 'none';
 
-  var dispatchShortage = [];
-  try{ dispatchShortage = JSON.parse(row.shortage_json||'[]'); }catch(e){}
-  var dsEl = document.getElementById('li-dispatch-shortage');
-  if(dispatchShortage.length){
-    dsEl.style.display = 'block';
-    dsEl.innerHTML = '<div style="font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;margin-bottom:.4rem">&#9888; Dispatch Shortage (Total \u2192 Send)</div>'
-      + dispatchShortage.map(function(s){
-          return '<div style="display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--border);font-size:11px">'
-            +'<span>'+esc(s.model||s.sku)+(s.reason?' <span style="color:var(--muted)">\u2014 '+esc(s.reason)+'</span>':'')+'</span>'
-            +'<span style="color:#ff8080;font-weight:700">-'+s.shortQty+'</span></div>';
-        }).join('');
-  } else { dsEl.style.display = 'none'; dsEl.innerHTML = ''; }
-
   // receipt_shortage_json now always contains one entry per item once someone
-  // hits Save on the shortage/QC modal (even 0/0 rows) — that's how "reviewed"
-  // gets tracked. So filter down to only the rows that actually flag something
-  // for this panel, but still show a quiet "reviewed, clean" note if the
-  // consignment was checked and nothing was wrong.
+  // hits Save on the QC modal (even at 0 rejected) — that's how "reviewed"
+  // gets tracked. So filter down to only the rows that actually flag a
+  // rejection for this panel, but still show a quiet "reviewed, clean" note
+  // if QC was checked and nothing was wrong.
   var receiptShortageAll = [];
   try{ receiptShortageAll = JSON.parse(row.receipt_shortage_json||'[]'); }catch(e){}
-  var receiptShortage = receiptShortageAll.filter(function(s){ return (s.shortQty>0)||(s.rejectQty>0)||(s.action&&s.action.trim()); });
+  var receiptShortage = receiptShortageAll.filter(function(s){ return (s.rejectQty>0); });
   var rsEl = document.getElementById('li-transit-shortage');
   if(receiptShortage.length){
     rsEl.style.display = 'block';
-    rsEl.innerHTML = '<div style="font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;margin-bottom:.4rem">&#9888; Transit Shortage / QC Reject (Send \u2192 Received \u2192 QC)</div>'
+    rsEl.innerHTML = '<div style="font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;margin-bottom:.4rem">&#9888; QC Rejections</div>'
       + receiptShortage.map(function(s){
-          var bits = [];
-          if(s.shortQty) bits.push('<span style="color:#ff8080;font-weight:700">-'+s.shortQty+' transit</span>');
-          if(s.rejectQty) bits.push('<span style="color:#ff8080;font-weight:700">-'+s.rejectQty+' QC reject</span>');
           return '<div style="display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--border);font-size:11px">'
-            +'<span>'+esc(s.model||s.sku)+(s.action?' <span style="color:var(--muted)">\u2014 '+esc(s.action)+'</span>':'')+'</span>'
-            +'<span>'+bits.join(' &middot; ')+'</span></div>';
+            +'<span>'+esc(s.model||s.sku)+'</span>'
+            +'<span style="color:#ff8080;font-weight:700">-'+s.rejectQty+' QC reject</span></div>';
         }).join('');
   } else if(receiptShortageAll.length){
     rsEl.style.display = 'block';
-    rsEl.innerHTML = '<div style="font-size:11px;color:#6dc87a;font-weight:600">&#10003; Transit / QC reviewed \u2014 no issues found</div>';
+    rsEl.innerHTML = '<div style="font-size:11px;color:#6dc87a;font-weight:600">&#10003; QC reviewed \u2014 no rejections</div>';
   } else { rsEl.style.display = 'none'; rsEl.innerHTML = ''; }
 
   document.getElementById('ledgerItemsModal').classList.add('show');
@@ -1259,22 +1242,13 @@ function renderItemsModalBody(row) {
     var sendVal = (it.sendQty!=null ? it.sendQty : it.qty);
     var sendCell = editing
       ? '<input type="number" min="0" id="li-item-send-'+i+'" value="'+sendVal+'" oninput="recomputeModalSendQtyTotal()" style="width:56px;text-align:center;font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
-      : '<span style="font-weight:700;color:'+sendQtyColor(sendVal, it.qty)+'">'+sendVal+'</span>';
+      : '<span style="font-weight:700;color:var(--text)">'+sendVal+'</span>';
     return '<div style="display:flex;justify-content:space-between;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:12px">'
       +'<span style="flex:1">'+esc(it.model||it.sku)+' <span style="color:var(--muted);font-size:10px">('+esc(it.sku)+')</span></span>'
       +'<span style="min-width:70px;text-align:center;color:var(--text);font-weight:600">'+it.qty+'</span>'
       +'<span style="min-width:64px;text-align:center">'+sendCell+'</span>'
       +'</div>';
   }).join('') : '<div style="color:var(--muted);font-size:11px;padding:1rem;text-align:center">No item breakdown stored for this consignment.</div>';
-}
-
-// Shared color rule for any "sent vs total" comparison: green = fully sent,
-// orange = partially short, red = nothing sent at all.
-function sendQtyColor(sent, total) {
-  if(total==null || sent==null) return 'var(--text)';
-  if(sent <= 0) return '#ff8080';
-  if(sent < total) return 'var(--accent)';
-  return '#6dc87a';
 }
 
 // Shared parser for the dd-mm-yyyy strings appointment_date is stored as.
@@ -1377,29 +1351,18 @@ function ledgerModalSaveEdit() {
     }
   }
 
-  // Read per-item Send Qty + Received Qty inputs, write back into items_json,
-  // sum each into row.send_qty / row.received_qty.
+  // Read per-item Send Qty inputs, write back into items_json, sum into
+  // row.send_qty. Send Qty falling short of Total Qty is expected/normal
+  // (partial shipments, holdbacks) — not tracked as an issue anymore.
   var items = _itemsModalItemsCache || [];
   var sendSum = 0;
-  // Dispatch Shortage (Total → Send) used to be fixed at bulk-print time and
-  // never touched again — so if someone later hand-edited Send Qty here, the
-  // shortage panel silently went stale. Regenerate it from qty vs sendQty
-  // every save instead, carrying forward any reason already recorded per SKU.
-  var oldShortageReasons = {};
-  try{ (JSON.parse(row.shortage_json||'[]')).forEach(function(s){ oldShortageReasons[s.sku] = s.reason||''; }); }catch(e){}
-  var newDispatchShortage = [];
   items.forEach(function(it,i){
     var sendEl = document.getElementById('li-item-send-'+i);
     var sv = sendEl ? (parseInt(sendEl.value)||0) : (it.sendQty!=null?it.sendQty:it.qty);
     it.sendQty = sv;
     sendSum += sv;
-    var shortQty = Math.max(0, (it.qty||0) - sv);
-    if(shortQty > 0){
-      newDispatchShortage.push({ sku: it.sku, model: it.model, shortQty: shortQty, reason: oldShortageReasons[it.sku]||'' });
-    }
   });
   row.items_json = JSON.stringify(items);
-  row.shortage_json = JSON.stringify(newDispatchShortage);
   row.send_qty = sendSum;
   // Received Qty is now a direct manual entry at the header level (see
   // renderItemsModalSummary) — not summed from the item rows above, which
@@ -1421,25 +1384,22 @@ function ledgerModalSaveEdit() {
   }).catch(function(){ toast('Ledger sync error (offline?)', 'err'); });
 }
 
-// Actual qty sent per SKU — now read directly from each item's own sendQty
-// (edited per-item in the Consignment No. popup). Falls back to the old
-// shortage_json-based calc for any legacy rows saved before that change.
+// Actual qty sent per SKU — read directly from each item's own sendQty
+// (edited per-item in the Consignment No. popup).
 function getEffectiveSentItems(row) {
   var items = [];
   try{ items = JSON.parse(row.items_json||'[]'); }catch(e){}
-  var legacyShortages = {};
-  try{ (JSON.parse(row.shortage_json||'[]')).forEach(function(s){ legacyShortages[s.sku] = s.shortQty||0; }); }catch(e){}
   return items.map(function(it){
-    var sentQty = (it.sendQty!=null) ? it.sendQty : Math.max(0, it.qty - (legacyShortages[it.sku]||0));
+    var sentQty = (it.sendQty!=null) ? it.sendQty : it.qty;
     return { sku: it.sku, model: it.model, sentQty: sentQty };
   });
 }
 
-// ── Transit shortage + QC reject (Send Qty → Received Qty → QC pass/fail) —
-// one modal, per SKU. Short Qty = lost in transit. Received Qty is derived
-// live (sentQty - shortQty) and shown read-only. QC Reject = of what arrived,
-// how many failed inspection at the warehouse (independent of transit loss —
-// covers the "100 sent, 100 received, but 95 inward + 5 rejected" case).
+// ── QC Rejections — a straight Yes/No question, defaulting to No. Send vs
+// Received shortfall is not asked about here anymore: that's an automatic
+// fact from the header numbers (see computeLedgerStatus's Short Received),
+// not something requiring manual explanation. Selecting Yes reveals a
+// per-SKU Qty Rejected list for whatever arrived but failed inspection.
 var _receiptShortageCN = null, _receiptShortageItemsCache = [];
 function ledgerOpenReceiptShortage(cn) {
   var row = _ledgerRows.find(function(r){ return r.consignment_no===cn; });
@@ -1449,60 +1409,47 @@ function ledgerOpenReceiptShortage(cn) {
   _receiptShortageItemsCache = items;
   var existingMap = {};
   try{ (JSON.parse(row.receipt_shortage_json||'[]')).forEach(function(s){ existingMap[s.sku]=s; }); }catch(e){}
+  var anyRejects = Object.keys(existingMap).some(function(sku){ return (existingMap[sku].rejectQty||0)>0; });
   document.getElementById('rsh-cn').textContent = cn;
   document.getElementById('rsh-send').textContent = row.send_qty;
   document.getElementById('rsh-received').textContent = row.received_qty;
+  document.getElementById('rsh-qc-yesno').value = anyRejects ? 'yes' : 'no';
   document.getElementById('rsh-body').innerHTML = items.length ? items.map(function(it,i){
     var existing = existingMap[it.sku];
-    var shortVal = existing ? existing.shortQty : '';
-    var recvQty = Math.max(0, it.sentQty - (parseInt(shortVal)||0));
-    var rejectVal = existing ? existing.rejectQty : '';
+    var rejectVal = (existing && existing.rejectQty) ? existing.rejectQty : '';
     return '<div style="display:flex;align-items:center;gap:.4rem;padding:.4rem 0;border-bottom:1px solid var(--border);font-size:12px">'
       +'<span style="flex:1">'+esc(it.model||it.sku)+' <span style="color:var(--muted)">(sent qty '+it.sentQty+')</span></span>'
-      +'<input type="number" min="0" max="'+it.sentQty+'" placeholder="0" value="'+shortVal+'" id="rsh-qty-'+i+'" oninput="rshRecomputeRecv('+i+','+it.sentQty+')" style="width:72px;text-align:center;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
-      +'<input type="text" placeholder="action taken" value="'+(existing?esc(existing.action):'')+'" id="rsh-action-'+i+'" style="width:150px;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)">'
-      +'<span id="rsh-recv-'+i+'" style="width:72px;text-align:center;font-size:12px;font-weight:700;color:var(--text)">'+recvQty+'</span>'
-      +'<input type="number" min="0" max="'+recvQty+'" placeholder="0" value="'+rejectVal+'" id="rsh-reject-'+i+'" style="width:72px;text-align:center;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:#ff8080">'
+      +'<input type="number" min="0" max="'+it.sentQty+'" placeholder="0" value="'+rejectVal+'" id="rsh-reject-'+i+'" style="width:80px;text-align:center;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:#ff8080">'
       +'</div>';
   }).join('') : '<div style="color:var(--muted);font-size:11px;padding:1rem;text-align:center">No item breakdown available for this consignment.</div>';
+  rshToggleQcSection();
   document.getElementById('receiptShortageModal').classList.add('show');
 }
-// Live-updates the read-only Received Qty span as Short Qty is typed, and
-// clamps the QC Reject input's max to match so it can never exceed it.
-function rshRecomputeRecv(i, sentQty) {
-  var shortEl = document.getElementById('rsh-qty-'+i);
-  var recvEl = document.getElementById('rsh-recv-'+i);
-  var rejectEl = document.getElementById('rsh-reject-'+i);
-  var recvQty = Math.max(0, sentQty - (parseInt(shortEl.value)||0));
-  if(recvEl) recvEl.textContent = recvQty;
-  if(rejectEl){
-    rejectEl.max = recvQty;
-    if((parseInt(rejectEl.value)||0) > recvQty) rejectEl.value = recvQty;
-  }
+// Shows/hides the per-SKU Qty Rejected list based on the Yes/No select.
+function rshToggleQcSection() {
+  var yn = document.getElementById('rsh-qc-yesno');
+  var sec = document.getElementById('rsh-qc-section');
+  if(sec) sec.style.display = (yn && yn.value==='yes') ? 'block' : 'none';
 }
 function closeReceiptShortageModal(){ document.getElementById('receiptShortageModal').classList.remove('show'); }
 function saveReceiptShortage() {
+  var yn = document.getElementById('rsh-qc-yesno');
+  var hasQc = !!(yn && yn.value==='yes');
   var items = _receiptShortageItemsCache || [];
-  var out = [], sumShort = 0;
+  var out = [];
+  // Always record every item (even at 0) whichever way Yes/No goes — this
+  // stamps the consignment as "reviewed", letting the UI distinguish
+  // "reviewed, no QC issues" from "nobody has checked this yet".
   items.forEach(function(it,i){
-    var qEl = document.getElementById('rsh-qty-'+i);
-    var aEl = document.getElementById('rsh-action-'+i);
-    var rEl = document.getElementById('rsh-reject-'+i);
-    var qv = qEl ? (parseInt(qEl.value)||0) : 0;
-    var rv = rEl ? (parseInt(rEl.value)||0) : 0;
-    var recvQty = Math.max(0, it.sentQty - qv);
-    sumShort += qv;
-    // Always record every item, even 0/0 — this stamps the consignment as
-    // "reviewed", letting the UI distinguish "reviewed, no issues found"
-    // from "nobody has checked this yet" instead of treating both as blank.
-    out.push({ sku:it.sku, model:it.model, sentQty:it.sentQty, shortQty:qv, receivedQty:recvQty, rejectQty:rv, action:aEl?aEl.value.trim():'' });
+    var rv = 0;
+    if(hasQc){
+      var rEl = document.getElementById('rsh-reject-'+i);
+      rv = rEl ? (parseInt(rEl.value)||0) : 0;
+    }
+    out.push({ sku:it.sku, model:it.model, rejectQty: rv });
   });
   var row = _ledgerRows.find(function(r){ return r.consignment_no===_receiptShortageCN; });
   if(!row) return;
-  var expectedDiff = (row.send_qty||0) - (row.received_qty||0);
-  if(expectedDiff>0 && sumShort!==expectedDiff){
-    if(!confirm('Short Qty entries total '+sumShort+', but Send Qty \u2212 Received Qty = '+expectedDiff+'. Save anyway?')) return;
-  }
   row.receipt_shortage_json = JSON.stringify(out);
   row.updated_at = new Date().toISOString();
   try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
@@ -1510,7 +1457,7 @@ function saveReceiptShortage() {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
   }).then(function(r){ return r.json(); }).then(function(data){
     if(!data || !data.ok) toast('Saved locally, but server save failed \u2014 will retry on next edit', 'err');
-    else toast('Transit shortage / QC reject details saved','ok');
+    else toast('QC rejection details saved','ok');
   }).catch(function(){ toast('Saved locally, but sync failed (offline?)', 'err'); });
   closeReceiptShortageModal();
   ledgerRender();
