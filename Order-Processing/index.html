@@ -195,6 +195,36 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
   .section-divider-label { font-size: 10px !important; }
   #upload-screen { display: none !important; }
   #picklist-screen { display: block !important; }
+
+  /* ── Combo tables only: stack price breakdown lines, and rebalance ──
+     column widths since Combo/UC SKU/Channel SKU need the most reading
+     room here — inline breakdowns + cramped combo boxes were the mess. */
+  .section-divider.combo-2 + .tbl-wrap table,
+  .section-divider.combo-3 + .tbl-wrap table {
+    table-layout: fixed;
+  }
+  .section-divider.combo-2 + .tbl-wrap table th:nth-child(1),
+  .section-divider.combo-3 + .tbl-wrap table th:nth-child(1) { width: 3% !important; }
+  .section-divider.combo-2 + .tbl-wrap table th:nth-child(2),
+  .section-divider.combo-3 + .tbl-wrap table th:nth-child(2) { width: 20% !important; }
+  .section-divider.combo-2 + .tbl-wrap table th:nth-child(3),
+  .section-divider.combo-3 + .tbl-wrap table th:nth-child(3) { width: 15% !important; }
+  .section-divider.combo-2 + .tbl-wrap table th:nth-child(4),
+  .section-divider.combo-3 + .tbl-wrap table th:nth-child(4) { width: 28% !important; }
+  .section-divider.combo-2 + .tbl-wrap table th:nth-child(5),
+  .section-divider.combo-3 + .tbl-wrap table th:nth-child(5) { width: 8% !important; }
+  .section-divider.combo-2 + .tbl-wrap table th:nth-child(6),
+  .section-divider.combo-3 + .tbl-wrap table th:nth-child(6) { width: 6% !important; }
+  .section-divider.combo-2 + .tbl-wrap table th:nth-child(7),
+  .section-divider.combo-3 + .tbl-wrap table th:nth-child(7) { width: 16% !important; }
+  .section-divider.combo-2 + .tbl-wrap table th:nth-child(8),
+  .section-divider.combo-3 + .tbl-wrap table th:nth-child(8) { width: 4% !important; }
+  .section-divider.combo-2 + .tbl-wrap table td,
+  .section-divider.combo-3 + .tbl-wrap table td { word-break: break-word; }
+  .section-divider.combo-2 + .tbl-wrap table .price-line,
+  .section-divider.combo-3 + .tbl-wrap table .price-line { display: block; margin-bottom: 2px; }
+  .section-divider.combo-2 + .tbl-wrap table .price-sep,
+  .section-divider.combo-3 + .tbl-wrap table .price-sep { display: none; }
 }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -761,11 +791,13 @@ function lookupPrice(sellerSku, fsn) {
 function formatPriceBreakdown(countsObj) {
   if (!countsObj || !Object.keys(countsObj).length) return '<span class="price-unlinked">—</span>';
   const entries = Object.entries(countsObj).sort((a, b) => b[1] - a[1]);
-  const parts = entries.map(([key, qty]) => {
+  const parts = entries.map(([key, qty], i) => {
     const label = key === '__unlinked__' ? '<span class="price-unlinked">Unlinked</span>' : `\u20b9${Number(key).toLocaleString('en-IN')}`;
-    return entries.length > 1 ? `${label} (${qty})` : label;
+    const text = entries.length > 1 ? `${label} (${qty})` : label;
+    const sep = (entries.length > 1 && i < entries.length - 1) ? '<span class="price-sep"> / </span>' : '';
+    return `<span class="price-line">${text}</span>${sep}`;
   });
-  return parts.join(' / ');
+  return parts.join('');
 }
 
 function skusDiffer(ucSku, chSku) {
