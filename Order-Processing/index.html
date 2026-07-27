@@ -843,7 +843,7 @@ function processRows(rows) {
         uniqueSkus, selMap, imgUrl, comboSize,
         qtyPerSku: Object.fromEntries(uniqueSkus.map(s=>[s,0])),
         skuCounts: Object.fromEntries(uniqueSkus.map(s=>[s,1])),
-        priceCountsBySku: Object.fromEntries(uniqueSkus.map(s=>[s,{}])),
+        priceCounts: {},
         qty: 0,
         orderCount: 0
       };
@@ -862,22 +862,21 @@ function processRows(rows) {
     sections[comboSize][key].orderCount += 1;
     if (!sections[comboSize][key].imgUrl && imgUrl) sections[comboSize][key].imgUrl = imgUrl;
 
-    // Tally this order's actual selling price per UC SKU. Matched by the
-    // order's own Channel/Seller SKU against the live PRICE_MAP first,
-    // falling back to FSN (extracted from Channel Product Images) if the
-    // Seller SKU string doesn't hit a listing — so orders placed under two
-    // different Flipkart listings (different price) for the same UC SKU
-    // show up as separate price buckets, not merged wrong, and renamed/
+    // Tally this order's actual selling price ONCE per order/set — not
+    // per component. A combo is sold under a single bundle listing (one
+    // Seller SKU covers all components together), so price is a whole-
+    // combo attribute, same as Image/Qty, not something that varies per
+    // component. Matched against the live PRICE_MAP first, falling back
+    // to FSN (extracted from Channel Product Images) if the Seller SKU
+    // string doesn't hit a listing — so orders under two different
+    // Flipkart listings (different price) for the same UC SKU/combo show
+    // up as separate price buckets, not merged wrong, and renamed/
     // relisted SKUs still resolve via their stable FSN where possible.
-    const priceBucket = sections[comboSize][key].priceCountsBySku;
-    uniqueSkus.forEach(s => {
-      const idx = skuList.indexOf(s);
-      const sellerSku = selList[idx] || selList[0] || '';
-      const priceInfo = lookupPrice(sellerSku, orderFsn);
-      const priceKey = priceInfo ? String(priceInfo.price) : '__unlinked__';
-      if (!priceBucket[s]) priceBucket[s] = {};
-      priceBucket[s][priceKey] = (priceBucket[s][priceKey] || 0) + sets;
-    });
+    const sellerSku = selList[0] || '';
+    const priceInfo = lookupPrice(sellerSku, orderFsn);
+    const priceKey = priceInfo ? String(priceInfo.price) : '__unlinked__';
+    const priceCounts = sections[comboSize][key].priceCounts;
+    priceCounts[priceKey] = (priceCounts[priceKey] || 0) + sets;
   });
 
   return sections;
@@ -945,7 +944,7 @@ function renderSection(groups, comboSize, rowNumStart) {
           ${isCombo && isFirst ? `<td rowspan="${rowspan}" style="width:200px">${comboHtml}</td>` : isCombo && !isFirst ? '' : ''}
           ${isFirst ? `<td rowspan="${rowspan}" class="img-cell">${imgUrl ? `<img src="${imgUrl}" alt="">` : ''}</td>` : ''}
           ${isFirst ? `<td rowspan="${rowspan}" class="qty">${group.qty||group.qtyPerSku[sku]}</td>` : ''}
-          <td class="price-cell">${formatPriceBreakdown(group.priceCountsBySku[sku])}</td>
+          ${isFirst ? `<td rowspan="${rowspan}" class="price-cell">${formatPriceBreakdown(group.priceCounts)}</td>` : ''}
           ${isFirst ? `<td rowspan="${rowspan}" class="check-col"><input type="checkbox"></td>` : ''}
         </tr>`;
       });
@@ -958,7 +957,7 @@ function renderSection(groups, comboSize, rowNumStart) {
         <td style="width:200px"></td>
         <td class="img-cell">${imgUrl ? `<img src="${imgUrl}" alt="">` : ''}</td>
         <td class="qty">${group.qty||group.qtyPerSku[sku]}</td>
-        <td class="price-cell">${formatPriceBreakdown(group.priceCountsBySku[sku])}</td>
+        <td class="price-cell">${formatPriceBreakdown(group.priceCounts)}</td>
         <td class="check-col"><input type="checkbox"></td>
       </tr>`;
     }
