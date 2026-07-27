@@ -719,6 +719,7 @@ const IMAGE_MAP = {
 // ── Live Flipkart selling price (fetched from GAS bridge, type=pricing) ──
 const PRICING_URL = 'https://script.google.com/macros/s/AKfycbzWR3EMfSLBJ92wLJG8PSaA0xqIWVAlNibQHxVIQQOTZr7vQZbV_yuBXax9AAvOM3V35w/exec?type=pricing';
 let PRICE_MAP = {}; // { "<Seller SKU Id>": { price, mrp, status } }
+let PRICE_BY_FSN = {}; // { "<Flipkart Serial Number>": { price, mrp, status } } — fallback match
 let priceMapPromise = null;
 
 // Fetches once per session and caches the in-flight promise so repeated
@@ -728,10 +729,33 @@ function ensurePriceMap() {
   if (!priceMapPromise) {
     priceMapPromise = fetch(PRICING_URL)
       .then(r => r.json())
-      .then(data => { PRICE_MAP = (data && data.ok && data.prices) ? data.prices : {}; })
-      .catch(err => { console.error('Price fetch failed:', err); PRICE_MAP = {}; });
+      .then(data => {
+        PRICE_MAP = (data && data.ok && data.prices) ? data.prices : {};
+        PRICE_BY_FSN = (data && data.ok && data.pricesByFsn) ? data.pricesByFsn : {};
+      })
+      .catch(err => { console.error('Price fetch failed:', err); PRICE_MAP = {}; PRICE_BY_FSN = {}; });
   }
   return priceMapPromise;
+}
+
+// Flipkart's "Channel Product Images" field is actually "<Listing ID>~<image URL>".
+// The Listing ID is always "LST" + 16-char FSN + a short suffix — so we can pull
+// the FSN straight out of it without any extra lookup. Used as a fallback price
+// match when the Seller SKU string doesn't hit (renamed/relisted SKUs etc),
+// since FSN is Flipkart's permanent product id and survives those renames.
+function extractFsnFromListingId(imgRaw) {
+  if (!imgRaw || !imgRaw.includes('~')) return '';
+  const listingId = imgRaw.split('~')[0].trim();
+  if (!listingId.startsWith('LST')) return '';
+  return listingId.slice(3, 19);
+}
+
+function lookupPrice(sellerSku, fsn) {
+  let info = PRICE_MAP[sellerSku];
+  if (info && info.price != null) return info;
+  info = PRICE_BY_FSN[fsn];
+  if (info && info.price != null) return info;
+  return null;
 }
 
 function formatPriceBreakdown(countsObj) {
@@ -807,6 +831,7 @@ function processRows(rows) {
 
     const imgRawUrl = imgRaw.includes('~') ? imgRaw.split('~')[1].trim() : '';
     const imgUrl = (imgRawUrl && imgRawUrl !== 'NULL') ? imgRawUrl : (IMAGE_MAP[uniqueSkus[0]]||'');
+    const orderFsn = extractFsnFromListingId(imgRaw);
 
     const key = uniqueSkus.slice().sort().join('|');
 
@@ -838,16 +863,18 @@ function processRows(rows) {
     if (!sections[comboSize][key].imgUrl && imgUrl) sections[comboSize][key].imgUrl = imgUrl;
 
     // Tally this order's actual selling price per UC SKU. Matched by the
-    // order's own Channel/Seller SKU against the live PRICE_MAP — never
-    // assumed from a single "representative" mapping — so orders placed
-    // under two different Flipkart listings (different price) for the
-    // same UC SKU show up as separate price buckets, not merged wrong.
+    // order's own Channel/Seller SKU against the live PRICE_MAP first,
+    // falling back to FSN (extracted from Channel Product Images) if the
+    // Seller SKU string doesn't hit a listing — so orders placed under two
+    // different Flipkart listings (different price) for the same UC SKU
+    // show up as separate price buckets, not merged wrong, and renamed/
+    // relisted SKUs still resolve via their stable FSN where possible.
     const priceBucket = sections[comboSize][key].priceCountsBySku;
     uniqueSkus.forEach(s => {
       const idx = skuList.indexOf(s);
       const sellerSku = selList[idx] || selList[0] || '';
-      const priceInfo = PRICE_MAP[sellerSku];
-      const priceKey = (priceInfo && priceInfo.price != null) ? String(priceInfo.price) : '__unlinked__';
+      const priceInfo = lookupPrice(sellerSku, orderFsn);
+      const priceKey = priceInfo ? String(priceInfo.price) : '__unlinked__';
       if (!priceBucket[s]) priceBucket[s] = {};
       priceBucket[s][priceKey] = (priceBucket[s][priceKey] || 0) + sets;
     });
