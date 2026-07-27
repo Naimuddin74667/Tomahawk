@@ -139,6 +139,8 @@ tr.combo-row td { background: #fffbeb !important; }
 .sku { font-family: var(--font-body); font-size: 13px; font-weight: 700; color: #111118; }
 .sku-sell { font-family: var(--font-body); font-size: 12px; color: #555566; }
 .qty { font-size: 16px; font-weight: 700; text-align: center; color: #111118; }
+.price-cell { font-size: 12px; color: #111118; white-space: nowrap; }
+.price-unlinked { color: #c0392b; font-style: italic; }
 .check-col { width: 32px; text-align: center; }
 input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor: pointer; }
 .img-cell { width: 60px; text-align: center; padding: 3px 5px !important; }
@@ -714,6 +716,34 @@ const IMAGE_MAP = {
 };
 
 // Check if two SKUs are totally different
+// ── Live Flipkart selling price (fetched from GAS bridge, type=pricing) ──
+const PRICING_URL = 'https://script.google.com/macros/s/AKfycbzWR3EMfSLBJ92wLJG8PSaA0xqIWVAlNibQHxVIQQOTZr7vQZbV_yuBXax9AAvOM3V35w/exec?type=pricing';
+let PRICE_MAP = {}; // { "<Seller SKU Id>": { price, mrp, status } }
+let priceMapPromise = null;
+
+// Fetches once per session and caches the in-flight promise so repeated
+// CSV uploads don't re-fetch. Fails soft — picklist still renders, just
+// shows "Unlinked" prices, if the bridge is unreachable.
+function ensurePriceMap() {
+  if (!priceMapPromise) {
+    priceMapPromise = fetch(PRICING_URL)
+      .then(r => r.json())
+      .then(data => { PRICE_MAP = (data && data.ok && data.prices) ? data.prices : {}; })
+      .catch(err => { console.error('Price fetch failed:', err); PRICE_MAP = {}; });
+  }
+  return priceMapPromise;
+}
+
+function formatPriceBreakdown(countsObj) {
+  if (!countsObj || !Object.keys(countsObj).length) return '<span class="price-unlinked">—</span>';
+  const entries = Object.entries(countsObj).sort((a, b) => b[1] - a[1]);
+  const parts = entries.map(([key, qty]) => {
+    const label = key === '__unlinked__' ? '<span class="price-unlinked">Unlinked</span>' : `\u20b9${Number(key).toLocaleString('en-IN')}`;
+    return entries.length > 1 ? `${label} (${qty})` : label;
+  });
+  return parts.join(' / ');
+}
+
 function skusDiffer(ucSku, chSku) {
   if (!ucSku || !chSku) return false;
   const clean = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -788,6 +818,7 @@ function processRows(rows) {
         uniqueSkus, selMap, imgUrl, comboSize,
         qtyPerSku: Object.fromEntries(uniqueSkus.map(s=>[s,0])),
         skuCounts: Object.fromEntries(uniqueSkus.map(s=>[s,1])),
+        priceCountsBySku: Object.fromEntries(uniqueSkus.map(s=>[s,{}])),
         qty: 0,
         orderCount: 0
       };
@@ -805,6 +836,21 @@ function processRows(rows) {
     sections[comboSize][key].qty = (sections[comboSize][key].qty||0) + sets;
     sections[comboSize][key].orderCount += 1;
     if (!sections[comboSize][key].imgUrl && imgUrl) sections[comboSize][key].imgUrl = imgUrl;
+
+    // Tally this order's actual selling price per UC SKU. Matched by the
+    // order's own Channel/Seller SKU against the live PRICE_MAP — never
+    // assumed from a single "representative" mapping — so orders placed
+    // under two different Flipkart listings (different price) for the
+    // same UC SKU show up as separate price buckets, not merged wrong.
+    const priceBucket = sections[comboSize][key].priceCountsBySku;
+    uniqueSkus.forEach(s => {
+      const idx = skuList.indexOf(s);
+      const sellerSku = selList[idx] || selList[0] || '';
+      const priceInfo = PRICE_MAP[sellerSku];
+      const priceKey = (priceInfo && priceInfo.price != null) ? String(priceInfo.price) : '__unlinked__';
+      if (!priceBucket[s]) priceBucket[s] = {};
+      priceBucket[s][priceKey] = (priceBucket[s][priceKey] || 0) + sets;
+    });
   });
 
   return sections;
@@ -831,6 +877,7 @@ function renderSection(groups, comboSize, rowNumStart) {
         ${isCombo ? '<th>Combo</th>' : ''}
         <th style="width:60px;text-align:center">Image</th>
         <th style="width:42px;text-align:center">Qty</th>
+        <th style="width:110px">Selling Price</th>
         <th class="check-col">&#10003;</th>
       </tr></thead>
       <tbody>`;
@@ -871,6 +918,7 @@ function renderSection(groups, comboSize, rowNumStart) {
           ${isCombo && isFirst ? `<td rowspan="${rowspan}">${comboHtml}</td>` : isCombo && !isFirst ? '' : ''}
           ${isFirst ? `<td rowspan="${rowspan}" class="img-cell">${imgUrl ? `<img src="${imgUrl}" alt="">` : ''}</td>` : ''}
           ${isFirst ? `<td rowspan="${rowspan}" class="qty">${group.qty||group.qtyPerSku[sku]}</td>` : ''}
+          <td class="price-cell">${formatPriceBreakdown(group.priceCountsBySku[sku])}</td>
           ${isFirst ? `<td rowspan="${rowspan}" class="check-col"><input type="checkbox"></td>` : ''}
         </tr>`;
       });
@@ -883,6 +931,7 @@ function renderSection(groups, comboSize, rowNumStart) {
         ${isCombo ? `<td>${comboHtml}</td>` : ''}
         <td class="img-cell">${imgUrl ? `<img src="${imgUrl}" alt="">` : ''}</td>
         <td class="qty">${group.qty||group.qtyPerSku[sku]}</td>
+        <td class="price-cell">${formatPriceBreakdown(group.priceCountsBySku[sku])}</td>
         <td class="check-col"><input type="checkbox"></td>
       </tr>`;
     }
@@ -944,11 +993,12 @@ document.getElementById('file-input-add').addEventListener('change', e => { if (
 
 function load(file) {
   const r = new FileReader();
-  r.onload = e => {
+  r.onload = async e => {
     try {
       const rows = parseCSV(e.target.result);
       if (!rows.length) { alert('No data found.'); return; }
       allRows = rows;
+      await ensurePriceMap();
       render(allRows);
     } catch(err) { alert('Error: ' + err.message); console.error(err); }
   };
@@ -960,7 +1010,7 @@ function load(file) {
 // (guards against accidentally uploading the same export twice).
 function loadMore(file) {
   const r = new FileReader();
-  r.onload = e => {
+  r.onload = async e => {
     try {
       const newRows = parseCSV(e.target.result);
       if (!newRows.length) { alert('No data found in that CSV.'); return; }
@@ -975,6 +1025,7 @@ function loadMore(file) {
       const dupeCount = newRows.length - uniqueNew.length;
 
       allRows = allRows.concat(uniqueNew);
+      await ensurePriceMap();
       render(allRows);
 
       let msg = `\u2714 Added ${uniqueNew.length} orders (${allRows.length} total)`;
