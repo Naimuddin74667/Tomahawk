@@ -1489,99 +1489,121 @@ const UC_IMAGE_MAP = {
   "TLV-2012-Vacuum-Li-CL-1": "https://m.media-amazon.com/images/I/41-m-ZRBa7L.jpg",
   "TCV-126-Car-Vacuum-CL": "https://m.media-amazon.com/images/I/412vqtOVXLL.jpg"
 };
-// ── STATE ──────────────────────────────────────────────────────────────
-let skuMap       = JSON.parse(localStorage.getItem('gp_sku_map_v1')    || '[]');
-// B&W images stored separately (base64 is too large for skuMap)
-// key: ucSku → { bwImageUrl, bwSourceUrl }
-let bwStore      = JSON.parse(localStorage.getItem('gp_bw_store_v1')   || '{}');
-function saveBwStore() { try { localStorage.setItem('gp_bw_store_v1', JSON.stringify(bwStore)); } catch(e) { console.warn('bwStore save failed:', e); } }
+// ── STATE (D1-only — sku_master is the single source of truth for all of
+// this; no localStorage caching anywhere below. See loadSkuMasterFromD1().) ──
+let skuMap       = [];   // [{ucSku, internalSku, pcsPerCarton, imageUrl, category, source}]
+// B&W images — key: ucSku → { bwImageUrl, bwSourceUrl }
+let bwStore      = {};
+function saveBwStore() { /* no-op — bwStore is D1-only now, synced per-entry via saveBwImageToD1()/clearBwImageInD1() */ }
 
 // ── BW IMAGE D1 SYNC ───────────────────────────────────────────────────
-// Saves a single B&W image entry to D1. Called after every successful Gemini generation
-// or manual upload. Runs silently — localStorage is the source of truth for this session.
+// Saves a single B&W image entry to sku_master. Called after every successful
+// Gemini generation or manual upload. Pure online-only — shows a visible
+// error and leaves the in-memory bwStore entry unconfirmed if it fails.
 async function saveBwImageToD1(ucSku) {
   if (!IS_LIVE) return;
   const entry = bwStore[ucSku];
   if (!entry || !entry.bwImageUrl) return;
   try {
-    await apiPost('saveBwImage', { ucSku, bwImageUrl: entry.bwImageUrl, bwSourceUrl: entry.bwSourceUrl || '' });
-  } catch(e) { console.warn('D1 bwImage save failed for', ucSku, e); }
+    const res = await apiPost('sm_upsert', { row: { ucSku, bwImageUrl: entry.bwImageUrl, bwSourceUrl: entry.bwSourceUrl || '' } });
+    if (!res.ok) throw new Error(res.error || 'Save failed');
+  } catch(e) { showToast('⚠ B&W image save failed for ' + ucSku + ' — ' + e.message, true); }
 }
 
-// Removes a B&W image from D1 when a mapping is deleted or its image URL changes.
-async function deleteBwImageFromD1(ucSku) {
+// Clears a stale B&W image in D1 (mapping's image URL changed) — does NOT
+// delete the SKU row itself, just the bw_image_url/bw_source_url fields.
+async function clearBwImageInD1(ucSku) {
   if (!IS_LIVE) return;
   try {
-    await apiPost('deleteBwImage', { ucSku });
-  } catch(e) { console.warn('D1 bwImage delete failed for', ucSku, e); }
+    const res = await apiPost('sm_upsert', { row: { ucSku, bwImageUrl: '', bwSourceUrl: '' } });
+    if (!res.ok) throw new Error(res.error || 'Clear failed');
+  } catch(e) { showToast('⚠ B&W image clear failed for ' + ucSku + ' — ' + e.message, true); }
 }
 
-// Called once on page load — pulls all B&W images from D1 into bwStore.
-// Only fills in entries missing locally (localStorage wins over D1 for same ucSku).
-async function loadBwImagesFromD1() {
+// Fully removes a SKU's row from sku_master — used only when a mapping
+// itself is deleted (not just its image), so it doesn't linger in D1.
+async function deleteSkuMasterEntry(ucSku) {
+  if (!IS_LIVE) return;
   try {
-    const res = await fetch(`${WORKER}?action=getBwImages`);
-    const data = await res.json();
-    if (!data.ok || !data.images || !data.images.length) return;
-    let changed = false;
-    data.images.forEach(function(row) {
-      if (!bwStore[row.uc_sku] && row.bw_image_url) {
-        bwStore[row.uc_sku] = { bwImageUrl: row.bw_image_url, bwSourceUrl: row.bw_source_url || '' };
-        changed = true;
-      }
-    });
-    if (changed) { saveBwStore(); renderMapTable(); }
-  } catch(e) { /* silent — offline is fine */ }
+    const res = await apiPost('sm_delete', { ucSku });
+    if (!res.ok) throw new Error(res.error || 'Delete failed');
+  } catch(e) { showToast('⚠ Delete from server failed for ' + ucSku + ' — ' + e.message, true); }
 }
-// On load: migrate any bwImageUrl already embedded in skuMap into bwStore, then strip from skuMap
-(function migrateBwFromSkuMap() {
-  let changed = false;
-  skuMap.forEach(function(m) {
-    if (m.bwImageUrl) {
-      bwStore[m.ucSku] = { bwImageUrl: m.bwImageUrl, bwSourceUrl: m.bwSourceUrl || m.imageUrl || '' };
-      delete m.bwImageUrl; delete m.bwSourceUrl; changed = true;
-    }
-  });
-  if (changed) { saveBwStore(); localStorage.setItem('gp_sku_map_v1', JSON.stringify(skuMap)); }
-})();
 let importItems  = [];
 let factoryItems = [];
 let generatedLabels = [];
-let ucCache      = JSON.parse(localStorage.getItem('gp_uc_cache_v1')   || '{}');
-let categories   = JSON.parse(localStorage.getItem('gp_categories_v1') || '[]');
-let boxCounters  = JSON.parse(localStorage.getItem('gp_counters_v1')   || '{}');
-let gpImageCache = JSON.parse(localStorage.getItem('gp_image_d1_v1')   || '{}'); // D1-synced imageUrl map
+let ucCache      = {}; // legacy external-source lookup cache — vestigial fallback only, never populated or persisted
+let categories   = []; // derived from sku_master on load; new ones appended in-memory as entered
+let boxCounters  = {}; // in-memory snapshot of D1 box_counters — loaded once via loadBoxCountersFromD1()
+let gpImageCache = {}; // in-memory imageUrl lookup, populated from sku_master load — no localStorage
 
-function saveCategories() { localStorage.setItem('gp_categories_v1', JSON.stringify(categories)); }
-function addCategoryIfNew(cat) { if (cat && cat !== 'Default' && !categories.includes(cat)) { categories.push(cat); saveCategories(); } }
-function saveSkuMapToStorage() {
-  // Strip bwImageUrl/bwSourceUrl before saving — those live in bwStore
-  const lean = skuMap.map(function(m) {
-    const copy = Object.assign({}, m);
-    delete copy.bwImageUrl; delete copy.bwSourceUrl;
-    return copy;
+function addCategoryIfNew(cat) { if (cat && cat !== 'Default' && !categories.includes(cat)) { categories.push(cat); } }
+
+// Saves the full skuMap to D1 (sku_master). Pure online-only — no local
+// fallback, no localStorage. Shows a visible error if it fails; in-memory
+// state is left as-is either way (caller already updated it optimistically).
+async function saveSkuMapToStorage() {
+  if (!IS_LIVE) return;
+  const rows = skuMap.map(function(m) {
+    return { ucSku: m.ucSku, internalSku: m.internalSku || '', category: m.category || '', qtyPerBox: m.pcsPerCarton || null, imageUrl: m.imageUrl || '' };
   });
-  try { localStorage.setItem('gp_sku_map_v1', JSON.stringify(lean)); } catch(e) { console.warn('skuMap save failed:', e); }
-  if (IS_LIVE) apiPost('saveSkuMapBulk', { map: lean }).catch(function(){});
+  try {
+    const res = await apiPost('sm_upsertBulk', { rows });
+    if (!res.ok) throw new Error(res.error || 'Save failed');
+  } catch(e) {
+    showToast('⚠ SKU map save failed — ' + e.message, true);
+  }
+}
+
+// ── SKU MASTER — load everything (skuMap, bwStore, gpImageCache, categories)
+// from D1 in one call. This is the only place any of this state is populated.
+async function loadSkuMasterFromD1() {
+  try {
+    const res = await fetch(`${WORKER}?action=sm_getAll`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Load failed');
+    const rows = data.rows || [];
+    skuMap = rows.map(function(r) {
+      return { ucSku: r.uc_sku, internalSku: r.internal_sku || '', pcsPerCarton: r.qty_per_box || null, imageUrl: r.image_url || '', category: r.category || '', source: 'sku_master' };
+    });
+    bwStore = {}; gpImageCache = {}; categories = [];
+    rows.forEach(function(r) {
+      if (r.bw_image_url) bwStore[r.uc_sku] = { bwImageUrl: r.bw_image_url, bwSourceUrl: r.bw_source_url || '' };
+      if (r.image_url) gpImageCache[r.uc_sku] = r.image_url;
+      if (r.category && r.category !== 'Default' && !categories.includes(r.category)) categories.push(r.category);
+    });
+  } catch(e) {
+    showToast('⚠ Could not load SKU data from server — ' + e.message, true);
+  }
+}
+
+// ── BOX COUNTERS — load current values from D1 (snapshot only, doesn't
+// increment). Needed so getCurrentBoxNum() can show the right number
+// before any box has been generated this session.
+async function loadBoxCountersFromD1() {
+  try {
+    const res = await fetch(`${WORKER}?action=gp_getBoxCounters`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Load failed');
+    boxCounters = {};
+    (data.rows || []).forEach(function(r) { boxCounters[r.key] = r.seq; });
+  } catch(e) {
+    showToast('⚠ Could not load box counters — ' + e.message, true);
+  }
 }
 
 // ── INIT ───────────────────────────────────────────────────────────────
-window.onload = () => {
+window.onload = async () => {
   document.getElementById('gp-date').value = new Date().toISOString().slice(0,10);
-  // Clear old cache if it used wrong imageUrl column
-  if (localStorage.getItem('gp_uc_cache_version') !== '3') {
-    localStorage.removeItem('gp_uc_cache_v1');
-    ucCache = {};
-    localStorage.setItem('gp_uc_cache_version', '3');
+  // theme applied early via inline script on <body>
+  if (IS_LIVE) {
+    await loadSkuMasterFromD1();
+    await loadBoxCountersFromD1();
   }
   renderMapTable();
   whPopulateSkuDropdown();
-  // theme applied early via inline script on <body>
-  // Silently enrich mapping images from embedded map
+  // Silently enrich mapping images from embedded map (UC_IMAGE_MAP fallback)
   enrichMappingImages();
-  // Fetch D1 image cache in background (live only)
-  if (IS_LIVE) loadGpImagesFromD1();
-  if (IS_LIVE) loadBwImagesFromD1();
 };
 
 function toggleTheme() { const isLight = document.documentElement.getAttribute('data-theme') === 'light'; if (isLight) { document.documentElement.removeAttribute('data-theme'); localStorage.setItem('tm_theme', 'dark'); } else { document.documentElement.setAttribute('data-theme', 'light'); localStorage.setItem('tm_theme', 'light'); } }
@@ -1625,14 +1647,15 @@ function getCurrentBoxNum(internalSku) {
   if (fNum) parts.push(`${String(fNum).padStart(4,'0')}`);
   return parts.length ? parts.join(' / ') : '—';
 }
+// D1-only, no local fallback — if this fails, the caller must NOT generate
+// a label with an unconfirmed box number. Throws on failure so callers halt.
 async function getNextSeq(internalSku, mmyy, type) {
   const key = `${internalSku}|${mmyy}|${type}`;
-  if (IS_LIVE) {
-    try { const res = await apiPost('getNextBoxSeq', {key}); if (res.seq) { boxCounters[key]=res.seq; localStorage.setItem('gp_counters_v1', JSON.stringify(boxCounters)); return res.seq; } } catch(e) {}
-  }
-  boxCounters[key] = (boxCounters[key]||0)+1;
-  localStorage.setItem('gp_counters_v1', JSON.stringify(boxCounters));
-  return boxCounters[key];
+  if (!IS_LIVE) { boxCounters[key] = (boxCounters[key]||0)+1; return boxCounters[key]; }
+  const res = await apiPost('getNextBoxSeq', {key});
+  if (!res.ok || !res.seq) throw new Error(res.error || 'Box counter save failed');
+  boxCounters[key] = res.seq;
+  return res.seq;
 }
 function formatBid(sku, mmyy, seq, type) {
   const pad = String(seq).padStart(4,'0');
@@ -2066,7 +2089,14 @@ async function generateLabels(type) {
   generatedLabels = [];
   for (const it of valid) {
     for (let b=1; b<=it.boxes; b++) {
-      const seq    = await getNextSeq(it.internalSku, mmyy, type);
+      let seq;
+      try {
+        seq = await getNextSeq(it.internalSku, mmyy, type);
+      } catch(e) {
+        setSyncPill('⚠ Failed','err');
+        showToast('⚠ Box counter save failed — ' + e.message + '. Stopped before generating an unconfirmed label.', true);
+        return;
+      }
       const bid    = formatBid(it.internalSku, mmyy, seq, type);
       const isLast = b===it.boxes;
       const lastQty= it.qty-(it.boxes-1)*it.qtyPerBox;
@@ -2259,45 +2289,19 @@ async function resetBoxCounters() {
   if (pwd === null) return; // cancelled
   if (pwd !== 'Admin@8411') { showToast('Wrong password', true); return; }
 
-  // Clear localStorage counters
-  boxCounters = {};
-  localStorage.setItem('gp_counters_v1', JSON.stringify({}));
-
-  // Clear D1 counters if live
   if (IS_LIVE) {
     try {
       const res = await apiPost('resetBoxCounters', {});
       if (!res.ok) throw new Error(res.error || 'Worker error');
-      showToast('✓ Box IDs reset (local + D1)');
+      boxCounters = {};
+      showToast('✓ Box IDs reset');
     } catch(e) {
-      showToast('✓ Local reset done — D1 reset failed: ' + e.message, true);
+      showToast('⚠ Reset failed — ' + e.message, true);
     }
   } else {
+    boxCounters = {};
     showToast('✓ Box IDs reset (local only)');
   }
-}
-
-// ── D1 IMAGE CACHE — load on startup ──────────────────────────────────
-// Fetches all synced image URLs from D1 into gpImageCache in background.
-// Also backfills any skuMap entries that are missing imageUrl.
-async function loadGpImagesFromD1() {
-  try {
-    const res = await fetch(`${WORKER}?action=getGpImages`);
-    const data = await res.json();
-    if (!data.ok || !data.images.length) return;
-    // Build lookup map
-    data.images.forEach(r => { gpImageCache[r.uc_sku] = r.image_url; });
-    localStorage.setItem('gp_image_d1_v1', JSON.stringify(gpImageCache));
-    // Backfill skuMap entries missing imageUrl
-    let changed = false;
-    skuMap.forEach(m => {
-      if (!m.imageUrl || m.imageUrl.length < 5) {
-        const url = gpImageCache[m.ucSku];
-        if (url) { m.imageUrl = url; changed = true; }
-      }
-    });
-    if (changed) { saveSkuMapToStorage(); renderMapTable(); }
-  } catch(e) { /* silent — offline is fine */ }
 }
 
 // ── IMAGE CSV UPLOAD HANDLER ───────────────────────────────────────────
@@ -2331,7 +2335,6 @@ function handleImageCsvUpload(event) {
         // Update local cache from what worker parsed
         if (data.images) {
           data.images.forEach(r => { gpImageCache[r.uc_sku] = r.image_url; });
-          localStorage.setItem('gp_image_d1_v1', JSON.stringify(gpImageCache));
         }
         // Backfill skuMap entries missing imageUrl
         let mapUpdated = 0;
@@ -2371,7 +2374,6 @@ function handleImageCsvUpload(event) {
         if (sku && img) map[sku] = img;
       }
       Object.entries(map).forEach(([k, v]) => { gpImageCache[k] = v; });
-      localStorage.setItem('gp_image_d1_v1', JSON.stringify(gpImageCache));
       statusEl.textContent = `✓ ${Object.keys(map).length} loaded (local)`;
       resultEl.style.display = 'block';
       resultEl.innerHTML = `<span style="color:var(--accent3);">✓ Loaded <strong>${Object.keys(map).length}</strong> image URLs locally (dev mode).</span>`;
@@ -2382,7 +2384,7 @@ function handleImageCsvUpload(event) {
 
 
 // ── GEMINI B&W AUTO-GENERATION ─────────────────────────────────────────
-// B&W images live in bwStore (separate localStorage key), never in skuMap.
+// B&W images live in bwStore (synced to sku_master separately), never in skuMap.
 // Token-efficiency: only call Gemini when imageUrl exists AND
 //   bwStore has no entry OR bwSourceUrl !== imageUrl (image changed).
 
@@ -2397,15 +2399,36 @@ const GEMINI_PROMPT = 'Convert the uploaded source image into a high-contrast, b
 let bwQueue      = new Set();
 let bwProcessing = false;
 
-function getGeminiKey() { return (localStorage.getItem('gp_gemini_key_v1') || '').trim(); }
-function saveGeminiKey(showMsg) {
+// D1-only — _geminiKey is an in-memory cache loaded once from gp_settings
+// on startup (see initGeminiKey). getGeminiKey() stays synchronous since
+// it's called from many places mid-flow; saveGeminiKey() pushes to D1
+// immediately and shows a visible error if that fails.
+let _geminiKey = '';
+function getGeminiKey() { return _geminiKey; }
+async function saveGeminiKey(showMsg) {
   const val = ((document.getElementById('gemini-key-input') || {}).value || '').trim();
-  if (val) { localStorage.setItem('gp_gemini_key_v1', val); if (showMsg) showToast('Gemini API key saved'); }
+  if (!val) return;
+  _geminiKey = val;
+  if (!IS_LIVE) { if (showMsg) showToast('Gemini API key saved (local)'); return; }
+  try {
+    const res = await apiPost('gp_saveSetting', { key: 'gemini_api_key', value: val });
+    if (!res.ok) throw new Error(res.error || 'Save failed');
+    if (showMsg) showToast('Gemini API key saved');
+  } catch(e) {
+    showToast('⚠ Gemini key save failed — ' + e.message, true);
+  }
 }
-function initGeminiKey() {
-  const k = getGeminiKey();
+async function initGeminiKey() {
   const inp = document.getElementById('gemini-key-input');
-  if (k && inp) inp.value = k;
+  if (!IS_LIVE) return;
+  try {
+    const res = await fetch(`${WORKER}?action=gp_getSettings`);
+    const data = await res.json();
+    if (data.ok && data.settings && data.settings.gemini_api_key) {
+      _geminiKey = data.settings.gemini_api_key;
+      if (inp) inp.value = _geminiKey;
+    }
+  } catch(e) { /* key stays empty — B&W generation will just be skipped until entered */ }
 }
 
 function needsBw(m) {
@@ -2437,7 +2460,6 @@ async function processBwQueue() {
     try {
       const bwDataUrl = await callGeminiForBw(skuMap[idx].imageUrl);
       bwStore[ucSku] = { bwImageUrl: bwDataUrl, bwSourceUrl: skuMap[idx].imageUrl };
-      saveBwStore();
       saveBwImageToD1(ucSku);   // persist to D1 (silent, non-blocking)
       renderMapTable();
     } catch(e) {
@@ -2667,16 +2689,14 @@ function saveEditMapping() {
     category,
   };
 
-  // Save B&W to bwStore (separate from skuMap to avoid localStorage bloat)
+  // Save B&W to bwStore (kept separate from skuMap to avoid bloating every sync payload)
   if (bwBase64) {
     bwStore[skuMap[idx].ucSku] = { bwImageUrl: bwBase64, bwSourceUrl: newImgUrl };
-    saveBwStore();
     saveBwImageToD1(skuMap[idx].ucSku);   // persist to D1
   } else if (newImgUrl && newImgUrl !== prevImgUrl) {
     // Image URL changed — clear stale B&W so it re-generates
     delete bwStore[skuMap[idx].ucSku];
-    saveBwStore();
-    deleteBwImageFromD1(skuMap[idx].ucSku);   // remove stale entry from D1
+    clearBwImageInD1(skuMap[idx].ucSku);   // clear stale bw fields in D1 (keeps the row)
   }
 
   saveSkuMapToStorage();
@@ -2699,11 +2719,9 @@ function openDeleteModal(idx) {
 function confirmDeleteMapping() {
   const idx = parseInt(document.getElementById('delete-map-modal').dataset.idx);
   const removed = skuMap.splice(idx, 1)[0];
-  // Also remove B&W image from bwStore and D1
-  if (removed && bwStore[removed.ucSku]) {
+  if (removed) {
     delete bwStore[removed.ucSku];
-    saveBwStore();
-    deleteBwImageFromD1(removed.ucSku);   // remove from D1
+    deleteSkuMasterEntry(removed.ucSku);   // real DELETE — saveSkuMapToStorage below only upserts, never deletes
   }
   saveSkuMapToStorage();
   renderMapTable();
@@ -3176,7 +3194,7 @@ function whSaveManualMapping() {
   const existingIdx = skuMap.findIndex(function(m) { return m.ucSku === ucSku; });
   if (existingIdx >= 0) skuMap[existingIdx] = entry; else skuMap.push(entry);
   if (category) addCategoryIfNew(category);
-  saveSkuMapToStorage(); // saves to localStorage + D1, does NOT call renderMapTable
+  saveSkuMapToStorage(); // saves to D1 (sku_master), does NOT call renderMapTable
 
   // Update whState with saved data
   whState.internalSku = internalSku;
@@ -3271,7 +3289,14 @@ async function generateWhLabels() {
 
   for (let b = 0; b < n; b++) {
     const boxQty = whState.boxQtys[b];
-    const seq    = await getNextSeq(sku, mmyy, 'manual');   // M-series, same as Stock Transfer
+    let seq;
+    try {
+      seq = await getNextSeq(sku, mmyy, 'manual');   // M-series, same as Stock Transfer
+    } catch(e) {
+      setSyncPill('⚠ Failed', 'err');
+      showToast('⚠ Box counter save failed — ' + e.message + '. Stopped before generating an unconfirmed label.', true);
+      return;
+    }
     const bid    = formatBid(sku, mmyy, seq, 'manual');
     generatedLabels.push({
       ucSku:       ucSku,
