@@ -690,6 +690,14 @@
 <body>
 <script>(function(){var t=localStorage.getItem('tm_theme');if(t==='light'){document.documentElement.setAttribute('data-theme','light');}})();</script>
 
+<!-- Blocks all interaction until sku_master + box counters finish loading from D1.
+     Without this, uploading a PDF or adding a row before the load completes
+     matches against an empty skuMap and everything shows as "not mapped". -->
+<div id="app-loading-overlay" style="position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;">
+  <div style="width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;"></div>
+  <div style="font-family:var(--mono);font-size:13px;color:var(--text2);letter-spacing:.5px;">Loading SKU &amp; box data…</div>
+</div>
+
 <header class="site-header">
 
   <a href="/Tomahawk/" class="header-logo">
@@ -1612,8 +1620,14 @@ window.onload = async () => {
   document.getElementById('gp-date').value = new Date().toISOString().slice(0,10);
   // theme applied early via inline script on <body>
   if (IS_LIVE) {
-    await loadSkuMasterFromD1();
-    await loadBoxCountersFromD1();
+    try {
+      await loadSkuMasterFromD1();
+      await loadBoxCountersFromD1();
+    } finally {
+      document.getElementById('app-loading-overlay').style.display = 'none';
+    }
+  } else {
+    document.getElementById('app-loading-overlay').style.display = 'none';
   }
   renderMapTable();
   whPopulateSkuDropdown();
