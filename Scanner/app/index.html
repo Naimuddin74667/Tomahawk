@@ -1358,6 +1358,7 @@ let looseMode     = false;
 let videoStream   = null;
 let scanInterval  = null;
 let pendingSku    = null;   // sku waiting for qty input
+let pendingBoxId  = null;   // box_id waiting for qty input (loose flow)
 let viewedSession = null;   // for detail overlay
 
 // ══════════════════════════════════════════════════════
@@ -1605,10 +1606,11 @@ function handleQR(rawData) {
   console.log('QR raw data:', rawData);
 
   // Parse QR formats:
-  // Sealed: "SKU:TLL-02|QTY:20"  or  "SKU:TBL-0024|QTY:5"
-  // Loose:  "SKU:TLL-02"
+  // Sealed: "SKU:TLL-02|QTY:20|BOX:TLL-02-0726-M0001"
+  // Loose:  "SKU:TLL-02" (no QTY/BOX)
   const skuMatch = rawData.match(/SKU:([^|\n\r]+)/i);
   const qtyMatch = rawData.match(/QTY:(\d+)/i);
+  const boxMatch = rawData.match(/BOX:([^|\n\r]+)/i);
 
   if (!skuMatch) {
     // QR detected but not our format — show what was read and resume
@@ -1617,18 +1619,21 @@ function handleQR(rawData) {
     return;
   }
 
-  const sku = skuMatch[1].trim().toUpperCase();
-  const qty = qtyMatch ? parseInt(qtyMatch[1]) : null;
+  const sku   = skuMatch[1].trim().toUpperCase();
+  const qty   = qtyMatch ? parseInt(qtyMatch[1]) : null;
+  const boxId = boxMatch ? boxMatch[1].trim() : null;
 
   if (looseMode) {
     pendingSku = sku;
+    pendingBoxId = boxId;
     openQtyModal(sku);
   } else if (qty !== null) {
-    // Sealed box — auto save
-    saveRecord(sku, qty, 'sealed');
+    // Sealed box — check for a duplicate box_id before auto-saving
+    proceedToSave(sku, qty, 'sealed', boxId);
   } else {
     // Loose box — ask for qty
     pendingSku = sku;
+    pendingBoxId = boxId;
     openQtyModal(sku);
   }
 }
@@ -1646,6 +1651,7 @@ function openQtyModal(sku) {
 function closeQtyModal() {
   document.getElementById('qty-modal').classList.remove('show');
   pendingSku = null;
+  pendingBoxId = null;
   if (scanning) setTimeout(() => startScan(), 300);
 }
 
@@ -1653,8 +1659,9 @@ function confirmQty() {
   const qty = parseInt(document.getElementById('qty-input').value);
   if (!qty || qty <= 0) { showToast('Enter a valid quantity', 'error'); return; }
   document.getElementById('qty-modal').classList.remove('show');
-  saveRecord(pendingSku, qty, 'loose');
+  proceedToSave(pendingSku, qty, 'loose', pendingBoxId);
   pendingSku = null;
+  pendingBoxId = null;
 }
 
 document.getElementById('qty-input').addEventListener('keydown', e => {
@@ -1662,16 +1669,40 @@ document.getElementById('qty-input').addEventListener('keydown', e => {
 });
 
 // ══════════════════════════════════════════════════════
+// DUPLICATE BOX CHECK — always a live D1 lookup (not the client's
+// possibly-stale cached records), so it still catches a box another
+// team member scanned moments ago on a different device.
+// ══════════════════════════════════════════════════════
+async function proceedToSave(sku, qty, type, boxId) {
+  if (boxId && activeSession) {
+    try {
+      const res = await fetch(`${WORKER}?action=scannerCheckBox&session_id=${activeSession.id}&box_id=${encodeURIComponent(boxId)}`);
+      const data = await res.json();
+      if (data.ok && data.exists) {
+        showConfirm(
+          'Already Scanned',
+          `Box ${boxId} was already recorded by ${data.scanned_by} at ${formatTime(data.scanned_at)}. Save it again anyway?`,
+          () => saveRecord(sku, qty, type, boxId)
+        );
+        return;
+      }
+    } catch(e) { /* check failed — don't block the scan on a network hiccup, just save normally */ }
+  }
+  saveRecord(sku, qty, type, boxId);
+}
+
+// ══════════════════════════════════════════════════════
 // SAVE RECORD
 // ══════════════════════════════════════════════════════
-async function saveRecord(sku, qty, type) {
+async function saveRecord(sku, qty, type, boxId) {
   const record = {
     session_id:  activeSession.id,
     sku,
     qty,
     type,
     scanned_by:  currentUser.username,
-    scanned_at:  new Date().toISOString()
+    scanned_at:  new Date().toISOString(),
+    box_id:      boxId || ''
   };
 
   // Optimistic update — add to local state immediately
