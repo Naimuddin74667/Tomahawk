@@ -1507,12 +1507,9 @@ async function startScan() {
   if (!activeSession) { showToast('No active session', 'error'); return; }
   try {
     // Stop any existing reader/stream first
-    if (zxingReader) { try { zxingReader.reset(); } catch(e){} zxingReader = null; }
-    if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
-    if (bdConfirmTimer) { clearTimeout(bdConfirmTimer); bdConfirmTimer = null; }
+    pauseCameraForPopup();
     bdCandidateMain = null; bdCandidateQtyRaw = null;
     processingScan = false;
-    if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
 
     const video = document.getElementById('scan-video');
 
@@ -1530,10 +1527,10 @@ async function startScan() {
     document.getElementById('scan-status-text').textContent = '🔍 Scanning... point at QR code';
 
     if (supportsBarcodeDetector()) {
-      // Dual-QR mode — reads both the main SKU/QTY/BOX QR and the small
-      // SEAL QR above it from the same camera frame. Polls every 200ms
-      // rather than every frame, which is plenty for a handheld scan and
-      // keeps CPU/battery use reasonable.
+      // Dual-QR mode — reads both the main SKU/BOX QR and the small QTY
+      // QR above it from the same camera frame. Polls every 200ms rather
+      // than every frame, which is plenty for a handheld scan and keeps
+      // CPU/battery use reasonable.
       if (!barcodeDetector) barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] });
       scanInterval = setInterval(() => scanFrameForBarcodes(video), 200);
     } else {
@@ -1550,10 +1547,10 @@ async function startScan() {
           processingScan = true;
           lastScannedRaw = raw; lastScannedAt = now;
           if (navigator.vibrate) navigator.vibrate(80);
-          // Stop decoding immediately — otherwise ZXing keeps re-decoding the
-          // same frame stream and fires this callback dozens of times a
-          // second for the same QR until the restart below finally resets it.
-          try { zxingReader.reset(); } catch(e){}
+          // Fully release the camera immediately — not just reset the
+          // decoder — so there's no live frame left for ZXing's internal
+          // loop to keep processing, regardless of how reset() behaves.
+          pauseCameraForPopup();
           handleQR(raw, null);
           // Scanning resumes on its own once whatever popup this opens
           // (success card or qty modal) actually closes — see
@@ -1611,12 +1608,28 @@ async function scanFrameForBarcodes(video) {
   }
 }
 
+// Fully releases the camera hardware and tears down whichever decoder is
+// active — the same cleanup stopScan() does, minus resetting the
+// `scanning` flag or button UI, since this is a pause (resumeScanning()
+// re-acquires the camera afterward), not a real stop. Doing this the
+// instant a scan is accepted — rather than just clearing a timer/interval
+// — means there is no camera frame left for any library-internal loop to
+// process, regardless of how ZXing/BarcodeDetector behave internally.
+function pauseCameraForPopup() {
+  if (zxingReader) { try { zxingReader.reset(); } catch(e){} zxingReader = null; }
+  if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
+  if (bdConfirmTimer) { clearTimeout(bdConfirmTimer); bdConfirmTimer = null; }
+  if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
+  const video = document.getElementById('scan-video');
+  if (video) video.srcObject = null;
+}
+
 function finalizeBarcodeScan() {
   const rawData = bdCandidateMain;
   const qtyRaw  = bdCandidateQtyRaw;
   lastScannedRaw = rawData; lastScannedAt = Date.now();
   bdCandidateMain = null; bdCandidateQtyRaw = null; bdConfirmTimer = null;
-  if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
+  pauseCameraForPopup();
   handleQR(rawData, qtyRaw);
   // Scanning resumes on its own once whatever popup this opens (success
   // card, qty modal, or the "already scanned" confirm) actually closes —
@@ -1633,14 +1646,8 @@ function resumeScanning() {
 
 function stopScan() {
   scanning = false;
-  if (zxingReader) { try { zxingReader.reset(); } catch(e){} zxingReader = null; }
-  if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
-  if (bdConfirmTimer) { clearTimeout(bdConfirmTimer); bdConfirmTimer = null; }
-  bdCandidateMain = null; bdCandidateQtyRaw = null;
+  pauseCameraForPopup();
   processingScan = false;
-  if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
-  const video = document.getElementById('scan-video');
-  video.srcObject = null;
   const btn = document.getElementById('btn-scan-start');
   btn.innerHTML = '<span>📷</span> Start Scan';
   btn.classList.remove('scanning');
