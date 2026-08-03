@@ -1313,7 +1313,7 @@ let barcodeDetector   = null;
 let bdCandidateMain    = null;  // raw text of the main QR (SKU/BOX) once first seen this scan
 let bdCandidateQtyRaw  = null;  // raw text of the QTY QR, if caught alongside it
 let bdConfirmTimer     = null;  // grace-window timer before deciding sealed/loose
-const BD_CONFIRM_WINDOW_MS = 600;
+const BD_CONFIRM_WINDOW_MS = 1200;
 function supportsBarcodeDetector() {
   return 'BarcodeDetector' in window;
 }
@@ -1513,9 +1513,17 @@ async function startScan() {
 
     const video = document.getElementById('scan-video');
 
-    // Open rear camera via browser API — same method confirmed working
+    // Open rear camera via browser API — same method confirmed working.
+    // Explicitly requesting a high resolution matters here: the default
+    // stream resolution a browser picks is usually plenty for the large
+    // main QR, but not enough actual pixels for the small QTY QR above it
+    // to resolve reliably.
     videoStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' } }
+      video: {
+        facingMode: { ideal: 'environment' },
+        width:  { ideal: 1920 },
+        height: { ideal: 1080 }
+      }
     });
     video.srcObject = videoStream;
     await video.play();
