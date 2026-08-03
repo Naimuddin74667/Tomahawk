@@ -1325,6 +1325,14 @@ let lastScannedRaw = null;
 let lastScannedAt  = 0;
 const SCAN_COOLDOWN_MS = 4000;
 
+// Hard lock — once a scan is being processed (a popup is about to open or
+// is open), nothing else can trigger handleQR until scanning genuinely
+// resumes. This is a backstop against any timing race in the decode loop
+// itself (e.g. a frame already queued before a reset/clearInterval takes
+// effect) — the cooldown above only guards the SAME box; this guards
+// against ANY scan firing while one is already in flight.
+let processingScan = false;
+
 // ══════════════════════════════════════════════════════
 // API HELPERS
 // ══════════════════════════════════════════════════════
@@ -1503,6 +1511,7 @@ async function startScan() {
     if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
     if (bdConfirmTimer) { clearTimeout(bdConfirmTimer); bdConfirmTimer = null; }
     bdCandidateMain = null; bdCandidateQtyRaw = null;
+    processingScan = false;
     if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
 
     const video = document.getElementById('scan-video');
@@ -1534,10 +1543,11 @@ async function startScan() {
       // (asks for a manual count) since there's no way to confirm QTY.
       zxingReader = new ZXing.BrowserMultiFormatReader();
       zxingReader.decodeFromStream(videoStream, video, (result, err) => {
-        if (result) {
+        if (result && !processingScan) {
           const raw = result.getText();
           const now = Date.now();
           if (raw === lastScannedRaw && (now - lastScannedAt) < SCAN_COOLDOWN_MS) return; // same box still in view — ignore
+          processingScan = true;
           lastScannedRaw = raw; lastScannedAt = now;
           if (navigator.vibrate) navigator.vibrate(80);
           // Stop decoding immediately — otherwise ZXing keeps re-decoding the
@@ -1572,7 +1582,7 @@ async function startScan() {
 // sealed/loose — this covers the case where the qty QR just wasn't in
 // frame on the exact same poll as the main QR.
 async function scanFrameForBarcodes(video) {
-  if (!videoStream || !barcodeDetector) return;
+  if (!videoStream || !barcodeDetector || processingScan) return;
   let barcodes;
   try {
     barcodes = await barcodeDetector.detect(video);
@@ -1588,7 +1598,10 @@ async function scanFrameForBarcodes(video) {
   if (mainRaw && !bdCandidateMain) {
     const now = Date.now();
     if (mainRaw === lastScannedRaw && (now - lastScannedAt) < SCAN_COOLDOWN_MS) return; // same box still in view — ignore
-    // First time seeing this main QR this scan — start the confirm window
+    // First time seeing this main QR this scan — lock immediately so no
+    // other poll (even one already in flight) can accept a second
+    // candidate, then start the confirm window.
+    processingScan = true;
     if (navigator.vibrate) navigator.vibrate(80);
     bdCandidateMain = mainRaw;
     bdCandidateQtyRaw = qtyRaw; // may be null if not yet caught this poll
@@ -1624,6 +1637,7 @@ function stopScan() {
   if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
   if (bdConfirmTimer) { clearTimeout(bdConfirmTimer); bdConfirmTimer = null; }
   bdCandidateMain = null; bdCandidateQtyRaw = null;
+  processingScan = false;
   if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
   const video = document.getElementById('scan-video');
   video.srcObject = null;
