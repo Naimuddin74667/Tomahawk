@@ -682,7 +682,7 @@ html[data-theme="light"] .icon-moon { display: none; }
 .success-bar-fill {
   height: 100%;
   border-radius: 2px;
-  animation: drain 3s linear forwards;
+  animation: drain 2s linear forwards;
 }
 .success-bar-fill.sealed { background: var(--green); }
 .success-bar-fill.loose { background: var(--accent); }
@@ -1265,7 +1265,7 @@ html[data-theme="light"] .icon-moon { display: none; }
     <div class="confirm-title" id="confirm-title">Are you sure?</div>
     <div class="confirm-msg" id="confirm-msg">This action cannot be undone.</div>
     <div class="confirm-btns">
-      <button class="btn btn-ghost" onclick="closeConfirm()">Cancel</button>
+      <button class="btn btn-ghost" onclick="cancelConfirm()">Cancel</button>
       <button class="btn btn-danger" id="confirm-ok-btn" onclick="">Confirm</button>
     </div>
   </div>
@@ -1545,8 +1545,9 @@ async function startScan() {
           // second for the same QR until the restart below finally resets it.
           try { zxingReader.reset(); } catch(e){}
           handleQR(raw, null);
-          // Auto-restart scanning after 3.2s (success card shows for 3s)
-          setTimeout(() => { if (scanning) startScan(); }, 3200);
+          // Scanning resumes on its own once whatever popup this opens
+          // (success card or qty modal) actually closes — see
+          // resumeScanning(), called from showSuccess()/closeQtyModal().
         }
         // NotFoundException fires every frame with no QR — safe to ignore
         if (err && !(err instanceof ZXing.NotFoundException)) {
@@ -1604,8 +1605,17 @@ function finalizeBarcodeScan() {
   bdCandidateMain = null; bdCandidateQtyRaw = null; bdConfirmTimer = null;
   if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
   handleQR(rawData, qtyRaw);
-  // Auto-restart scanning after 3.2s (success/qty-modal shows first)
-  setTimeout(() => { if (scanning) startScan(); }, 3200);
+  // Scanning resumes on its own once whatever popup this opens (success
+  // card, qty modal, or the "already scanned" confirm) actually closes —
+  // see resumeScanning(), not a blind timer here.
+}
+
+// Called once whatever popup a scan opened (success card, qty modal, or
+// the "already scanned" confirm dialog) actually closes — not on a blind
+// timer, so the camera never restarts while the picker is still looking
+// at or interacting with something on screen.
+function resumeScanning() {
+  if (scanning) startScan();
 }
 
 function stopScan() {
@@ -1677,7 +1687,7 @@ function closeQtyModal() {
   document.getElementById('qty-modal').classList.remove('show');
   pendingSku = null;
   pendingBoxId = null;
-  if (scanning) setTimeout(() => startScan(), 300);
+  setTimeout(resumeScanning, 300);
 }
 
 function confirmQty() {
@@ -1770,7 +1780,7 @@ function showSuccess(sku, qty, type) {
   bar.style.animation = '';
 
   overlay.classList.add('show');
-  setTimeout(() => overlay.classList.remove('show'), 3000);
+  setTimeout(() => { overlay.classList.remove('show'); resumeScanning(); }, 2000);
 }
 
 // ══════════════════════════════════════════════════════
@@ -1785,6 +1795,13 @@ function showConfirm(title, msg, cb) {
 function closeConfirm() {
   document.getElementById('confirm-modal').classList.remove('show');
   confirmCallback = null;
+}
+function cancelConfirm() {
+  // Cancelling means nothing else will happen (no save, no further popup),
+  // so resume scanning right away — unlike the OK path below, where the
+  // callback's own popup (the success card) controls when to resume.
+  closeConfirm();
+  resumeScanning();
 }
 document.getElementById('confirm-ok-btn').addEventListener('click', () => {
   if (confirmCallback) confirmCallback();
