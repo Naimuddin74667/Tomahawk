@@ -1377,6 +1377,13 @@ function supportsBarcodeDetector() {
   return 'BarcodeDetector' in window;
 }
 
+// Prevents the same QR being processed again in rapid succession — either
+// from the ZXing fallback re-decoding the same frame stream repeatedly, or
+// from the camera restarting 3.2s later while still pointed at the same box.
+let lastScannedRaw = null;
+let lastScannedAt  = 0;
+const SCAN_COOLDOWN_MS = 4000;
+
 // ══════════════════════════════════════════════════════
 // API HELPERS
 // ══════════════════════════════════════════════════════
@@ -1592,8 +1599,16 @@ async function startScan() {
       zxingReader = new ZXing.BrowserMultiFormatReader();
       zxingReader.decodeFromStream(videoStream, video, (result, err) => {
         if (result) {
+          const raw = result.getText();
+          const now = Date.now();
+          if (raw === lastScannedRaw && (now - lastScannedAt) < SCAN_COOLDOWN_MS) return; // same box still in view — ignore
+          lastScannedRaw = raw; lastScannedAt = now;
           if (navigator.vibrate) navigator.vibrate(80);
-          handleQR(result.getText(), null);
+          // Stop decoding immediately — otherwise ZXing keeps re-decoding the
+          // same frame stream and fires this callback dozens of times a
+          // second for the same QR until the restart below finally resets it.
+          try { zxingReader.reset(); } catch(e){}
+          handleQR(raw, null);
           // Auto-restart scanning after 3.2s (success card shows for 3s)
           setTimeout(() => { if (scanning) startScan(); }, 3200);
         }
@@ -1634,6 +1649,8 @@ async function scanFrameForBarcodes(video) {
   });
 
   if (mainRaw && !bdCandidateMain) {
+    const now = Date.now();
+    if (mainRaw === lastScannedRaw && (now - lastScannedAt) < SCAN_COOLDOWN_MS) return; // same box still in view — ignore
     // First time seeing this main QR this scan — start the confirm window
     if (navigator.vibrate) navigator.vibrate(80);
     bdCandidateMain = mainRaw;
@@ -1647,6 +1664,7 @@ async function scanFrameForBarcodes(video) {
 function finalizeBarcodeScan() {
   const rawData = bdCandidateMain;
   const sealFound = bdCandidateSealFound;
+  lastScannedRaw = rawData; lastScannedAt = Date.now();
   bdCandidateMain = null; bdCandidateSealFound = false; bdConfirmTimer = null;
   if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
   handleQR(rawData, sealFound);
