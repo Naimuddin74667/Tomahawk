@@ -1361,22 +1361,6 @@ let pendingSku    = null;   // sku waiting for qty input
 let pendingBoxId  = null;   // box_id waiting for qty input (loose flow)
 let viewedSession = null;   // for detail overlay
 
-// ── SEAL QR DETECTION ──────────────────────────────────────────────────
-// Uses the native BarcodeDetector API (Chrome/Android) to read both the
-// main data QR and the small seal QR above it in the same camera view.
-// Not supported on iOS/Safari — on those devices we fall back to the
-// older ZXing single-QR flow further down, which has no seal awareness
-// (sealed/loose is decided purely by whether QTY is in the main QR, same
-// as before this feature existed).
-let barcodeDetector      = null;
-let bdCandidateMain      = null;  // raw text of the main QR once first seen this scan
-let bdCandidateSealFound = false; // whether a SEAL: QR was seen alongside it
-let bdConfirmTimer       = null;  // grace-window timer before deciding sealed/loose
-const BD_CONFIRM_WINDOW_MS = 600;
-function supportsBarcodeDetector() {
-  return 'BarcodeDetector' in window;
-}
-
 // ══════════════════════════════════════════════════════
 // API HELPERS
 // ══════════════════════════════════════════════════════
@@ -1558,9 +1542,6 @@ async function startScan() {
   try {
     // Stop any existing reader/stream first
     if (zxingReader) { try { zxingReader.reset(); } catch(e){} zxingReader = null; }
-    if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
-    if (bdConfirmTimer) { clearTimeout(bdConfirmTimer); bdConfirmTimer = null; }
-    bdCandidateMain = null; bdCandidateSealFound = false;
     if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
 
     const video = document.getElementById('scan-video');
@@ -1572,37 +1553,28 @@ async function startScan() {
     video.srcObject = videoStream;
     await video.play();
 
+    // Init ZXing and decode from the live stream
+    zxingReader = new ZXing.BrowserMultiFormatReader();
+
     scanning = true;
     const btn = document.getElementById('btn-scan-start');
     btn.innerHTML = '<span>⏹</span> Stop Scan';
     btn.classList.add('scanning');
     document.getElementById('scan-status-text').textContent = '🔍 Scanning... point at QR code';
 
-    if (supportsBarcodeDetector()) {
-      // Dual-QR mode — reads both the main SKU/QTY/BOX QR and the small
-      // SEAL QR above it from the same camera frame. Polls every 200ms
-      // rather than every frame, which is plenty for a handheld scan and
-      // keeps CPU/battery use reasonable.
-      if (!barcodeDetector) barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] });
-      scanInterval = setInterval(() => scanFrameForBarcodes(video), 200);
-    } else {
-      // Fallback — ZXing single-QR decode (no seal awareness; sealed/loose
-      // falls back to whether QTY is present in the main QR, same as
-      // before the seal feature existed).
-      zxingReader = new ZXing.BrowserMultiFormatReader();
-      zxingReader.decodeFromStream(videoStream, video, (result, err) => {
-        if (result) {
-          if (navigator.vibrate) navigator.vibrate(80);
-          handleQR(result.getText(), null);
-          // Auto-restart scanning after 3.2s (success card shows for 3s)
-          setTimeout(() => { if (scanning) startScan(); }, 3200);
-        }
-        // NotFoundException fires every frame with no QR — safe to ignore
-        if (err && !(err instanceof ZXing.NotFoundException)) {
-          console.warn('ZXing:', err.message);
-        }
-      });
-    }
+    // decodeFromStream — confirmed working on Android Chrome
+    zxingReader.decodeFromStream(videoStream, video, (result, err) => {
+      if (result) {
+        if (navigator.vibrate) navigator.vibrate(80);
+        handleQR(result.getText());
+        // Auto-restart scanning after 3.2s (success card shows for 3s)
+        setTimeout(() => { if (scanning) startScan(); }, 3200);
+      }
+      // NotFoundException fires every frame with no QR — safe to ignore
+      if (err && !(err instanceof ZXing.NotFoundException)) {
+        console.warn('ZXing:', err.message);
+      }
+    });
 
   } catch (e) {
     console.error('Scan error:', e);
@@ -1614,52 +1586,9 @@ async function startScan() {
   }
 }
 
-// Polled every 200ms while scanning (BarcodeDetector path only). Looks for
-// a main QR (SKU:...) and, once found, keeps polling for a short grace
-// window to also catch a SEAL:... QR nearby before deciding sealed/loose —
-// this covers the case where the seal QR just wasn't in frame on the
-// exact same poll as the main QR.
-async function scanFrameForBarcodes(video) {
-  if (!videoStream || !barcodeDetector) return;
-  let barcodes;
-  try {
-    barcodes = await barcodeDetector.detect(video);
-  } catch(e) { return; } // detect() can throw on an occasional bad frame — just try again next tick
-  if (!barcodes.length) return;
-
-  let mainRaw = null, sealRaw = null;
-  barcodes.forEach(b => {
-    if (/^SKU:/i.test(b.rawValue)) mainRaw = b.rawValue;
-    if (/^SEAL:/i.test(b.rawValue)) sealRaw = b.rawValue;
-  });
-
-  if (mainRaw && !bdCandidateMain) {
-    // First time seeing this main QR this scan — start the confirm window
-    if (navigator.vibrate) navigator.vibrate(80);
-    bdCandidateMain = mainRaw;
-    bdCandidateSealFound = !!sealRaw;
-    bdConfirmTimer = setTimeout(finalizeBarcodeScan, BD_CONFIRM_WINDOW_MS);
-  } else if (mainRaw && bdCandidateMain && sealRaw) {
-    bdCandidateSealFound = true; // caught it on a later poll within the window
-  }
-}
-
-function finalizeBarcodeScan() {
-  const rawData = bdCandidateMain;
-  const sealFound = bdCandidateSealFound;
-  bdCandidateMain = null; bdCandidateSealFound = false; bdConfirmTimer = null;
-  if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
-  handleQR(rawData, sealFound);
-  // Auto-restart scanning after 3.2s (success/qty-modal shows first)
-  setTimeout(() => { if (scanning) startScan(); }, 3200);
-}
-
 function stopScan() {
   scanning = false;
   if (zxingReader) { try { zxingReader.reset(); } catch(e){} zxingReader = null; }
-  if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
-  if (bdConfirmTimer) { clearTimeout(bdConfirmTimer); bdConfirmTimer = null; }
-  bdCandidateMain = null; bdCandidateSealFound = false;
   if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
   const video = document.getElementById('scan-video');
   video.srcObject = null;
@@ -1671,10 +1600,10 @@ function stopScan() {
 
 // processFrame removed — ZXing handles frame decoding internally
 
-function handleQR(rawData, sealConfirmed) {
+function handleQR(rawData) {
   // Show raw QR data in status bar for debugging — helps verify what was scanned
   document.getElementById('scan-status-text').textContent = 'Read: ' + rawData.substring(0, 40);
-  console.log('QR raw data:', rawData, 'seal:', sealConfirmed);
+  console.log('QR raw data:', rawData);
 
   // Parse QR formats:
   // Sealed: "SKU:TLL-02|QTY:20|BOX:TLL-02-0726-M0001"
@@ -1694,20 +1623,11 @@ function handleQR(rawData, sealConfirmed) {
   const qty   = qtyMatch ? parseInt(qtyMatch[1]) : null;
   const boxId = boxMatch ? boxMatch[1].trim() : null;
 
-  // Sealed requires QTY in the main QR. On devices that support seal
-  // detection (sealConfirmed is true/false, not null), it ALSO requires
-  // the seal QR to have been read alongside it — if the seal's been torn
-  // off or scratched out, treat it as loose even though QTY is present,
-  // since the printed quantity can no longer be trusted.
-  // On devices without seal detection (sealConfirmed is null, ZXing
-  // fallback), behave exactly as before this feature existed.
-  const isSealed = sealConfirmed === null ? (qty !== null) : (qty !== null && sealConfirmed);
-
   if (looseMode) {
     pendingSku = sku;
     pendingBoxId = boxId;
     openQtyModal(sku);
-  } else if (isSealed) {
+  } else if (qty !== null) {
     // Sealed box — check for a duplicate box_id before auto-saving
     proceedToSave(sku, qty, 'sealed', boxId);
   } else {
