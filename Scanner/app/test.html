@@ -494,54 +494,6 @@ html[data-theme="light"] .icon-moon { display: none; }
   letter-spacing: 0.5px;
 }
 
-/* Treat as Loose toggle */
-.loose-toggle-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 12px 16px;
-  margin-top: 16px;
-  width: 100%;
-  max-width: 320px;
-  cursor: pointer;
-}
-.toggle-label {
-  flex: 1;
-}
-.toggle-label-main {
-  font-family: var(--mono);
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--text);
-}
-.toggle-label-sub {
-  font-family: var(--mono);
-  font-size: 9px;
-  color: var(--text3);
-  margin-top: 2px;
-}
-.toggle-switch {
-  width: 44px; height: 24px;
-  background: var(--surface3);
-  border-radius: 12px;
-  position: relative;
-  transition: background 0.2s;
-  flex-shrink: 0;
-}
-.toggle-switch.on { background: var(--accent); }
-.toggle-knob {
-  position: absolute;
-  top: 3px; left: 3px;
-  width: 18px; height: 18px;
-  background: #fff;
-  border-radius: 50%;
-  transition: left 0.2s;
-}
-.toggle-switch.on .toggle-knob { left: 23px; }
-
 /* Scan start button */
 .btn-scan-start {
   margin-top: 20px;
@@ -1244,17 +1196,6 @@ html[data-theme="light"] .icon-moon { display: none; }
       <canvas id="scan-canvas"></canvas>
       <div class="scan-status" id="scan-status-text">Tap button to start camera</div>
 
-      <!-- Treat as Loose toggle -->
-      <div class="loose-toggle-row" onclick="toggleLooseMode()">
-        <div class="toggle-label">
-          <div class="toggle-label-main">Treat as Loose</div>
-          <div class="toggle-label-sub">Scan sealed QR but record as loose</div>
-        </div>
-        <div class="toggle-switch" id="loose-toggle-switch">
-          <div class="toggle-knob"></div>
-        </div>
-      </div>
-
       <button class="btn-scan-start" id="btn-scan-start" onclick="toggleScan()">
         <span>📷</span> Start Scan
       </button>
@@ -1354,7 +1295,6 @@ let pastSessions  = [];
 let myHistory     = [];     // current user's scans this session
 
 let scanning      = false;
-let looseMode     = false;
 let videoStream   = null;
 let scanInterval  = null;
 let pendingSku    = null;   // sku waiting for qty input
@@ -1365,13 +1305,14 @@ let viewedSession = null;   // for detail overlay
 // Uses the native BarcodeDetector API (Chrome/Android) to read both the
 // main data QR and the small seal QR above it in the same camera view.
 // Not supported on iOS/Safari — on those devices we fall back to the
-// older ZXing single-QR flow further down, which has no seal awareness
-// (sealed/loose is decided purely by whether QTY is in the main QR, same
-// as before this feature existed).
-let barcodeDetector      = null;
-let bdCandidateMain      = null;  // raw text of the main QR once first seen this scan
-let bdCandidateSealFound = false; // whether a SEAL: QR was seen alongside it
-let bdConfirmTimer       = null;  // grace-window timer before deciding sealed/loose
+// older ZXing single-QR flow further down. Since ZXing can only decode
+// ONE QR at a time, it can only ever read the main SKU/BOX QR — it has no
+// way to also pick up the separate QTY QR, so every scan on those devices
+// falls back to asking for a manual count (same as "loose" below).
+let barcodeDetector   = null;
+let bdCandidateMain    = null;  // raw text of the main QR (SKU/BOX) once first seen this scan
+let bdCandidateQtyRaw  = null;  // raw text of the QTY QR, if caught alongside it
+let bdConfirmTimer     = null;  // grace-window timer before deciding sealed/loose
 const BD_CONFIRM_WINDOW_MS = 600;
 function supportsBarcodeDetector() {
   return 'BarcodeDetector' in window;
@@ -1544,12 +1485,6 @@ function renderUserHistory() {
 // ══════════════════════════════════════════════════════
 // SCANNING
 // ══════════════════════════════════════════════════════
-function toggleLooseMode() {
-  looseMode = !looseMode;
-  const sw = document.getElementById('loose-toggle-switch');
-  sw.classList.toggle('on', looseMode);
-}
-
 async function toggleScan() {
   if (scanning) {
     stopScan();
@@ -1567,7 +1502,7 @@ async function startScan() {
     if (zxingReader) { try { zxingReader.reset(); } catch(e){} zxingReader = null; }
     if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
     if (bdConfirmTimer) { clearTimeout(bdConfirmTimer); bdConfirmTimer = null; }
-    bdCandidateMain = null; bdCandidateSealFound = false;
+    bdCandidateMain = null; bdCandidateQtyRaw = null;
     if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
 
     const video = document.getElementById('scan-video');
@@ -1593,9 +1528,10 @@ async function startScan() {
       if (!barcodeDetector) barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] });
       scanInterval = setInterval(() => scanFrameForBarcodes(video), 200);
     } else {
-      // Fallback — ZXing single-QR decode (no seal awareness; sealed/loose
-      // falls back to whether QTY is present in the main QR, same as
-      // before the seal feature existed).
+      // Fallback — ZXing single-QR decode. It can only read one QR at a
+      // time, so it only ever gets the main SKU/BOX QR, never the QTY QR
+      // alongside it — every scan on these devices is treated as loose
+      // (asks for a manual count) since there's no way to confirm QTY.
       zxingReader = new ZXing.BrowserMultiFormatReader();
       zxingReader.decodeFromStream(videoStream, video, (result, err) => {
         if (result) {
@@ -1630,10 +1566,10 @@ async function startScan() {
 }
 
 // Polled every 200ms while scanning (BarcodeDetector path only). Looks for
-// a main QR (SKU:...) and, once found, keeps polling for a short grace
-// window to also catch a SEAL:... QR nearby before deciding sealed/loose —
-// this covers the case where the seal QR just wasn't in frame on the
-// exact same poll as the main QR.
+// the main QR (SKU:...|BOX:...) and, once found, keeps polling for a short
+// grace window to also catch the small QTY:... QR nearby before deciding
+// sealed/loose — this covers the case where the qty QR just wasn't in
+// frame on the exact same poll as the main QR.
 async function scanFrameForBarcodes(video) {
   if (!videoStream || !barcodeDetector) return;
   let barcodes;
@@ -1642,10 +1578,10 @@ async function scanFrameForBarcodes(video) {
   } catch(e) { return; } // detect() can throw on an occasional bad frame — just try again next tick
   if (!barcodes.length) return;
 
-  let mainRaw = null, sealRaw = null;
+  let mainRaw = null, qtyRaw = null;
   barcodes.forEach(b => {
     if (/^SKU:/i.test(b.rawValue)) mainRaw = b.rawValue;
-    if (/^SEAL:/i.test(b.rawValue)) sealRaw = b.rawValue;
+    if (/^QTY:/i.test(b.rawValue)) qtyRaw = b.rawValue;
   });
 
   if (mainRaw && !bdCandidateMain) {
@@ -1654,20 +1590,20 @@ async function scanFrameForBarcodes(video) {
     // First time seeing this main QR this scan — start the confirm window
     if (navigator.vibrate) navigator.vibrate(80);
     bdCandidateMain = mainRaw;
-    bdCandidateSealFound = !!sealRaw;
+    bdCandidateQtyRaw = qtyRaw; // may be null if not yet caught this poll
     bdConfirmTimer = setTimeout(finalizeBarcodeScan, BD_CONFIRM_WINDOW_MS);
-  } else if (mainRaw && bdCandidateMain && sealRaw) {
-    bdCandidateSealFound = true; // caught it on a later poll within the window
+  } else if (mainRaw && bdCandidateMain && qtyRaw && !bdCandidateQtyRaw) {
+    bdCandidateQtyRaw = qtyRaw; // caught it on a later poll within the window
   }
 }
 
 function finalizeBarcodeScan() {
   const rawData = bdCandidateMain;
-  const sealFound = bdCandidateSealFound;
+  const qtyRaw  = bdCandidateQtyRaw;
   lastScannedRaw = rawData; lastScannedAt = Date.now();
-  bdCandidateMain = null; bdCandidateSealFound = false; bdConfirmTimer = null;
+  bdCandidateMain = null; bdCandidateQtyRaw = null; bdConfirmTimer = null;
   if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
-  handleQR(rawData, sealFound);
+  handleQR(rawData, qtyRaw);
   // Auto-restart scanning after 3.2s (success/qty-modal shows first)
   setTimeout(() => { if (scanning) startScan(); }, 3200);
 }
@@ -1677,7 +1613,7 @@ function stopScan() {
   if (zxingReader) { try { zxingReader.reset(); } catch(e){} zxingReader = null; }
   if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
   if (bdConfirmTimer) { clearTimeout(bdConfirmTimer); bdConfirmTimer = null; }
-  bdCandidateMain = null; bdCandidateSealFound = false;
+  bdCandidateMain = null; bdCandidateQtyRaw = null;
   if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
   const video = document.getElementById('scan-video');
   video.srcObject = null;
@@ -1689,16 +1625,16 @@ function stopScan() {
 
 // processFrame removed — ZXing handles frame decoding internally
 
-function handleQR(rawData, sealConfirmed) {
+function handleQR(rawData, qtyRaw) {
   // Show raw QR data in status bar for debugging — helps verify what was scanned
   document.getElementById('scan-status-text').textContent = 'Read: ' + rawData.substring(0, 40);
-  console.log('QR raw data:', rawData, 'seal:', sealConfirmed);
+  console.log('QR raw data:', rawData, 'qty QR:', qtyRaw);
 
-  // Parse QR formats:
-  // Sealed: "SKU:TLL-02|QTY:20|BOX:TLL-02-0726-M0001"
-  // Loose:  "SKU:TLL-02" (no QTY/BOX)
+  // Main QR: "SKU:TLL-02|BOX:TLL-02-0726-M0001" — no QTY here anymore.
+  // QTY lives in the small QR above it (qtyRaw, passed in separately) —
+  // if that one's been scratched out or torn off, qtyRaw comes back null
+  // and this is treated as loose (ask for a manual count).
   const skuMatch = rawData.match(/SKU:([^|\n\r]+)/i);
-  const qtyMatch = rawData.match(/QTY:(\d+)/i);
   const boxMatch = rawData.match(/BOX:([^|\n\r]+)/i);
 
   if (!skuMatch) {
@@ -1709,27 +1645,18 @@ function handleQR(rawData, sealConfirmed) {
   }
 
   const sku   = skuMatch[1].trim().toUpperCase();
-  const qty   = qtyMatch ? parseInt(qtyMatch[1]) : null;
   const boxId = boxMatch ? boxMatch[1].trim() : null;
+  const qtyMatch = qtyRaw ? qtyRaw.match(/QTY:(\d+)/i) : null;
+  const qty = qtyMatch ? parseInt(qtyMatch[1]) : null;
 
-  // Sealed requires QTY in the main QR. On devices that support seal
-  // detection (sealConfirmed is true/false, not null), it ALSO requires
-  // the seal QR to have been read alongside it — if the seal's been torn
-  // off or scratched out, treat it as loose even though QTY is present,
-  // since the printed quantity can no longer be trusted.
-  // On devices without seal detection (sealConfirmed is null, ZXing
-  // fallback), behave exactly as before this feature existed.
-  const isSealed = sealConfirmed === null ? (qty !== null) : (qty !== null && sealConfirmed);
-
-  if (looseMode) {
-    pendingSku = sku;
-    pendingBoxId = boxId;
-    openQtyModal(sku);
-  } else if (isSealed) {
-    // Sealed box — check for a duplicate box_id before auto-saving
+  if (qty !== null) {
+    // Both QRs read successfully — sealed, trust the printed quantity.
+    // Check for a duplicate box_id before auto-saving.
     proceedToSave(sku, qty, 'sealed', boxId);
   } else {
-    // Loose box — ask for qty
+    // QTY QR missing/unreadable (scratched, torn, or — on devices without
+    // BarcodeDetector — simply can't be read alongside the main QR at
+    // all) — treat as loose and ask for a manual count.
     pendingSku = sku;
     pendingBoxId = boxId;
     openQtyModal(sku);
