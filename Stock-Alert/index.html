@@ -560,8 +560,39 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
 </style>
 
+<style>
+/* — Auth gate + header auth controls — shared pattern across all Tomahawk apps — */
+.auth-gate{position:fixed;inset:0;z-index:500;background:var(--bg-base);display:flex;align-items:center;justify-content:center;padding:20px}
+.auth-gate[hidden]{display:none}
+.auth-card{width:100%;max-width:340px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:14px;padding:32px 28px 28px}
+.auth-logo-row{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+.auth-logo-mark{width:34px;height:34px;border-radius:8px;background:var(--accent);color:#111;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-weight:800;font-size:16px;flex-shrink:0}
+.auth-title{font-weight:700;font-size:16px;color:var(--text-primary)}
+.auth-sub{font-size:11px;color:var(--text-muted);margin-top:1px}
+.header-logout-btn{width:34px;height:34px;border-radius:50%;background:var(--bg-raised);border:1px solid var(--border-default);color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:border-color .15s,color .15s;flex-shrink:0}
+.header-logout-btn:hover{border-color:#f87171;color:#f87171}
+.header-logout-btn[hidden]{display:none}
+.header-user[hidden]{display:none}
+.role-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:20px;background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent-border);margin-left:2px}
+.access-denied-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:'DM Sans',sans-serif;color:var(--text-primary);background:var(--bg-base);text-align:center;padding:20px}
+</style>
 </head>
 <body>
+
+<div class="auth-gate" id="auth-gate">
+  <div class="auth-card">
+    <div class="auth-logo-row">
+      <div class="auth-logo-mark">T</div>
+      <div>
+        <div class="auth-title">Tomahawk Operations</div>
+        <div class="auth-sub">Sign in to continue</div>
+      </div>
+    </div>
+    <div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:14px;">
+      Login now happens once on the <a href="../index.html" style="color:var(--accent)">Tomahawk hub</a>. Redirecting you there&#8230;
+    </div>
+  </div>
+</div>
 
 <!-- ============================================================
      HEADER  (identical component to other Tomahawk apps)
@@ -592,12 +623,129 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         <path d="M9 1v2M9 15v2M1 9h2M15 9h2M3.22 3.22l1.42 1.42M13.36 13.36l1.42 1.42M3.22 14.78l1.42-1.42M13.36 4.64l1.42-1.42" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
       </svg>
     </button>
-    <div class="header-user">
-      <div class="user-avatar">IT</div>
-      <span class="user-name">ITH Team</span>
+    <div class="header-user" id="header-user" hidden>
+      <div class="user-avatar" id="user-avatar">--</div>
+      <span class="user-name" id="user-name-display">&#8212;</span>
+      <span class="role-badge" id="user-role-badge">&#8212;</span>
     </div>
+    <button class="header-logout-btn" id="header-logout-btn" hidden title="Log out">
+      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M8 17H4.5a1.5 1.5 0 01-1.5-1.5v-11A1.5 1.5 0 014.5 3H8M13.5 14l3.5-4-3.5-4M17 10H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
   </div>
 </header>
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+// AUTH — session comes from the Tomahawk hub. Admin/manager get full
+// edit access; viewer gets view-only. picker_packer has no access at
+// all. Writes are guarded at their two real chokepoints further down
+// (the table's delegated click handler, and the settings-modal
+// buttons/list) plus a global fetch guard as a backstop.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var TM_SESSION_KEY = 'tm_session_v1';
+  var TM_WORKER = 'https://tomahawk-returns.naimuddin.workers.dev';
+
+  function getSession() { try { return JSON.parse(localStorage.getItem(TM_SESSION_KEY) || 'null'); } catch (e) { return null; } }
+  function clearSession() { localStorage.removeItem(TM_SESSION_KEY); }
+  function goToHub() { window.location.href = '../index.html'; }
+
+  window.TM_ROLE = null;
+
+  var ACTION_ROLE_MIN = {
+    sa_saveQtyOverride: 'manager', sa_deleteQtyOverride: 'manager', sa_bulkImportQtyOverrides: 'manager',
+    sa_archiveSku: 'manager', sa_unarchiveSku: 'manager',
+    sa_saveRecQtyOverride: 'manager', sa_deleteRecQtyOverride: 'manager', sa_saveSettings: 'manager'
+  };
+  function actionAllowed(action, role) {
+    var min = ACTION_ROLE_MIN[action];
+    if (!min) return true;
+    return role === 'admin' || role === 'manager';
+  }
+
+  var _origFetch = window.fetch.bind(window);
+  window.fetch = function (url, opts) {
+    try {
+      var urlStr = typeof url === 'string' ? url : (url && url.url) || '';
+      if (urlStr.indexOf('tomahawk-returns.naimuddin.workers.dev') !== -1) {
+        var m = urlStr.match(/[?&]action=([a-zA-Z_]+)/);
+        var action = m ? m[1] : null;
+        if (!action && opts && opts.body) { try { action = JSON.parse(opts.body).action; } catch (e) {} }
+        if (action && !actionAllowed(action, window.TM_ROLE)) {
+          if (typeof toast === 'function') toast("View only \u2014 you don't have edit access", 'err');
+          return Promise.resolve(new Response(JSON.stringify({ ok: false, error: 'View-only access' }), { status: 403, headers: { 'Content-Type': 'application/json' } }));
+        }
+        var session = getSession();
+        opts = opts || {};
+        opts.headers = Object.assign({}, opts.headers || {}, (session && session.token) ? { 'X-Tomahawk-Session': session.token } : {});
+      }
+    } catch (e) {}
+    return _origFetch(url, opts);
+  };
+
+  function applyRoleUI(role) {
+    window.TM_ROLE = role;
+    var canEdit = (role === 'admin' || role === 'manager');
+    ['save-default-recqty-btn', 'add-recqty-override-btn'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.style.display = canEdit ? '' : 'none';
+    });
+  }
+
+  function showApp(user) {
+    document.getElementById('auth-gate').hidden = true;
+    document.getElementById('header-user').hidden = false;
+    document.getElementById('header-logout-btn').hidden = false;
+    var label = user.display_name || user.username;
+    document.getElementById('user-avatar').textContent = label.slice(0, 2).toUpperCase();
+    document.getElementById('user-name-display').textContent = label;
+    var roleLabels = { admin: 'Admin', manager: 'Manager', viewer: 'Viewer', picker_packer: 'Picker & Packer' };
+    document.getElementById('user-role-badge').textContent = roleLabels[user.role] || user.role;
+    applyRoleUI(user.role);
+  }
+
+  function showAccessDenied() {
+    document.body.innerHTML =
+      '<div class="access-denied-screen">' +
+      '<div style="font-size:15px;font-weight:700;">You don\'t have access to this app</div>' +
+      '<div style="font-size:13px;color:var(--text-muted);max-width:320px;">Picker &amp; Packer accounts only have access to the Scanner App.</div>' +
+      '<a href="../index.html" style="margin-top:8px;color:var(--accent);font-size:13px;text-decoration:none;">&#8592; Back to Tomahawk Operations</a>' +
+      '</div>';
+  }
+
+  document.getElementById('header-logout-btn').addEventListener('click', async function () {
+    var session = getSession();
+    if (session && session.token) {
+      try {
+        await _origFetch(TM_WORKER + '?action=logout', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tomahawk-Session': session.token },
+          body: JSON.stringify({ action: 'logout' })
+        });
+      } catch (e) {}
+    }
+    clearSession();
+    goToHub();
+  });
+
+  (async function initAuth() {
+    var session = getSession();
+    if (!session || !session.token) { goToHub(); return; }
+    if (session.role !== 'admin' && session.role !== 'manager' && session.role !== 'viewer') {
+      showAccessDenied(); return;
+    }
+
+    showApp(session);
+
+    try {
+      var res = await _origFetch(TM_WORKER + '?action=validateSession', { headers: { 'X-Tomahawk-Session': session.token } }).then(function (r) { return r.json(); });
+      if (!res.ok || !res.user) { clearSession(); goToHub(); return; }
+      if (res.user.role !== 'admin' && res.user.role !== 'manager' && res.user.role !== 'viewer') { showAccessDenied(); return; }
+      localStorage.setItem(TM_SESSION_KEY, JSON.stringify({ token: session.token, username: res.user.username, role: res.user.role, display_name: res.user.display_name }));
+      showApp(res.user);
+    } catch (e) { /* network hiccup — keep the optimistic render */ }
+  })();
+})();
+</script>
 
 <div class="site-body">
 
@@ -1387,6 +1535,14 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   // Event delegation on the table body — cells are rebuilt on every
   // renderTable() call, so listeners are bound once here rather than per-row.
   tableBody.addEventListener('click', function (e) {
+    // Viewer role: block every edit/archive/add interaction in this table
+    // with one guard, rather than hunting each button individually.
+    var isWriteBtn = e.target.closest('.qty-box-add-btn, .qty-box-edit-btn, .qty-box-save-btn, .archive-btn, .unarchive-btn, .recqty-edit-btn, .recqty-save-btn');
+    if (isWriteBtn && window.TM_ROLE === 'viewer') {
+      if (typeof toast === 'function') toast("View only — you don't have edit access", 'err');
+      return;
+    }
+
     var addBtn = e.target.closest('.qty-box-add-btn');
     var editBtn = e.target.closest('.qty-box-edit-btn');
     var saveBtn = e.target.closest('.qty-box-save-btn');
@@ -1854,6 +2010,10 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   recQtyOverrideList.addEventListener('click', function (e) {
     var removeBtn = e.target.closest('.settings-override-remove');
     if (!removeBtn) return;
+    if (window.TM_ROLE === 'viewer') {
+      if (typeof toast === 'function') toast("View only — you don't have edit access", 'err');
+      return;
+    }
     var sku = removeBtn.getAttribute('data-sku');
     removeBtn.disabled = true;
     deleteRecQtyOverride(sku, function (err) {
