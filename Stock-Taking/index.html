@@ -594,8 +594,40 @@
   }
 
 </style>
+<style>
+/* — Auth gate + topbar auth controls, using this app's own tokens — */
+.auth-gate{position:fixed;inset:0;z-index:500;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px}
+.auth-gate[hidden]{display:none}
+.auth-card{width:100%;max-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:32px 28px 28px}
+.auth-logo-row{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+.auth-logo-mark{width:34px;height:34px;border-radius:8px;background:var(--accent);color:#111;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;flex-shrink:0}
+.auth-title{font-weight:700;font-size:16px;color:var(--text)}
+.auth-sub{font-size:11px;color:var(--text2);margin-top:1px}
+.topbar-user{display:flex;align-items:center;gap:7px;background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:4px 12px 4px 4px;font-family:var(--sans);flex-shrink:0}
+.topbar-user[hidden]{display:none}
+.topbar-user-avatar{width:24px;height:24px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;color:#111}
+.topbar-user-name{font-size:12px;color:var(--text2)}
+.topbar-role-badge{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:2px 6px;border-radius:20px;background:var(--surface);color:var(--accent);border:1px solid var(--border)}
+.topbar-logout-btn[hidden]{display:none}
+.access-denied-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:var(--sans);color:var(--text);background:var(--bg);text-align:center;padding:20px}
+</style>
 </head>
 <body>
+
+<div class="auth-gate" id="auth-gate">
+  <div class="auth-card">
+    <div class="auth-logo-row">
+      <div class="auth-logo-mark">T</div>
+      <div>
+        <div class="auth-title">Tomahawk Operations</div>
+        <div class="auth-sub">Sign in to continue</div>
+      </div>
+    </div>
+    <div style="font-size:11.5px;color:var(--text2);margin-bottom:14px;">
+      Login now happens once on the <a href="../index.html" style="color:var(--accent)">Tomahawk hub</a>. Redirecting you there&#8230;
+    </div>
+  </div>
+</div>
 
 <div class="topbar">
   <button class="hamburger-btn" id="hamburger-btn" onclick="toggleNav()" aria-label="Open menu">☰</button>
@@ -610,8 +642,87 @@
     <button class="btn btn-ghost" onclick="loadFromWorker()" title="Reload from cloud">↺<span class="sync-label"> Sync</span></button>
     <button class="btn btn-ghost" onclick="toggleTheme()" id="theme-btn" title="Toggle light/dark mode">🌙</button>
     <button class="btn btn-ghost hide-on-mobile" onclick="exportData()">⬇ Export All</button>
+    <div class="topbar-user" id="topbar-user" hidden>
+      <div class="topbar-user-avatar" id="topbar-user-avatar">--</div>
+      <span class="topbar-user-name hide-on-mobile" id="topbar-user-name">&#8212;</span>
+      <span class="topbar-role-badge" id="topbar-role-badge">&#8212;</span>
+    </div>
+    <button class="btn btn-ghost topbar-logout-btn" id="topbar-logout-btn" hidden title="Log out">&#9099;</button>
   </div>
 </div>
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+// AUTH — session comes from the Tomahawk hub. Admin/manager get full
+// edit access; viewer gets view-only. picker_packer has no access at
+// all. Every write funnels through apiPost() further down, which is
+// where the real guard lives.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var TM_SESSION_KEY = 'tm_session_v1';
+  var TM_WORKER = 'https://tomahawk-returns.naimuddin.workers.dev';
+
+  function getSession() { try { return JSON.parse(localStorage.getItem(TM_SESSION_KEY) || 'null'); } catch (e) { return null; } }
+  function clearSession() { localStorage.removeItem(TM_SESSION_KEY); }
+  function goToHub() { window.location.href = '../index.html'; }
+
+  window.TM_ROLE = null;
+  window.TM_GET_SESSION = getSession; // used by apiGet/apiPost further down
+
+  function showApp(user) {
+    document.getElementById('auth-gate').hidden = true;
+    document.getElementById('topbar-user').hidden = false;
+    document.getElementById('topbar-logout-btn').hidden = false;
+    var label = user.display_name || user.username;
+    document.getElementById('topbar-user-avatar').textContent = label.slice(0, 2).toUpperCase();
+    document.getElementById('topbar-user-name').textContent = label;
+    var roleLabels = { admin: 'Admin', manager: 'Manager', viewer: 'Viewer', picker_packer: 'Picker & Packer' };
+    document.getElementById('topbar-role-badge').textContent = roleLabels[user.role] || user.role;
+    window.TM_ROLE = user.role;
+  }
+
+  function showAccessDenied() {
+    document.body.innerHTML =
+      '<div class="access-denied-screen">' +
+      '<div style="font-size:15px;font-weight:700;">You don\'t have access to this app</div>' +
+      '<div style="font-size:13px;color:var(--text2);max-width:320px;">Picker &amp; Packer accounts only have access to the Scanner App.</div>' +
+      '<a href="../index.html" style="margin-top:8px;color:var(--accent);font-size:13px;text-decoration:none;">&#8592; Back to Tomahawk Operations</a>' +
+      '</div>';
+  }
+
+  document.getElementById('topbar-logout-btn').addEventListener('click', async function () {
+    var session = getSession();
+    if (session && session.token) {
+      try {
+        await fetch(TM_WORKER + '?action=logout', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tomahawk-Session': session.token },
+          body: JSON.stringify({ action: 'logout' })
+        });
+      } catch (e) {}
+    }
+    clearSession();
+    goToHub();
+  });
+
+  (async function initAuth() {
+    var session = getSession();
+    if (!session || !session.token) { goToHub(); return; }
+    if (session.role !== 'admin' && session.role !== 'manager' && session.role !== 'viewer') {
+      showAccessDenied(); return;
+    }
+
+    showApp(session);
+
+    try {
+      var res = await fetch(TM_WORKER + '?action=validateSession', { headers: { 'X-Tomahawk-Session': session.token } }).then(function (r) { return r.json(); });
+      if (!res.ok || !res.user) { clearSession(); goToHub(); return; }
+      if (res.user.role !== 'admin' && res.user.role !== 'manager' && res.user.role !== 'viewer') { showAccessDenied(); return; }
+      localStorage.setItem(TM_SESSION_KEY, JSON.stringify({ token: session.token, username: res.user.username, role: res.user.role, display_name: res.user.display_name }));
+      showApp(res.user);
+    } catch (e) { /* network hiccup — keep the optimistic render */ }
+  })();
+})();
+</script>
 
 <div class="nav-overlay" id="nav-overlay" onclick="closeNav()"></div>
 <nav class="tabs" id="main-nav">
@@ -1187,14 +1298,36 @@ function setSyncStatus(status) {
 }
 
 // ── WORKER API ─────────────────────────────────────────────────────────
+var ST_WRITE_ACTION_MIN = {
+  saveBox: 'manager', deleteBox: 'manager', deleteSKU: 'manager',
+  saveLoose: 'manager', deleteLoose: 'manager',
+  saveUCDisable: 'manager', deleteUCDisable: 'manager',
+  saveStockSettings: 'manager', saveBinAllotment: 'manager', deleteBinAllotment: 'manager'
+};
+function stActionAllowed(action) {
+  var min = ST_WRITE_ACTION_MIN[action];
+  if (!min) return true; // reads (e.g. 'loadStock') are viewer-accessible
+  var role = window.TM_ROLE;
+  return role === 'admin' || role === 'manager';
+}
+function stSessionHeaders(extra) {
+  var session = (typeof window.TM_GET_SESSION === 'function') ? window.TM_GET_SESSION() : null;
+  var headers = Object.assign({}, extra || {});
+  if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
+  return headers;
+}
 async function apiGet(action) {
-  const r = await fetch(`${WORKER}?action=${action}`);
+  const r = await fetch(`${WORKER}?action=${action}`, { headers: stSessionHeaders() });
   return r.json();
 }
 async function apiPost(action, body) {
+  if (!stActionAllowed(action)) {
+    if (typeof showToast === 'function') showToast("View only — you don't have edit access", true);
+    return { ok: false, error: 'View-only access' };
+  }
   const r = await fetch(`${WORKER}?action=${action}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: stSessionHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body)
   });
   return r.json();
@@ -1367,6 +1500,7 @@ function printLabel() {
 }
 
 function saveAndPrint() {
+  if (window.TM_ROLE === 'viewer') { if (typeof showToast === 'function') showToast("View only \u2014 you don't have edit access", true); return; }
   closeModal();
   saveLabelToMaster();
   executePrint();
@@ -1808,6 +1942,7 @@ function toggleGroup(groupId, headerRow) {
 }
 
 function deleteBox(id) {
+  if (window.TM_ROLE === 'viewer') { if (typeof showToast === 'function') showToast("View only \u2014 you don't have edit access", true); return; }
   if (!confirm('Delete this box entry? This cannot be undone.')) return;
   masterList = masterList.filter(s => s.id !== id);
   localStorage.setItem('sku_master', JSON.stringify(masterList));
@@ -1989,6 +2124,7 @@ function printLooseLabel() {
 }
 
 function looseSaveAndPrint() {
+  if (window.TM_ROLE === 'viewer') { if (typeof showToast === 'function') showToast("View only \u2014 you don't have edit access", true); return; }
   document.getElementById('loose-unsaved-modal').style.display = 'none';
   saveLooseEntry();
   executeLoosePrint();
@@ -2161,6 +2297,7 @@ function addLooseEntry() {
 }
 
 function deleteLoose(id) {
+  if (window.TM_ROLE === 'viewer') { if (typeof showToast === 'function') showToast("View only \u2014 you don't have edit access", true); return; }
   if (!confirm('Delete this loose count entry?')) return;
   looseList = looseList.filter(l => l.id !== id);
   localStorage.setItem('sku_loose', JSON.stringify(looseList));
@@ -2272,6 +2409,7 @@ function renderUC() {
 }
 
 function deleteUC(id) {
+  if (window.TM_ROLE === 'viewer') { if (typeof showToast === 'function') showToast("View only \u2014 you don't have edit access", true); return; }
   ucList = ucList.filter(u => u.id !== id);
   localStorage.setItem('sku_uc', JSON.stringify(ucList));
   renderUC();
@@ -2353,6 +2491,7 @@ function syncSettings() {
 }
 
 function addPerson() {
+  if (window.TM_ROLE === 'viewer') { if (typeof showToast === 'function') showToast("View only \u2014 you don't have edit access", true); return; }
   const val = document.getElementById('person-inp').value.trim();
   if (!val) return;
   if (persons.includes(val)) { showToast('Already exists', true); return; }
@@ -2370,6 +2509,7 @@ function deletePerson(i) {
 }
 
 function addCategory() {
+  if (window.TM_ROLE === 'viewer') { if (typeof showToast === 'function') showToast("View only \u2014 you don't have edit access", true); return; }
   const val = document.getElementById('cat-inp').value.trim();
   if (!val) return;
   if (categories.includes(val)) { showToast('Already exists', true); return; }
