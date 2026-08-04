@@ -708,6 +708,18 @@ html[data-theme="light"]       .icon-moon { display: none; }
     <div class="auth-footnote">ITH Team · Internal use only</div>
   </div>
 </div>
+<script>
+// Runs immediately as the parser hits this point — before the rest of the
+// page paints — so a returning user with a cached session never sees the
+// gate flash at all. The full IIFE further down still re-validates the
+// session against the server in the background and reverts if it's stale.
+(function () {
+  try {
+    var s = JSON.parse(localStorage.getItem('tm_session_v1') || 'null');
+    if (s && s.token) document.getElementById('auth-gate').hidden = true;
+  } catch (e) {}
+})();
+</script>
 <!-- END BLOCK 5.6 — LOGIN GATE -->
 
 <!-- ============================================================
@@ -1182,9 +1194,18 @@ html[data-theme="light"]       .icon-moon { display: none; }
   async function init() {
     const session = getSession();
     if (!session || !session.token) { showGate(); return; }
+
+    // Optimistic: the tiny inline script earlier already hid the gate for
+    // this case, but showApp() also needs to run to populate the header
+    // (avatar, name, role badge, admin button) — do that immediately from
+    // the cached session, with no network wait.
+    showApp(session);
+
+    // Then quietly confirm with the server. Only touch the UI again if
+    // something's actually wrong (expired/revoked session) — a healthy
+    // session just gets its cached fields refreshed silently.
     const res = await api('validateSession');
     if (res.ok && res.user) {
-      // keep localStorage user fields fresh (role may have changed)
       setSession({ token: session.token, username: res.user.username, role: res.user.role, display_name: res.user.display_name });
       showApp(res.user);
     } else {
