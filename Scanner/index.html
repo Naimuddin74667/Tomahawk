@@ -739,44 +739,54 @@ html[data-theme="light"] .icon-moon { display: none; }
 }
 
 /* Tally table */
-.tally-row {
+.tally-table-header {
+  display: grid;
+  grid-template-columns: 1fr auto 90px;
+  gap: 16px;
+  padding: 0 16px 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.tally-table-row {
+  display: grid;
+  grid-template-columns: 1fr auto 90px;
+  align-items: center;
+  gap: 16px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 14px 16px;
-  margin-bottom: 8px;
+  padding: 12px 16px;
+  margin-bottom: 6px;
 }
 .tally-sku {
   font-family: var(--mono);
   font-size: 14px;
   font-weight: 700;
   color: var(--accent);
-  margin-bottom: 6px;
 }
-.tally-breakdown {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 6px;
-}
-.tally-chip {
+.tally-boxes { display: flex; gap: 6px; justify-content: flex-end; }
+.box-pill {
   font-family: var(--mono);
-  font-size: 10px;
-  padding: 3px 8px;
-  border-radius: 4px;
-}
-.tally-chip.sealed { background: var(--green-dim); color: var(--green); }
-.tally-chip.loose { background: var(--accent-dim); color: var(--accent); }
-.tally-total {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--text2);
-}
-.tally-total span {
-  color: var(--green);
-  font-size: 18px;
+  font-size: 11px;
   font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 10px;
+  white-space: nowrap;
 }
+.box-pill.sealed { background: var(--green-dim); color: var(--green); }
+.box-pill.loose { background: var(--accent-dim); color: var(--accent); }
+.tally-qty-cell {
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+}
+.tally-qty-cell .unit { font-size: 10px; color: var(--text2); font-weight: 400; margin-left: 3px; }
 
 /* Users list */
 .user-row {
@@ -1394,38 +1404,41 @@ function renderTally() {
     return;
   }
 
-  // Aggregate per SKU
+  // Aggregate per SKU — box count is a count of physical scans (each
+  // sealed or loose scan = one box/container handled), qty is the sum of
+  // pieces across all of them.
   const bySkuMap = {};
   allRecords.forEach(r => {
-    if (!bySkuMap[r.sku]) bySkuMap[r.sku] = { sku: r.sku, sealed: [], loose: 0 };
-    if (r.type === 'sealed') bySkuMap[r.sku].sealed.push(r.qty);
-    else bySkuMap[r.sku].loose += r.qty;
+    if (!bySkuMap[r.sku]) bySkuMap[r.sku] = { sku: r.sku, sealedCount: 0, looseCount: 0, totalQty: 0 };
+    if (r.type === 'sealed') bySkuMap[r.sku].sealedCount++;
+    else bySkuMap[r.sku].looseCount++;
+    bySkuMap[r.sku].totalQty += r.qty;
   });
 
   const skus = Object.values(bySkuMap).sort((a,b) => a.sku.localeCompare(b.sku));
-  const totalPcs = skus.reduce((acc, s) => {
-    return acc + s.sealed.reduce((a,b)=>a+b,0) + s.loose;
-  }, 0);
+  const totalPcs = skus.reduce((acc, s) => acc + s.totalQty, 0);
 
   document.getElementById('tally-stat-skus').textContent  = skus.length;
   document.getElementById('tally-stat-total').textContent = totalPcs;
 
-  el.innerHTML = skus.map(s => {
-    const sealedTotal = s.sealed.reduce((a,b)=>a+b,0);
-    const total = sealedTotal + s.loose;
-    const sealedDetail = s.sealed.length > 0
-      ? `${s.sealed.length} box${s.sealed.length>1?'es':''} × avg ${Math.round(sealedTotal/s.sealed.length)} = ${sealedTotal} pcs`
-      : '—';
-    return `
-      <div class="tally-row">
-        <div class="tally-sku">${s.sku}</div>
-        <div class="tally-breakdown">
-          <span class="tally-chip sealed">Sealed: ${sealedDetail}</span>
-          ${s.loose > 0 ? `<span class="tally-chip loose">Loose: ${s.loose} pcs</span>` : ''}
-        </div>
-        <div class="tally-total">Total: <span>${total} pcs</span></div>
-      </div>`;
-  }).join('');
+  const header = `
+    <div class="tally-table-header">
+      <div>SKU</div>
+      <div style="text-align:right;">Boxes</div>
+      <div style="text-align:right;">Qty</div>
+    </div>`;
+
+  const rows = skus.map(s => `
+    <div class="tally-table-row">
+      <div class="tally-sku">${s.sku}</div>
+      <div class="tally-boxes">
+        ${s.sealedCount > 0 ? `<span class="box-pill sealed">Sealed ${s.sealedCount}</span>` : ''}
+        ${s.looseCount > 0 ? `<span class="box-pill loose">Loose ${s.looseCount}</span>` : ''}
+      </div>
+      <div class="tally-qty-cell">${s.totalQty}<span class="unit">pcs</span></div>
+    </div>`).join('');
+
+  el.innerHTML = header + rows;
 }
 
 // ══════════════════════════════════════════════════════
