@@ -270,6 +270,7 @@ html[data-theme="light"] .icon-moon { display: none; }
 .btn-danger { background: var(--red-dim); color: var(--red); border: 1px solid var(--red); }
 .btn-success { background: var(--green-dim); color: var(--green); border: 1px solid var(--green); }
 .btn-ghost { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
+.btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-full { width: 100%; }
 
 /* ── FORM ELEMENTS ── */
@@ -1125,7 +1126,6 @@ html[data-theme="light"] .icon-moon { display: none; }
     <div class="admin-tab active" onclick="switchAdminTab('tally')">Live Tally</div>
     <div class="admin-tab" onclick="switchAdminTab('session')">Session</div>
     <div class="admin-tab" onclick="switchAdminTab('history')">All Scans</div>
-    <div class="admin-tab" onclick="switchAdminTab('past')">Past Sessions</div>
   </div>
 
   <div class="scroll-content">
@@ -1142,6 +1142,20 @@ html[data-theme="light"] .icon-moon { display: none; }
           </div>
           <button class="btn btn-primary btn-full action-btn-restricted" onclick="createSession()">Create Session →</button>
         </div>
+      </div>
+
+      <div class="divider" style="margin:20px 0;"></div>
+      <div class="card-title" style="margin-bottom:10px;">Past Sessions</div>
+      <div id="past-sessions-list">
+        <div class="empty-state">
+          <div class="empty-icon">📁</div>
+          No past sessions yet
+        </div>
+      </div>
+      <div id="pastSessionsPagerControls" style="display:none;align-items:center;justify-content:center;gap:1rem;padding:12px 0 4px;">
+        <button class="btn btn-ghost" style="width:auto;padding:8px 14px;font-size:11px;" id="pastSessionsPrevBtn" onclick="pastSessionsGoToPage(_pastSessionsPage-1)">← Prev</button>
+        <span id="pastSessionsPageIndicator" style="font-family:var(--mono);font-size:11px;color:var(--text2);white-space:nowrap;"></span>
+        <button class="btn btn-ghost" style="width:auto;padding:8px 14px;font-size:11px;" id="pastSessionsNextBtn" onclick="pastSessionsGoToPage(_pastSessionsPage+1)">Next →</button>
       </div>
     </div>
 
@@ -1171,16 +1185,6 @@ html[data-theme="light"] .icon-moon { display: none; }
         <div class="empty-state">
           <div class="empty-icon">📋</div>
           No scans in this session
-        </div>
-      </div>
-    </div>
-
-    <!-- PAST SESSIONS PANEL -->
-    <div class="admin-panel" id="admin-panel-past">
-      <div id="past-sessions-list">
-        <div class="empty-state">
-          <div class="empty-icon">📁</div>
-          No past sessions yet
         </div>
       </div>
     </div>
@@ -1521,17 +1525,52 @@ function renderAllScans() {
 // ══════════════════════════════════════════════════════
 // ADMIN — PAST SESSIONS
 // ══════════════════════════════════════════════════════
+var _pastSessionsPage = 1;
+var _pastSessionsPageSize = 10;
+
 function renderPastSessions() {
   const el = document.getElementById('past-sessions-list');
   if (pastSessions.length === 0) {
     el.innerHTML = `<div class="empty-state"><div class="empty-icon">📁</div>No past sessions yet</div>`;
+    document.getElementById('pastSessionsPagerControls').style.display = 'none';
     return;
   }
-  el.innerHTML = pastSessions.map(s => `
+
+  const totalPages = Math.max(1, Math.ceil(pastSessions.length / _pastSessionsPageSize));
+  if (_pastSessionsPage > totalPages) _pastSessionsPage = totalPages;
+  if (_pastSessionsPage < 1) _pastSessionsPage = 1;
+  const startIdx = (_pastSessionsPage - 1) * _pastSessionsPageSize;
+  const pageRows = pastSessions.slice(startIdx, startIdx + _pastSessionsPageSize);
+
+  el.innerHTML = pageRows.map(s => `
     <div class="past-session-row" onclick="openSessionDetail(${s.id})">
       <div class="past-session-name">📁 ${s.name}</div>
       <div class="past-session-meta">Closed · ${formatDate(s.created_at)} · tap to view →</div>
     </div>`).join('');
+
+  renderPastSessionsPagination(pastSessions.length, totalPages);
+}
+
+// Updates the Prev/Next + page indicator controls. Deliberately does NOT
+// rebuild any HTML — the buttons and span already exist in the page; we
+// just toggle visibility, update the label text, and set disabled state.
+function renderPastSessionsPagination(totalRows, totalPages) {
+  const wrap = document.getElementById('pastSessionsPagerControls');
+  if (totalRows <= _pastSessionsPageSize) { wrap.style.display = 'none'; return; } // single page — nothing to paginate
+  wrap.style.display = 'flex';
+
+  const startRow = (_pastSessionsPage - 1) * _pastSessionsPageSize + 1;
+  const endRow = Math.min(_pastSessionsPage * _pastSessionsPageSize, totalRows);
+  document.getElementById('pastSessionsPageIndicator').textContent =
+    startRow + '–' + endRow + ' of ' + totalRows + ' · Page ' + _pastSessionsPage + ' of ' + totalPages;
+
+  document.getElementById('pastSessionsPrevBtn').disabled = (_pastSessionsPage <= 1);
+  document.getElementById('pastSessionsNextBtn').disabled = (_pastSessionsPage >= totalPages);
+}
+
+function pastSessionsGoToPage(p) {
+  _pastSessionsPage = p;
+  renderPastSessions();
 }
 
 async function openSessionDetail(sessionId) {
@@ -1606,7 +1645,7 @@ function exportSessionCSV() {
 // ══════════════════════════════════════════════════════
 function switchAdminTab(tab) {
   document.querySelectorAll('.admin-tab').forEach((t,i) => {
-    const tabs = ['tally','session','history','past'];
+    const tabs = ['tally','session','history'];
     t.classList.toggle('active', tabs[i] === tab);
   });
   document.querySelectorAll('.admin-panel').forEach(p => p.classList.remove('active'));
@@ -1615,6 +1654,7 @@ function switchAdminTab(tab) {
   // Refresh on switch
   if (tab === 'tally') renderTally();
   if (tab === 'history') renderAllScans();
+  if (tab === 'session') renderPastSessions();
 }
 
 // ══════════════════════════════════════════════════════
