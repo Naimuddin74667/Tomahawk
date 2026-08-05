@@ -1085,7 +1085,7 @@ html[data-theme="light"] .icon-moon { display: none; }
       <span class="logo-tagline">Scanner Dashboard</span>
     </a>
     <div class="topbar-info">
-      <div class="topbar-role" style="color:var(--accent);">Administrator</div>
+      <div class="topbar-role" id="topbar-role" style="color:var(--accent);">Administrator</div>
       <div class="topbar-user" id="admin-topbar-name">—</div>
     </div>
     <div class="topbar-right">
@@ -1124,7 +1124,7 @@ html[data-theme="light"] .icon-moon { display: none; }
             <label>Session Name</label>
             <input type="text" id="new-session-name" placeholder="e.g. June 2026 Audit">
           </div>
-          <button class="btn btn-primary btn-full" onclick="createSession()">Create Session →</button>
+          <button class="btn btn-primary btn-full action-btn-restricted" onclick="createSession()">Create Session →</button>
         </div>
       </div>
     </div>
@@ -1260,11 +1260,27 @@ function goToHub() {
   window.location.href = '../index.html';
 }
 
+const ROLE_LABELS = { admin: 'Administrator', manager: 'Manager', viewer: 'Viewer' };
+
+// Admin and Manager have identical rights on this Dashboard — the only
+// distinction enforced here is Viewer, which is view-only: session
+// create/close controls are hidden and their functions refuse to run as
+// a backstop even if triggered some other way.
+function applyRolePermissions() {
+  const roleEl = document.getElementById('topbar-role');
+  if (roleEl) roleEl.textContent = ROLE_LABELS[currentUser.role] || currentUser.role;
+
+  const isViewer = currentUser.role === 'viewer';
+  document.querySelectorAll('.action-btn-restricted').forEach(btn => {
+    btn.style.display = isViewer ? 'none' : '';
+  });
+}
+
 function showAccessDenied() {
   document.body.innerHTML =
     '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;' +
     'font-family:\'DM Sans\',sans-serif;color:#e8e8f0;background:#0c0c14;text-align:center;padding:20px;">' +
-    '<div style="font-size:15px;font-weight:700;">Scanner Dashboard is admin-only</div>' +
+    '<div style="font-size:15px;font-weight:700;">Scanner Dashboard is for Admin, Manager, and Viewer accounts</div>' +
     '<div style="font-size:13px;color:#888899;max-width:320px;">Team members who scan boxes should use the Scanner App on their phone instead.</div>' +
     '<a href="../index.html" style="margin-top:8px;color:#F5A800;font-size:13px;text-decoration:none;">← Back to Tomahawk Operations</a>' +
     '</div>';
@@ -1347,15 +1363,17 @@ function renderAdminSession() {
           </div>
         </div>
         <div class="divider"></div>
-        <button class="btn btn-danger btn-full" onclick="confirmCloseSession()">Close Session</button>
+        <button class="btn btn-danger btn-full action-btn-restricted" onclick="confirmCloseSession()">Close Session</button>
       </div>`;
   } else {
     activeWrap.innerHTML = '';
     noWrap.style.display = 'block';
   }
+  applyRolePermissions();
 }
 
 async function createSession() {
+  if (currentUser.role === 'viewer') { showToast('View only — you don\'t have permission for this', 'error'); return; }
   const name = document.getElementById('new-session-name').value.trim();
   if (!name) { showToast('Enter a session name', 'error'); return; }
 
@@ -1371,6 +1389,7 @@ async function createSession() {
 }
 
 function confirmCloseSession() {
+  if (currentUser.role === 'viewer') { showToast('View only — you don\'t have permission for this', 'error'); return; }
   showConfirm(
     'Close Session?',
     `"${activeSession.name}" will be archived. All data is saved.`,
@@ -1614,17 +1633,20 @@ function downloadCSV(rows, filename) {
 // ══════════════════════════════════════════════════════
 // INIT — gate on the shared Tomahawk hub session
 // ══════════════════════════════════════════════════════
+const DASHBOARD_ROLES = ['admin', 'manager', 'viewer'];
+
 (async function init() {
   const session = getTmSession();
 
   if (!session || !session.token) { goToHub(); return; }
-  if (session.role !== 'admin') { showAccessDenied(); return; }
+  if (!DASHBOARD_ROLES.includes(session.role)) { showAccessDenied(); return; }
 
-  // Optimistic render — the cached session already says admin, so show the
-  // dashboard immediately rather than waiting on a network round-trip.
+  // Optimistic render — the cached session already says a valid role, so
+  // show the dashboard immediately rather than waiting on a network round-trip.
   currentUser = { username: session.username, role: session.role };
   showScreen('admin');
   await loadAndRoute();
+  applyRolePermissions();
 
   // Confirm with the server in the background — catches an expired/revoked
   // session, or a role that was downgraded since this was cached.
@@ -1633,8 +1655,9 @@ function downloadCSV(rows, filename) {
       headers: { 'X-Tomahawk-Session': session.token }
     }).then(r => r.json());
     if (!res.ok || !res.user) { goToHub(); return; }
-    if (res.user.role !== 'admin') { showAccessDenied(); return; }
+    if (!DASHBOARD_ROLES.includes(res.user.role)) { showAccessDenied(); return; }
     currentUser = { username: res.user.username, role: res.user.role };
+    applyRolePermissions();
   } catch (e) { /* network hiccup — keep the optimistic render, don't kick the user out */ }
 })();
 </script>
