@@ -1038,6 +1038,7 @@ html[data-theme="light"] .icon-moon { display: none; }
   color: var(--text);
   margin-bottom: 8px;
 }
+.confirm-title.warning { color: var(--red); }
 .confirm-msg {
   font-family: var(--mono);
   font-size: 11px;
@@ -1045,6 +1046,7 @@ html[data-theme="light"] .icon-moon { display: none; }
   margin-bottom: 20px;
   line-height: 1.6;
 }
+.confirm-msg.warning { color: var(--red); }
 .confirm-btns { display: flex; gap: 10px; }
 .confirm-btns .btn { flex: 1; }
 
@@ -1757,10 +1759,13 @@ async function proceedToSave(sku, qty, type, boxId) {
       });
       const data = await res.json();
       if (data.ok && data.exists) {
+        const isMe = currentUser && data.scanned_by === currentUser.username;
+        const who = isMe ? 'You have already scanned' : `${data.scanned_by} has already scanned`;
         showConfirm(
-          'Already Scanned',
-          `Box ${boxId} was already recorded by ${data.scanned_by} at ${formatTime(data.scanned_at)}. Save it again anyway?`,
-          () => saveRecord(sku, qty, type, boxId)
+          who,
+          `Box ${boxId} at ${formatTime(data.scanned_at)}. Save it again anyway?`,
+          () => saveRecord(sku, qty, type, boxId),
+          true
         );
         return;
       }
@@ -1829,14 +1834,20 @@ function showSuccess(sku, qty, type) {
 // ══════════════════════════════════════════════════════
 // ADMIN — SESSION
 // ══════════════════════════════════════════════════════
-function showConfirm(title, msg, cb) {
-  document.getElementById('confirm-title').textContent = title;
-  document.getElementById('confirm-msg').textContent   = msg;
+function showConfirm(title, msg, cb, isWarning) {
+  const titleEl = document.getElementById('confirm-title');
+  const msgEl   = document.getElementById('confirm-msg');
+  titleEl.textContent = title;
+  msgEl.textContent   = msg;
+  titleEl.classList.toggle('warning', !!isWarning);
+  msgEl.classList.toggle('warning', !!isWarning);
   confirmCallback = cb;
   document.getElementById('confirm-modal').classList.add('show');
 }
 function closeConfirm() {
   document.getElementById('confirm-modal').classList.remove('show');
+  document.getElementById('confirm-title').classList.remove('warning');
+  document.getElementById('confirm-msg').classList.remove('warning');
   confirmCallback = null;
 }
 function cancelConfirm() {
