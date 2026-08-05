@@ -619,7 +619,12 @@ html[data-theme="light"] .icon-moon { display: none; }
   max-width: 320px;
   border: 1px solid var(--border);
   animation: pop-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: transform 0.15s;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
 }
+.success-card:active { transform: scale(0.97); }
 @keyframes pop-in {
   from { transform: scale(0.8); opacity: 0; }
   to { transform: scale(1); opacity: 1; }
@@ -1251,7 +1256,7 @@ html[data-theme="light"] .icon-moon { display: none; }
 
 <!-- Success overlay -->
 <div class="success-overlay" id="success-overlay">
-  <div class="success-card">
+  <div class="success-card" id="success-card">
     <span class="success-icon" id="success-icon">✅</span>
     <div class="success-type" id="success-type">SEALED</div>
     <div class="success-sku" id="success-sku">—</div>
@@ -1808,6 +1813,51 @@ async function saveRecord(sku, qty, type, boxId) {
 // ══════════════════════════════════════════════════════
 // SUCCESS CARD
 // ══════════════════════════════════════════════════════
+// ── PAUSABLE CARD TIMER ──────────────────────────────────────────────
+// Backs the auto-dismiss on the success/duplicate-warning card. Press and
+// hold the card to pause the countdown (and freeze the progress bar) so
+// you can actually read it; release to resume with whatever time was left.
+const cardTimer = { timeoutId: null, remainingMs: 0, startedAt: 0, dismissFn: null };
+
+function startCardTimer(durationMs, dismissFn) {
+  cardTimer.remainingMs = durationMs;
+  cardTimer.dismissFn = dismissFn;
+  cardTimer.startedAt = Date.now();
+  cardTimer.timeoutId = setTimeout(fireCardTimer, durationMs);
+}
+function fireCardTimer() {
+  cardTimer.timeoutId = null;
+  const fn = cardTimer.dismissFn;
+  cardTimer.dismissFn = null;
+  if (fn) fn();
+}
+function pauseCardTimer() {
+  if (!cardTimer.timeoutId) return;
+  clearTimeout(cardTimer.timeoutId);
+  cardTimer.remainingMs = Math.max(0, cardTimer.remainingMs - (Date.now() - cardTimer.startedAt));
+  cardTimer.timeoutId = null;
+  const bar = document.getElementById('success-bar-fill');
+  if (bar) bar.style.animationPlayState = 'paused';
+}
+function resumeCardTimer() {
+  if (cardTimer.timeoutId || !cardTimer.dismissFn) return;
+  cardTimer.startedAt = Date.now();
+  cardTimer.timeoutId = setTimeout(fireCardTimer, cardTimer.remainingMs);
+  const bar = document.getElementById('success-bar-fill');
+  if (bar) bar.style.animationPlayState = 'running';
+}
+// Press-and-hold on the card — touch (mobile) and mouse (desktop testing)
+(function() {
+  const card = document.getElementById('success-card');
+  if (!card) return;
+  card.addEventListener('touchstart', pauseCardTimer, { passive: true });
+  card.addEventListener('touchend', resumeCardTimer);
+  card.addEventListener('touchcancel', resumeCardTimer);
+  card.addEventListener('mousedown', pauseCardTimer);
+  card.addEventListener('mouseup', resumeCardTimer);
+  card.addEventListener('mouseleave', resumeCardTimer);
+})();
+
 function showSuccess(sku, qty, type) {
   const overlay = document.getElementById('success-overlay');
   document.getElementById('success-icon').textContent  = type === 'sealed' ? '✅' : '📦';
@@ -1824,9 +1874,10 @@ function showSuccess(sku, qty, type) {
   bar.style.animation = 'none';
   bar.offsetHeight; // reflow
   bar.style.animation = '';
+  bar.style.animationPlayState = 'running';
 
   overlay.classList.add('show');
-  setTimeout(() => { overlay.classList.remove('show'); resumeScanning(); }, 1500);
+  startCardTimer(1500, () => { overlay.classList.remove('show'); resumeScanning(); });
 }
 
 // Duplicate box detected — shown instead of saving, auto-dismisses after
@@ -1847,9 +1898,10 @@ function showDuplicateWarning(who, boxId) {
   bar.style.animation = 'none';
   bar.offsetHeight; // reflow
   bar.style.animation = '';
+  bar.style.animationPlayState = 'running';
 
   overlay.classList.add('show');
-  setTimeout(() => { overlay.classList.remove('show'); resumeScanning(); }, 2000);
+  startCardTimer(2000, () => { overlay.classList.remove('show'); resumeScanning(); });
 }
 
 // ══════════════════════════════════════════════════════
