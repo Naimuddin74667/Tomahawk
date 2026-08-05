@@ -741,8 +741,8 @@ html[data-theme="light"] .icon-moon { display: none; }
 /* Tally table */
 .tally-table-header {
   display: grid;
-  grid-template-columns: 1fr auto 90px;
-  gap: 16px;
+  grid-template-columns: 1fr auto 70px 70px;
+  gap: 14px;
   padding: 0 16px 8px;
   font-family: var(--mono);
   font-size: 10px;
@@ -752,9 +752,9 @@ html[data-theme="light"] .icon-moon { display: none; }
 }
 .tally-table-row {
   display: grid;
-  grid-template-columns: 1fr auto 90px;
+  grid-template-columns: 1fr auto 70px 70px;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -767,13 +767,21 @@ html[data-theme="light"] .icon-moon { display: none; }
   font-weight: 700;
   color: var(--accent);
 }
-.tally-boxes { display: flex; gap: 6px; justify-content: flex-end; }
+.tally-boxes-cell { text-align: right; }
+.tally-boxes-total {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+.tally-boxes-pills { display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap; }
 .box-pill {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  padding: 3px 9px;
-  border-radius: 10px;
+  padding: 2px 7px;
+  border-radius: 8px;
   white-space: nowrap;
 }
 .box-pill.sealed { background: var(--green-dim); color: var(--green); }
@@ -786,7 +794,15 @@ html[data-theme="light"] .icon-moon { display: none; }
   color: var(--text);
   white-space: nowrap;
 }
-.tally-qty-cell .unit { font-size: 10px; color: var(--text2); font-weight: 400; margin-left: 3px; }
+.tally-qty-cell .unit { font-size: 9px; color: var(--text2); font-weight: 400; margin-left: 2px; }
+.tally-qtybox-cell {
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text2);
+  white-space: nowrap;
+}
 
 /* Users list */
 .user-row {
@@ -1425,11 +1441,13 @@ function renderTally() {
 
   // Aggregate per SKU — box count is a count of physical scans (each
   // sealed or loose scan = one box/container handled), qty is the sum of
-  // pieces across all of them.
+  // pieces across all of them. sealedQtys tracks each sealed scan's own
+  // qty so we can derive Qty/Box — the per-box quantity printed on the
+  // label by Inward Label Generator.
   const bySkuMap = {};
   allRecords.forEach(r => {
-    if (!bySkuMap[r.sku]) bySkuMap[r.sku] = { sku: r.sku, sealedCount: 0, looseCount: 0, totalQty: 0 };
-    if (r.type === 'sealed') bySkuMap[r.sku].sealedCount++;
+    if (!bySkuMap[r.sku]) bySkuMap[r.sku] = { sku: r.sku, sealedCount: 0, looseCount: 0, totalQty: 0, sealedQtys: [] };
+    if (r.type === 'sealed') { bySkuMap[r.sku].sealedCount++; bySkuMap[r.sku].sealedQtys.push(r.qty); }
     else bySkuMap[r.sku].looseCount++;
     bySkuMap[r.sku].totalQty += r.qty;
   });
@@ -1445,17 +1463,33 @@ function renderTally() {
       <div>SKU</div>
       <div style="text-align:right;">Boxes</div>
       <div style="text-align:right;">Qty</div>
+      <div style="text-align:right;">Qty/Box</div>
     </div>`;
 
-  const rows = skus.map(s => `
-    <div class="tally-table-row">
-      <div class="tally-sku">${s.sku}</div>
-      <div class="tally-boxes">
-        ${s.sealedCount > 0 ? `<span class="box-pill sealed">Sealed ${s.sealedCount}</span>` : ''}
-        ${s.looseCount > 0 ? `<span class="box-pill loose">Loose ${s.looseCount}</span>` : ''}
-      </div>
-      <div class="tally-qty-cell">${s.totalQty}<span class="unit">pcs</span></div>
-    </div>`).join('');
+  const rows = skus.map(s => {
+    const totalBoxes = s.sealedCount + s.looseCount;
+    // Qty/Box comes from the sealed boxes' printed quantity. If every
+    // sealed scan for this SKU agrees, show that value; if they differ
+    // (mixed batch), show the average with a ~ so it's clear it's not exact.
+    let qtyPerBox = '—';
+    if (s.sealedQtys.length) {
+      const allSame = s.sealedQtys.every(q => q === s.sealedQtys[0]);
+      qtyPerBox = allSame ? s.sealedQtys[0] : `~${Math.round(s.sealedQtys.reduce((a,b)=>a+b,0)/s.sealedQtys.length)}`;
+    }
+    return `
+      <div class="tally-table-row">
+        <div class="tally-sku">${s.sku}</div>
+        <div class="tally-boxes-cell">
+          <div class="tally-boxes-total">${totalBoxes}</div>
+          <div class="tally-boxes-pills">
+            ${s.sealedCount > 0 ? `<span class="box-pill sealed">Sealed ${s.sealedCount}</span>` : ''}
+            ${s.looseCount > 0 ? `<span class="box-pill loose">Loose ${s.looseCount}</span>` : ''}
+          </div>
+        </div>
+        <div class="tally-qty-cell">${s.totalQty}<span class="unit">pcs</span></div>
+        <div class="tally-qtybox-cell">${qtyPerBox}</div>
+      </div>`;
+  }).join('');
 
   el.innerHTML = header + rows;
 }
