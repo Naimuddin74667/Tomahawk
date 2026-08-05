@@ -646,6 +646,7 @@ html[data-theme="light"] .icon-moon { display: none; }
 }
 .success-type.sealed { color: var(--green); }
 .success-type.loose { color: var(--accent); }
+.success-type.duplicate { color: var(--red); }
 
 .success-sku {
   font-family: var(--mono);
@@ -686,6 +687,7 @@ html[data-theme="light"] .icon-moon { display: none; }
 }
 .success-bar-fill.sealed { background: var(--green); }
 .success-bar-fill.loose { background: var(--accent); }
+.success-bar-fill.duplicate { background: var(--red); }
 @keyframes drain {
   from { width: 100%; }
   to { width: 0%; }
@@ -1254,7 +1256,7 @@ html[data-theme="light"] .icon-moon { display: none; }
     <div class="success-type" id="success-type">SEALED</div>
     <div class="success-sku" id="success-sku">—</div>
     <div class="success-qty" id="success-qty">0</div>
-    <div class="success-unit">PIECES</div>
+    <div class="success-unit" id="success-unit">PIECES</div>
     <div class="success-bar">
       <div class="success-bar-fill" id="success-bar-fill"></div>
     </div>
@@ -1761,13 +1763,8 @@ async function proceedToSave(sku, qty, type, boxId) {
       if (data.ok && data.exists) {
         const isMe = currentUser && data.scanned_by === currentUser.username;
         const who = isMe ? 'You have already scanned' : `${data.scanned_by} has already scanned`;
-        showConfirm(
-          who,
-          `Box ${boxId} at ${formatTime(data.scanned_at)}. Save it again anyway?`,
-          () => saveRecord(sku, qty, type, boxId),
-          true
-        );
-        return;
+        showDuplicateWarning(who, boxId);
+        return; // blocked — not saved
       }
     } catch(e) { /* check failed — don't block the scan on a network hiccup, just save normally */ }
   }
@@ -1819,6 +1816,7 @@ function showSuccess(sku, qty, type) {
   document.getElementById('success-sku').textContent   = sku;
   document.getElementById('success-qty').textContent   = qty;
   document.getElementById('success-qty').className     = `success-qty ${type}`;
+  document.getElementById('success-unit').textContent  = 'PIECES';
 
   // Reset and restart bar animation
   const bar = document.getElementById('success-bar-fill');
@@ -1829,6 +1827,29 @@ function showSuccess(sku, qty, type) {
 
   overlay.classList.add('show');
   setTimeout(() => { overlay.classList.remove('show'); resumeScanning(); }, 1500);
+}
+
+// Duplicate box detected — shown instead of saving, auto-dismisses after
+// 2s with no save action (this scan is simply blocked, not queued for
+// confirmation).
+function showDuplicateWarning(who, boxId) {
+  const overlay = document.getElementById('success-overlay');
+  document.getElementById('success-icon').textContent  = '⚠️';
+  document.getElementById('success-type').textContent  = 'DUPLICATE SCAN';
+  document.getElementById('success-type').className    = 'success-type duplicate';
+  document.getElementById('success-sku').textContent   = who;
+  document.getElementById('success-qty').textContent   = '';
+  document.getElementById('success-qty').className     = 'success-qty duplicate';
+  document.getElementById('success-unit').textContent  = boxId ? `Box ${boxId}` : '';
+
+  const bar = document.getElementById('success-bar-fill');
+  bar.className = 'success-bar-fill duplicate';
+  bar.style.animation = 'none';
+  bar.offsetHeight; // reflow
+  bar.style.animation = '';
+
+  overlay.classList.add('show');
+  setTimeout(() => { overlay.classList.remove('show'); resumeScanning(); }, 2000);
 }
 
 // ══════════════════════════════════════════════════════
