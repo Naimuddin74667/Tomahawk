@@ -1098,7 +1098,6 @@ html[data-theme="light"] .icon-moon { display: none; }
   <div class="admin-tabs">
     <div class="admin-tab active" onclick="switchAdminTab('tally')">Live Tally</div>
     <div class="admin-tab" onclick="switchAdminTab('session')">Session</div>
-    <div class="admin-tab" onclick="switchAdminTab('users')">Users</div>
     <div class="admin-tab" onclick="switchAdminTab('history')">All Scans</div>
     <div class="admin-tab" onclick="switchAdminTab('past')">Past Sessions</div>
   </div>
@@ -1138,30 +1137,6 @@ html[data-theme="light"] .icon-moon { display: none; }
           No scans yet
         </div>
       </div>
-    </div>
-
-    <!-- USERS PANEL -->
-    <div class="admin-panel" id="admin-panel-users">
-      <div class="card">
-        <div class="card-title">Add New User</div>
-        <div class="form-group">
-          <label>Username</label>
-          <input type="text" id="new-user-name" placeholder="e.g. ravi" autocapitalize="none">
-        </div>
-        <div class="form-group">
-          <label>Password</label>
-          <input type="password" id="new-user-pass" placeholder="Set a password">
-        </div>
-        <div class="form-group">
-          <label>Role</label>
-          <select id="new-user-role">
-            <option value="user">Team Member</option>
-            <option value="admin">Admin</option>
-          </select>
-        </div>
-        <button class="btn btn-primary btn-full" onclick="addUser()">Add User →</button>
-      </div>
-      <div id="users-list"></div>
     </div>
 
     <!-- ALL SCANS PANEL -->
@@ -1224,14 +1199,12 @@ const WORKER = 'https://tomahawk-returns.naimuddin.workers.dev';
 
 // Default admin account — change password after first login
 // Stored in D1 scanner_users table; this seeds it if missing
-const DEFAULT_ADMIN = { username: 'admin', password: 'tomahawk@2026', role: 'admin' };
 
 // ══════════════════════════════════════════════════════
 // STATE
 // ══════════════════════════════════════════════════════
 let currentUser   = null;   // { id, username, role }
 let activeSession = null;   // { id, name, created_at, ... }
-let allUsers      = [];
 let allRecords    = [];     // current session records
 let pastSessions  = [];
 let viewedSession = null;   // for detail overlay
@@ -1322,7 +1295,6 @@ async function loadAndRoute() {
   const r = await api('scannerLoadData');
   if (r.ok) {
     activeSession = r.activeSession || null;
-    allUsers      = r.users || [];
     allRecords    = r.records || [];
     pastSessions  = r.pastSessions || [];
   }
@@ -1331,7 +1303,6 @@ async function loadAndRoute() {
   document.getElementById('admin-topbar-avatar').textContent = initialsOf(currentUser.username);
   renderAdminSession();
   renderTally();
-  renderUsers();
   renderAllScans();
   renderPastSessions();
   showScreen('admin');
@@ -1455,56 +1426,6 @@ function renderTally() {
         <div class="tally-total">Total: <span>${total} pcs</span></div>
       </div>`;
   }).join('');
-}
-
-// ══════════════════════════════════════════════════════
-// ADMIN — USERS
-// ══════════════════════════════════════════════════════
-async function addUser() {
-  const username = document.getElementById('new-user-name').value.trim().toLowerCase();
-  const password = document.getElementById('new-user-pass').value.trim();
-  const role     = document.getElementById('new-user-role').value;
-
-  if (!username || !password) { showToast('Fill in all fields', 'error'); return; }
-  if (allUsers.find(u => u.username === username)) { showToast('Username already exists', 'error'); return; }
-
-  const r = await api('scannerAddUser', { username, password, role });
-  if (!r.ok) { showToast('Failed to add user', 'error'); return; }
-
-  allUsers.push({ id: r.id, username, role });
-  document.getElementById('new-user-name').value = '';
-  document.getElementById('new-user-pass').value = '';
-  renderUsers();
-  showToast('User added: ' + username, 'success');
-}
-
-function renderUsers() {
-  const el = document.getElementById('users-list');
-  const nonAdminUsers = allUsers.filter(u => u.username !== DEFAULT_ADMIN.username);
-  if (nonAdminUsers.length === 0) {
-    el.innerHTML = `<div class="empty-state"><div class="empty-icon">👥</div>No team members added yet</div>`;
-    return;
-  }
-  el.innerHTML = nonAdminUsers.map(u => `
-    <div class="user-row">
-      <div class="user-avatar">${u.username[0].toUpperCase()}</div>
-      <div class="user-info">
-        <div class="user-name">${u.username}</div>
-        <div class="user-role">${u.role}</div>
-      </div>
-      <span class="role-badge ${u.role}">${u.role}</span>
-      ${u.role !== 'admin' ? `<button class="btn btn-ghost" style="font-size:10px;padding:6px 10px;" onclick="deleteUser(${u.id},'${u.username}')">🗑</button>` : ''}
-    </div>`).join('');
-}
-
-function deleteUser(id, username) {
-  showConfirm('Delete User?', `Remove "${username}" from the system?`, async () => {
-    const r = await api('scannerDeleteUser', { id });
-    if (!r.ok) { showToast('Failed to delete user', 'error'); return; }
-    allUsers = allUsers.filter(u => u.id !== id);
-    renderUsers();
-    showToast('User removed', 'success');
-  });
 }
 
 // ══════════════════════════════════════════════════════
