@@ -740,15 +740,15 @@ html[data-theme="light"] .icon-moon { display: none; }
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: clamp(12px, 3vh, 22px) 22px;
-  margin-bottom: 10px;
+  padding: clamp(9px, 2.3vh, 17px) 22px;
+  margin-bottom: 8px;
 }
 
 .active-session-display {
   display: flex;
   align-items: center;
   gap: 14px;
-  margin-bottom: clamp(8px, 2vh, 16px);
+  margin-bottom: clamp(6px, 1.5vh, 12px);
 }
 .session-icon { font-size: 36px; }
 .session-display-name {
@@ -786,6 +786,12 @@ html[data-theme="light"] .icon-moon { display: none; }
   border-radius: var(--radius-sm);
   padding: 12px 16px;
   margin-bottom: 6px;
+}
+.tally-sr {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text3);
 }
 .tally-sku {
   font-family: var(--mono);
@@ -933,7 +939,7 @@ html[data-theme="light"] .icon-moon { display: none; }
   letter-spacing: 1px;
   margin-top: 4px;
 }
-.stats-row-lg .stat-card { padding: clamp(8px, 2vh, 16px) 14px; }
+.stats-row-lg .stat-card { padding: clamp(6px, 1.5vh, 12px) 14px; }
 .stats-row-lg .stat-num { font-size: 30px; }
 .stats-row-lg .stat-lbl { font-size: 10px; margin-top: 6px; }
 
@@ -988,7 +994,7 @@ html[data-theme="light"] .icon-moon { display: none; }
 .divider {
   height: 1px;
   background: var(--border);
-  margin: clamp(6px, 1.5vh, 10px) 0;
+  margin: clamp(5px, 1.2vh, 8px) 0;
 }
 
 /* Loading spinner */
@@ -1680,14 +1686,15 @@ function renderSessionDetail(records) {
   const totalBoxes   = records.length;
 
   const header = `
-    <div class="tally-table-header">
+    <div class="tally-table-header" style="grid-template-columns:40px 3fr 2fr 2fr 2fr;">
+      <div>Sr.</div>
       <div>SKU</div>
       <div style="text-align:right;">Boxes</div>
       <div style="text-align:right;">Qty</div>
       <div style="text-align:right;">Qty/Box</div>
     </div>`;
 
-  const rows = skus.map(s => {
+  const rows = skus.map((s, idx) => {
     const skuBoxes = s.sealedCount + s.looseCount;
     const skuQty   = s.sealedQty + s.looseQty;
     let qtyPerBox = '—';
@@ -1696,7 +1703,8 @@ function renderSessionDetail(records) {
       qtyPerBox = allSame ? s.sealedQtys[0] : `~${Math.round(s.sealedQtys.reduce((a,b)=>a+b,0)/s.sealedQtys.length)}`;
     }
     return `
-      <div class="tally-table-row">
+      <div class="tally-table-row" style="grid-template-columns:40px 3fr 2fr 2fr 2fr;">
+        <div class="tally-sr">${idx + 1}</div>
         <div class="tally-sku">${s.sku}</div>
         <div class="tally-boxes-cell">
           <div class="tally-boxes-total">${skuBoxes}</div>
@@ -1802,7 +1810,7 @@ function formatDate(iso) {
 }
 
 function downloadCSV(rows, filename) {
-  const csv = rows.map(r => r.map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const csv = rows.map(r => r.map(v => `"${String(v === null || v === undefined ? '' : v).replace(/"/g,'""')}"`).join(',')).join('\n');
   const a = document.createElement('a');
   a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
   a.download = filename;
