@@ -283,8 +283,7 @@
   // the real enforcement point once auth enforcement is turned on.
   var ACTION_ROLE_MIN = {
     bk_libSave: 'manager', blinkitSaveInv: 'manager', blinkitSaveReceivedQty: 'manager',
-    blinkitSaveCreditNote: 'manager', blinkitSaveStatusNote: 'manager', blinkitDeleteInvoiceByRO: 'manager',
-    blinkitDeleteAllInvoices: 'admin'
+    blinkitSaveCreditNote: 'manager', blinkitSaveStatusNote: 'manager', blinkitDeleteInvoiceByRO: 'manager'
   };
   function actionAllowed(action, role) {
     var min = ACTION_ROLE_MIN[action];
@@ -321,10 +320,6 @@
     window.TM_CAN_EDIT = (role === 'admin' || role === 'manager');
     var isAdmin = role === 'admin';
 
-    ['ledgerDeleteAllBtn'].forEach(function (id) {
-      var el = document.getElementById(id);
-      if (el) el.style.display = isAdmin ? '' : 'none';
-    });
     ['invGenerateLabelsBtn', 'invPreviewBtn', 'cnGenerateBtn', 'saveLibInlineEditBtn', 'deleteModelBtn', 'clearLibraryBtn', 'lib-mode-edit-btn'].forEach(function (id) {
       var el = document.getElementById(id);
       if (el) el.style.display = window.TM_CAN_EDIT ? '' : 'none';
@@ -761,8 +756,6 @@
     <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128203; Invoice Ledger</div>
     <input type="text" id="ledgerSearch" placeholder="Search RO or Invoice No..." oninput="_ledgerPage=1;ledgerRender()" style="width:220px;font-size:11px;padding:5px 10px">
     <button class="btn btn-secondary btn-sm" onclick="ledgerLoad()" style="width:auto">&#8635; Refresh</button>
-    <!-- Admin-only (see applyRoleUI in the AUTH script above) and password-gated in ledgerDeleteAllPrompt(). -->
-    <button class="btn btn-sm" id="ledgerDeleteAllBtn" onclick="ledgerDeleteAllPrompt()" style="width:auto;background:#3a1414;border:1px solid #6b2020;color:#ff8080">&#128465; Delete Invoice</button>
   </div>
 
   <!-- Stats strip -->
@@ -797,10 +790,11 @@
           <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Credit Note</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Cr. Note Qty</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Status</th>
+          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Delete</th>
         </tr>
       </thead>
       <tbody id="ledgerTbody">
-        <tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+        <tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -3458,34 +3452,38 @@ function invReset() {
 
 
 // ═══════════════════════════════════════════════════════════════
-// DELETE ALL INVOICES — admin-only (button hidden for non-admins
-// via applyRoleUI) and password-gated below.
+// DELETE ONE INVOICE (by RO number) — emergency use only.
+// Button is admin-only (see the isAdmin check inside ledgerRender()
+// that draws it) and always password-gated below, regardless of role.
 // ═══════════════════════════════════════════════════════════════
-function ledgerDeleteAllPrompt() {
-  var pw = prompt('Enter admin password to delete ALL invoices & credit notes:');
+function ledgerDeleteRowPrompt(ro) {
+  var pw = prompt('EMERGENCY USE ONLY.\nEnter admin password to delete the invoice for RO ' + ro + ':');
   if (pw === null) return; // cancelled
   if (pw !== 'Admin@8411') { toast('Incorrect password', 'err'); return; }
-  if (!confirm('This will PERMANENTLY delete ALL invoices and credit notes (cloud + local) and reset invoice/CN numbering to 001. This cannot be undone. Continue?')) return;
+  if (!confirm('This will PERMANENTLY delete the invoice for RO ' + ro + ' (cloud + local). This cannot be undone. Continue?')) return;
 
-  // Clear every Blinkit-prefixed localStorage key (records, sequences, cached HTML/items)
-  Object.keys(localStorage)
-    .filter(function(k){
-      return k === 'blinkit_inv_records' || k === 'blinkit_inv_seq' || k === 'blinkit_cn_seq'
-          || k.indexOf('blinkit_inv_html_') === 0 || k.indexOf('blinkit_cn_html_') === 0
-          || k.indexOf('blinkit_inv_items_') === 0;
-    })
-    .forEach(function(k){ localStorage.removeItem(k); });
+  // Remove this RO's record from the local record map, plus its cached
+  // invoice HTML/items snapshot (keyed by invoice number, not RO).
+  var saved = JSON.parse(localStorage.getItem('blinkit_inv_records') || '{}');
+  var rec = saved[ro];
+  var invNum = rec ? (typeof rec === 'object' ? rec.inv_number : rec) : null;
+  delete saved[ro];
+  localStorage.setItem('blinkit_inv_records', JSON.stringify(saved));
+  if (invNum) {
+    try { localStorage.removeItem('blinkit_inv_html_' + invNum); } catch(e) {}
+    try { localStorage.removeItem('blinkit_inv_items_' + invNum); } catch(e) {}
+  }
 
   if (!IS_LIVE) {
-    toast('All local invoice/CN test data cleared', 'ok');
+    toast('Invoice deleted (local)', 'ok');
     ledgerLoad();
     return;
   }
 
-  fetch(WORKER_URL + '?action=blinkitDeleteAllInvoices', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })
+  fetch(WORKER_URL + '?action=blinkitDeleteInvoiceByRO', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ ro_number: ro }) })
     .then(function(r){ return r.json(); })
     .then(function(d){
-      if (d.ok) { toast('All invoices & credit notes deleted (cloud + local)', 'ok'); }
+      if (d.ok) { toast('Invoice deleted (cloud + local)', 'ok'); }
       else { toast('Cloud delete failed — local data was still cleared', 'err'); }
       ledgerLoad();
     })
@@ -3570,7 +3568,7 @@ function ledgerRender() {
 
   if (!rows.length) {
     document.getElementById('ledgerTbody').innerHTML =
-      '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">' +
+      '<tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">' +
       (q ? 'No results for "' + q + '"' : 'No invoices generated yet') + '</td></tr>';
     document.getElementById('ledgerPagerControls').style.display = 'none';
     return;
@@ -3653,6 +3651,13 @@ function ledgerRender() {
       statusCell += '<div style="margin-top:3px;font-size:9.5px;color:var(--muted);max-width:130px">' + cn.reason.replace(/&/g,'&amp;') + '</div>';
     }
 
+    // ── Delete cell — admin-only, emergency use, always password-gated
+    //    (see ledgerDeleteRowPrompt). Non-admins get an empty cell. ──
+    var isAdminRow = window.TM_ROLE === 'admin';
+    var deleteCell = isAdminRow
+      ? '<button class="btn btn-sm" title="Emergency delete — admin password required" onclick="ledgerDeleteRowPrompt(\'' + (r.ro_number||'').replace(/'/g,"\\'") + '\')" style="width:auto;font-size:10px;padding:3px 8px;background:#3a1414;border:1px solid #6b2020;color:#ff8080">&#128465;</button>'
+      : '<span style="color:var(--muted)">&#8212;</span>';
+
     return '<tr style="' + bg + ';border-bottom:1px solid var(--border)">'
       + '<td style="padding:.6rem 1rem;font-family:\'DM Mono\',monospace;font-size:11px;color:var(--accent);font-weight:700">' + (r.inv_number||'\u2014') + '</td>'
       + '<td style="padding:.6rem 1rem;font-family:\'DM Mono\',monospace;font-size:11px;color:var(--text)">' + (r.ro_number||'\u2014') + '</td>'
@@ -3667,6 +3672,7 @@ function ledgerRender() {
       + '<td style="padding:.6rem 1rem;text-align:right;white-space:nowrap">' + cnCell + '</td>'
       + '<td style="padding:.6rem 1rem;font-size:11px;color:var(--text);text-align:center">' + cnQtyCell + '</td>'
       + '<td style="padding:.6rem 1rem;text-align:center;white-space:nowrap">' + statusCell + '</td>'
+      + '<td style="padding:.6rem 1rem;text-align:center;white-space:nowrap">' + deleteCell + '</td>'
     + '</tr>';
   }).join('');
 }
