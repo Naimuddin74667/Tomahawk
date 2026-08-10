@@ -260,7 +260,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
      BLOCK 4 — STAT CARDS
 ============================================================ -->
 <style>
-.stats-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 24px; }
+.stats-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 12px; margin-bottom: 24px; }
 .stat-card {
   background: var(--bg-surface); border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg); padding: 16px 18px;
@@ -468,6 +468,48 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .recqty-save-btn:hover, .recqty-cancel-btn:hover { background: var(--bg-hover); }
 .recqty-saving { color: var(--text-secondary); font-size: 11px; font-style: italic; }
 .recqty-error { color: #f87171; font-size: 11px; cursor: help; }
+
+.g4box-cell { white-space: nowrap; }
+.g4box-value { font-weight: 600; color: var(--text-primary); margin-right: 6px; }
+.g4box-na { color: var(--text-muted); font-size: 12px; font-style: italic; }
+.g4box-edit-btn {
+  background: transparent; border: none; cursor: pointer; font-size: 12px;
+  padding: 2px 4px; color: var(--text-secondary); transition: color .15s;
+}
+.g4box-edit-btn:hover { color: var(--accent); }
+.g4box-edit-row { display: flex; align-items: center; gap: 4px; }
+.g4box-input {
+  width: 54px; background: var(--bg-raised); border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm); padding: 4px 6px; color: var(--text-primary);
+  font-family: var(--font-body); font-size: 12px; text-align: right;
+  -moz-appearance: textfield;
+}
+.g4box-input::-webkit-outer-spin-button, .g4box-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.g4box-input.qty-error { border-color: #f87171; }
+.g4box-save-btn, .g4box-cancel-btn {
+  background: transparent; border: none; cursor: pointer; font-size: 13px;
+  width: 20px; height: 20px; border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+}
+.g4box-save-btn { color: var(--c-green); }
+.g4box-cancel-btn { color: var(--text-muted); }
+.g4box-save-btn:hover, .g4box-cancel-btn:hover { background: var(--bg-hover); }
+.g4box-saving { color: var(--text-secondary); font-size: 11px; font-style: italic; }
+.g4box-error { color: #f87171; font-size: 11px; cursor: help; }
+
+.type-tag { font-size: 12px; color: var(--text-secondary); }
+.type-tag.type-bundle { color: var(--c-orange); font-weight: 600; }
+
+.g4-status-badge {
+  display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .03em;
+  padding: 3px 9px; border-radius: var(--radius-xl); text-transform: uppercase; border: 1px solid;
+}
+.g4-status-badge.good { border-color: var(--c-green-border); color: var(--c-green); background: var(--c-green-dim); }
+.g4-status-badge.bad { border-color: #f8717150; color: #f87171; background: #f8717118; }
+.g4-status-badge.pending { border-color: var(--border-default); color: var(--text-muted); background: transparent; }
+
+.stock-table tbody tr.row-g4-bad { background: #f8717110; }
+.stock-table tbody tr.row-g4-bad:hover { background: #f8717120; }
 
 /* ---- Settings modal ---- */
 .settings-section { margin-bottom: 20px; }
@@ -819,6 +861,11 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       <div class="stat-value" id="stat-qtybox-data">—</div>
       <div class="stat-sub" id="stat-qtybox-sub">all simple SKUs · click to view</div>
     </div>
+    <div class="stat-card" id="card-g4-stock">
+      <div class="stat-label">G4 Stock</div>
+      <div class="stat-value" id="stat-g4-stock">—</div>
+      <div class="stat-sub" id="stat-g4-stock-sub">reconcile box counts · click to view</div>
+    </div>
   </div>
 
   <div class="toolbar">
@@ -833,6 +880,11 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       <input type="checkbox" id="unconfirmed-only-toggle">
       Unconfirmed only
     </label>
+    <select class="tb-select" id="type-filter" style="display:none;">
+      <option value="">All types</option>
+      <option value="simple">Simple</option>
+      <option value="bundle">Bundle</option>
+    </select>
     <button class="tb-refresh" id="refresh-btn">
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12.25 7A5.25 5.25 0 112.87 3.5M2.87 3.5V1M2.87 3.5H5.37" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Refresh
@@ -1042,6 +1094,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   var qtyValues = {};        // { skuCode: number } — typed transfer qty, defaults to 0 until edited
   var boxQtyValues = {};     // { skuCode: number } — typed "Transfer Box Qty" (number of boxes), used to auto-compute Total Qty
   var qtyOverrides = {};     // { skuCode: number } — manually saved Qty/box, from D1 (sa_qty_overrides)
+  var g4BoxCounts = {};      // { skuCode: number } — manually counted Total Box in G4, from D1 (sa_g4_box_counts)
   var qtyConfirmed = {};     // { skuCode: true } — Qty/box values confirmed via the Qty/Box Data tab specifically
   var archivedSkus = {};     // { skuCode: true } — manually archived SKUs, from D1 (sa_archived_skus)
   var recQtyOverrides = {};  // { skuCode: number } — manually saved Rec. Qty, from D1 (sa_recqty_overrides)
@@ -1092,6 +1145,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   var showDisabledToggle = document.getElementById('show-disabled-toggle');
   var unconfirmedOnlyWrap = document.getElementById('unconfirmed-only-wrap');
   var unconfirmedOnlyToggle = document.getElementById('unconfirmed-only-toggle');
+  var typeFilter = document.getElementById('type-filter');
   var refreshBtn = document.getElementById('refresh-btn');
   var lastUpdated = document.getElementById('last-updated');
   var statusDot = document.getElementById('status-dot');
@@ -1139,6 +1193,11 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     applyFilters();
   });
 
+  // ---- TYPE FILTER (G4 Stock tab only) -----------------------------------
+  typeFilter.addEventListener('change', function () {
+    applyFilters();
+  });
+
   // ---- FETCH ------------------------------------------------------
   // Single combined round trip — the Worker's sa_loadAll action fetches
   // UC_Inventory + bundles from the GAS bridge (edge-cached there for 5 min,
@@ -1177,6 +1236,11 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         recQtyOverrides = {};
         (data.recQty || []).forEach(function (row) {
           recQtyOverrides[row.sku_code] = row.rec_qty;
+        });
+
+        g4BoxCounts = {};
+        (data.g4BoxCounts || []).forEach(function (row) {
+          g4BoxCounts[row.sku_code] = row.total_box;
         });
 
         appSettings = data.settings || {};
@@ -1340,6 +1404,12 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       // regardless of stock levels or archive status. Excludes underscore
       // (BUNDLE-type) SKUs per the naming convention — see isSimpleSku.
       baseRows = allRows.filter(function (r) { return isSimpleSku(r.skuCode); });
+    } else if (currentView === 'g4stock') {
+      // G4 stock reconciliation — every SKU in UC_Inventory, both simple
+      // and bundle-type, since a manual box count can (and should) be
+      // tracked for either. Type filtering happens in the toolbar dropdown
+      // below, not here.
+      baseRows = allRows;
     } else {
       baseRows = idleRows.filter(function (r) {
         var isArchivedRow = archivedSkus.hasOwnProperty(r.skuCode);
@@ -1348,10 +1418,16 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     }
 
     var isBundleView = (currentView === 'bundlesku');
+    var typeFilterVal = typeFilter.value; // '', 'simple', 'bundle' — only meaningful in g4stock view
 
     visibleRows = baseRows.filter(function (r) {
       if (!showDisabled && r.enabled === false) return false;
       if (currentView === 'qtybox' && unconfirmedOnly && qtyConfirmed[r.skuCode]) return false;
+      if (currentView === 'g4stock' && typeFilterVal) {
+        var rowIsSimple = isSimpleSku(r.skuCode);
+        if (typeFilterVal === 'simple' && !rowIsSimple) return false;
+        if (typeFilterVal === 'bundle' && rowIsSimple) return false;
+      }
       if (cat && r.categoryCode !== cat) return false;
       if (!isBundleView && brand && r.brand !== brand) return false;
       if (q) {
@@ -1364,7 +1440,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       return true;
     });
 
-    if (isBundleView || currentView === 'qtybox') {
+    if (isBundleView || currentView === 'qtybox' || currentView === 'g4stock') {
       visibleRows.sort(function (a, b) { return a.skuCode.localeCompare(b.skuCode); });
     } else {
       visibleRows.sort(function (a, b) {
@@ -1428,6 +1504,14 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     document.getElementById('stat-qtybox-data').textContent = qtyBoxSkuCount;
     document.getElementById('stat-qtybox-sub').textContent =
       qtyBoxConfirmedCount + '/' + qtyBoxSkuCount + ' confirmed · click to view';
+
+    var g4StockCountedCount = 0;
+    allRows.forEach(function (r) {
+      if (g4BoxCounts.hasOwnProperty(r.skuCode)) g4StockCountedCount++;
+    });
+    document.getElementById('stat-g4-stock').textContent = allRows.length;
+    document.getElementById('stat-g4-stock-sub').textContent =
+      g4StockCountedCount + '/' + allRows.length + ' counted · click to view';
   }
 
   // Resolves the effective Qty/box for a row — same priority as renderQtyPerBoxCell:
@@ -1644,12 +1728,69 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       });
   }
 
+  // ---- G4 TOTAL BOX CELL (G4 Stock reconciliation tab) -------------------
+  // Purely manual — a physical box count entered by whoever's counting G4,
+  // no UC fallback exists for this (UC only gives a stock quantity, not a
+  // box count). Starts as "Not counted" until someone fills it in.
+  function renderG4BoxCell(r) {
+    var sku = r.skuCode;
+    if (g4BoxCounts.hasOwnProperty(sku) && g4BoxCounts[sku] !== null && g4BoxCounts[sku] !== '') {
+      return '<td class="g4box-cell" title="Manually counted — click ✎ to edit">' +
+        '<span class="g4box-value">' + escapeHtml(g4BoxCounts[sku]) + '</span>' +
+        '<button type="button" class="g4box-edit-btn" data-sku="' + escapeHtml(sku) + '" title="Edit">✎</button>' +
+        '</td>';
+    }
+    return '<td class="g4box-cell"><span class="g4box-na">Not counted</span>' +
+      '<button type="button" class="g4box-edit-btn" data-sku="' + escapeHtml(sku) + '" title="Enter count">✎</button>' +
+      '</td>';
+  }
+
+  function enterG4BoxEditMode(cell, sku) {
+    var current = g4BoxCounts.hasOwnProperty(sku) ? g4BoxCounts[sku] : '';
+    cell.innerHTML =
+      '<div class="g4box-edit-row">' +
+        '<input type="number" min="0" class="g4box-input" value="' + escapeHtml(current) + '">' +
+        '<button type="button" class="g4box-save-btn" data-sku="' + escapeHtml(sku) + '" title="Save">✓</button>' +
+        '<button type="button" class="g4box-cancel-btn" title="Cancel">✕</button>' +
+      '</div>';
+    var input = cell.querySelector('.g4box-input');
+    input.focus();
+    input.select();
+  }
+
+  function saveG4BoxCount(sku, cell) {
+    var input = cell.querySelector('.g4box-input');
+    var val = parseInt(input.value, 10);
+    if (!(val >= 0)) {
+      input.classList.add('qty-error');
+      input.focus();
+      return;
+    }
+    cell.innerHTML = '<span class="g4box-saving">Saving…</span>';
+
+    fetch(WORKER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'sa_saveG4BoxCount', skuCode: sku, totalBox: val })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data || data.ok === false) throw new Error((data && data.error) || 'Save failed');
+        g4BoxCounts[sku] = val;
+        renderTable();
+        renderGlobalStats(); // keep the "X/Y counted" progress on the card in sync
+      })
+      .catch(function (err) {
+        cell.innerHTML = '<span class="g4box-error" title="' + escapeHtml(err.message) + '">Save failed — retry</span>';
+      });
+  }
+
   // Event delegation on the table body — cells are rebuilt on every
   // renderTable() call, so listeners are bound once here rather than per-row.
   tableBody.addEventListener('click', function (e) {
     // Viewer role: block every edit/archive/add interaction in this table
     // with one guard, rather than hunting each button individually.
-    var isWriteBtn = e.target.closest('.qty-box-add-btn, .qty-box-edit-btn, .qty-box-save-btn, .archive-btn, .unarchive-btn, .recqty-edit-btn, .recqty-save-btn');
+    var isWriteBtn = e.target.closest('.qty-box-add-btn, .qty-box-edit-btn, .qty-box-save-btn, .archive-btn, .unarchive-btn, .recqty-edit-btn, .recqty-save-btn, .g4box-edit-btn, .g4box-save-btn');
     if (isWriteBtn && window.TM_ROLE === 'viewer') {
       if (typeof toast === 'function') toast("View only — you don't have edit access", 'err');
       return;
@@ -1664,6 +1805,9 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     var recEditBtn = e.target.closest('.recqty-edit-btn');
     var recSaveBtn = e.target.closest('.recqty-save-btn');
     var recCancelBtn = e.target.closest('.recqty-cancel-btn');
+    var g4EditBtn = e.target.closest('.g4box-edit-btn');
+    var g4SaveBtn = e.target.closest('.g4box-save-btn');
+    var g4CancelBtn = e.target.closest('.g4box-cancel-btn');
 
     if (addBtn || editBtn) {
       var sku = (addBtn || editBtn).getAttribute('data-sku');
@@ -1681,6 +1825,12 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     } else if (recSaveBtn) {
       saveRecQtyOverride(recSaveBtn.getAttribute('data-sku'), recSaveBtn.closest('td'));
     } else if (recCancelBtn) {
+      renderTable();
+    } else if (g4EditBtn) {
+      enterG4BoxEditMode(g4EditBtn.closest('td'), g4EditBtn.getAttribute('data-sku'));
+    } else if (g4SaveBtn) {
+      saveG4BoxCount(g4SaveBtn.getAttribute('data-sku'), g4SaveBtn.closest('td'));
+    } else if (g4CancelBtn) {
       renderTable();
     }
   });
@@ -1719,46 +1869,60 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     document.getElementById('card-bundle-sku').classList.toggle('is-active-view', view === 'bundlesku');
     document.getElementById('card-archived').classList.toggle('is-active-view', view === 'archived');
     document.getElementById('card-qtybox-data').classList.toggle('is-active-view', view === 'qtybox');
+    document.getElementById('card-g4-stock').classList.toggle('is-active-view', view === 'g4stock');
     selectedSkus = {}; // selection only makes sense in Idle / Low Stock views
-    selectAll.disabled = (view === 'archived' || view === 'idealstock' || view === 'bundlesku' || view === 'qtybox');
+    selectAll.disabled = (view === 'archived' || view === 'idealstock' || view === 'bundlesku' || view === 'qtybox' || view === 'g4stock');
     selectAll.checked = false;
     unconfirmedOnlyWrap.style.display = (view === 'qtybox') ? '' : 'none';
+    typeFilter.style.display = (view === 'g4stock') ? '' : 'none';
     updateColumnVisibility(view);
     applyFilters();
   }
 
-  // Bundle SKU and Qty/Box Data views each have a different shape than the
-  // default idle/lowstock/archived table, so swap the shared header row
-  // instead of maintaining separate tables.
+  // Bundle SKU, Qty/Box Data, and G4 Stock views each have a different shape
+  // than the default idle/lowstock/archived table, so swap the shared
+  // header row instead of maintaining separate tables.
   // - Bundle SKU: master SKU + category + linked simple SKUs + stock, no
   //   name/qty-box-transfer/actions. Rec.Qty repurposed as Stock, Qty/box
   //   repurposed as Combo Qty.
   // - Qty/Box Data: flat reference list of every TRUE SIMPLE SKU's stock
   //   and Qty/box — SKU + Name + Category + Stock (E3/G4) + Qty/box.
+  // - G4 Stock: reconciliation list — SKU + Category + Type + Qty/box +
+  //   Total Box (manual count) + Total Qty (UC's own G4_stock, independent
+  //   of the count) + Status (Good/Bad/Pending). Repurposes sort-g4→Type,
+  //   Rec.Qty→Qty/box, Qty/box→Total Box, Transfer Box Qty→Total Qty,
+  //   Total Transfer Qty→Status, hides Name and Actions.
   function updateColumnVisibility(view) {
     var isBundle = (view === 'bundlesku');
     var isQtyBox = (view === 'qtybox');
+    var isG4Stock = (view === 'g4stock');
 
-    document.getElementById('th-name').style.display = isBundle ? 'none' : '';
+    document.getElementById('th-name').style.display = (isBundle || isG4Stock) ? 'none' : '';
     document.getElementById('th-boxtransferqty').style.display = (isBundle || isQtyBox) ? 'none' : '';
     document.getElementById('th-transferqty').style.display = (isBundle || isQtyBox) ? 'none' : '';
-    document.getElementById('th-actions').style.display = (isBundle || isQtyBox) ? 'none' : '';
+    document.getElementById('th-actions').style.display = (isBundle || isQtyBox || isG4Stock) ? 'none' : '';
     document.getElementById('th-sku').textContent = isBundle ? 'Bundle / Master SKU' : 'SKU';
 
     var sortG4 = document.getElementById('sort-g4');
-    sortG4.style.display = '';
-    sortG4.textContent = isBundle ? 'Simple SKU (linked)' : (isQtyBox ? 'Stock' : ('G4 stock ' + (sortDesc ? '↓' : '↑')));
-    sortG4.classList.toggle('sortable', !isBundle && !isQtyBox);
+    sortG4.style.display = isQtyBox ? 'none' : '';
+    sortG4.textContent = isBundle ? 'Simple SKU (linked)' : (isQtyBox ? 'Stock' : (isG4Stock ? 'Type' : ('G4 stock ' + (sortDesc ? '↓' : '↑'))));
+    sortG4.classList.toggle('sortable', !isBundle && !isQtyBox && !isG4Stock);
 
     var thRecQty = document.getElementById('th-recqty');
     thRecQty.style.display = isQtyBox ? 'none' : '';
     thRecQty.style.width = isBundle ? '110px' : '90px';
-    thRecQty.textContent = isBundle ? 'Stock' : 'Rec. qty';
+    thRecQty.textContent = isBundle ? 'Stock' : (isG4Stock ? 'Qty/box' : 'Rec. qty');
 
     var thQtyBox = document.getElementById('th-qtybox');
     thQtyBox.style.display = '';
     thQtyBox.style.width = isBundle ? '100px' : '80px';
-    thQtyBox.textContent = isBundle ? 'Combo Qty' : 'Qty/box';
+    thQtyBox.textContent = isBundle ? 'Combo Qty' : (isG4Stock ? 'Total Box' : 'Qty/box');
+
+    var thBoxTransferQty = document.getElementById('th-boxtransferqty');
+    thBoxTransferQty.textContent = isG4Stock ? 'Total Qty' : 'Transfer Box Qty';
+
+    var thTransferQty = document.getElementById('th-transferqty');
+    thTransferQty.textContent = isG4Stock ? 'Status' : 'Total Transfer qty';
   }
 
   function renderTable() {
@@ -1776,6 +1940,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         emptyMsg = unconfirmedOnly
           ? 'Everything visible here is confirmed. 🎉<br>Uncheck "Unconfirmed only" to see the full list.'
           : 'No SKUs match this search.';
+      } else if (currentView === 'g4stock') {
+        emptyMsg = 'No SKUs match this search.';
       } else {
         emptyMsg = 'No idle-stock SKUs match this view.<br>Everything currently in G4 either has matching E3 stock, or your filters are hiding it.';
       }
@@ -1790,7 +1956,52 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     var isIdealStockView = (currentView === 'idealstock');
     var isBundleSkuView = (currentView === 'bundlesku');
     var isQtyBoxView = (currentView === 'qtybox');
-    var isViewOnly = isArchivedView || isIdealStockView || isBundleSkuView || isQtyBoxView;
+    var isG4StockView = (currentView === 'g4stock');
+    var isViewOnly = isArchivedView || isIdealStockView || isBundleSkuView || isQtyBoxView || isG4StockView;
+
+    if (isG4StockView) {
+      // Reconciliation list: SKU + Category + Type + Qty/box + Total Box
+      // (manual count) + Total Qty (UC's own G4_stock, independent of the
+      // count) + Status. Status is computed, not stored:
+      //   - no Total Box entered yet → Pending (not yet counted)
+      //   - qty/box × Total Box === Total Qty → Good
+      //   - otherwise → Bad, and the row gets a highlight
+      visibleRows.forEach(function (r) {
+        var placeholder = isPlaceholderSku(r.skuCode);
+        var disabled = r.enabled === false;
+        var rowIsSimple = isSimpleSku(r.skuCode);
+        var totalQty = Number(r.G4_stock) || 0;
+        var qtyPerBox = getQtyPerBoxValue(r);
+        var hasCount = g4BoxCounts.hasOwnProperty(r.skuCode) && g4BoxCounts[r.skuCode] !== null && g4BoxCounts[r.skuCode] !== '';
+        var totalBox = hasCount ? Number(g4BoxCounts[r.skuCode]) : 0;
+
+        var statusHtml, rowClass = '';
+        if (!hasCount) {
+          statusHtml = '<span class="g4-status-badge pending" title="No Total Box count entered yet">Pending</span>';
+        } else if (qtyPerBox * totalBox === totalQty) {
+          statusHtml = '<span class="g4-status-badge good" title="Qty/box × Total Box matches Total Qty">Good</span>';
+        } else {
+          statusHtml = '<span class="g4-status-badge bad" title="' + qtyPerBox + ' × ' + totalBox + ' = ' + (qtyPerBox * totalBox) + ', but Total Qty is ' + totalQty + '">Bad</span>';
+          rowClass = ' class="row-g4-bad"';
+        }
+
+        html += '<tr' + rowClass + ' data-sku="' + escapeHtml(r.skuCode) + '">';
+        html += '<td></td>';
+        html += '<td><span class="sku-code">' + escapeHtml(r.skuCode) + '</span>' +
+                (placeholder ? '<span class="badge">Placeholder</span>' : '') +
+                (disabled ? '<span class="badge disabled">Disabled</span>' : '') + '</td>';
+        html += '<td>' + escapeHtml(r.categoryCode||'—') + '</td>';
+        html += '<td><span class="type-tag' + (rowIsSimple ? '' : ' type-bundle') + '">' + (rowIsSimple ? 'Simple' : 'Bundle') + '</span></td>';
+        html += renderQtyPerBoxCell(r, false);
+        html += renderG4BoxCell(r);
+        html += '<td>' + totalQty + '</td>';
+        html += '<td>' + statusHtml + '</td>';
+        html += '</tr>';
+      });
+      tableBody.innerHTML = html;
+      syncSelectAllState();
+      return;
+    }
 
     if (isQtyBoxView) {
       // Flat reference list: SKU + Name + Category + Stock (E3/G4) +
@@ -1960,7 +2171,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   function updateActionBar() {
     var count = Object.keys(selectedSkus).length;
     selCountNum.textContent = count;
-    var isViewOnlyMode = (currentView === 'archived' || currentView === 'idealstock' || currentView === 'bundlesku' || currentView === 'qtybox');
+    var isViewOnlyMode = (currentView === 'archived' || currentView === 'idealstock' || currentView === 'bundlesku' || currentView === 'qtybox' || currentView === 'g4stock');
     actionBar.style.display = (count > 0 && !isViewOnlyMode) ? 'flex' : 'none';
   }
 
@@ -1983,7 +2194,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
   // ---- SORT ----------------------------------------------------------
   document.getElementById('sort-g4').addEventListener('click', function () {
-    if (currentView === 'bundlesku' || currentView === 'qtybox') return; // repurposed header here, not sortable
+    if (currentView === 'bundlesku' || currentView === 'qtybox' || currentView === 'g4stock') return; // repurposed header here, not sortable
     sortDesc = !sortDesc;
     this.textContent = 'G4 stock ' + (sortDesc ? '↓' : '↑');
     applyFilters();
@@ -2018,6 +2229,10 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   });
   document.getElementById('card-qtybox-data').addEventListener('click', function () {
     setView('qtybox');
+    document.getElementById('stock-table').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  document.getElementById('card-g4-stock').addEventListener('click', function () {
+    setView('g4stock');
     document.getElementById('stock-table').scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 
