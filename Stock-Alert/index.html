@@ -1061,14 +1061,27 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   // Per the team's SKU naming convention: underscore ("_") marks a
   // separately-stocked component bundled in — a BUNDLE-type SKU in
   // Unicommerce that explodes into components. Hyphen-only SKUs are true
-  // SIMPLE SKUs (or variants of one). The Qty/Box Data view is meant to be
-  // a reference list of simple SKUs only, so underscore SKUs are excluded
-  // there even though they still live in UC_Inventory alongside everything
-  // else. This is separate from — and in addition to — the curated master
-  // SKUs in UC_BundleComposition (the "Bundle SKU" card), which never
-  // appear in UC_Inventory at all.
+  // SIMPLE SKUs (or variants of one).
+  //
+  // EXCEPTION: "_Bare-Tool(s)" suffix SKUs (e.g. TCD-12D_Bare-Tool) are a
+  // UC naming quirk, not a real bundle — bare-tool variants are never used
+  // as a base for further bundling (per standing convention), so despite
+  // the underscore they're standalone sellable items with their own real
+  // stock and their own box qty. Same regex already used by getSkuBase()
+  // below to identify these as components, not composites.
+  //
+  // The Qty/Box Data view is meant to be a reference list of simple SKUs
+  // only, so genuine BUNDLE-type underscore SKUs are excluded there even
+  // though they still live in UC_Inventory alongside everything else. This
+  // is separate from — and in addition to — the curated master SKUs in
+  // UC_BundleComposition (the "Bundle SKU" card), which never appear in
+  // UC_Inventory at all.
+  var BARE_TOOL_SUFFIX_RE = /[-_]Bare[-_]Tools?$/i;
   var isSimpleSku = function (sku) {
-    return !!sku && String(sku).indexOf('_') === -1;
+    if (!sku) return false;
+    var s = String(sku);
+    if (s.indexOf('_') === -1) return true;
+    return BARE_TOOL_SUFFIX_RE.test(s);
   };
 
   // ---- DOM refs --------------------------------------------------
