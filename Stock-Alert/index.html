@@ -507,6 +507,8 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .g4-status-badge.good { border-color: var(--c-green-border); color: var(--c-green); background: var(--c-green-dim); }
 .g4-status-badge.bad { border-color: #f8717150; color: #f87171; background: #f8717118; }
 .g4-status-badge.pending { border-color: var(--border-default); color: var(--text-muted); background: transparent; }
+.g4-status-badge.loose { border-color: var(--c-orange-border); color: var(--c-orange); background: var(--c-orange-dim); }
+.g4-status-badge.noqtybox { border-color: var(--border-default); color: var(--text-muted); background: transparent; font-style: italic; }
 
 .stock-table tbody tr.row-g4-bad { background: #f8717110; }
 .stock-table tbody tr.row-g4-bad:hover { background: #f8717120; }
@@ -885,6 +887,14 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       <option value="simple">Simple</option>
       <option value="bundle">Bundle</option>
     </select>
+    <select class="tb-select" id="g4status-filter" style="display:none;">
+      <option value="">All statuses</option>
+      <option value="loose">Loose Carton</option>
+      <option value="bad">Bad</option>
+      <option value="pending">Pending</option>
+      <option value="good">Good</option>
+      <option value="noqtybox">No Qty/box</option>
+    </select>
     <button class="tb-refresh" id="refresh-btn">
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12.25 7A5.25 5.25 0 112.87 3.5M2.87 3.5V1M2.87 3.5H5.37" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Refresh
@@ -1146,6 +1156,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   var unconfirmedOnlyWrap = document.getElementById('unconfirmed-only-wrap');
   var unconfirmedOnlyToggle = document.getElementById('unconfirmed-only-toggle');
   var typeFilter = document.getElementById('type-filter');
+  var g4StatusFilter = document.getElementById('g4status-filter');
   var refreshBtn = document.getElementById('refresh-btn');
   var lastUpdated = document.getElementById('last-updated');
   var statusDot = document.getElementById('status-dot');
@@ -1195,6 +1206,11 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
   // ---- TYPE FILTER (G4 Stock tab only) -----------------------------------
   typeFilter.addEventListener('change', function () {
+    applyFilters();
+  });
+
+  // ---- STATUS FILTER (G4 Stock tab only) ---------------------------------
+  g4StatusFilter.addEventListener('change', function () {
     applyFilters();
   });
 
@@ -1419,6 +1435,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
     var isBundleView = (currentView === 'bundlesku');
     var typeFilterVal = typeFilter.value; // '', 'simple', 'bundle' — only meaningful in g4stock view
+    var g4StatusFilterVal = g4StatusFilter.value; // '', 'loose', 'bad', 'pending', 'good', 'noqtybox'
 
     visibleRows = baseRows.filter(function (r) {
       if (!showDisabled && r.enabled === false) return false;
@@ -1428,6 +1445,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         if (typeFilterVal === 'simple' && !rowIsSimple) return false;
         if (typeFilterVal === 'bundle' && rowIsSimple) return false;
       }
+      if (currentView === 'g4stock' && g4StatusFilterVal && computeG4Status(r).key !== g4StatusFilterVal) return false;
       if (cat && r.categoryCode !== cat) return false;
       if (!isBundleView && brand && r.brand !== brand) return false;
       if (q) {
@@ -1505,13 +1523,17 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     document.getElementById('stat-qtybox-sub').textContent =
       qtyBoxConfirmedCount + '/' + qtyBoxSkuCount + ' confirmed · click to view';
 
-    var g4StockCountedCount = 0;
+    var g4StockCountedCount = 0, g4LooseCartonCount = 0;
     allRows.forEach(function (r) {
       if (g4BoxCounts.hasOwnProperty(r.skuCode)) g4StockCountedCount++;
+      var qtyPerBox = getQtyPerBoxValue(r);
+      var totalQty = Number(r.G4_stock) || 0;
+      if (qtyPerBox && totalQty % qtyPerBox !== 0) g4LooseCartonCount++;
     });
     document.getElementById('stat-g4-stock').textContent = allRows.length;
-    document.getElementById('stat-g4-stock-sub').textContent =
-      g4StockCountedCount + '/' + allRows.length + ' counted · click to view';
+    document.getElementById('stat-g4-stock-sub').textContent = g4LooseCartonCount > 0
+      ? (g4LooseCartonCount + ' loose carton issue' + (g4LooseCartonCount === 1 ? '' : 's') + ' · click to view')
+      : (g4StockCountedCount + '/' + allRows.length + ' counted · click to view');
   }
 
   // Resolves the effective Qty/box for a row — same priority as renderQtyPerBoxCell:
@@ -1525,6 +1547,39 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       return Number(r.piecesPerCarton) || 0;
     }
     return 0;
+  }
+
+  // G4 Stock reconciliation status for one row — shared between the status
+  // filter dropdown and the table renderer, so the two never drift apart.
+  // See the isG4StockView render branch for the policy this encodes:
+  // G4 should only ever hold sealed full boxes.
+  function computeG4Status(r) {
+    var totalQty = Number(r.G4_stock) || 0;
+    var qtyPerBox = getQtyPerBoxValue(r);
+    var hasCount = g4BoxCounts.hasOwnProperty(r.skuCode) && g4BoxCounts[r.skuCode] !== null && g4BoxCounts[r.skuCode] !== '';
+    var totalBox = hasCount ? Number(g4BoxCounts[r.skuCode]) : 0;
+
+    if (!qtyPerBox) {
+      return { key: 'noqtybox', label: 'No Qty/box', isBad: false,
+        title: "Set a Qty/box value first — can't check for loose cartons without it" };
+    }
+    if (totalQty % qtyPerBox !== 0) {
+      var looseUnits = totalQty % qtyPerBox;
+      var fullBoxes = Math.floor(totalQty / qtyPerBox);
+      return { key: 'loose', label: 'Loose Carton', isBad: true,
+        title: totalQty + ' ÷ ' + qtyPerBox + ' = ' + fullBoxes + ' full box(es) + ' + looseUnits + ' loose unit(s) — G4 should only hold sealed full boxes' };
+    }
+    var expectedBoxes = totalQty / qtyPerBox;
+    if (!hasCount) {
+      return { key: 'pending', label: 'Pending', isBad: false,
+        title: 'Expected ' + expectedBoxes + ' box(es) — enter the physical count to confirm' };
+    }
+    if (totalBox === expectedBoxes) {
+      return { key: 'good', label: 'Good', isBad: false,
+        title: 'Counted ' + totalBox + ' box(es), matches the expected ' + expectedBoxes };
+    }
+    return { key: 'bad', label: 'Bad', isBad: true,
+      title: 'Counted ' + totalBox + ' box(es), but ' + expectedBoxes + ' were expected (' + qtyPerBox + ' × ' + expectedBoxes + ' = ' + totalQty + ')' };
   }
 
   // "Transfer Box Qty" (number of boxes). Its value auto-computes into the
@@ -1875,6 +1930,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     selectAll.checked = false;
     unconfirmedOnlyWrap.style.display = (view === 'qtybox') ? '' : 'none';
     typeFilter.style.display = (view === 'g4stock') ? '' : 'none';
+    g4StatusFilter.style.display = (view === 'g4stock') ? '' : 'none';
     updateColumnVisibility(view);
     applyFilters();
   }
@@ -1962,28 +2018,28 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     if (isG4StockView) {
       // Reconciliation list: SKU + Category + Type + Qty/box + Total Box
       // (manual count) + Total Qty (UC's own G4_stock, independent of the
-      // count) + Status. Status is computed, not stored:
-      //   - no Total Box entered yet → Pending (not yet counted)
-      //   - qty/box × Total Box === Total Qty → Good
-      //   - otherwise → Bad, and the row gets a highlight
+      // count) + Status.
+      //
+      // Core policy this view enforces: G4 is a stocking warehouse — it
+      // should only ever hold SEALED FULL BOXES, never a loose/partial
+      // carton. That means Total Qty should always be an exact multiple
+      // of Qty/box. This check needs no manual counting at all — it's
+      // caught directly from system data:
+      //   - Qty/box not set at all → can't evaluate anything yet
+      //   - Total Qty % Qty/box ≠ 0 → Loose Carton — a real physical
+      //     problem, flagged immediately regardless of whether anyone's
+      //     done the manual box count yet
+      //   - otherwise (divides evenly): compare against the manual count —
+      //     no count yet → Pending; count matches expected boxes → Good;
+      //     count doesn't match → Bad
       visibleRows.forEach(function (r) {
         var placeholder = isPlaceholderSku(r.skuCode);
         var disabled = r.enabled === false;
         var rowIsSimple = isSimpleSku(r.skuCode);
         var totalQty = Number(r.G4_stock) || 0;
-        var qtyPerBox = getQtyPerBoxValue(r);
-        var hasCount = g4BoxCounts.hasOwnProperty(r.skuCode) && g4BoxCounts[r.skuCode] !== null && g4BoxCounts[r.skuCode] !== '';
-        var totalBox = hasCount ? Number(g4BoxCounts[r.skuCode]) : 0;
-
-        var statusHtml, rowClass = '';
-        if (!hasCount) {
-          statusHtml = '<span class="g4-status-badge pending" title="No Total Box count entered yet">Pending</span>';
-        } else if (qtyPerBox * totalBox === totalQty) {
-          statusHtml = '<span class="g4-status-badge good" title="Qty/box × Total Box matches Total Qty">Good</span>';
-        } else {
-          statusHtml = '<span class="g4-status-badge bad" title="' + qtyPerBox + ' × ' + totalBox + ' = ' + (qtyPerBox * totalBox) + ', but Total Qty is ' + totalQty + '">Bad</span>';
-          rowClass = ' class="row-g4-bad"';
-        }
+        var st = computeG4Status(r);
+        var statusHtml = '<span class="g4-status-badge ' + st.key + '" title="' + escapeHtml(st.title) + '">' + st.label + '</span>';
+        var rowClass = st.isBad ? ' class="row-g4-bad"' : '';
 
         html += '<tr' + rowClass + ' data-sku="' + escapeHtml(r.skuCode) + '">';
         html += '<td></td>';
