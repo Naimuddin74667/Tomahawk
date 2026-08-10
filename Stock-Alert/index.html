@@ -806,6 +806,11 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       <div class="stat-value" id="stat-archived">—</div>
       <div class="stat-sub">manually archived · click to view</div>
     </div>
+    <div class="stat-card" id="card-qtybox-data">
+      <div class="stat-label">Qty/Box Data</div>
+      <div class="stat-value" id="stat-qtybox-data">—</div>
+      <div class="stat-sub">all simple SKUs · click to view</div>
+    </div>
   </div>
 
   <div class="toolbar">
@@ -1258,6 +1263,11 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       // BUNDLE_MASTER_DATA above) — independent of G4/E3 stock, since
       // bundle SKUs are compositions, not warehouse-stocked items.
       baseRows = bundleMasterRows;
+    } else if (currentView === 'qtybox') {
+      // Flat reference list of every simple SKU from UC_Inventory, regardless
+      // of stock levels or archive status — this view is purely about
+      // surfacing each SKU's Qty/box value.
+      baseRows = allRows;
     } else {
       baseRows = idleRows.filter(function (r) {
         var isArchivedRow = archivedSkus.hasOwnProperty(r.skuCode);
@@ -1280,7 +1290,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       return true;
     });
 
-    if (isBundleView) {
+    if (isBundleView || currentView === 'qtybox') {
       visibleRows.sort(function (a, b) { return a.skuCode.localeCompare(b.skuCode); });
     } else {
       visibleRows.sort(function (a, b) {
@@ -1335,6 +1345,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     document.getElementById('stat-ideal-stock').textContent = idealStockCount;
     document.getElementById('stat-bundle-sku').textContent = bundleSkuCount;
     document.getElementById('stat-archived').textContent = archivedCount;
+    document.getElementById('stat-qtybox-data').textContent = allRows.length;
   }
 
   // Resolves the effective Qty/box for a row — same priority as renderQtyPerBoxCell:
@@ -1606,30 +1617,42 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     document.getElementById('card-ideal-stock').classList.toggle('is-active-view', view === 'idealstock');
     document.getElementById('card-bundle-sku').classList.toggle('is-active-view', view === 'bundlesku');
     document.getElementById('card-archived').classList.toggle('is-active-view', view === 'archived');
+    document.getElementById('card-qtybox-data').classList.toggle('is-active-view', view === 'qtybox');
     selectedSkus = {}; // selection only makes sense in Idle / Low Stock views
-    selectAll.disabled = (view === 'archived' || view === 'idealstock' || view === 'bundlesku');
+    selectAll.disabled = (view === 'archived' || view === 'idealstock' || view === 'bundlesku' || view === 'qtybox');
     selectAll.checked = false;
-    updateBundleColumns(view === 'bundlesku');
+    updateColumnVisibility(view);
     applyFilters();
   }
 
-  // Bundle SKU view has a different shape (master SKU + category + linked
-  // simple SKUs + stock, no brand/qty-box/transfer/actions), so swap the
-  // shared header row instead of maintaining a second table. Natural DOM
-  // order already gives us SKU → Category → G4(relabeled Simple SKU) once
-  // Name/Brand are hidden, and Rec.Qty is repurposed as the Stock column.
-  function updateBundleColumns(isBundle) {
+  // Bundle SKU and Qty/Box Data views each have a different shape than the
+  // default idle/lowstock/archived table, so swap the shared header row
+  // instead of maintaining separate tables.
+  // - Bundle SKU: master SKU + category + linked simple SKUs + stock, no
+  //   name/qty-box-transfer/actions. Rec.Qty repurposed as Stock, Qty/box
+  //   repurposed as Combo Qty.
+  // - Qty/Box Data: flat reference list of every simple SKU's Qty/box —
+  //   just SKU + Name + Category + Qty/box, nothing stock/transfer related.
+  function updateColumnVisibility(view) {
+    var isBundle = (view === 'bundlesku');
+    var isQtyBox = (view === 'qtybox');
+
     document.getElementById('th-name').style.display = isBundle ? 'none' : '';
-    document.getElementById('th-boxtransferqty').style.display = isBundle ? 'none' : '';
-    document.getElementById('th-transferqty').style.display = isBundle ? 'none' : '';
-    document.getElementById('th-actions').style.display = isBundle ? 'none' : '';
+    document.getElementById('th-boxtransferqty').style.display = (isBundle || isQtyBox) ? 'none' : '';
+    document.getElementById('th-transferqty').style.display = (isBundle || isQtyBox) ? 'none' : '';
+    document.getElementById('th-actions').style.display = (isBundle || isQtyBox) ? 'none' : '';
     document.getElementById('th-sku').textContent = isBundle ? 'Bundle / Master SKU' : 'SKU';
-    document.getElementById('sort-g4').textContent = isBundle ? 'Simple SKU (linked)' : ('G4 stock ' + (sortDesc ? '↓' : '↑'));
-    document.getElementById('sort-g4').classList.toggle('sortable', !isBundle);
+
+    var sortG4 = document.getElementById('sort-g4');
+    sortG4.style.display = isQtyBox ? 'none' : '';
+    sortG4.textContent = isBundle ? 'Simple SKU (linked)' : ('G4 stock ' + (sortDesc ? '↓' : '↑'));
+    sortG4.classList.toggle('sortable', !isBundle && !isQtyBox);
+
     var thRecQty = document.getElementById('th-recqty');
-    thRecQty.style.display = '';
+    thRecQty.style.display = isQtyBox ? 'none' : '';
     thRecQty.style.width = isBundle ? '110px' : '90px';
     thRecQty.textContent = isBundle ? 'Stock' : 'Rec. qty';
+
     var thQtyBox = document.getElementById('th-qtybox');
     thQtyBox.style.display = '';
     thQtyBox.style.width = isBundle ? '100px' : '80px';
@@ -1647,6 +1670,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         emptyMsg = 'No SKUs currently have E3 stock with zero channel listings.';
       } else if (currentView === 'bundlesku') {
         emptyMsg = 'No bundle/master SKUs match this search.';
+      } else if (currentView === 'qtybox') {
+        emptyMsg = 'No SKUs match this search.';
       } else {
         emptyMsg = 'No idle-stock SKUs match this view.<br>Everything currently in G4 either has matching E3 stock, or your filters are hiding it.';
       }
@@ -1660,7 +1685,29 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     var isLowStockView = (currentView === 'lowstock');
     var isIdealStockView = (currentView === 'idealstock');
     var isBundleSkuView = (currentView === 'bundlesku');
-    var isViewOnly = isArchivedView || isIdealStockView || isBundleSkuView;
+    var isQtyBoxView = (currentView === 'qtybox');
+    var isViewOnly = isArchivedView || isIdealStockView || isBundleSkuView || isQtyBoxView;
+
+    if (isQtyBoxView) {
+      // Flat reference list: SKU + Name + Category + Qty/box only — no
+      // checkboxes, stock, transfer, or actions columns for this view.
+      visibleRows.forEach(function (r) {
+        var placeholder = isPlaceholderSku(r.skuCode);
+        var disabled = r.enabled === false;
+        html += '<tr data-sku="' + escapeHtml(r.skuCode) + '">';
+        html += '<td></td>';
+        html += '<td><span class="sku-code">' + escapeHtml(r.skuCode) + '</span>' +
+                (placeholder ? '<span class="badge">Placeholder</span>' : '') +
+                (disabled ? '<span class="badge disabled">Disabled</span>' : '') + '</td>';
+        html += '<td><span class="sku-name" title="' + escapeHtml(r.name||'') + '">' + escapeHtml(r.name||'—') + '</span></td>';
+        html += '<td>' + escapeHtml(r.categoryCode||'—') + '</td>';
+        html += renderQtyPerBoxCell(r);
+        html += '</tr>';
+      });
+      tableBody.innerHTML = html;
+      syncSelectAllState();
+      return;
+    }
 
     if (isBundleSkuView) {
       // Different shape entirely: master SKU + category + its linked simple
@@ -1806,7 +1853,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   function updateActionBar() {
     var count = Object.keys(selectedSkus).length;
     selCountNum.textContent = count;
-    var isViewOnlyMode = (currentView === 'archived' || currentView === 'idealstock' || currentView === 'bundlesku');
+    var isViewOnlyMode = (currentView === 'archived' || currentView === 'idealstock' || currentView === 'bundlesku' || currentView === 'qtybox');
     actionBar.style.display = (count > 0 && !isViewOnlyMode) ? 'flex' : 'none';
   }
 
@@ -1860,6 +1907,10 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   });
   document.getElementById('card-archived').addEventListener('click', function () {
     setView('archived');
+    document.getElementById('stock-table').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  document.getElementById('card-qtybox-data').addEventListener('click', function () {
+    setView('qtybox');
     document.getElementById('stock-table').scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 
