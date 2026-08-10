@@ -367,6 +367,14 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 }
 .badge.disabled { border-color: var(--border-default); color: var(--text-muted); background: transparent; }
 
+.confirm-badge {
+  display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: .03em;
+  padding: 2px 7px; border-radius: var(--radius-xl); margin-left: 6px;
+  text-transform: uppercase; vertical-align: middle; border: 1px solid;
+}
+.confirm-badge.confirmed { border-color: var(--c-green-border); color: var(--c-green); background: var(--c-green-dim); }
+.confirm-badge.unconfirmed { border-color: var(--c-orange-border); color: var(--c-orange); background: var(--c-orange-dim); }
+
 .mag-value { font-weight: 700; color: var(--accent); font-size: 14px; }
 .e3-hint { font-size: 10px; color: var(--c-green); margin-left: 6px; font-weight: 600; }
 
@@ -809,7 +817,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     <div class="stat-card" id="card-qtybox-data">
       <div class="stat-label">Qty/Box Data</div>
       <div class="stat-value" id="stat-qtybox-data">—</div>
-      <div class="stat-sub">all simple SKUs · click to view</div>
+      <div class="stat-sub" id="stat-qtybox-sub">all simple SKUs · click to view</div>
     </div>
   </div>
 
@@ -820,6 +828,10 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     <label class="tb-check" id="show-disabled-wrap">
       <input type="checkbox" id="show-disabled-toggle">
       Show disabled SKUs
+    </label>
+    <label class="tb-check" id="unconfirmed-only-wrap" style="display:none;">
+      <input type="checkbox" id="unconfirmed-only-toggle">
+      Unconfirmed only
     </label>
     <button class="tb-refresh" id="refresh-btn">
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12.25 7A5.25 5.25 0 112.87 3.5M2.87 3.5V1M2.87 3.5H5.37" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1030,6 +1042,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   var qtyValues = {};        // { skuCode: number } — typed transfer qty, defaults to 0 until edited
   var boxQtyValues = {};     // { skuCode: number } — typed "Transfer Box Qty" (number of boxes), used to auto-compute Total Qty
   var qtyOverrides = {};     // { skuCode: number } — manually saved Qty/box, from D1 (sa_qty_overrides)
+  var qtyConfirmed = {};     // { skuCode: true } — Qty/box values confirmed via the Qty/Box Data tab specifically
   var archivedSkus = {};     // { skuCode: true } — manually archived SKUs, from D1 (sa_archived_skus)
   var recQtyOverrides = {};  // { skuCode: number } — manually saved Rec. Qty, from D1 (sa_recqty_overrides)
   var appSettings = {};      // { default_rec_qty: '20', ... } — from D1 (sa_settings)
@@ -1064,6 +1077,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   var categoryFilter = document.getElementById('category-filter');
   var brandFilter = document.getElementById('brand-filter');
   var showDisabledToggle = document.getElementById('show-disabled-toggle');
+  var unconfirmedOnlyWrap = document.getElementById('unconfirmed-only-wrap');
+  var unconfirmedOnlyToggle = document.getElementById('unconfirmed-only-toggle');
   var refreshBtn = document.getElementById('refresh-btn');
   var lastUpdated = document.getElementById('last-updated');
   var statusDot = document.getElementById('status-dot');
@@ -1102,6 +1117,15 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     applyFilters();
   });
 
+  // ---- UNCONFIRMED ONLY (Qty/Box Data tab only) --------------------------
+  // Not persisted — resets each visit, since it's a working filter for the
+  // current confirmation session rather than a standing preference.
+  var unconfirmedOnly = false;
+  unconfirmedOnlyToggle.addEventListener('change', function () {
+    unconfirmedOnly = unconfirmedOnlyToggle.checked;
+    applyFilters();
+  });
+
   // ---- FETCH ------------------------------------------------------
   // Single combined round trip — the Worker's sa_loadAll action fetches
   // UC_Inventory + bundles from the GAS bridge (edge-cached there for 5 min,
@@ -1126,8 +1150,10 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         if (invData.error) throw new Error(invData.error);
 
         qtyOverrides = {};
+        qtyConfirmed = {};
         (data.overrides || []).forEach(function (row) {
           qtyOverrides[row.sku_code] = row.qty_per_box;
+          if (row.confirmed) qtyConfirmed[row.sku_code] = true;
         });
 
         archivedSkus = {};
@@ -1312,6 +1338,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
     visibleRows = baseRows.filter(function (r) {
       if (!showDisabled && r.enabled === false) return false;
+      if (currentView === 'qtybox' && unconfirmedOnly && qtyConfirmed[r.skuCode]) return false;
       if (cat && r.categoryCode !== cat) return false;
       if (!isBundleView && brand && r.brand !== brand) return false;
       if (q) {
@@ -1379,9 +1406,15 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     document.getElementById('stat-ideal-stock').textContent = idealStockCount;
     document.getElementById('stat-bundle-sku').textContent = bundleSkuCount;
     document.getElementById('stat-archived').textContent = archivedCount;
-    var qtyBoxSkuCount = 0;
-    allRows.forEach(function (r) { if (isSimpleSku(r.skuCode)) qtyBoxSkuCount++; });
+    var qtyBoxSkuCount = 0, qtyBoxConfirmedCount = 0;
+    allRows.forEach(function (r) {
+      if (!isSimpleSku(r.skuCode)) return;
+      qtyBoxSkuCount++;
+      if (qtyConfirmed[r.skuCode]) qtyBoxConfirmedCount++;
+    });
     document.getElementById('stat-qtybox-data').textContent = qtyBoxSkuCount;
+    document.getElementById('stat-qtybox-sub').textContent =
+      qtyBoxConfirmedCount + '/' + qtyBoxSkuCount + ' confirmed · click to view';
   }
 
   // Resolves the effective Qty/box for a row — same priority as renderQtyPerBoxCell:
@@ -1411,14 +1444,24 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     return '<td>' + boxInputHtml + '</td>';
   }
 
-  function renderQtyPerBoxCell(r) {
+  function renderQtyPerBoxCell(r, isQtyBoxTab) {
     var sku = r.skuCode;
 
     // Priority 1: manually saved override (D1) — takes precedence once someone
     // has explicitly edited/corrected a value for this SKU
     if (qtyOverrides.hasOwnProperty(sku) && qtyOverrides[sku] !== null && qtyOverrides[sku] !== '') {
+      var isConfirmed = !!qtyConfirmed[sku];
+      // Confirmed/unconfirmed badge only shown in the Qty/Box Data tab —
+      // that's the dedicated audit view; other views don't need the clutter.
+      var confirmBadge = '';
+      if (isQtyBoxTab) {
+        confirmBadge = isConfirmed
+          ? '<span class="confirm-badge confirmed" title="Confirmed correct via Qty/Box Data">✓ Confirmed</span>'
+          : '<span class="confirm-badge unconfirmed" title="Saved from another view — not yet confirmed here">Unconfirmed</span>';
+      }
       return '<td class="qty-box-cell" title="Manually saved override — click ✎ to edit">' +
         '<span class="qty-box-value">' + escapeHtml(qtyOverrides[sku]) + '</span>' +
+        confirmBadge +
         '<button type="button" class="qty-box-edit-btn" data-sku="' + escapeHtml(sku) + '" title="Edit">✎</button>' +
         '</td>';
     }
@@ -1427,8 +1470,12 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     // a manual override (Priority 1) that takes precedence from then on
     var real = r.piecesPerCarton;
     if (real !== null && real !== undefined && real !== '') {
+      var pendingBadge = isQtyBoxTab
+        ? '<span class="confirm-badge unconfirmed" title="From Unicommerce — not yet confirmed">Unconfirmed</span>'
+        : '';
       return '<td class="qty-box-cell" title="From Unicommerce: PiecesPerCarton — click ✎ to override">' +
         '<span class="qty-box-value">' + escapeHtml(real) + '</span>' +
+        pendingBadge +
         '<button type="button" class="qty-box-edit-btn" data-sku="' + escapeHtml(sku) + '" title="Edit / override">✎</button>' +
         '</td>';
     }
@@ -1470,18 +1517,23 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     var row = visibleRows.filter(function (r) { return r.skuCode === sku; })[0] ||
               idleRows.filter(function (r) { return r.skuCode === sku; })[0];
     var name = row ? (row.name || '') : '';
+    // Only saves made from within the Qty/Box Data tab count as "confirmed"
+    // — everywhere else this same Qty/box editor is just a quick ad-hoc
+    // entry for a transfer, not a deliberate audit.
+    var confirmThisSave = (currentView === 'qtybox');
 
     cell.innerHTML = '<span class="qty-box-saving">Saving…</span>';
 
     fetch(WORKER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'sa_saveQtyOverride', skuCode: sku, name: name, qtyPerBox: val })
+      body: JSON.stringify({ action: 'sa_saveQtyOverride', skuCode: sku, name: name, qtyPerBox: val, confirmed: confirmThisSave })
     })
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (!data || data.ok === false) throw new Error((data && data.error) || 'Save failed');
         qtyOverrides[sku] = val;
+        if (confirmThisSave) { qtyConfirmed[sku] = true; } else { delete qtyConfirmed[sku]; }
         renderTable();
       })
       .catch(function (err) {
@@ -1657,6 +1709,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     selectedSkus = {}; // selection only makes sense in Idle / Low Stock views
     selectAll.disabled = (view === 'archived' || view === 'idealstock' || view === 'bundlesku' || view === 'qtybox');
     selectAll.checked = false;
+    unconfirmedOnlyWrap.style.display = (view === 'qtybox') ? '' : 'none';
     updateColumnVisibility(view);
     applyFilters();
   }
@@ -1707,7 +1760,9 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       } else if (currentView === 'bundlesku') {
         emptyMsg = 'No bundle/master SKUs match this search.';
       } else if (currentView === 'qtybox') {
-        emptyMsg = 'No SKUs match this search.';
+        emptyMsg = unconfirmedOnly
+          ? 'Everything visible here is confirmed. 🎉<br>Uncheck "Unconfirmed only" to see the full list.'
+          : 'No SKUs match this search.';
       } else {
         emptyMsg = 'No idle-stock SKUs match this view.<br>Everything currently in G4 either has matching E3 stock, or your filters are hiding it.';
       }
@@ -1740,7 +1795,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         html += '<td><span class="sku-name" title="' + escapeHtml(r.name||'') + '">' + escapeHtml(r.name||'—') + '</span></td>';
         html += '<td>' + escapeHtml(r.categoryCode||'—') + '</td>';
         html += '<td><span class="mag-value">E3: ' + e3 + '</span> <span class="e3-hint">G4: ' + g4 + '</span></td>';
-        html += renderQtyPerBoxCell(r);
+        html += renderQtyPerBoxCell(r, true);
         html += '</tr>';
       });
       tableBody.innerHTML = html;
