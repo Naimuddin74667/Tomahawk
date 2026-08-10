@@ -1045,6 +1045,19 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     return s.indexOf('block-') === 0 || s.indexOf('block_') === 0 || s.indexOf('unlinked') !== -1;
   };
 
+  // Per the team's SKU naming convention: underscore ("_") marks a
+  // separately-stocked component bundled in — a BUNDLE-type SKU in
+  // Unicommerce that explodes into components. Hyphen-only SKUs are true
+  // SIMPLE SKUs (or variants of one). The Qty/Box Data view is meant to be
+  // a reference list of simple SKUs only, so underscore SKUs are excluded
+  // there even though they still live in UC_Inventory alongside everything
+  // else. This is separate from — and in addition to — the curated master
+  // SKUs in UC_BundleComposition (the "Bundle SKU" card), which never
+  // appear in UC_Inventory at all.
+  var isSimpleSku = function (sku) {
+    return !!sku && String(sku).indexOf('_') === -1;
+  };
+
   // ---- DOM refs --------------------------------------------------
   var tableBody = document.getElementById('table-body');
   var searchInput = document.getElementById('search-input');
@@ -1284,10 +1297,10 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       // bundle SKUs are compositions, not warehouse-stocked items.
       baseRows = bundleMasterRows;
     } else if (currentView === 'qtybox') {
-      // Flat reference list of every simple SKU from UC_Inventory, regardless
-      // of stock levels or archive status — this view is purely about
-      // surfacing each SKU's Qty/box value.
-      baseRows = allRows;
+      // Flat reference list of every TRUE SIMPLE SKU from UC_Inventory —
+      // regardless of stock levels or archive status. Excludes underscore
+      // (BUNDLE-type) SKUs per the naming convention — see isSimpleSku.
+      baseRows = allRows.filter(function (r) { return isSimpleSku(r.skuCode); });
     } else {
       baseRows = idleRows.filter(function (r) {
         var isArchivedRow = archivedSkus.hasOwnProperty(r.skuCode);
@@ -1366,7 +1379,9 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     document.getElementById('stat-ideal-stock').textContent = idealStockCount;
     document.getElementById('stat-bundle-sku').textContent = bundleSkuCount;
     document.getElementById('stat-archived').textContent = archivedCount;
-    document.getElementById('stat-qtybox-data').textContent = allRows.length;
+    var qtyBoxSkuCount = 0;
+    allRows.forEach(function (r) { if (isSimpleSku(r.skuCode)) qtyBoxSkuCount++; });
+    document.getElementById('stat-qtybox-data').textContent = qtyBoxSkuCount;
   }
 
   // Resolves the effective Qty/box for a row — same priority as renderQtyPerBoxCell:
@@ -1652,8 +1667,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   // - Bundle SKU: master SKU + category + linked simple SKUs + stock, no
   //   name/qty-box-transfer/actions. Rec.Qty repurposed as Stock, Qty/box
   //   repurposed as Combo Qty.
-  // - Qty/Box Data: flat reference list of every simple SKU's Qty/box —
-  //   just SKU + Name + Category + Qty/box, nothing stock/transfer related.
+  // - Qty/Box Data: flat reference list of every TRUE SIMPLE SKU's stock
+  //   and Qty/box — SKU + Name + Category + Stock (E3/G4) + Qty/box.
   function updateColumnVisibility(view) {
     var isBundle = (view === 'bundlesku');
     var isQtyBox = (view === 'qtybox');
@@ -1665,8 +1680,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     document.getElementById('th-sku').textContent = isBundle ? 'Bundle / Master SKU' : 'SKU';
 
     var sortG4 = document.getElementById('sort-g4');
-    sortG4.style.display = isQtyBox ? 'none' : '';
-    sortG4.textContent = isBundle ? 'Simple SKU (linked)' : ('G4 stock ' + (sortDesc ? '↓' : '↑'));
+    sortG4.style.display = '';
+    sortG4.textContent = isBundle ? 'Simple SKU (linked)' : (isQtyBox ? 'Stock' : ('G4 stock ' + (sortDesc ? '↓' : '↑')));
     sortG4.classList.toggle('sortable', !isBundle && !isQtyBox);
 
     var thRecQty = document.getElementById('th-recqty');
@@ -1710,11 +1725,13 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     var isViewOnly = isArchivedView || isIdealStockView || isBundleSkuView || isQtyBoxView;
 
     if (isQtyBoxView) {
-      // Flat reference list: SKU + Name + Category + Qty/box only — no
-      // checkboxes, stock, transfer, or actions columns for this view.
+      // Flat reference list: SKU + Name + Category + Stock (E3/G4) +
+      // Qty/box only — no checkboxes, transfer, or actions columns.
       visibleRows.forEach(function (r) {
         var placeholder = isPlaceholderSku(r.skuCode);
         var disabled = r.enabled === false;
+        var e3 = Number(r.E3_stock) || 0;
+        var g4 = Number(r.G4_stock) || 0;
         html += '<tr data-sku="' + escapeHtml(r.skuCode) + '">';
         html += '<td></td>';
         html += '<td><span class="sku-code">' + escapeHtml(r.skuCode) + '</span>' +
@@ -1722,6 +1739,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
                 (disabled ? '<span class="badge disabled">Disabled</span>' : '') + '</td>';
         html += '<td><span class="sku-name" title="' + escapeHtml(r.name||'') + '">' + escapeHtml(r.name||'—') + '</span></td>';
         html += '<td>' + escapeHtml(r.categoryCode||'—') + '</td>';
+        html += '<td><span class="mag-value">E3: ' + e3 + '</span> <span class="e3-hint">G4: ' + g4 + '</span></td>';
         html += renderQtyPerBoxCell(r);
         html += '</tr>';
       });
@@ -1897,7 +1915,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
   // ---- SORT ----------------------------------------------------------
   document.getElementById('sort-g4').addEventListener('click', function () {
-    if (currentView === 'bundlesku') return; // header is repurposed as "Simple SKU (linked)" here, not sortable
+    if (currentView === 'bundlesku' || currentView === 'qtybox') return; // repurposed header here, not sortable
     sortDesc = !sortDesc;
     this.textContent = 'G4 stock ' + (sortDesc ? '↓' : '↑');
     applyFilters();
