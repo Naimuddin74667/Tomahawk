@@ -922,6 +922,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 (function () {
 
   // ---- CONFIG -------------------------------------------------
+  // No longer called directly — proxied + edge-cached via Worker action
+  // sa_loadAll instead (see loadData()). Kept here for reference/debugging.
   var UC_INVENTORY_GAS_URL = 'https://script.google.com/macros/s/AKfycbwPnZl404I0IVHgIxy6QRxSCdep3XbqufE73w8ZdA1qugPEdygzoRhtht10RWT6fkjGTQ/exec';
   var WORKER_URL = 'https://tomahawk-returns.naimuddin.workers.dev';
 
@@ -1087,63 +1089,44 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   var recQtyOverrideList = document.getElementById('recqty-override-list');
 
   // ---- FETCH ------------------------------------------------------
+  // Single combined round trip — the Worker's sa_loadAll action fetches
+  // UC_Inventory + bundles from the GAS bridge (edge-cached there for 5 min,
+  // since those two Apps Script calls are the slow part — cold starts +
+  // full-sheet reads) and bundles them with all four D1 metadata queries
+  // into one response. This replaces what used to be 6 separate client-side
+  // fetches with 1.
   function loadData() {
     refreshBtn.classList.add('is-loading');
     statusDot.classList.remove('is-error');
     statusText.textContent = 'Loading UC_Inventory…';
-    tableBody.innerHTML = '<tr><td colspan="10"><div class="loading-state">Fetching UC_Inventory…</div></td></tr>';
+    if (!allRows.length) {
+      tableBody.innerHTML = '<tr><td colspan="10"><div class="loading-state">Fetching UC_Inventory…</div></td></tr>';
+    }
 
-    var invFetch = fetch(UC_INVENTORY_GAS_URL).then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    });
-
-    var overridesFetch = fetch(WORKER_URL + '?action=sa_getQtyOverrides')
+    fetch(WORKER_URL + '?action=sa_loadAll')
       .then(function (r) { return r.json(); })
-      .catch(function () { return { ok: false, rows: [] }; }); // non-fatal — overrides just won't show if this fails
+      .then(function (data) {
+        if (!data || data.ok === false) throw new Error((data && data.error) || 'Load failed');
 
-    var archivedFetch = fetch(WORKER_URL + '?action=sa_getArchivedSkus')
-      .then(function (r) { return r.json(); })
-      .catch(function () { return { ok: false, rows: [] }; }); // non-fatal — archived list just won't load if this fails
-
-    var recQtyFetch = fetch(WORKER_URL + '?action=sa_getRecQtyOverrides')
-      .then(function (r) { return r.json(); })
-      .catch(function () { return { ok: false, rows: [] }; }); // non-fatal — Rec. qty just shows the default/NA if this fails
-
-    var settingsFetch = fetch(WORKER_URL + '?action=sa_getSettings')
-      .then(function (r) { return r.json(); })
-      .catch(function () { return { ok: false, settings: {} }; }); // non-fatal — falls back to no default set
-
-    var bundlesFetch = fetch(UC_INVENTORY_GAS_URL + '?type=bundles')
-      .then(function (r) { return r.json(); })
-      .catch(function () { return { error: 'bundle fetch failed' }; }); // non-fatal — falls back to cached bundle data below
-
-    Promise.all([invFetch, overridesFetch, archivedFetch, bundlesFetch, recQtyFetch, settingsFetch])
-      .then(function (results) {
-        var data = results[0];
-        var overridesData = results[1];
-        var archivedData = results[2];
-        var bundlesData = results[3];
-        var recQtyData = results[4];
-        var settingsData = results[5];
-        if (data.error) throw new Error(data.error);
+        var invData = data.inventory || {};
+        if (invData.error) throw new Error(invData.error);
 
         qtyOverrides = {};
-        (overridesData.rows || []).forEach(function (row) {
+        (data.overrides || []).forEach(function (row) {
           qtyOverrides[row.sku_code] = row.qty_per_box;
         });
 
         archivedSkus = {};
-        (archivedData.rows || []).forEach(function (row) {
+        (data.archived || []).forEach(function (row) {
           archivedSkus[row.sku_code] = true;
         });
 
         recQtyOverrides = {};
-        (recQtyData.rows || []).forEach(function (row) {
+        (data.recQty || []).forEach(function (row) {
           recQtyOverrides[row.sku_code] = row.rec_qty;
         });
 
-        appSettings = settingsData.settings || {};
+        appSettings = data.settings || {};
         defaultRecQtyInput.value = (appSettings.default_rec_qty != null && appSettings.default_rec_qty !== '') ? appSettings.default_rec_qty : '';
         renderRecQtySettingsList();
 
@@ -1151,13 +1134,15 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         // bridge. If this fetch failed or errored, keep whatever's already
         // in BUNDLE_MASTER_DATA (the localStorage cache from last success),
         // so the Bundle SKU view doesn't just go blank on a flaky refresh.
+        var bundlesData = data.bundles || {};
         if (bundlesData && bundlesData.bundles) {
           BUNDLE_MASTER_DATA = bundlesData.bundles;
           saveCachedBundleData(BUNDLE_MASTER_DATA);
         }
         buildBundleMasterRows();
 
-        allRows = data.rows || [];
+        allRows = invData.rows || [];
+        saveCachedInventory(allRows); // instant paint on next load, see INIT below
         buildIdleSet();
         computeBundleComponents();
         populateFilterOptions();
@@ -1169,11 +1154,27 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       .catch(function (err) {
         statusDot.classList.add('is-error');
         statusText.textContent = 'Failed to load';
-        tableBody.innerHTML = '<tr><td colspan="10"><div class="error-state">Couldn\'t reach the UC_Inventory feed.<br>' + escapeHtml(err.message) + '<br><br>Try Refresh, or check the GAS deployment URL.</div></td></tr>';
+        tableBody.innerHTML = '<tr><td colspan="10"><div class="error-state">Couldn\'t reach the data feed.<br>' + escapeHtml(err.message) + '<br><br>Try Refresh, or check the Worker/GAS deployment.</div></td></tr>';
       })
       .finally(function () {
         refreshBtn.classList.remove('is-loading');
       });
+  }
+
+  // ---- INVENTORY CACHE (instant paint on repeat visits) ------------------
+  // Mirrors the existing bundle-cache pattern above. Renders last known
+  // UC_Inventory data immediately on load while a fresh fetch runs in the
+  // background, so the app doesn't sit on a blank loading state every time
+  // — it just quietly updates once the live data arrives.
+  var INVENTORY_CACHE_KEY = 'sa_inventory_cache_v1';
+  function loadCachedInventory() {
+    try {
+      var raw = localStorage.getItem(INVENTORY_CACHE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) { return []; }
+  }
+  function saveCachedInventory(rows) {
+    try { localStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(rows)); } catch (e) {}
   }
 
   function buildIdleSet() {
@@ -2104,6 +2105,20 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
   // ---- INIT --------------------------------------------------------------
   document.getElementById('card-idle-skus').classList.add('is-active-view');
+
+  // Paint instantly from the last successful load, if any, while the live
+  // fetch runs in the background — avoids a blank loading state on every
+  // visit. Gets overwritten the moment loadData() resolves.
+  var cachedInv = loadCachedInventory();
+  if (cachedInv.length) {
+    allRows = cachedInv;
+    buildIdleSet();
+    computeBundleComponents();
+    populateFilterOptions();
+    applyFilters();
+    statusText.textContent = allRows.length + ' SKUs · cached, refreshing…';
+  }
+
   loadData();
 
 })();
