@@ -260,7 +260,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
      BLOCK 4 — STAT CARDS
 ============================================================ -->
 <style>
-.stats-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 24px; }
+.stats-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 24px; }
 .stat-card {
   background: var(--bg-surface); border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg); padding: 16px 18px;
@@ -817,6 +817,10 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     <input type="text" class="tb-search" id="search-input" placeholder="Search SKU, name, or brand…">
     <select class="tb-select" id="category-filter"><option value="">All categories</option></select>
     <select class="tb-select" id="brand-filter"><option value="">All brands</option></select>
+    <label class="tb-check" id="show-disabled-wrap">
+      <input type="checkbox" id="show-disabled-toggle">
+      Show disabled SKUs
+    </label>
     <button class="tb-refresh" id="refresh-btn">
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12.25 7A5.25 5.25 0 112.87 3.5M2.87 3.5V1M2.87 3.5H5.37" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Refresh
@@ -1032,6 +1036,19 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   var currentView = 'idle';  // 'idle' | 'archived'
   var sortDesc = true;
 
+  // ---- SHOW/HIDE DISABLED SKUs (persisted) ------------------------------
+  // Global filter, applies across all views (idle/lowstock/archived/qtybox);
+  // Bundle SKU view already excludes disabled master SKUs at data-build time
+  // (see buildBundleMasterRows), so this has no visible effect there.
+  var SHOW_DISABLED_KEY = 'sa_show_disabled_v1';
+  var showDisabled = localStorage.getItem(SHOW_DISABLED_KEY) !== 'false'; // default: show
+  showDisabledToggle.checked = showDisabled;
+  showDisabledToggle.addEventListener('change', function () {
+    showDisabled = showDisabledToggle.checked;
+    localStorage.setItem(SHOW_DISABLED_KEY, showDisabled ? 'true' : 'false');
+    applyFilters();
+  });
+
   var isPlaceholderSku = function (sku) {
     if (!sku) return false;
     var s = String(sku).toLowerCase();
@@ -1043,6 +1060,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   var searchInput = document.getElementById('search-input');
   var categoryFilter = document.getElementById('category-filter');
   var brandFilter = document.getElementById('brand-filter');
+  var showDisabledToggle = document.getElementById('show-disabled-toggle');
   var refreshBtn = document.getElementById('refresh-btn');
   var lastUpdated = document.getElementById('last-updated');
   var statusDot = document.getElementById('status-dot');
@@ -1278,6 +1296,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     var isBundleView = (currentView === 'bundlesku');
 
     visibleRows = baseRows.filter(function (r) {
+      if (!showDisabled && r.enabled === false) return false;
       if (cat && r.categoryCode !== cat) return false;
       if (!isBundleView && brand && r.brand !== brand) return false;
       if (q) {
