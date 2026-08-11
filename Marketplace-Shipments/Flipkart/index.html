@@ -1115,6 +1115,54 @@ function getWorkerBase() {
   return isLive ? 'https://tomahawk-returns.naimuddin.workers.dev' : 'http://localhost:8787';
 }
 
+// ── Reliable D1 save for ledger rows (mirrors Blinkit's invoice-sync pattern) ──
+// A plain fetch here used to fire-and-forget — one network hiccup and a ledger
+// edit could silently never reach D1, with only a passive toast and no actual
+// retry. This retries with backoff, and if it still fails after 3 tries,
+// queues the row so it auto-resyncs the next time this browser opens the app —
+// same safety net Blinkit invoices already have.
+var LEDGER_SYNC_QUEUE_KEY = 'fk_pending_ledger_sync';
+function fkLedgerSaveWithRetry(row, attempt, onDone) {
+  fetch(getWorkerBase() + '?action=fkLedgerSave', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(row)
+  }).then(function(r){ return r.json(); }).then(function(data){
+    if (!data || !data.ok) throw new Error((data && data.error) || 'Save rejected');
+    removeFromLedgerSyncQueue(row.consignment_no);
+    if (onDone) onDone(true);
+  }).catch(function(err){
+    console.error('fkLedgerSave attempt ' + (attempt+1) + ' failed:', err && err.message);
+    if (attempt < 2) {
+      var delay = [3000, 8000][attempt] || 8000;
+      setTimeout(function(){ fkLedgerSaveWithRetry(row, attempt + 1, onDone); }, delay);
+    } else {
+      queueFailedLedgerSync(row);
+      if (onDone) onDone(false);
+    }
+  });
+}
+function queueFailedLedgerSync(row) {
+  var q = [];
+  try { q = JSON.parse(localStorage.getItem(LEDGER_SYNC_QUEUE_KEY) || '[]'); } catch(e) {}
+  q = q.filter(function(p){ return p.consignment_no !== row.consignment_no; });
+  q.push(row);
+  try { localStorage.setItem(LEDGER_SYNC_QUEUE_KEY, JSON.stringify(q)); } catch(e) {}
+}
+function removeFromLedgerSyncQueue(cn) {
+  var q = [];
+  try { q = JSON.parse(localStorage.getItem(LEDGER_SYNC_QUEUE_KEY) || '[]'); } catch(e) {}
+  var next = q.filter(function(p){ return p.consignment_no !== cn; });
+  try { localStorage.setItem(LEDGER_SYNC_QUEUE_KEY, JSON.stringify(next)); } catch(e) {}
+}
+function flushPendingLedgerSyncs() {
+  var isLive = location.hostname === 'naimuddin74667.github.io';
+  if (!isLive) return;
+  var q = [];
+  try { q = JSON.parse(localStorage.getItem(LEDGER_SYNC_QUEUE_KEY) || '[]'); } catch(e) {}
+  if (!q.length) return;
+  toast('Resyncing ' + q.length + ' ledger row(s) that failed to save earlier\u2026', 'info');
+  q.forEach(function(row){ fkLedgerSaveWithRetry(row, 0); });
+}
+
 function ledgerLoad() {
   var tbody = document.getElementById('ledgerTbody');
   if(tbody) tbody.innerHTML = '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
@@ -1601,12 +1649,10 @@ function ledgerModalSaveEdit() {
   _itemsModalEditing = false;
   closeLedgerItemsModal();
   ledgerRender(); // keep the table behind the modal in sync
-  fetch(getWorkerBase() + '?action=fkLedgerSave', {
-    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
-  }).then(function(r){ return r.json(); }).then(function(data){
-    if(!data || !data.ok) toast('Save failed \u2014 will retry on next edit', 'err');
-    else toast('Saved','ok');
-  }).catch(function(){ toast('Ledger sync error (offline?)', 'err'); });
+  fkLedgerSaveWithRetry(row, 0, function(success){
+    if (success) toast('Saved','ok');
+    else toast('Save failed after retries \u2014 queued, will auto-resync next visit', 'err');
+  });
 }
 
 // "Has QC Rejections?" now lives inline in the Consignment No. popup itself
@@ -1645,12 +1691,10 @@ function updateLedgerRowFromPrint(row, printableRows, queueLength, itemsJson) {
   row.items_json = JSON.stringify(itemsJson || []);
   row.updated_at = new Date().toISOString();
   try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
-  fetch(getWorkerBase() + '?action=fkLedgerSave', {
-    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
-  }).then(function(r){ return r.json(); }).then(function(data){
-    if(!data || !data.ok) toast('Consignment '+row.consignment_no+' updated locally only \u2014 server save failed (check worker deployment)', 'err');
-    else toast('Consignment '+row.consignment_no+' ledger updated \u2014 '+printableRows.length+' SKUs \u00b7 '+queueLength+' qty', 'ok');
-  }).catch(function(){ toast('Consignment '+row.consignment_no+' updated locally only \u2014 sync failed (offline?)', 'err'); });
+  fkLedgerSaveWithRetry(row, 0, function(success){
+    if (success) toast('Consignment '+row.consignment_no+' ledger updated \u2014 '+printableRows.length+' SKUs \u00b7 '+queueLength+' qty', 'ok');
+    else toast('Consignment '+row.consignment_no+' updated locally only \u2014 queued, will auto-resync next visit', 'err');
+  });
   if(document.getElementById('tab-ledger').style.display !== 'none') ledgerRender();
 }
 
@@ -1725,11 +1769,9 @@ function applyLedgerModalPdfText(row, text) {
   row.updated_at = new Date().toISOString();
   try { localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); } catch(e){}
 
-  fetch(getWorkerBase() + '?action=fkLedgerSave', {
-    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(row)
-  }).then(function(r){ return r.json(); }).then(function(data) {
-    if (!data || !data.ok) toast('Updated locally only \u2014 server save failed', 'err');
-  }).catch(function(){ toast('Updated locally only \u2014 sync failed (offline?)', 'err'); });
+  fkLedgerSaveWithRetry(row, 0, function(success){
+    if (!success) toast('Updated locally only \u2014 queued, will auto-resync next visit', 'err');
+  });
 
   renderItemsModalSummary(row);
   renderItemsModalBody(row);
@@ -1763,11 +1805,9 @@ function ledgerRecordPrint(printableRows, queueLength, itemsJson) {
   };
   _ledgerRows.push(row);
   try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
-  fetch(getWorkerBase() + '?action=fkLedgerSave', {
-    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
-  }).then(function(r){ return r.json(); }).then(function(data){
-    if(!data || !data.ok) toast('Consignment '+_bulkCN+' saved locally only \u2014 server save failed (check worker deployment)', 'err');
-  }).catch(function(){ toast('Consignment '+_bulkCN+' saved locally only \u2014 sync failed (offline?)', 'err'); });
+  fkLedgerSaveWithRetry(row, 0, function(success){
+    if (!success) toast('Consignment '+_bulkCN+' saved locally only \u2014 queued, will auto-resync next visit', 'err');
+  });
   if(document.getElementById('tab-ledger').style.display !== 'none') ledgerRender();
 }
 
@@ -3267,6 +3307,7 @@ function saveNotFoundModal() {
 })();
 
 loadGSheetLookup();
+flushPendingLedgerSyncs(); // retry any ledger saves that failed to sync last session
 
 // ── BOX LABEL CROPPER ──
 // Auto-detects each label's border-box on a Flipkart box/shipping-label PDF
