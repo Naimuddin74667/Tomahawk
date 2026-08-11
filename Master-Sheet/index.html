@@ -307,7 +307,7 @@
     </div>
     <div id="map-table-wrap" style="display:none;" class="table-scroll">
       <table class="data-table">
-        <thead><tr><th>UC SKU</th><th>Internal SKU</th><th>Category</th><th>Qty/Box</th><th>Image</th><th>B&amp;W</th><th>Updated</th><th>By</th><th></th></tr></thead>
+        <thead><tr><th>Internal SKU</th><th>UC SKU</th><th>Category</th><th>Qty/Box</th><th>Image</th><th>B&amp;W</th><th>Updated</th><th></th></tr></thead>
         <tbody id="map-tbody"></tbody>
       </table>
     </div>
@@ -322,15 +322,15 @@
     <div style="font-family:var(--mono);font-size:15.6px;font-weight:700;color:var(--accent);margin-bottom:20px;" id="edit-modal-title">✏ Edit SKU</div>
     <input type="hidden" id="edit-map-idx">
     <div class="form-group">
-      <label>UC SKU</label>
+      <label>Internal SKU <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;color:var(--text2);">(required)</span></label>
+      <input type="text" id="edit-internal-sku" placeholder="e.g. TCD-20A-2B-2Ah-SSS">
+    </div>
+    <div class="form-group">
+      <label>UC SKU <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;color:var(--text2);">(required)</span></label>
       <input type="text" id="edit-uc-sku" placeholder="e.g. TCD-20A-2B-2Ah-SSS">
     </div>
     <div class="form-group">
-      <label>Internal SKU</label>
-      <input type="text" id="edit-internal-sku">
-    </div>
-    <div class="form-group">
-      <label>Category</label>
+      <label>Category <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;color:var(--text2);">(optional)</span></label>
       <div style="display:flex;gap:8px;">
         <select id="edit-category" style="flex:1;">
           <option value="">— Select —</option>
@@ -339,8 +339,9 @@
       </div>
     </div>
     <div class="form-group">
-      <label>Qty per Box (Pieces per Carton)</label>
-      <input type="number" id="edit-ppc" min="1">
+      <label>Qty per Box</label>
+      <div id="edit-ppc-display" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text2);font-family:var(--mono);font-size:13px;padding:10px 14px;">—</div>
+      <div style="font-size:11px;color:var(--text2);margin-top:4px;line-height:1.5;">Not editable here — only set via confirmed Stock Alert Qty/Box Data, or "Save &amp; Link" in Inward Label Generator's Stock Transfer tab.</div>
     </div>
     <div class="form-group">
       <label>Product Image URL <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:12px;color:var(--text2);">(paste Amazon/any image URL)</span></label>
@@ -511,14 +512,13 @@ function renderMasterTable() {
       ? `<img src="${colorSrc}" style="width:36px;height:36px;object-fit:contain;border:1px solid #ddd;border-radius:3px;background:#fff;" onerror="this.style.display='none'">`
       : '<span style="color:var(--text2);font-size:11px;">—</span>';
     return `<tr>
-      <td style="font-family:var(--mono);font-size:12px;">${m.ucSku}</td>
       <td style="font-family:var(--mono);font-size:12px;color:var(--accent);">${m.internalSku||'<span style=\"color:var(--text2);\">—</span>'}</td>
+      <td style="font-family:var(--mono);font-size:12px;">${m.ucSku}</td>
       <td style="font-size:12px;">${m.category||'—'}</td>
       <td style="font-family:var(--mono);font-size:12px;">${m.pcsPerCarton||'—'}</td>
       <td>${imgHtml}</td>
       <td>${bwHtml}</td>
       <td style="font-family:var(--mono);font-size:10px;color:var(--text2);white-space:nowrap;">${fmtDate(m.updatedAt)}</td>
-      <td><span class="badge">${m.updatedBy||'—'}</span></td>
       <td style="white-space:nowrap;">
         <button class="btn btn-ghost" style="padding:4px 8px;font-size:12px;margin-right:4px;" onclick="openEditModal(${idx})">✏</button>
         <button class="btn btn-ghost" style="padding:4px 8px;font-size:12px;color:var(--accent2);border-color:var(--accent2);" onclick="openDeleteModal(${idx})">🗑</button>
@@ -535,7 +535,7 @@ function openAddModal() {
   document.getElementById('edit-uc-sku').readOnly = false;
   document.getElementById('edit-uc-sku').style.opacity = '1';
   document.getElementById('edit-internal-sku').value = '';
-  document.getElementById('edit-ppc').value = '';
+  document.getElementById('edit-ppc-display').textContent = '— not set yet';
   document.getElementById('edit-img-url').value = '';
   const catSel = document.getElementById('edit-category');
   catSel.innerHTML = '<option value="">— Select —</option>' +
@@ -559,7 +559,7 @@ function openEditModal(idx) {
   document.getElementById('edit-uc-sku').readOnly = true;
   document.getElementById('edit-uc-sku').style.opacity = '0.6';
   document.getElementById('edit-internal-sku').value = m.internalSku;
-  document.getElementById('edit-ppc').value          = m.pcsPerCarton || '';
+  document.getElementById('edit-ppc-display').textContent = m.pcsPerCarton ? (m.pcsPerCarton + ' pcs/box') : '— not set yet';
   document.getElementById('edit-img-url').value      = m.imageUrl || '';
   const catSel = document.getElementById('edit-category');
   catSel.innerHTML = '<option value="">— Select —</option>' +
@@ -583,14 +583,14 @@ async function saveEditMapping() {
   const isAdd        = idxRaw === '';
   const ucSku        = document.getElementById('edit-uc-sku').value.trim();
   const internalSku  = document.getElementById('edit-internal-sku').value.trim();
-  const ppc          = parseInt(document.getElementById('edit-ppc').value) || null;
   const imgUrl       = document.getElementById('edit-img-url').value.trim();
   const catSel       = document.getElementById('edit-category').value;
   const catNew       = document.getElementById('edit-category-new').value.trim();
   const category     = catNew || (catSel === '__new__' ? '' : catSel);
   const bwInput      = document.getElementById('edit-bw-upload');
 
-  if (!ucSku) { showToast('UC SKU is required', true); return; }
+  if (!ucSku)       { showToast('UC SKU is required', true); return; }
+  if (!internalSku) { showToast('Internal SKU is required', true); return; }
 
   if (isAdd) {
     if (skuMap.find(m => m.ucSku === ucSku)) { showToast('That UC SKU already exists — edit it instead', true); return; }
@@ -599,8 +599,13 @@ async function saveEditMapping() {
 
   const bwBase64 = bwInput._base64 || null;
 
+  // NOTE: qtyPerBox is deliberately never included here — Qty/Box is only
+  // ever written by confirmed Stock Alert Qty/Box Data or Inward Label
+  // Generator's "Save & Link" flow. Omitting it means the worker's
+  // COALESCE(excluded.qty_per_box, sku_master.qty_per_box) leaves whatever
+  // value is already there untouched.
   const row = {
-    ucSku, internalSku, category, qtyPerBox: ppc, imageUrl: imgUrl,
+    ucSku, internalSku, category, imageUrl: imgUrl,
     bwImageUrl: bwBase64 || undefined, bwSourceUrl: bwBase64 ? imgUrl : undefined,
     updatedBy: (JSON.parse(localStorage.getItem('tm_session_v1')||'null')||{}).username || 'admin'
   };
@@ -608,10 +613,10 @@ async function saveEditMapping() {
   if (!ok) return;
 
   if (isAdd) {
-    skuMap.push({ ucSku, internalSku, category, pcsPerCarton: ppc, imageUrl: imgUrl, updatedAt: new Date().toISOString(), updatedBy: row.updatedBy });
+    skuMap.push({ ucSku, internalSku, category, pcsPerCarton: null, imageUrl: imgUrl, updatedAt: new Date().toISOString(), updatedBy: row.updatedBy });
   } else {
     const idx = parseInt(idxRaw);
-    skuMap[idx] = { ...skuMap[idx], internalSku, category, pcsPerCarton: ppc, imageUrl: imgUrl, updatedAt: new Date().toISOString(), updatedBy: row.updatedBy };
+    skuMap[idx] = { ...skuMap[idx], internalSku, category, imageUrl: imgUrl, updatedAt: new Date().toISOString(), updatedBy: row.updatedBy };
   }
   if (bwBase64) bwStore[ucSku] = { bwImageUrl: bwBase64, bwSourceUrl: imgUrl };
 
@@ -646,8 +651,8 @@ async function confirmDeleteMapping() {
 // ── EXPORT CSV ────────────────────────────────────────────────────────
 function exportMappings() {
   if (!skuMap.length) { showToast('No SKUs to export', true); return; }
-  const rows = [['UC SKU','Internal SKU','Category','Qty/Box','Image URL','Updated At','Updated By']];
-  skuMap.forEach(m => rows.push([m.ucSku, m.internalSku||'', m.category||'', m.pcsPerCarton||'', m.imageUrl||'', m.updatedAt||'', m.updatedBy||'']));
+  const rows = [['Internal SKU','UC SKU','Category','Qty/Box','Image URL','Updated At']];
+  skuMap.forEach(m => rows.push([m.internalSku||'', m.ucSku, m.category||'', m.pcsPerCarton||'', m.imageUrl||'', m.updatedAt||'']));
   const csv  = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob([csv], {type:'text/csv'});
   const a    = document.createElement('a');
