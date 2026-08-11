@@ -1245,7 +1245,7 @@ html[data-theme="light"] .icon-moon{display:none}
         <div class="settings-card">
           <div class="settings-item">
             <div class="settings-item-info">
-              <h4>Load from Google Sheet</h4>
+              <h4>Reload latest data</h4>
               <p>Pull all data to this device</p>
             </div>
             <button class="btn bg" style="font-size:13px;padding:5px 10px;flex-shrink:0" onclick="gsLoad()">↓ Load</button>
@@ -1310,39 +1310,6 @@ html[data-theme="light"] .icon-moon{display:none}
         <button class="btn bg" style="flex:1" onclick="closeModal('admin-modal')">Cancel</button>
         <button class="btn b-rd" style="flex:1" onclick="confirmDangerAction()">Confirm</button>
       </div>
-    </div>
-  </div>
-</div>
-
-<!-- Google Sheets modal -->
-<div class="overlay" id="gs-modal">
-  <div class="modal" style="width:460px">
-    <div class="mh"><div><h2>Google Sheets sync</h2><p>Auto-connected to your Google Sheet</p></div><button class="mclose" onclick="closeModal('gs-modal')">×</button></div>
-    <div class="mc-b">
-      <div style="background:var(--gbg);border:1px solid var(--gb);border-radius:var(--rs);padding:12px 14px;margin-bottom:14px">
-        <div style="font-size:15px;font-weight:600;color:var(--gn);margin-bottom:4px">✓ Connected to Google Sheet</div>
-        <div style="font-size:14px;color:var(--gn);opacity:.8;font-family:'DM Mono',monospace;word-break:break-all">1020TgPUh2xC4Sc-PJodz1HMGLhuD5Fo_avHeUFrtJ5I</div>
-      </div>
-      <p style="font-size:15px;color:var(--t2);margin-bottom:14px">Data auto-syncs to Google Sheet 3 seconds after every change. Use the buttons below to manually save or load.</p>
-      <div style="display:flex;gap:8px;margin-bottom:14px">
-        <button class="btn bp" style="flex:1" onclick="gsSave()">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>
-          Save all to sheet
-        </button>
-        <button class="btn bg" style="flex:1" onclick="gsLoad()">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="7 16 12 21 17 16"/><line x1="12" y1="21" x2="12" y2="9"/><path d="M5 9V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v4"/></svg>
-          Load from sheet
-        </button>
-      </div>
-      <div style="background:var(--s2);border-radius:var(--rs);padding:10px 12px;margin-bottom:12px">
-        <div style="font-size:14px;font-weight:600;color:var(--t2);margin-bottom:5px">Using on a new device</div>
-        <div style="font-size:14px;color:var(--t2);line-height:1.8">
-          1. Open <strong>naimuddin74667.github.io/Tomahawk/Returns-Manager</strong> in Chrome<br>
-          2. Click this icon → <strong>Load from sheet</strong><br>
-          3. All data loads automatically ✓
-        </div>
-      </div>
-      <div id="gs-status" style="font-size:14px;margin-top:2px"></div>
     </div>
   </div>
 </div>
@@ -2968,7 +2935,7 @@ function setSyncStatus(state, msg){
   dot.className='sb-sync-dot '+state;
   txt.className='sb-sync-txt'+(state==='failed'?' failed':'');
   txt.textContent=msg;
-  if(state==='failed') txt.onclick=()=>gsSave();
+  if(state==='failed') txt.onclick=()=>doSync();
   else txt.onclick=null;
 }
 function clearCSVMaster(){
@@ -2976,12 +2943,10 @@ function clearCSVMaster(){
   master={};meta={uploadedAt:null};persistCSV();persist();updateCSVStatus();updateDashboard();toast('CSV master data cleared');
 }
 
-// Google Sheets sync
 // ── Cloudflare Worker config ─────────────────────────────────
 // Worker URL set after deployment — update this after creating the Worker
 const CF_WORKER_URL = 'https://tomahawk-returns.naimuddin.workers.dev';
 let autoSyncTimer = null;
-const GS_URL_KEY = 'rm_gs_url_v2';
 
 // ── UC Item Master — full SKU list for "Different item received" dropdowns ──
 // Same Apps Script deployment as FK_RETURNS_GAS_URL, routed via ?type=itemmaster.
@@ -3096,14 +3061,6 @@ async function fetchFKReturnsFromSheet(){
     toast('Flipkart sheet sync failed: '+err.message);
     fkSheetState='failed';
   }
-}
-
-// ── Supabase helpers ─────────────────────────────────────────
-function setGsStatus(msg, ok) {
-  const el = document.getElementById('gs-status');
-  if (!el) return;
-  el.textContent = msg;
-  el.style.color = ok === true ? 'var(--gn)' : ok === false ? 'var(--rd)' : 'var(--t2)';
 }
 
 // ── Cloudflare Worker API call helper ────────────────────────
