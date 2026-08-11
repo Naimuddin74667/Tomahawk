@@ -390,7 +390,10 @@
       <div class="left-inner" style="display:flex;flex-direction:column;gap:.8rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
           <div style="font-size:11px;color:var(--muted);line-height:1.6">Upload PDF or CSV &rarr; auto-matches to library &rarr; prints labels.</div>
-          <div id="gsheet-status" style="font-size:9px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap;margin-left:.5rem">Loading...</div>
+          <div style="display:flex;align-items:center;gap:.4rem;margin-left:.5rem;flex-shrink:0">
+            <div id="gsheet-status" style="font-size:9px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap">Loading...</div>
+            <button id="gsheet-refresh-btn" onclick="loadGSheetLookup(true)" title="Bypass the 24h cache and re-fetch SKU data from Flipkart Listings" style="font-size:9px;padding:2px 6px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;white-space:nowrap">&#8635; Refresh</button>
+          </div>
         </div>
         <div style="display:flex;gap:.5rem">
           <div class="file-drop" id="pdfDrop" style="flex:1" ondragover="bulkDragOver(event,'pdfDrop')" ondragleave="bulkDragLeave('pdfDrop')" ondrop="bulkDropFile(event,'pdf')">
@@ -960,23 +963,27 @@ var OXFORD_B64 = "iVBORw0KGgoAAAANSUhEUgAAAdIAAABoCAIAAADKJObGAAApeklEQVR4nO2ddV
 var GSHEET_LOOKUP = {}; // populated at runtime from Cloudflare Worker
 var _gsheetLoaded = false;
 
-function loadGSheetLookup() {
+function loadGSheetLookup(forceRefresh) {
   var IS_LIVE = location.hostname === 'naimuddin74667.github.io';
   var workerBase = IS_LIVE
     ? 'https://tomahawk-returns.naimuddin.workers.dev'
     : 'http://localhost:8787';
 
   var statusEl = document.getElementById('gsheet-status');
-  if(statusEl) statusEl.textContent = 'Syncing SKU data...';
+  var btnEl = document.getElementById('gsheet-refresh-btn');
+  if(statusEl) statusEl.textContent = forceRefresh ? 'Force-refreshing SKU data...' : 'Syncing SKU data...';
+  if(btnEl) btnEl.disabled = true;
 
-  fetch(workerBase + '?action=gsheetLookup')
+  var url = workerBase + '?action=gsheetLookup' + (forceRefresh ? '&refresh=1' : '');
+
+  fetch(url)
     .then(function(r){ return r.json(); })
     .then(function(data){
       if(data.ok && data.data){
         GSHEET_LOOKUP = data.data;
         _gsheetLoaded = true;
         var count = Object.keys(GSHEET_LOOKUP).length;
-        if(statusEl){ statusEl.textContent = count + ' SKUs loaded'; statusEl.style.color='#6dc87a'; }
+        if(statusEl){ statusEl.textContent = count + ' SKUs loaded' + (forceRefresh ? ' (fresh)' : ''); statusEl.style.color='#6dc87a'; }
         console.log('[GSheet] Loaded ' + count + ' SKUs. Cache: ' + (data.fetched||'live'));
       } else {
         throw new Error(data.error || 'Unknown error');
@@ -986,6 +993,9 @@ function loadGSheetLookup() {
       console.warn('[GSheet] Fetch failed, using embedded fallback:', err.message);
       if(statusEl){ statusEl.textContent = 'Offline — using cached data'; statusEl.style.color='#e05555'; }
       // Keep whatever is in GSHEET_LOOKUP (could be empty or prefilled by fallback)
+    })
+    .finally(function(){
+      if(btnEl) btnEl.disabled = false;
     });
 }
 
