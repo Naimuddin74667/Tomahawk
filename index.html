@@ -585,6 +585,15 @@ html[data-theme="light"]       .icon-moon { display: none; }
   cursor: pointer; font-family: var(--font-body);
 }
 .header-admin-btn:hover { background: var(--accent-border); }
+.hub-toast {
+  position: fixed; bottom: 24px; right: 24px;
+  background: var(--bg-surface); border-left: 4px solid var(--accent);
+  border-radius: 6px; padding: 14px 20px; font-size: 13px; color: var(--text-secondary);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4); transform: translateY(80px); opacity: 0;
+  transition: all 0.3s; z-index: 999; max-width: 320px;
+}
+.hub-toast.show { transform: translateY(0); opacity: 1; }
+.hub-toast.error { border-left-color: #e05c5c; }
 .role-badge {
   font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
   padding: 2px 7px; border-radius: var(--radius-xl);
@@ -763,6 +772,10 @@ html[data-theme="light"]       .icon-moon { display: none; }
         <circle cx="9" cy="9" r="3.5" stroke="currentColor" stroke-width="1.4"/>
         <path d="M9 1v2M9 15v2M1 9h2M15 9h2M3.22 3.22l1.42 1.42M13.36 13.36l1.42 1.42M3.22 14.78l1.42-1.42M13.36 4.64l1.42-1.42" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
       </svg>
+    </button>
+    <button class="header-admin-btn" id="header-refresh-sku-btn" hidden title="Fetch latest enabled SKUs from UC_ItemMaster and save for the whole team">
+      <svg width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M17 10a7 7 0 11-2.05-4.95M17 3v4h-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="admin-btn-label">Refresh SKU List</span>
     </button>
     <button class="header-admin-btn" id="header-admin-btn" hidden title="Manage Users">
       <svg width="13" height="13" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="6.5" r="3.5" stroke="currentColor" stroke-width="1.5"/><path d="M3 17c0-3.5 3.1-6 7-6s7 2.5 7 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
@@ -1094,6 +1107,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
     </div>
 
   </footer>
+  <div class="hub-toast" id="hub-toast"></div>
 
   <div class="footer-bottom">
     <span class="footer-copy">Tomahawk Tools · ITH Team · Internal use only</span>
@@ -1219,6 +1233,8 @@ html[data-theme="light"]       .icon-moon { display: none; }
     nameEl.textContent = label;
     roleBadge.textContent = ROLE_LABELS[user.role] || user.role;
     adminBtn.hidden = user.role !== 'admin';
+    var refreshSkuBtn = document.getElementById('header-refresh-sku-btn');
+    if (refreshSkuBtn) refreshSkuBtn.hidden = user.role !== 'admin';
     var masterSheetCard = document.getElementById('master-sheet-card');
     if (masterSheetCard) masterSheetCard.hidden = user.role !== 'admin';
     updateGreetingWithName(label.split(' ')[0]);
@@ -1234,6 +1250,8 @@ html[data-theme="light"]       .icon-moon { display: none; }
     headerUser.hidden = true;
     logoutBtn.hidden = true;
     adminBtn.hidden = true;
+    var refreshSkuBtn = document.getElementById('header-refresh-sku-btn');
+    if (refreshSkuBtn) refreshSkuBtn.hidden = true;
     var masterSheetCard = document.getElementById('master-sheet-card');
     if (masterSheetCard) masterSheetCard.hidden = true;
   }
@@ -1259,6 +1277,81 @@ html[data-theme="light"]       .icon-moon { display: none; }
       clearSession();
       showGate();
     }
+  }
+
+  // ── Refresh SKU List (admin only) — fetches enabled SKUs live from
+  // UC_ItemMaster (via Google Sheets' gviz CSV export) and saves the
+  // snapshot to D1 so every app/session reads the same current list.
+  // Requires the primary UC sheet to be shared as "Anyone with the link —
+  // Viewer"; fails with a clear message if it's still private.
+  const UC_ITEMMASTER_URL = 'https://docs.google.com/spreadsheets/d/17gMjH2tqTRKyyRXf8pvMtZXaj0MfyUFRWtFKODGHIlw/gviz/tq?tqx=out:csv&sheet=UC_ItemMaster';
+
+  function hubToast(msg, isError) {
+    const t = document.getElementById('hub-toast');
+    if (!t) return;
+    t.textContent = msg;
+    t.className = 'hub-toast show' + (isError ? ' error' : '');
+    clearTimeout(t._tt);
+    t._tt = setTimeout(() => t.classList.remove('show'), 4000);
+  }
+
+  function parseGvizCsvLine(line) {
+    const result = [];
+    let cur = '', inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') { if (inQ && line[i+1] === '"') { cur += '"'; i++; } else inQ = !inQ; }
+      else if (ch === ',' && !inQ) { result.push(cur); cur = ''; }
+      else cur += ch;
+    }
+    result.push(cur);
+    return result;
+  }
+
+  const refreshSkuBtnEl = document.getElementById('header-refresh-sku-btn');
+  if (refreshSkuBtnEl) {
+    refreshSkuBtnEl.addEventListener('click', async function () {
+      const label = refreshSkuBtnEl.querySelector('.admin-btn-label');
+      const originalText = label ? label.textContent : '';
+      refreshSkuBtnEl.disabled = true;
+      if (label) label.textContent = 'Fetching…';
+      try {
+        const res = await fetch(UC_ITEMMASTER_URL);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const text = await res.text();
+        if (text.trim().startsWith('<')) throw new Error('Sheet is not publicly viewable — check its sharing settings');
+
+        const lines = text.split(/\r?\n/).filter(l => l.trim());
+        const header = parseGvizCsvLine(lines[0]).map(h => h.trim());
+        const skuIdx = header.indexOf('skuCode');
+        const enabledIdx = header.indexOf('enabled');
+        if (skuIdx === -1) throw new Error('skuCode column not found — got: ' + header.join(', '));
+
+        const seen = new Set();
+        const skus = [];
+        for (let i = 1; i < lines.length; i++) {
+          const cols = parseGvizCsvLine(lines[i]);
+          const sku = (cols[skuIdx] || '').trim();
+          if (!sku || seen.has(sku)) continue;
+          const enabledRaw = enabledIdx !== -1 ? (cols[enabledIdx] || '').trim().toUpperCase() : 'TRUE';
+          if (enabledRaw !== 'TRUE' && enabledRaw !== '1') continue;
+          seen.add(sku);
+          skus.push(sku);
+        }
+        skus.sort();
+        if (!skus.length) throw new Error('Parsed 0 SKUs — check UC_ItemMaster has data');
+
+        if (label) label.textContent = 'Saving…';
+        const saveRes = await api('ucsku_saveList', { method: 'POST', body: { skus } });
+        if (!saveRes.ok) throw new Error(saveRes.error || 'Save failed');
+
+        hubToast(`✓ Refreshed — ${skus.length} enabled SKUs saved for the whole team`);
+      } catch (e) {
+        hubToast('⚠ Refresh failed — ' + e.message, true);
+      }
+      refreshSkuBtnEl.disabled = false;
+      if (label) label.textContent = originalText;
+    });
   }
 
   loginForm.addEventListener('submit', async function (e) {
