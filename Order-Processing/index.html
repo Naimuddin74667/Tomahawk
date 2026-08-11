@@ -439,20 +439,6 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
         <a class="btn btn-outline" id="lc-dl-link" style="display:block;text-align:center;text-decoration:none;" href="#" download="cropped_shipping_labels.pdf">&#8595; Download didn't start? Click here</a>
       </div>
 
-      <button id="lc-adv-toggle" onclick="lcToggleAdvanced()" style="background:none;border:none;color:var(--text2);font-size:11px;cursor:pointer;padding:0;display:flex;align-items:center;gap:5px;font-family:var(--font-body);margin-top:16px;">
-        &#9881; Advanced settings &#9662;
-      </button>
-      <div id="lc-adv-panel" style="display:none;flex-direction:column;gap:.8rem;margin-top:14px;border-top:1px solid var(--border);padding-top:14px;">
-        <div>
-          <label style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:6px;"><span>Padding around label</span><b id="lc-pad-val" style="color:var(--accent);">1 mm</b></label>
-          <input type="range" id="lc-pad-slider" min="0" max="6" step="0.5" value="1" style="width:100%;accent-color:var(--accent);">
-        </div>
-        <div>
-          <label style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:6px;"><span>Detection sensitivity</span><b id="lc-thresh-val" style="color:var(--accent);">Standard</b></label>
-          <input type="range" id="lc-thresh-slider" min="215" max="250" step="5" value="240" style="width:100%;accent-color:var(--accent);">
-        </div>
-        <div style="font-size:10px;color:var(--text2);line-height:1.5;">Defaults work for standard Flipkart/E-Kart/Delhivery shipping labels. Only adjust if a batch isn't cropping cleanly.</div>
-      </div>
     </div>
   </div>
 </div>
@@ -1241,7 +1227,12 @@ function switchTab(name, btn) {
 // to find where the label ends, then finds the label's own tight content box
 // within that region. Namespaced with lc* to stay independent of the picklist code.
 (function(){
-  var LC_SETTINGS_KEY = 'picklist_cropper_v1';
+  // Pad/threshold used to be user-adjustable sliders saved to
+  // localStorage (picklist_cropper_v1). Fixed as constants instead —
+  // these work for standard Flipkart/E-Kart/Delhivery shipping labels
+  // and should not vary per user/device.
+  var LC_PAD_MM = 1;
+  var LC_THRESH = 240;
   var LC_DETECT_SCALE = 2.2;
   var LC_ANCHOR_BUFFER_PT = 10;
 
@@ -1259,33 +1250,6 @@ function switchTab(name, btn) {
   var lcWarnBox = document.getElementById('lc-warn-box');
   var lcDlFallback = document.getElementById('lc-dl-fallback');
   var lcDlLink = document.getElementById('lc-dl-link');
-  var lcPadSlider = document.getElementById('lc-pad-slider');
-  var lcPadVal = document.getElementById('lc-pad-val');
-  var lcThreshSlider = document.getElementById('lc-thresh-slider');
-  var lcThreshVal = document.getElementById('lc-thresh-val');
-  var lcAdvToggle = document.getElementById('lc-adv-toggle');
-  var lcAdvPanel = document.getElementById('lc-adv-panel');
-
-  // Settings persistence
-  (function restore(){
-    try{
-      var s = JSON.parse(localStorage.getItem(LC_SETTINGS_KEY)) || {};
-      if (s.pad != null) lcPadSlider.value = s.pad;
-      if (s.thresh != null) lcThreshSlider.value = s.thresh;
-    } catch(e){}
-    lcUpdatePadLabel(); lcUpdateThreshLabel();
-  })();
-  function lcSave(){ localStorage.setItem(LC_SETTINGS_KEY, JSON.stringify({ pad: parseFloat(lcPadSlider.value), thresh: parseInt(lcThreshSlider.value) })); }
-  function lcUpdatePadLabel(){ lcPadVal.textContent = parseFloat(lcPadSlider.value).toFixed(1).replace(/\.0$/,'') + ' mm'; }
-  function lcUpdateThreshLabel(){ var v=parseInt(lcThreshSlider.value); lcThreshVal.textContent = v<=225?'Strict':v>=245?'Loose':'Standard'; }
-  lcPadSlider.addEventListener('input', function(){ lcUpdatePadLabel(); lcSave(); });
-  lcThreshSlider.addEventListener('input', function(){ lcUpdateThreshLabel(); lcSave(); });
-
-  window.lcToggleAdvanced = function(){
-    var open = lcAdvPanel.style.display === 'flex';
-    lcAdvPanel.style.display = open ? 'none' : 'flex';
-    lcAdvToggle.innerHTML = open ? '&#9881; Advanced settings &#9662;' : '&#9881; Advanced settings &#9652;';
-  };
 
   // Drag/drop + file input
   window.lcDragOver = function(e){ e.preventDefault(); lcDropzone.classList.add('drag-over'); };
@@ -1416,8 +1380,8 @@ function switchTab(name, btn) {
     lcProgressInner.style.width = '0%';
     lcStatus.textContent = 'Starting...';
 
-    var padMm = parseFloat(lcPadSlider.value);
-    var threshold = parseInt(lcThreshSlider.value);
+    var padMm = LC_PAD_MM;
+    var threshold = LC_THRESH;
     var problemPages = [];
 
     try{
