@@ -138,7 +138,7 @@ const ACTION_TIERS = {
   //   in effect, but touches D1 + calls Gmail, so gate it manager_up like
   //   every other Blinkit write. List is viewer_read to match the rest
   //   of Marketplace-Shipments' read tier. —
-  blinkitCheckRoEmails: 'manager_up', blinkitListRoLog: 'viewer_read', blinkitDebugGmail: 'manager_up',
+  blinkitCheckRoEmails: 'manager_up', blinkitListRoLog: 'viewer_read',
 
   // — Inward Label Generator (Gate Pass): admin + manager ONLY, no viewer
   //   access at all, not even read —
@@ -877,45 +877,6 @@ export default {
             settings,
             g4BoxCounts: g4BoxRows.results || []
           });
-        }
-
-        // ── BLINKIT RO EMAIL WATCHER — [TEMP DEBUG] diagnose Gmail search ──
-        // Not meant to stay long-term — returns which mailbox is actually
-        // authenticated plus separate counts for the label alone vs the
-        // label+phrase combo, to isolate exactly where a 0-result search
-        // is going wrong.
-        if (action === 'blinkitDebugGmail') {
-          try {
-            const accessToken = await getGmailAccessToken(env);
-            const authHeader = { headers: { Authorization: 'Bearer ' + accessToken } };
-
-            const profileRes = await fetch(`${GMAIL_API_BASE}/profile`, authHeader);
-            const profile = profileRes.ok ? await profileRes.json() : { error: 'profile fetch failed: ' + profileRes.status };
-
-            const labelOnlyRes = await fetch(
-              `${GMAIL_API_BASE}/messages?q=${encodeURIComponent('label:Blinkit')}&maxResults=25`, authHeader
-            );
-            const labelOnlyData = labelOnlyRes.ok ? await labelOnlyRes.json() : { error: 'label search failed: ' + labelOnlyRes.status };
-
-            const phraseRes = await fetch(
-              `${GMAIL_API_BASE}/messages?q=${encodeURIComponent('label:Blinkit "R.O. Number"')}&maxResults=25`, authHeader
-            );
-            const phraseData = phraseRes.ok ? await phraseRes.json() : { error: 'phrase search failed: ' + phraseRes.status };
-
-            const labelsRes = await fetch(`${GMAIL_API_BASE}/labels`, authHeader);
-            const labelsData = labelsRes.ok ? await labelsRes.json() : { error: 'labels fetch failed: ' + labelsRes.status };
-            const blinkitLabels = (labelsData.labels || []).filter(l => /blinkit/i.test(l.name));
-
-            return json({
-              ok: true,
-              authenticatedAs: profile.emailAddress || profile,
-              labelOnlyCount: labelOnlyData.resultSizeEstimate != null ? labelOnlyData.resultSizeEstimate : labelOnlyData,
-              phraseSearchCount: phraseData.resultSizeEstimate != null ? phraseData.resultSizeEstimate : phraseData,
-              matchingLabels: blinkitLabels
-            });
-          } catch (err) {
-            return json({ ok: false, error: err.message }, 500);
-          }
         }
 
         // ── BLINKIT RO EMAIL WATCHER — manually trigger a Gmail check ────
