@@ -851,7 +851,6 @@
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">No. of SKU</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Total Qty</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Received Qty</th>
-          <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Invoice</th>
           <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Credit Note</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Cr. Note Qty</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Status</th>
@@ -862,7 +861,7 @@
         </tr>
       </thead>
       <tbody id="roLedgerTbody">
-        <tr><td colspan="15" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+        <tr><td colspan="14" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -3834,12 +3833,19 @@ function formatDateSimple(raw) {
   return m[3] + '-' + m[2] + '-' + m[1];
 }
 
-// Blinkit prefixes every warehouse name with "BCPL - " / "BCPL – " —
-// strips that off for display since it's the same on every RO and adds
-// nothing but visual noise.
+// Warehouse names arrive in inconsistent formats depending on the
+// source: RO emails prefix with "BCPL - ", invoice records sometimes
+// prefix with "Blinkit " instead, and some include a trailing
+// "Warehouse"/"warehouse" suffix while others don't. Normalizes all of
+// these down to one short consistent form, e.g. "Pune P3 Feeder" —
+// same result regardless of which source it came from.
 function formatWarehouse(raw) {
   if (!raw) return '';
-  return String(raw).replace(/^BCPL\s*[-\u2013]\s*/i, '');
+  var s = String(raw);
+  s = s.replace(/^BCPL\s*[-\u2013]\s*/i, '');
+  s = s.replace(/^Blinkit\s+/i, '');
+  s = s.replace(/\s+Warehouse\s*$/i, '');
+  return s.trim();
 }
 
 // Blinkit's times arrive as "HH:MM:SS" — this drops the seconds since
@@ -3903,7 +3909,7 @@ function roLedgerRepairAll() {
   if (!confirm('This clears the entire RO Ledger and rebuilds it fresh from Gmail. Use this if SKU/Qty data won\'t show up for older entries. Continue?')) return;
 
   document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="15" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Rebuilding from Gmail\u2026 this can take a moment.</td></tr>';
+    '<tr><td colspan="14" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Rebuilding from Gmail\u2026 this can take a moment.</td></tr>';
 
   fetch(WORKER_URL + '?action=blinkitWipeRoLog', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' })
     .then(function(r){ return r.json(); })
@@ -3923,7 +3929,7 @@ var _roLedgerGatepassMap = {}; // ro_number -> gatepass record (from UC_Gatepass
 
 function roLedgerLoad() {
   document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="15" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+    '<tr><td colspan="14" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
 
   Promise.all([
     fetch(WORKER_URL + '?action=blinkitListRoLog').then(function(r){ return r.json(); }),
@@ -3964,7 +3970,7 @@ function roLedgerLoad() {
     })
     .catch(function(err){
       document.getElementById('roLedgerTbody').innerHTML =
-        '<tr><td colspan="15" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
+        '<tr><td colspan="14" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
     });
 }
 
@@ -4087,7 +4093,7 @@ function roLedgerRender() {
 
   if (!groups.length) {
     document.getElementById('roLedgerTbody').innerHTML =
-      '<tr><td colspan="15" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
+      '<tr><td colspan="14" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
     return;
   }
 
@@ -4128,17 +4134,15 @@ function roLedgerRender() {
     var whDisplay = created ? formatWarehouse(created.warehouse) : (inv ? formatWarehouse(inv.warehouse) : '');
     var createdDisplay = created ? formatDateSimple(created.creation_date) : (inv ? (inv.inv_date || '') : '');
 
-    // Invoice No. cell — number/link, or the Generate button if none exists yet.
+    // Invoice No. cell — number + small download button together, or
+    // the Generate button if no invoice exists yet.
     var invNum = inv ? inv.inv_number : null;
     var invNoCell = invNum
-      ? '<span style="color:var(--accent);font-weight:700;font-family:\'DM Mono\',monospace">'+esc(invNum)+'</span>'
+      ? ('<span style="color:var(--accent);font-weight:700;font-family:\'DM Mono\',monospace">'+esc(invNum)+'</span>'
+         + ' <span title="Download" style="cursor:pointer;color:var(--muted)" onclick="event.stopPropagation();ledgerDownload('+JSON.stringify(inv).replace(/"/g,'&quot;')+')">&#8595;</span>')
       : (created
           ? '<button class="btn btn-secondary btn-sm" style="width:auto" onclick="event.stopPropagation();roLedgerGenerateInvoice(\''+roEsc+'\')">+ Generate</button>'
           : '<span style="color:var(--muted)">\u2014</span>');
-    // Invoice cell — the download action, its own column (matching Invoice Ledger).
-    var invDownloadCell = invNum
-      ? '<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();ledgerDownload('+JSON.stringify(inv).replace(/"/g,'&quot;')+')" style="width:auto;font-size:10px">&#8595; Download</button>'
-      : '<span style="color:var(--muted)">\u2014</span>';
 
     var status = roLedgerDeriveStatus(g);
     var statusBadge = '<span style="display:inline-block;padding:2px 9px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:'+status.bg+';color:'+status.fg+'">'+esc(status.label)+'</span>';
@@ -4209,8 +4213,7 @@ function roLedgerRender() {
       + '<td style="padding:.5rem 1rem">'+esc(whDisplay||'\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+skuText+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+qtyText+'</td>'
-      + '<td style="padding:.5rem 1rem;text-align:center;white-space:nowrap">'+recvCell+'</td>'
-      + '<td style="padding:.5rem 1rem;text-align:right">'+invDownloadCell+'</td>'
+      + '<td style="padding:.5rem 1rem;text-align:center">'+recvCell+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:right;white-space:nowrap">'+cnCell+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+cnQtyCell+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center;white-space:nowrap">'+roStatusCell+'</td>'
