@@ -848,12 +848,13 @@
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Expires</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Appointment (latest)</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Rescheduled</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">SKU Items</th>
+          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">No. of SKU</th>
+          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Total Qty</th>
           <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">&nbsp;</th>
         </tr>
       </thead>
       <tbody id="roLedgerTbody">
-        <tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+        <tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -3825,7 +3826,7 @@ var _roDetailCurrent = null; // the group currently open in the detail modal
 
 function roLedgerLoad() {
   document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+    '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
 
   fetch(WORKER_URL + '?action=blinkitListRoLog')
     .then(function(r){ return r.json(); })
@@ -3834,10 +3835,11 @@ function roLedgerLoad() {
       _roLedgerRows = data.rows || [];
       roLedgerGroup();
       roLedgerRender();
+      roLedgerAutoParseAll();
     })
     .catch(function(err){
       document.getElementById('roLedgerTbody').innerHTML =
-        '<tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
+        '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
     });
 }
 
@@ -3868,9 +3870,13 @@ function roLedgerGroup() {
   });
 }
 
-function roLedgerItemCount(row) {
-  if (!row || !row.items_json) return 0;
-  try { return (JSON.parse(row.items_json) || []).length; } catch(e) { return 0; }
+function roLedgerItemStats(row) {
+  if (!row || !row.items_json) return { count: 0, totalQty: 0 };
+  try {
+    var items = JSON.parse(row.items_json) || [];
+    var totalQty = items.reduce(function(sum, it){ return sum + (parseInt(it.qty) || 0); }, 0);
+    return { count: items.length, totalQty: totalQty };
+  } catch(e) { return { count: 0, totalQty: 0 }; }
 }
 
 function roLedgerRender() {
@@ -3889,7 +3895,7 @@ function roLedgerRender() {
 
   if (!groups.length) {
     document.getElementById('roLedgerTbody').innerHTML =
-      '<tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
+      '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
     return;
   }
 
@@ -3900,10 +3906,9 @@ function roLedgerRender() {
     var apptText = latestSto
       ? esc(formatDateSimple(latestSto.scheduled_date||'') || '\u2014') + (latestSto.scheduled_time ? esc(' ' + latestSto.scheduled_time) : '')
       : '<span style="color:var(--muted)">Not scheduled yet</span>';
-    var itemsCount = roLedgerItemCount(created);
-    var itemsText = itemsCount > 0
-      ? itemsCount + ' SKU' + (itemsCount === 1 ? '' : 's')
-      : '<span style="color:var(--muted)">Not parsed</span>';
+    var stats = roLedgerItemStats(created);
+    var skuText = stats.count > 0 ? stats.count : '<span style="color:var(--muted)">\u2014</span>';
+    var qtyText = stats.count > 0 ? stats.totalQty : '<span style="color:var(--muted)">\u2014</span>';
     var roEsc = esc(g.ro_number).replace(/'/g, "\\'");
     return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="roLedgerOpenDetail(\''+roEsc+'\')">'
       + '<td style="padding:.5rem 1rem;font-family:\'DM Mono\',monospace">'+esc(g.ro_number)+'</td>'
@@ -3912,7 +3917,8 @@ function roLedgerRender() {
       + '<td style="padding:.5rem 1rem">'+esc(created ? (formatDateSimple(created.expiration_date)||'\u2014') : '\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem">'+apptText+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+(reschedCount > 0 ? ('<span style="color:var(--accent);font-weight:700">'+reschedCount+'\u00d7</span>') : '\u2014')+'</td>'
-      + '<td style="padding:.5rem 1rem;text-align:center">'+itemsText+'</td>'
+      + '<td style="padding:.5rem 1rem;text-align:center">'+skuText+'</td>'
+      + '<td style="padding:.5rem 1rem;text-align:center">'+qtyText+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:right"><button class="btn btn-secondary btn-sm" style="width:auto" onclick="event.stopPropagation();roLedgerOpenDetail(\''+roEsc+'\')">View \u2192</button></td>'
       + '</tr>';
   }).join('');
@@ -4029,26 +4035,20 @@ function roLedgerRenderItems() {
     '<div style="color:var(--muted)">Not parsed yet \u2014 click "Parse from Excel" above.</div>';
 }
 
-// Fetches the RO's Excel attachment bytes on demand (never stored),
-// parses it with the SAME column logic the Generate Invoice tab's
-// manual XLSX upload already uses (Item Code / Product UPC / Quantity /
-// MRP / Product Description), then saves only the extracted values.
-function roLedgerParseItems() {
-  var g = _roDetailCurrent;
-  if (!g || !g.created) return;
-  var created = g.created;
-
+// Core parse+save logic — fetches the given RO's Excel attachment on
+// demand (never stored), parses it with the SAME column logic the
+// Generate Invoice tab's manual XLSX upload already uses (Item Code /
+// Product UPC / Quantity / MRP / Product Description), saves only the
+// extracted values, and returns the parsed items array. Shared by both
+// the manual "Parse from Excel" button and the automatic background
+// pass that runs when the Ledger loads.
+function roLedgerParseAndSaveOne(created) {
   var attachments = [];
   try { attachments = JSON.parse(created.attachments_json || '[]'); } catch(e) {}
   var xlsxAttachment = attachments.filter(function(a){ return /\.xlsx?$/i.test(a.filename||''); })[0];
-  if (!xlsxAttachment) { toast('No Excel attachment on this RO email', 'err'); return; }
+  if (!xlsxAttachment) return Promise.reject(new Error('No Excel attachment on this RO email'));
 
-  var btn = document.getElementById('roDetailParseBtn');
-  btn.disabled = true;
-  var origLabel = btn.textContent;
-  btn.textContent = 'Parsing\u2026';
-
-  fetch(WORKER_URL + '?action=blinkitGetRoAttachment'
+  return fetch(WORKER_URL + '?action=blinkitGetRoAttachment'
       + '&gmail_msg_id=' + encodeURIComponent(created.gmail_msg_id)
       + '&attachment_id=' + encodeURIComponent(xlsxAttachment.attachmentId))
     .then(function(r){ return r.json(); })
@@ -4083,10 +4083,59 @@ function roLedgerParseItems() {
         _roLedgerRows.forEach(function(r){
           if (r.gmail_msg_id === created.gmail_msg_id) r.items_json = created.items_json;
         });
-        toast('Parsed ' + items.length + ' SKU(s) from Excel', 'ok');
-        roLedgerRenderItems();
-        roLedgerRender();
+        return items;
       });
+    });
+}
+
+// Runs automatically after every roLedgerLoad() — finds every RO that
+// has an Excel attachment but hasn't been parsed yet, and parses them
+// one at a time in the background (sequential, not parallel, to stay
+// gentle on the Gmail API), re-rendering the table as each one
+// finishes so the SKU/Qty columns fill in progressively instead of
+// requiring a manual click per RO.
+function roLedgerAutoParseAll() {
+  var pending = _roLedgerGroups
+    .map(function(g){ return g.created; })
+    .filter(function(c){
+      if (!c || c.items_json) return false;
+      var attachments = [];
+      try { attachments = JSON.parse(c.attachments_json || '[]'); } catch(e) {}
+      return attachments.some(function(a){ return /\.xlsx?$/i.test(a.filename||''); });
+    });
+  if (!pending.length) return;
+
+  pending.reduce(function(chain, created){
+    return chain.then(function(){
+      return roLedgerParseAndSaveOne(created)
+        .then(function(){ roLedgerRender(); })
+        .catch(function(){ /* leave this one as "Not parsed" — visible in the UI, not worth a toast per row */ });
+    });
+  }, Promise.resolve());
+}
+
+// Fetches the RO's Excel attachment bytes on demand (never stored),
+// parses it with the SAME column logic the Generate Invoice tab's
+// manual XLSX upload already uses (Item Code / Product UPC / Quantity /
+// MRP / Product Description), then saves only the extracted values.
+// Manual re-parse button in the detail modal — most ROs will already be
+// auto-parsed by the time this is clicked; this is mainly for a retry
+// after a failure, or to re-pull after the Excel changed.
+function roLedgerParseItems() {
+  var g = _roDetailCurrent;
+  if (!g || !g.created) return;
+  var created = g.created;
+
+  var btn = document.getElementById('roDetailParseBtn');
+  btn.disabled = true;
+  var origLabel = btn.textContent;
+  btn.textContent = 'Parsing\u2026';
+
+  roLedgerParseAndSaveOne(created)
+    .then(function(items){
+      toast('Parsed ' + items.length + ' SKU(s) from Excel', 'ok');
+      roLedgerRenderItems();
+      roLedgerRender();
     })
     .catch(function(err){ toast('Parse failed: ' + err.message, 'err'); })
     .then(function(){ btn.disabled = false; if (btn.textContent === 'Parsing\u2026') btn.textContent = origLabel; });
