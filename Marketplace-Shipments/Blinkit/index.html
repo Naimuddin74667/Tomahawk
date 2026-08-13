@@ -3909,16 +3909,24 @@ function roLedgerGroup() {
   });
   // Chronological order within each RO — oldest schedule first, so the
   // last item in the array is always the current/latest appointment.
+  // Sorted by the actual Gmail timestamp (email_date), not detected_at —
+  // detected_at is when our 15-min cron happened to notice it, which can
+  // lag behind the real send time and misorder emails that arrived close
+  // together. Falls back to detected_at only for rows logged before
+  // email_date was captured (older entries, pre-repair).
   Object.keys(map).forEach(function(ro){
-    map[ro].stoRows.sort(function(a,b){ return (a.detected_at||'').localeCompare(b.detected_at||''); });
+    map[ro].stoRows.sort(function(a,b){
+      return (a.email_date||a.detected_at||'').localeCompare(b.email_date||b.detected_at||'');
+    });
   });
-  // Sorted by RO number, ascending. Numeric compare (not plain string
-  // compare) since RO numbers vary in digit-length — a string sort would
-  // misorder e.g. "9..." after "10...".
+  // Sorted by mail date/time, newest first — using each RO's creation
+  // email if we have it, otherwise its most recent appointment email.
   _roLedgerGroups = Object.values(map).sort(function(a,b){
-    var na = Number(a.ro_number), nb = Number(b.ro_number);
-    if (!isNaN(na) && !isNaN(nb)) return na - nb;
-    return String(a.ro_number).localeCompare(String(b.ro_number));
+    var da = (a.created ? (a.created.email_date||a.created.detected_at) : null)
+      || (a.stoRows.length ? (a.stoRows[a.stoRows.length-1].email_date||a.stoRows[a.stoRows.length-1].detected_at) : '') || '';
+    var db = (b.created ? (b.created.email_date||b.created.detected_at) : null)
+      || (b.stoRows.length ? (b.stoRows[b.stoRows.length-1].email_date||b.stoRows[b.stoRows.length-1].detected_at) : '') || '';
+    return db.localeCompare(da);
   });
 }
 
