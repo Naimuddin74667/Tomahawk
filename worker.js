@@ -141,6 +141,7 @@ const ACTION_TIERS = {
   //   of Marketplace-Shipments' read tier. —
   blinkitCheckRoEmails: 'manager_up', blinkitListRoLog: 'viewer_read',
   blinkitGetRoAttachment: 'manager_up', blinkitSaveRoItems: 'manager_up', blinkitDeleteRoLog: 'manager_up',
+  blinkitSetRoStatus: 'manager_up',
 
   // — Inward Label Generator (Gate Pass): admin + manager ONLY, no viewer
   //   access at all, not even read —
@@ -1438,12 +1439,13 @@ export default {
           return json({ ok: true });
         }
 
-        // ── BLINKIT RO EMAIL WATCHER — delete a whole RO's entry ──────
-        // Removes every row for this RO number (the RO-created email
-        // AND every appointment/reschedule email) — e.g. when the RO
-        // itself gets cancelled and shouldn't keep showing in the
-        // Ledger. Does not touch Gmail — only removes it from this log,
-        // so nothing gets "un-cancelled" by mistake on the next check.
+        // ── BLINKIT RO EMAIL WATCHER — hard-delete a whole RO's entry ──
+        // Removes every row for this RO number entirely. Kept for real
+        // cleanup (e.g. a genuine duplicate/mistake), but the "Cancelled"
+        // button in the UI uses blinkitSetRoStatus instead, NOT this — a
+        // cancelled RO should stay visible with a Cancelled badge
+        // (matching Blinkit's own table), not disappear. Does not touch
+        // Gmail either way — only affects this log.
         if (act === 'blinkitDeleteRoLog') {
           await ensureBlinkitRoTable(env.DB);
           const { ro_number } = body;
@@ -1452,6 +1454,22 @@ export default {
             'DELETE FROM blinkit_ro_log WHERE ro_number = ?'
           ).bind(ro_number).run();
           return json({ ok: true, deleted: result.meta.changes });
+        }
+
+        // ── BLINKIT RO EMAIL WATCHER — set a manual status on an RO ───
+        // Applied to every row for this RO number (so it's visible
+        // regardless of which row the Ledger happens to read it from).
+        // Currently only 'cancelled' is used, from the Ledger's Cancel
+        // button — pass null/empty to clear it back to the normal
+        // derived status (Unscheduled/Scheduled/Expired).
+        if (act === 'blinkitSetRoStatus') {
+          await ensureBlinkitRoTable(env.DB);
+          const { ro_number, status } = body;
+          if (!ro_number) return json({ ok: false, error: 'ro_number required' }, 400);
+          await env.DB.prepare(
+            'UPDATE blinkit_ro_log SET manual_status = ? WHERE ro_number = ?'
+          ).bind(status || null, ro_number).run();
+          return json({ ok: true });
         }
 
         // ── BLINKIT RO EMAIL WATCHER — [ADMIN] wipe + rebuild the whole log ──
@@ -1783,6 +1801,7 @@ async function ensureBlinkitRoTable(DB) {
     subject                   TEXT,
     gmail_link                TEXT,
     email_date                 TEXT,
+    manual_status               TEXT,
     detected_at                TEXT DEFAULT (datetime('now'))
   )`).run();
   // Migrations for tables created before these columns existed —
@@ -1797,7 +1816,8 @@ async function ensureBlinkitRoTable(DB) {
     `ALTER TABLE blinkit_ro_log ADD COLUMN warehouse_contact_number TEXT`,
     `ALTER TABLE blinkit_ro_log ADD COLUMN attachments_json TEXT DEFAULT '[]'`,
     `ALTER TABLE blinkit_ro_log ADD COLUMN items_json TEXT`,
-    `ALTER TABLE blinkit_ro_log ADD COLUMN email_date TEXT`
+    `ALTER TABLE blinkit_ro_log ADD COLUMN email_date TEXT`,
+    `ALTER TABLE blinkit_ro_log ADD COLUMN manual_status TEXT`
   ];
   for (const sql of migrations) {
     try { await DB.prepare(sql).run(); } catch(e) { /* column already exists — safe to ignore */ }
