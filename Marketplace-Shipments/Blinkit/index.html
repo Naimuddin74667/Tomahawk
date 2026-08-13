@@ -877,6 +877,8 @@
       <button onclick="closeRoDetailModal()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
     </div>
 
+    <div id="roDetailSummary" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;background:#111;border:1px solid var(--border);border-radius:6px;padding:.7rem .9rem;margin-bottom:1rem;font-size:12px"></div>
+
     <div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:1rem 0 .5rem;font-family:'DM Mono',monospace">Appointment History</div>
     <div id="roDetailHistory" style="font-size:12px;color:var(--text);margin-bottom:1rem"></div>
 
@@ -4258,6 +4260,29 @@ function roLedgerOpenDetail(roNumber) {
   if (!g) return;
   _roDetailCurrent = g;
   document.getElementById('roDetailNumber').textContent = roNumber;
+
+  // Same fallback as the main table: prefer the RO email's own data,
+  // fall back to the invoice record for ROs that predate the Gmail
+  // watcher (or whose email was otherwise missed) — this is exactly the
+  // Invoice Ledger data, reused here rather than left blank.
+  var created = g.created;
+  var inv = _roLedgerInvMap[g.ro_number];
+  var stats = roLedgerItemStats(created);
+  var skuCount = stats.count > 0 ? stats.count : (inv ? (inv.sku_count || 0) : 0);
+  var totalQty = stats.count > 0 ? stats.totalQty : (inv ? (inv.total_qty || 0) : 0);
+  var whDisplay = created ? formatWarehouse(created.warehouse) : (inv ? formatWarehouse(inv.warehouse) : '');
+  var createdDisplay = created ? formatDateSimple(created.creation_date) : (inv ? (inv.inv_date || '') : '');
+
+  function summaryField(label, value) {
+    return '<div><div style="color:var(--muted);font-size:9px;letter-spacing:.05em;text-transform:uppercase;margin-bottom:2px">'+esc(label)+'</div><div style="font-weight:600">'+(value || '<span style="color:var(--muted)">\u2014</span>')+'</div></div>';
+  }
+  document.getElementById('roDetailSummary').innerHTML =
+    summaryField('Invoice No.', inv ? esc(inv.inv_number) : null)
+    + summaryField('Warehouse', whDisplay ? esc(whDisplay) : null)
+    + summaryField('Created', createdDisplay ? esc(createdDisplay) : null)
+    + summaryField('No. of SKU', skuCount > 0 ? skuCount : null)
+    + summaryField('Total Qty', totalQty > 0 ? totalQty : null)
+    + summaryField('Received Qty', (inv && inv.received_qty !== null && inv.received_qty !== undefined && inv.received_qty !== '') ? inv.received_qty : null);
 
   var historyHtml;
   if (!g.stoRows.length) {
