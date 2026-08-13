@@ -883,10 +883,7 @@
     <div id="roDetailItems" style="font-size:12px;color:var(--text)"></div>
 
     <div style="margin-top:1.2rem;display:flex;align-items:center;justify-content:space-between">
-      <div style="display:flex;gap:.5rem">
-        <button class="btn btn-secondary btn-sm" style="width:auto;color:var(--rd);border-color:var(--rd)" onclick="roLedgerDeleteEntry()">&#128683; Mark as Cancelled</button>
-        <button class="btn btn-secondary btn-sm" style="width:auto" onclick="roLedgerUncancelEntry()">Un-cancel</button>
-      </div>
+      <button class="btn btn-secondary btn-sm" style="width:auto;color:var(--rd);border-color:var(--rd)" onclick="roLedgerDeleteEntry()">&#128683; Mark as Cancelled</button>
       <a id="roDetailGmailLink" href="#" target="_blank" style="font-size:11px;color:var(--muted);text-decoration:underline">Open original email in Gmail &#8599;</a>
     </div>
   </div>
@@ -3926,12 +3923,19 @@ function roLedgerGroup() {
   });
   // Sorted by mail date/time, newest first — using each RO's creation
   // email if we have it, otherwise its most recent appointment email.
-  _roLedgerGroups = Object.values(map).sort(function(a,b){
+  var allGroups = Object.values(map).sort(function(a,b){
     var da = (a.created ? (a.created.email_date||a.created.detected_at) : null)
       || (a.stoRows.length ? (a.stoRows[a.stoRows.length-1].email_date||a.stoRows[a.stoRows.length-1].detected_at) : '') || '';
     var db = (b.created ? (b.created.email_date||b.created.detected_at) : null)
       || (b.stoRows.length ? (b.stoRows[b.stoRows.length-1].email_date||b.stoRows[b.stoRows.length-1].detected_at) : '') || '';
     return db.localeCompare(da);
+  });
+  // Cancelled ROs are hidden from the ledger entirely — not shown with
+  // a badge, just not listed. Marking one via "Mark as Cancelled" (in
+  // the detail modal) removes it from view on the next load.
+  _roLedgerGroups = allGroups.filter(function(g){
+    return !((g.created && g.created.manual_status === 'cancelled')
+      || g.stoRows.some(function(r){ return r.manual_status === 'cancelled'; }));
   });
 }
 
@@ -3946,30 +3950,16 @@ function roLedgerItemStats(row) {
 
 // Derives a Blinkit-style status badge from what we can actually tell
 // from email data:
-//   Cancelled    — manual_status set via the Ledger's Cancel button
-//                  (we have no email that tells us this — only what the
-//                  person marks themselves)
 //   Scheduled    — has at least one appointment email
-//   Expired      — no appointment, and past the RO's expiration date
-//   Unscheduled  — no appointment yet, not expired
-// Deliberately does NOT attempt Fulfilled — that requires knowing
-// goods were actually received (GRN), which no email we read reports.
+//   Unscheduled  — no appointment yet
+// No "Expired" — every RO expires on a fixed ~30-day window regardless,
+// so it isn't a meaningful distinguishing status. No "Cancelled" here
+// either — cancelled ROs are filtered out before this ever runs (see
+// roLedgerGroup). Deliberately does NOT attempt "Fulfilled" — that
+// requires knowing goods were actually received (GRN), which no email
+// we read reports.
 function roLedgerDeriveStatus(g) {
-  var cancelled = (g.created && g.created.manual_status === 'cancelled')
-    || g.stoRows.some(function(r){ return r.manual_status === 'cancelled'; });
-  if (cancelled) return { label: 'Cancelled', bg: 'rgba(224,85,85,.15)', fg: '#e05555' };
-
   if (g.stoRows.length > 0) return { label: 'Scheduled', bg: 'rgba(62,207,142,.15)', fg: '#3ecf8e' };
-
-  var expiry = g.created ? g.created.expiration_date : null;
-  if (expiry) {
-    var m = String(expiry).match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (m) {
-      var expiryDate = new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
-      var today = new Date(); today.setHours(0,0,0,0);
-      if (expiryDate < today) return { label: 'Expired', bg: 'rgba(224,85,85,.15)', fg: '#e05555' };
-    }
-  }
   return { label: 'Unscheduled', bg: 'rgba(224,166,62,.15)', fg: '#e0a63e' };
 }
 
@@ -4114,14 +4104,15 @@ function closeRoDetailModal() {
   _roDetailCurrent = null;
 }
 
-// Marks the RO as Cancelled — it stays visible in the ledger with a
-// Cancelled badge (matching how Blinkit's own table still lists
-// cancelled ROs), rather than disappearing. Applies to every row for
-// this RO number. Can be reversed via roLedgerUncancelEntry.
+// Marks the RO as Cancelled — hides it from the RO Ledger entirely
+// (not shown with a badge, just not listed). Applies to every row for
+// this RO number. Nothing is deleted; clicking "Repair" rebuilds the
+// whole log fresh from Gmail, which clears any manual_status along the
+// way — that's the recovery path if one gets cancelled by mistake.
 function roLedgerDeleteEntry() {
   var g = _roDetailCurrent;
   if (!g) return;
-  if (!confirm('Mark RO ' + g.ro_number + ' as Cancelled? It stays in the ledger with a Cancelled badge — this does not delete anything.')) return;
+  if (!confirm('Mark RO ' + g.ro_number + ' as Cancelled? It will be hidden from the RO Ledger (nothing is deleted \u2014 hitting Repair later would bring it back).')) return;
 
   fetch(WORKER_URL + '?action=blinkitSetRoStatus', {
     method: 'POST', headers: {'Content-Type':'application/json'},
@@ -4129,22 +4120,6 @@ function roLedgerDeleteEntry() {
   }).then(function(r){ return r.json(); }).then(function(data){
     if (!data.ok) throw new Error(data.error || 'Failed to update status');
     toast('RO ' + g.ro_number + ' marked as Cancelled', 'ok');
-    closeRoDetailModal();
-    roLedgerLoad();
-  }).catch(function(err){ toast('Failed: ' + err.message, 'err'); });
-}
-
-// Clears a manually-set Cancelled status, returning the RO to its
-// normal derived status (Unscheduled/Scheduled/Expired).
-function roLedgerUncancelEntry() {
-  var g = _roDetailCurrent;
-  if (!g) return;
-  fetch(WORKER_URL + '?action=blinkitSetRoStatus', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ ro_number: g.ro_number, status: null })
-  }).then(function(r){ return r.json(); }).then(function(data){
-    if (!data.ok) throw new Error(data.error || 'Failed to update status');
-    toast('RO ' + g.ro_number + ' un-cancelled', 'ok');
     closeRoDetailModal();
     roLedgerLoad();
   }).catch(function(err){ toast('Failed: ' + err.message, 'err'); });
