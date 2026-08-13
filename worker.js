@@ -1782,6 +1782,7 @@ async function ensureBlinkitRoTable(DB) {
     items_json                 TEXT,
     subject                   TEXT,
     gmail_link                TEXT,
+    email_date                 TEXT,
     detected_at                TEXT DEFAULT (datetime('now'))
   )`).run();
   // Migrations for tables created before these columns existed —
@@ -1795,7 +1796,8 @@ async function ensureBlinkitRoTable(DB) {
     `ALTER TABLE blinkit_ro_log ADD COLUMN warehouse_contact_name TEXT`,
     `ALTER TABLE blinkit_ro_log ADD COLUMN warehouse_contact_number TEXT`,
     `ALTER TABLE blinkit_ro_log ADD COLUMN attachments_json TEXT DEFAULT '[]'`,
-    `ALTER TABLE blinkit_ro_log ADD COLUMN items_json TEXT`
+    `ALTER TABLE blinkit_ro_log ADD COLUMN items_json TEXT`,
+    `ALTER TABLE blinkit_ro_log ADD COLUMN email_date TEXT`
   ];
   for (const sql of migrations) {
     try { await DB.prepare(sql).run(); } catch(e) { /* column already exists — safe to ignore */ }
@@ -2004,6 +2006,11 @@ async function checkNewRoEmails(env) {
     const subjectHeader = headers.find(h => h.name === 'Subject');
     const subject = subjectHeader ? subjectHeader.value : '';
 
+    // Gmail's internalDate is the actual send/receive time (epoch ms),
+    // not when our cron happened to check — that's what "detected_at"
+    // captures instead, which can lag behind by up to 15 minutes.
+    const emailDate = msg.internalDate ? new Date(parseInt(msg.internalDate)).toISOString() : null;
+
     const bodyText = extractGmailBody(msg.payload);
     const parsed = parseRoEmailBody(bodyText);
     const attachments = extractGmailAttachments(msg.payload);
@@ -2013,14 +2020,14 @@ async function checkNewRoEmails(env) {
       INSERT INTO blinkit_ro_log (
         gmail_msg_id, email_type, ro_number, creation_date, expiration_date, warehouse,
         appointment_id, scheduled_date, scheduled_time, warehouse_contact_name, warehouse_contact_number,
-        attachments_json, subject, gmail_link, detected_at
+        attachments_json, subject, gmail_link, email_date, detected_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(gmail_msg_id) DO NOTHING
     `).bind(
       m.id, parsed.email_type, parsed.ro_number, parsed.creation_date, parsed.expiration_date, parsed.warehouse,
       parsed.appointment_id, parsed.scheduled_date, parsed.scheduled_time, parsed.warehouse_contact_name, parsed.warehouse_contact_number,
-      JSON.stringify(attachments), subject, gmailLink
+      JSON.stringify(attachments), subject, gmailLink, emailDate
     ).run();
 
     newCount++;
