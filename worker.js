@@ -142,6 +142,7 @@ const ACTION_TIERS = {
   blinkitCheckRoEmails: 'manager_up', blinkitListRoLog: 'viewer_read',
   blinkitGetRoAttachment: 'manager_up', blinkitSaveRoItems: 'manager_up', blinkitDeleteRoLog: 'manager_up',
   blinkitSetRoStatus: 'manager_up',
+  blinkitBulkSetAppointments: 'manager_up',
 
   // — Inward Label Generator (Gate Pass): admin + manager ONLY, no viewer
   //   access at all, not even read —
@@ -1472,17 +1473,53 @@ export default {
           return json({ ok: true });
         }
 
+        // ── BLINKIT RO EMAIL WATCHER — bulk backfill appointment dates ──
+        // For ROs that predate the Gmail watcher (created before it
+        // existed, so there's no actual email to detect) — inserts a
+        // synthetic 'sto_scheduled' row per RO so it shows up in the
+        // Ledger the same way a real appointment email would. Uses a
+        // deterministic gmail_msg_id ('manual-appt-<ro_number>') so
+        // re-running this with corrected data updates in place rather
+        // than duplicating, and so blinkitWipeRoLog can recognize and
+        // preserve these rows (see below) instead of wiping them on a
+        // Repair, since there's no email to re-detect them from.
+        // Body: { appointments: [{ ro_number, scheduled_date, scheduled_time }, ...] }
+        if (act === 'blinkitBulkSetAppointments') {
+          await ensureBlinkitRoTable(env.DB);
+          const { appointments } = body;
+          if (!Array.isArray(appointments) || !appointments.length) {
+            return json({ ok: false, error: 'appointments array required' }, 400);
+          }
+          let count = 0;
+          for (const a of appointments) {
+            if (!a.ro_number || !a.scheduled_date) continue;
+            const msgId = 'manual-appt-' + a.ro_number;
+            await env.DB.prepare(`
+              INSERT INTO blinkit_ro_log (gmail_msg_id, email_type, ro_number, scheduled_date, scheduled_time, subject, detected_at)
+              VALUES (?, 'sto_scheduled', ?, ?, ?, 'Manually entered from Blinkit Seller Hub', datetime('now'))
+              ON CONFLICT(gmail_msg_id) DO UPDATE SET
+                scheduled_date = excluded.scheduled_date,
+                scheduled_time = excluded.scheduled_time
+            `).bind(msgId, a.ro_number, a.scheduled_date, a.scheduled_time || null).run();
+            count++;
+          }
+          return json({ ok: true, count });
+        }
+
         // ── BLINKIT RO EMAIL WATCHER — [ADMIN] wipe + rebuild the whole log ──
-        // Clears every row, then immediately re-runs the Gmail check so
-        // it repopulates from scratch. Exists because rows logged before
-        // a schema/parsing change (e.g. attachments_json didn't used to
-        // be captured) never get "backfilled" on their own — the dedup
-        // logic only processes emails it hasn't seen before, so an
+        // Clears every row EXCEPT manually-entered ones (gmail_msg_id
+        // starting 'manual-appt-', from blinkitBulkSetAppointments) —
+        // those have no corresponding email, so wiping them would lose
+        // that data permanently with no way to re-fetch it. Everything
+        // else gets rebuilt fresh from Gmail. Exists because rows logged
+        // before a schema/parsing change (e.g. attachments_json didn't
+        // used to be captured) never get "backfilled" on their own — the
+        // dedup logic only processes emails it hasn't seen before, so an
         // already-logged row missing new data stays missing it forever
         // unless it's re-fetched. This forces exactly that.
         if (act === 'blinkitWipeRoLog') {
           await ensureBlinkitRoTable(env.DB);
-          await env.DB.prepare('DELETE FROM blinkit_ro_log').run();
+          await env.DB.prepare(`DELETE FROM blinkit_ro_log WHERE gmail_msg_id NOT LIKE 'manual-appt-%'`).run();
           const result = await checkNewRoEmails(env);
           return json({ ok: true, rebuilt: result });
         }
