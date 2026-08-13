@@ -3927,6 +3927,16 @@ function roLedgerGroup() {
       map[ro].created = r; // the ro_created email — there should only be one per RO
     }
   });
+  // Include ROs that already have an invoice in Invoice Ledger but were
+  // never detected via Gmail — e.g. generated before the RO watcher
+  // existed, or from an email it missed. Without a `created` row these
+  // won't have Expiry Date/Appointment/Rescheduled data (no email to
+  // pull it from), but the row still shows up with whatever the invoice
+  // itself knows (Warehouse, SKU count, Qty, Received Qty, Credit Note,
+  // RO Status) — same fallback logic as roLedgerRender.
+  Object.keys(_roLedgerInvMap).forEach(function(ro){
+    if (!map[ro]) map[ro] = { ro_number: ro, created: null, stoRows: [] };
+  });
   // Chronological order within each RO — oldest schedule first, so the
   // last item in the array is always the current/latest appointment.
   // Sorted by the actual Gmail timestamp (email_date), not detected_at —
@@ -3940,12 +3950,17 @@ function roLedgerGroup() {
     });
   });
   // Sorted by mail date/time, newest first — using each RO's creation
-  // email if we have it, otherwise its most recent appointment email.
+  // email if we have it, otherwise its most recent appointment email,
+  // otherwise (invoice-only ROs with no email at all) its invoice date
+  // so it doesn't just default to the very bottom of the list.
   var allGroups = Object.values(map).sort(function(a,b){
+    var invA = _roLedgerInvMap[a.ro_number], invB = _roLedgerInvMap[b.ro_number];
     var da = (a.created ? (a.created.email_date||a.created.detected_at) : null)
-      || (a.stoRows.length ? (a.stoRows[a.stoRows.length-1].email_date||a.stoRows[a.stoRows.length-1].detected_at) : '') || '';
+      || (a.stoRows.length ? (a.stoRows[a.stoRows.length-1].email_date||a.stoRows[a.stoRows.length-1].detected_at) : null)
+      || (invA ? (invA.created_at||'') : '') || '';
     var db = (b.created ? (b.created.email_date||b.created.detected_at) : null)
-      || (b.stoRows.length ? (b.stoRows[b.stoRows.length-1].email_date||b.stoRows[b.stoRows.length-1].detected_at) : '') || '';
+      || (b.stoRows.length ? (b.stoRows[b.stoRows.length-1].email_date||b.stoRows[b.stoRows.length-1].detected_at) : null)
+      || (invB ? (invB.created_at||'') : '') || '';
     return db.localeCompare(da);
   });
   // Cancelled ROs are hidden from the ledger entirely — not shown with
@@ -4002,7 +4017,7 @@ function roLedgerRender() {
   var q = (document.getElementById('roLedgerSearch').value || '').trim().toLowerCase();
   var groups = _roLedgerGroups.filter(function(g){
     if (!q) return true;
-    var wh = ((g.created && g.created.warehouse) || '').toLowerCase();
+    var wh = ((g.created && g.created.warehouse) || (_roLedgerInvMap[g.ro_number] && _roLedgerInvMap[g.ro_number].warehouse) || '').toLowerCase();
     return g.ro_number.toLowerCase().indexOf(q) !== -1 || wh.indexOf(q) !== -1;
   });
 
@@ -4025,12 +4040,26 @@ function roLedgerRender() {
     var apptText = latestSto
       ? esc(formatDateSimple(latestSto.scheduled_date||'') || '\u2014')
       : '<span style="color:var(--muted)">Not scheduled yet</span>';
-    var stats = roLedgerItemStats(created);
-    var skuText = stats.count > 0 ? stats.count : '<span style="color:var(--muted)">\u2014</span>';
-    var qtyText = stats.count > 0 ? stats.totalQty : '<span style="color:var(--muted)">\u2014</span>';
     var roEsc = esc(g.ro_number).replace(/'/g, "\\'");
 
     var inv = _roLedgerInvMap[g.ro_number]; // full invoice record, or undefined if none generated yet
+
+    // SKU count / Qty: prefer the RO email's own parsed Excel data: if
+    // that's not available (no email, or not parsed yet), fall back to
+    // what the invoice itself recorded — still real numbers, just from
+    // the invoice rather than the RO document.
+    var stats = roLedgerItemStats(created);
+    var skuCount = stats.count > 0 ? stats.count : (inv ? (inv.sku_count || 0) : 0);
+    var totalQty = stats.count > 0 ? stats.totalQty : (inv ? (inv.total_qty || 0) : 0);
+    var skuText = skuCount > 0 ? skuCount : '<span style="color:var(--muted)">\u2014</span>';
+    var qtyText = totalQty > 0 ? totalQty : '<span style="color:var(--muted)">\u2014</span>';
+
+    // Warehouse / Created date: same fallback — RO email first, invoice
+    // record second, for ROs that only exist because an invoice was
+    // generated before the Gmail watcher ever saw them.
+    var whDisplay = created ? formatWarehouse(created.warehouse) : (inv ? formatWarehouse(inv.warehouse) : '');
+    var createdDisplay = created ? formatDateSimple(created.creation_date) : (inv ? (inv.inv_date || '') : '');
+
     var invNum = inv ? inv.inv_number : null;
     var invCell = invNum
       ? ('<span style="color:var(--accent);font-weight:700;font-family:\'DM Mono\',monospace">'+esc(invNum)+'</span>'
@@ -4104,8 +4133,8 @@ function roLedgerRender() {
     return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="roLedgerOpenDetail(\''+roEsc+'\')">'
       + '<td style="padding:.5rem 1rem;text-align:center">'+invCell+'</td>'
       + '<td style="padding:.5rem 1rem;font-family:\'DM Mono\',monospace">'+esc(g.ro_number)+'</td>'
-      + '<td style="padding:.5rem 1rem">'+esc(created ? (formatWarehouse(created.warehouse)||'\u2014') : '\u2014')+'</td>'
-      + '<td style="padding:.5rem 1rem">'+esc(created ? (formatDateSimple(created.creation_date)||'\u2014') : '\u2014')+'</td>'
+      + '<td style="padding:.5rem 1rem">'+esc(whDisplay||'\u2014')+'</td>'
+      + '<td style="padding:.5rem 1rem">'+esc(createdDisplay||'\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem">'+esc(created ? (formatDateSimple(created.expiration_date)||'\u2014') : '\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem">'+apptText+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+(reschedCount > 0 ? ('<span style="color:var(--accent);font-weight:700">'+reschedCount+'\u00d7</span>') : '\u2014')+'</td>'
