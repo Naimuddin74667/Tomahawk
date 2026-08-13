@@ -3838,11 +3838,13 @@ function roLedgerGroup() {
   Object.keys(map).forEach(function(ro){
     map[ro].stoRows.sort(function(a,b){ return (a.detected_at||'').localeCompare(b.detected_at||''); });
   });
-  // Newest RO first
+  // Sorted by RO number, ascending. Numeric compare (not plain string
+  // compare) since RO numbers vary in digit-length — a string sort would
+  // misorder e.g. "9..." after "10...".
   _roLedgerGroups = Object.values(map).sort(function(a,b){
-    var da = (a.created ? a.created.detected_at : (a.stoRows[a.stoRows.length-1]||{}).detected_at) || '';
-    var db = (b.created ? b.created.detected_at : (b.stoRows[b.stoRows.length-1]||{}).detected_at) || '';
-    return db.localeCompare(da);
+    var na = Number(a.ro_number), nb = Number(b.ro_number);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return String(a.ro_number).localeCompare(String(b.ro_number));
   });
 }
 
