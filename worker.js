@@ -95,6 +95,7 @@ const ACTION_TIERS = {
   adminResetPassword: 'admin_only', adminDeleteUser: 'admin_only', adminSetEnforcement: 'admin_only',
   wipeAllReturns: 'admin_only', blinkitDeleteAllInvoices: 'admin_only',
   fkLedgerDeleteAll: 'admin_only', resetBoxCounters: 'admin_only', sm_migrateLegacy: 'admin_only',
+  blinkitWipeRoLog: 'admin_only',
 
   // — Returns Manager: viewer can view, strictly no edits or logs —
   load: 'viewer_read',
@@ -1451,6 +1452,21 @@ export default {
             'DELETE FROM blinkit_ro_log WHERE ro_number = ?'
           ).bind(ro_number).run();
           return json({ ok: true, deleted: result.meta.changes });
+        }
+
+        // ── BLINKIT RO EMAIL WATCHER — [ADMIN] wipe + rebuild the whole log ──
+        // Clears every row, then immediately re-runs the Gmail check so
+        // it repopulates from scratch. Exists because rows logged before
+        // a schema/parsing change (e.g. attachments_json didn't used to
+        // be captured) never get "backfilled" on their own — the dedup
+        // logic only processes emails it hasn't seen before, so an
+        // already-logged row missing new data stays missing it forever
+        // unless it's re-fetched. This forces exactly that.
+        if (act === 'blinkitWipeRoLog') {
+          await ensureBlinkitRoTable(env.DB);
+          await env.DB.prepare('DELETE FROM blinkit_ro_log').run();
+          const result = await checkNewRoEmails(env);
+          return json({ ok: true, rebuilt: result });
         }
 
         // ── BLINKIT SKU LIBRARY — save ────────────────────────
