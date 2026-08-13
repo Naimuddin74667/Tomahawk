@@ -846,7 +846,6 @@
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Number</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Warehouse</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Created</th>
-          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Expires</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Appointment (latest)</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Rescheduled</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">No. of SKU</th>
@@ -855,7 +854,7 @@
         </tr>
       </thead>
       <tbody id="roLedgerTbody">
-        <tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+        <tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -3821,6 +3820,14 @@ function formatWarehouse(raw) {
   return String(raw).replace(/^BCPL\s*[-\u2013]\s*/i, '');
 }
 
+// Blinkit's times arrive as "HH:MM:SS" — this drops the seconds since
+// they're always :00 and add nothing but visual clutter.
+function formatTimeSimple(raw) {
+  if (!raw) return '';
+  var m = String(raw).match(/^(\d{1,2}):(\d{2})/);
+  return m ? (m[1] + ':' + m[2]) : raw;
+}
+
 var _roLedgerRows = [];    // raw rows from blinkitListRoLog
 var _roLedgerGroups = [];  // grouped by ro_number
 var _roDetailCurrent = null; // the group currently open in the detail modal
@@ -3834,7 +3841,7 @@ function roLedgerRepairAll() {
   if (!confirm('This clears the entire RO Ledger and rebuilds it fresh from Gmail. Use this if SKU/Qty data won\'t show up for older entries. Continue?')) return;
 
   document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Rebuilding from Gmail\u2026 this can take a moment.</td></tr>';
+    '<tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Rebuilding from Gmail\u2026 this can take a moment.</td></tr>';
 
   fetch(WORKER_URL + '?action=blinkitWipeRoLog', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' })
     .then(function(r){ return r.json(); })
@@ -3851,7 +3858,7 @@ function roLedgerRepairAll() {
 
 function roLedgerLoad() {
   document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+    '<tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
 
   fetch(WORKER_URL + '?action=blinkitListRoLog')
     .then(function(r){ return r.json(); })
@@ -3864,7 +3871,7 @@ function roLedgerLoad() {
     })
     .catch(function(err){
       document.getElementById('roLedgerTbody').innerHTML =
-        '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
+        '<tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
     });
 }
 
@@ -3920,7 +3927,7 @@ function roLedgerRender() {
 
   if (!groups.length) {
     document.getElementById('roLedgerTbody').innerHTML =
-      '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
+      '<tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
     return;
   }
 
@@ -3929,7 +3936,7 @@ function roLedgerRender() {
     var latestSto = g.stoRows.length ? g.stoRows[g.stoRows.length - 1] : null;
     var reschedCount = Math.max(0, g.stoRows.length - 1);
     var apptText = latestSto
-      ? esc(formatDateSimple(latestSto.scheduled_date||'') || '\u2014') + (latestSto.scheduled_time ? esc(' ' + latestSto.scheduled_time) : '')
+      ? esc(formatDateSimple(latestSto.scheduled_date||'') || '\u2014') + (latestSto.scheduled_time ? esc(' ' + formatTimeSimple(latestSto.scheduled_time)) : '')
       : '<span style="color:var(--muted)">Not scheduled yet</span>';
     var stats = roLedgerItemStats(created);
     var skuText = stats.count > 0 ? stats.count : '<span style="color:var(--muted)">\u2014</span>';
@@ -3939,7 +3946,6 @@ function roLedgerRender() {
       + '<td style="padding:.5rem 1rem;font-family:\'DM Mono\',monospace">'+esc(g.ro_number)+'</td>'
       + '<td style="padding:.5rem 1rem">'+esc(created ? (formatWarehouse(created.warehouse)||'\u2014') : '\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem">'+esc(created ? (formatDateSimple(created.creation_date)||'\u2014') : '\u2014')+'</td>'
-      + '<td style="padding:.5rem 1rem">'+esc(created ? (formatDateSimple(created.expiration_date)||'\u2014') : '\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem">'+apptText+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+(reschedCount > 0 ? ('<span style="color:var(--accent);font-weight:700">'+reschedCount+'\u00d7</span>') : '\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+skuText+'</td>'
@@ -3965,7 +3971,7 @@ function roLedgerOpenDetail(roNumber) {
       return '<div style="padding:.4rem 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;'
         + (isLatest ? 'font-weight:700;color:var(--accent)' : 'color:var(--muted)') + '">'
         + '<span>'+esc(label)+' \u2014 Appointment ID '+esc(r.appointment_id||'\u2014')+'</span>'
-        + '<span>'+esc(formatDateSimple(r.scheduled_date)||'\u2014')+' '+esc(r.scheduled_time||'')+(isLatest ? ' (current)' : '')+'</span>'
+        + '<span>'+esc(formatDateSimple(r.scheduled_date)||'\u2014')+' '+esc(formatTimeSimple(r.scheduled_time)||'')+(isLatest ? ' (current)' : '')+'</span>'
         + '</div>';
     }).join('');
   }
