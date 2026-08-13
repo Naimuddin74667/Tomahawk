@@ -140,6 +140,7 @@ const ACTION_TIERS = {
   //   every other Blinkit write. List is viewer_read to match the rest
   //   of Marketplace-Shipments' read tier. —
   blinkitCheckRoEmails: 'manager_up', blinkitListRoLog: 'viewer_read',
+  blinkitGetGatepass: 'viewer_read',
   blinkitGetRoAttachment: 'manager_up', blinkitSaveRoItems: 'manager_up', blinkitDeleteRoLog: 'manager_up',
   blinkitSetRoStatus: 'manager_up',
   blinkitBulkSetAppointments: 'manager_up',
@@ -903,6 +904,28 @@ export default {
             'SELECT * FROM blinkit_ro_log ORDER BY detected_at DESC LIMIT 200'
           ).all();
           return json({ ok: true, rows: rows.results || [] });
+        }
+
+        // ── BLINKIT — gatepass lookup (Ready to Dispatch signal) ──────
+        // Proxies + edge-caches the GAS bridge's Blinkit-filtered
+        // UC_Gatepass data, same 5-min caching pattern sa_loadAll
+        // already uses for UC_Inventory — avoids hitting Apps Script on
+        // every RO Ledger load.
+        if (action === 'blinkitGetGatepass') {
+          const cache = caches.default;
+          const cacheKey = new Request('https://cache.internal/blinkit-gatepass-v1');
+          const cached = await cache.match(cacheKey);
+          if (cached) {
+            return new Response(await cached.text(), { headers: { ...CORS, 'X-Cache': 'HIT' } });
+          }
+          const res = await fetch(SA_UC_GAS_URL + '?type=blinkitGatepass');
+          if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
+          const text = await res.text();
+          const response = new Response(text, {
+            headers: { ...CORS, 'Cache-Control': 'public, max-age=300', 'X-Cache': 'MISS' }
+          });
+          await cache.put(cacheKey, response.clone());
+          return response;
         }
 
         // ── BLINKIT RO EMAIL WATCHER — fetch one attachment's raw bytes ──
