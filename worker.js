@@ -139,6 +139,7 @@ const ACTION_TIERS = {
   //   every other Blinkit write. List is viewer_read to match the rest
   //   of Marketplace-Shipments' read tier. —
   blinkitCheckRoEmails: 'manager_up', blinkitListRoLog: 'viewer_read',
+  blinkitGetRoAttachment: 'manager_up', blinkitSaveRoItems: 'manager_up',
 
   // — Inward Label Generator (Gate Pass): admin + manager ONLY, no viewer
   //   access at all, not even read —
@@ -901,6 +902,33 @@ export default {
           return json({ ok: true, rows: rows.results || [] });
         }
 
+        // ── BLINKIT RO EMAIL WATCHER — fetch one attachment's raw bytes ──
+        // On-demand only — called when the Ledger tab needs to parse a
+        // specific RO's Excel attachment. Returns base64 (standard, not
+        // base64url) so the frontend can atob() it directly. The file is
+        // never stored anywhere; this just relays it through for a
+        // one-time client-side parse.
+        if (action === 'blinkitGetRoAttachment') {
+          try {
+            const gmailMsgId = url.searchParams.get('gmail_msg_id');
+            const attachmentId = url.searchParams.get('attachment_id');
+            if (!gmailMsgId || !attachmentId) {
+              return json({ ok: false, error: 'gmail_msg_id and attachment_id required' }, 400);
+            }
+            const accessToken = await getGmailAccessToken(env);
+            const attRes = await fetch(
+              `${GMAIL_API_BASE}/messages/${gmailMsgId}/attachments/${attachmentId}`,
+              { headers: { Authorization: 'Bearer ' + accessToken } }
+            );
+            if (!attRes.ok) throw new Error('Gmail attachment fetch failed: ' + attRes.status);
+            const attData = await attRes.json();
+            if (!attData.data) throw new Error('No data in Gmail attachment response');
+            return json({ ok: true, base64: base64UrlToBase64(attData.data) });
+          } catch (err) {
+            return json({ ok: false, error: err.message }, 500);
+          }
+        }
+
         return json({ ok: false, error: 'Unknown action' }, 400);
       }
 
@@ -1393,6 +1421,22 @@ export default {
           return json({ ok: true });
         }
 
+        // ── BLINKIT RO EMAIL WATCHER — save parsed SKU/qty values ─────
+        // Called after the Ledger tab fetches an RO's Excel attachment
+        // and parses it client-side (reusing the existing SheetJS-based
+        // parser). Only the extracted values are stored here — the file
+        // itself was never saved anywhere, just relayed through once.
+        if (act === 'blinkitSaveRoItems') {
+          await ensureBlinkitRoTable(env.DB);
+          const { gmail_msg_id, items_json } = body;
+          if (!gmail_msg_id) return json({ ok: false, error: 'gmail_msg_id required' }, 400);
+          if (typeof items_json !== 'string') return json({ ok: false, error: 'items_json must be a JSON string' }, 400);
+          await env.DB.prepare(`
+            UPDATE blinkit_ro_log SET items_json = ? WHERE gmail_msg_id = ?
+          `).bind(items_json, gmail_msg_id).run();
+          return json({ ok: true });
+        }
+
         // ── BLINKIT SKU LIBRARY — save ────────────────────────
         if (act === 'bk_libSave') {
           await ensureBlinkitTables(env.DB);
@@ -1657,14 +1701,33 @@ export default {
 // ══════════════════════════════════════════════════════════════════
 // BLINKIT RO EMAIL WATCHER — Gmail API integration
 // ══════════════════════════════════════════════════════════════════
-// Reads naimuddin@bullet.co.in via the Gmail API (read-only scope),
-// searches for "RO created/edited" notification emails (label:Blinkit,
-// subject starting with RO_), parses the RO Number / Creation Date /
-// Expiration Date / Bill-To warehouse out of the email body, and logs
-// each one exactly once into blinkit_ro_log — deduped by Gmail message
-// ID, so re-running this (via cron or manual trigger) never double-logs
-// the same email. Phase 1 only: detection + logging, no UI wiring yet,
-// no PDF attachment handling yet.
+// Reads naimuddin@bullet.co.in via the Gmail API (read-only scope) and
+// tracks two email types Blinkit sends for every RO, both logged into
+// the same blinkit_ro_log table (one row per email, deduped by Gmail
+// message ID — so every reschedule shows up as its own row, giving a
+// full history for free):
+//
+//   'ro_created'    — "Your Recommended Order (R.O.) has been
+//                      successfully created/edited." Contains RO
+//                      Number, Creation/Expiration Date, Bill-To
+//                      warehouse, and the RO document attachments
+//                      (PDF + Excel with the SKU/qty line items).
+//
+//   'sto_scheduled' — "Your Stock Transfer Order Request (S.T.O.) has
+//                      been successfully scheduled on your request."
+//                      Same number as the RO, but under "S.T.O.
+//                      Number" instead. Contains Appointment ID,
+//                      Scheduled Date/Time, warehouse contact. Blinkit
+//                      resends this EXACT same email type again for a
+//                      reschedule — same Appointment ID, new date/time
+//                      — so this one type covers both the original
+//                      schedule and every later reschedule.
+//
+// PDFs/Excel files themselves are never stored — only their Gmail
+// attachment IDs are logged (attachments_json), fetched on demand via
+// blinkitGetRoAttachment when the Ledger tab actually needs them, then
+// parsed client-side (reusing the existing SheetJS-based parser) and
+// only the extracted values get saved back, via blinkitSaveRoItems.
 // ══════════════════════════════════════════════════════════════════
 
 const GMAIL_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -1672,15 +1735,39 @@ const GMAIL_API_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
 async function ensureBlinkitRoTable(DB) {
   await DB.prepare(`CREATE TABLE IF NOT EXISTS blinkit_ro_log (
-    gmail_msg_id    TEXT PRIMARY KEY,
-    ro_number       TEXT,
-    creation_date   TEXT,
-    expiration_date TEXT,
-    warehouse       TEXT,
-    subject         TEXT,
-    gmail_link      TEXT,
-    detected_at     TEXT DEFAULT (datetime('now'))
+    gmail_msg_id             TEXT PRIMARY KEY,
+    email_type               TEXT DEFAULT 'ro_created',
+    ro_number                TEXT,
+    creation_date             TEXT,
+    expiration_date           TEXT,
+    warehouse                 TEXT,
+    appointment_id            TEXT,
+    scheduled_date             TEXT,
+    scheduled_time             TEXT,
+    warehouse_contact_name    TEXT,
+    warehouse_contact_number  TEXT,
+    attachments_json           TEXT DEFAULT '[]',
+    items_json                 TEXT,
+    subject                   TEXT,
+    gmail_link                TEXT,
+    detected_at                TEXT DEFAULT (datetime('now'))
   )`).run();
+  // Migrations for tables created before these columns existed —
+  // CREATE TABLE IF NOT EXISTS above won't add columns to an
+  // already-existing table, so ALTER them in separately.
+  const migrations = [
+    `ALTER TABLE blinkit_ro_log ADD COLUMN email_type TEXT DEFAULT 'ro_created'`,
+    `ALTER TABLE blinkit_ro_log ADD COLUMN appointment_id TEXT`,
+    `ALTER TABLE blinkit_ro_log ADD COLUMN scheduled_date TEXT`,
+    `ALTER TABLE blinkit_ro_log ADD COLUMN scheduled_time TEXT`,
+    `ALTER TABLE blinkit_ro_log ADD COLUMN warehouse_contact_name TEXT`,
+    `ALTER TABLE blinkit_ro_log ADD COLUMN warehouse_contact_number TEXT`,
+    `ALTER TABLE blinkit_ro_log ADD COLUMN attachments_json TEXT DEFAULT '[]'`,
+    `ALTER TABLE blinkit_ro_log ADD COLUMN items_json TEXT`
+  ];
+  for (const sql of migrations) {
+    try { await DB.prepare(sql).run(); } catch(e) { /* column already exists — safe to ignore */ }
+  }
 }
 
 // Exchanges the long-lived refresh token for a short-lived access token.
@@ -1719,6 +1806,39 @@ function base64UrlDecode(str) {
   return new TextDecoder('utf-8').decode(bytes);
 }
 
+// Same base64url → base64 character-set fix as above, but WITHOUT
+// decoding the bytes as UTF-8 text — attachments are binary (PDF/Excel),
+// and running them through a text decoder would corrupt them. This just
+// swaps the URL-safe characters back and pads it, leaving the actual
+// bytes untouched, so the frontend can base64-decode it as binary itself.
+function base64UrlToBase64(str) {
+  str = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (str.length % 4) str += '=';
+  return str;
+}
+
+// Walks the MIME part tree collecting anything with a filename + Gmail
+// attachmentId (i.e. an actual attachment, not the message body). Only
+// the metadata is collected here — the actual bytes are fetched later,
+// on demand, via blinkitGetRoAttachment.
+function extractGmailAttachments(payload) {
+  const found = [];
+  function walk(part) {
+    if (!part) return;
+    if (part.filename && part.body && part.body.attachmentId) {
+      found.push({
+        filename: part.filename,
+        mimeType: part.mimeType || '',
+        attachmentId: part.body.attachmentId,
+        size: part.body.size || 0
+      });
+    }
+    if (part.parts && part.parts.length) part.parts.forEach(walk);
+  }
+  walk(payload);
+  return found;
+}
+
 // Gmail messages are a tree of MIME parts. Prefer the plain-text part;
 // if only HTML is present, strip tags as a fallback (good enough for
 // regex parsing, not meant to be human-readable).
@@ -1745,34 +1865,76 @@ function extractGmailBody(payload) {
   return '';
 }
 
-// Parses the fixed-format fields out of a Blinkit "RO created/edited"
-// email body. Matches the exact wording seen in the reference email:
-//   R.O. Number: 43886110067504
-//   Creation Date: 2026-08-11
-//   Expiration Date: 2026-09-10 18:29:00+00:00
-//   Bill To: BCPL - Pune P3 Feeder Warehouse
+// Parses the fixed-format fields out of a Blinkit RO/STO email body.
+// Detects which of the two email types this is, then extracts only the
+// fields that type actually contains — matching the exact wording seen
+// in the reference emails:
+//
+//   ro_created:
+//     R.O. Number: 43886110067504
+//     Creation Date: 2026-08-11
+//     Expiration Date: 2026-09-10 18:29:00+00:00
+//     Bill To: BCPL - Pune P3 Feeder Warehouse
+//
+//   sto_scheduled (same wording whether it's the first schedule or a
+//   later reschedule — Blinkit resends this exact template each time):
+//     S.T.O. Number: 43886110063631
+//     Scheduled Date: 2026-08-14
+//     Schedule Time: 07:00:00
+//     Appointment ID: 709997295775
+//     Warehouse Contact Name: Naveen Awasthi
+//     Warehouse Contact Number: 9309559192
 function parseRoEmailBody(text) {
-  const roMatch        = text.match(/R\.?O\.?\s*Number\s*:\s*([A-Za-z0-9]+)/i);
-  const creationMatch  = text.match(/Creation Date\s*:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/i);
-  const expiryMatch    = text.match(/Expiration Date\s*:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}[^\n\r]*)/i);
-  const warehouseMatch = text.match(/Bill To\s*:\s*([^\n\r]+)/i);
-  return {
-    ro_number:       roMatch ? roMatch[1].trim() : null,
-    creation_date:   creationMatch ? creationMatch[1].trim() : null,
-    expiration_date: expiryMatch ? expiryMatch[1].trim() : null,
-    warehouse:       warehouseMatch ? warehouseMatch[1].trim() : null
+  const isSto = /S\.?T\.?O\.?\s*Number\s*:/i.test(text);
+  const email_type = isSto ? 'sto_scheduled' : 'ro_created';
+
+  const numberMatch = isSto
+    ? text.match(/S\.?T\.?O\.?\s*Number\s*:\s*([A-Za-z0-9]+)/i)
+    : text.match(/R\.?O\.?\s*Number\s*:\s*([A-Za-z0-9]+)/i);
+
+  const result = {
+    email_type,
+    ro_number: numberMatch ? numberMatch[1].trim() : null,
+    creation_date: null, expiration_date: null, warehouse: null,
+    appointment_id: null, scheduled_date: null, scheduled_time: null,
+    warehouse_contact_name: null, warehouse_contact_number: null
   };
+
+  if (!isSto) {
+    const creationMatch  = text.match(/Creation Date\s*:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/i);
+    const expiryMatch    = text.match(/Expiration Date\s*:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}[^\n\r]*)/i);
+    const warehouseMatch = text.match(/Bill To\s*:\s*([^\n\r]+)/i);
+    result.creation_date   = creationMatch  ? creationMatch[1].trim()  : null;
+    result.expiration_date = expiryMatch    ? expiryMatch[1].trim()    : null;
+    result.warehouse       = warehouseMatch ? warehouseMatch[1].trim() : null;
+  } else {
+    const schedDateMatch = text.match(/Scheduled Date\s*:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/i);
+    const schedTimeMatch = text.match(/Schedule Time\s*:\s*([0-9:]+)/i);
+    const apptMatch       = text.match(/Appointment ID\s*:\s*([A-Za-z0-9]+)/i);
+    const contactNameMatch   = text.match(/Warehouse Contact Name\s*:\s*([^\n\r]+)/i);
+    const contactNumberMatch = text.match(/Warehouse Contact Number\s*:\s*([^\n\r]+)/i);
+    result.scheduled_date            = schedDateMatch     ? schedDateMatch[1].trim()     : null;
+    result.scheduled_time            = schedTimeMatch     ? schedTimeMatch[1].trim()     : null;
+    result.appointment_id            = apptMatch          ? apptMatch[1].trim()          : null;
+    result.warehouse_contact_name    = contactNameMatch   ? contactNameMatch[1].trim()   : null;
+    result.warehouse_contact_number  = contactNumberMatch ? contactNumberMatch[1].trim() : null;
+  }
+
+  return result;
 }
 
-// Main check: search Gmail for RO emails, skip ones already logged
-// (by Gmail message ID), parse + insert the rest. Safe to call as
-// often as needed — re-running never creates duplicate rows.
+// Main check: search Gmail for both RO-created and STO-scheduled
+// emails, skip ones already logged (by Gmail message ID), parse +
+// insert the rest — including which attachments each one has, so the
+// Ledger tab can fetch/parse them on demand later. Safe to call as
+// often as needed — re-running never creates duplicate rows, and every
+// reschedule email becomes its own new row automatically.
 async function checkNewRoEmails(env) {
   await ensureBlinkitRoTable(env.DB);
   const accessToken = await getGmailAccessToken(env);
 
-  const query = encodeURIComponent('label:Blinkit "R.O. Number"');
-  const listRes = await fetch(`${GMAIL_API_BASE}/messages?q=${query}&maxResults=20`, {
+  const query = encodeURIComponent('label:Blinkit ("R.O. Number" OR "S.T.O. Number")');
+  const listRes = await fetch(`${GMAIL_API_BASE}/messages?q=${query}&maxResults=30`, {
     headers: { Authorization: 'Bearer ' + accessToken }
   });
   if (!listRes.ok) throw new Error('Gmail list failed: ' + listRes.status);
@@ -1798,13 +1960,22 @@ async function checkNewRoEmails(env) {
 
     const bodyText = extractGmailBody(msg.payload);
     const parsed = parseRoEmailBody(bodyText);
+    const attachments = extractGmailAttachments(msg.payload);
     const gmailLink = `https://mail.google.com/mail/u/0/#all/${m.id}`;
 
     await env.DB.prepare(`
-      INSERT INTO blinkit_ro_log (gmail_msg_id, ro_number, creation_date, expiration_date, warehouse, subject, gmail_link, detected_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      INSERT INTO blinkit_ro_log (
+        gmail_msg_id, email_type, ro_number, creation_date, expiration_date, warehouse,
+        appointment_id, scheduled_date, scheduled_time, warehouse_contact_name, warehouse_contact_number,
+        attachments_json, subject, gmail_link, detected_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(gmail_msg_id) DO NOTHING
-    `).bind(m.id, parsed.ro_number, parsed.creation_date, parsed.expiration_date, parsed.warehouse, subject, gmailLink).run();
+    `).bind(
+      m.id, parsed.email_type, parsed.ro_number, parsed.creation_date, parsed.expiration_date, parsed.warehouse,
+      parsed.appointment_id, parsed.scheduled_date, parsed.scheduled_time, parsed.warehouse_contact_name, parsed.warehouse_contact_number,
+      JSON.stringify(attachments), subject, gmailLink
+    ).run();
 
     newCount++;
   }
