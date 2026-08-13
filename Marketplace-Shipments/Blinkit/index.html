@@ -845,8 +845,10 @@
         <tr>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Invoice No.</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Number</th>
+          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Status</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Warehouse</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Created</th>
+          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Expiry Date</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Appointment (latest)</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Rescheduled</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">No. of SKU</th>
@@ -855,7 +857,7 @@
         </tr>
       </thead>
       <tbody id="roLedgerTbody">
-        <tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+        <tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -881,7 +883,10 @@
     <div id="roDetailItems" style="font-size:12px;color:var(--text)"></div>
 
     <div style="margin-top:1.2rem;display:flex;align-items:center;justify-content:space-between">
-      <button class="btn btn-secondary btn-sm" style="width:auto;color:var(--rd);border-color:var(--rd)" onclick="roLedgerDeleteEntry()">&#128465; Delete this RO (cancelled)</button>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-secondary btn-sm" style="width:auto;color:var(--rd);border-color:var(--rd)" onclick="roLedgerDeleteEntry()">&#128683; Mark as Cancelled</button>
+        <button class="btn btn-secondary btn-sm" style="width:auto" onclick="roLedgerUncancelEntry()">Un-cancel</button>
+      </div>
       <a id="roDetailGmailLink" href="#" target="_blank" style="font-size:11px;color:var(--muted);text-decoration:underline">Open original email in Gmail &#8599;</a>
     </div>
   </div>
@@ -3854,7 +3859,7 @@ function roLedgerRepairAll() {
   if (!confirm('This clears the entire RO Ledger and rebuilds it fresh from Gmail. Use this if SKU/Qty data won\'t show up for older entries. Continue?')) return;
 
   document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Rebuilding from Gmail\u2026 this can take a moment.</td></tr>';
+    '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Rebuilding from Gmail\u2026 this can take a moment.</td></tr>';
 
   fetch(WORKER_URL + '?action=blinkitWipeRoLog', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' })
     .then(function(r){ return r.json(); })
@@ -3873,7 +3878,7 @@ var _roLedgerInvMap = {}; // ro_number -> inv_number, for the Invoice No. column
 
 function roLedgerLoad() {
   document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+    '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
 
   Promise.all([
     fetch(WORKER_URL + '?action=blinkitListRoLog').then(function(r){ return r.json(); }),
@@ -3891,7 +3896,7 @@ function roLedgerLoad() {
     })
     .catch(function(err){
       document.getElementById('roLedgerTbody').innerHTML =
-        '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
+        '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
     });
 }
 
@@ -3939,6 +3944,35 @@ function roLedgerItemStats(row) {
   } catch(e) { return { count: 0, totalQty: 0 }; }
 }
 
+// Derives a Blinkit-style status badge from what we can actually tell
+// from email data:
+//   Cancelled    — manual_status set via the Ledger's Cancel button
+//                  (we have no email that tells us this — only what the
+//                  person marks themselves)
+//   Scheduled    — has at least one appointment email
+//   Expired      — no appointment, and past the RO's expiration date
+//   Unscheduled  — no appointment yet, not expired
+// Deliberately does NOT attempt Fulfilled — that requires knowing
+// goods were actually received (GRN), which no email we read reports.
+function roLedgerDeriveStatus(g) {
+  var cancelled = (g.created && g.created.manual_status === 'cancelled')
+    || g.stoRows.some(function(r){ return r.manual_status === 'cancelled'; });
+  if (cancelled) return { label: 'Cancelled', bg: 'rgba(224,85,85,.15)', fg: '#e05555' };
+
+  if (g.stoRows.length > 0) return { label: 'Scheduled', bg: 'rgba(62,207,142,.15)', fg: '#3ecf8e' };
+
+  var expiry = g.created ? g.created.expiration_date : null;
+  if (expiry) {
+    var m = String(expiry).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) {
+      var expiryDate = new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
+      var today = new Date(); today.setHours(0,0,0,0);
+      if (expiryDate < today) return { label: 'Expired', bg: 'rgba(224,85,85,.15)', fg: '#e05555' };
+    }
+  }
+  return { label: 'Unscheduled', bg: 'rgba(224,166,62,.15)', fg: '#e0a63e' };
+}
+
 function roLedgerRender() {
   var q = (document.getElementById('roLedgerSearch').value || '').trim().toLowerCase();
   var groups = _roLedgerGroups.filter(function(g){
@@ -3955,7 +3989,7 @@ function roLedgerRender() {
 
   if (!groups.length) {
     document.getElementById('roLedgerTbody').innerHTML =
-      '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
+      '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
     return;
   }
 
@@ -3976,11 +4010,15 @@ function roLedgerRender() {
       : (created
           ? '<button class="btn btn-secondary btn-sm" style="width:auto" onclick="event.stopPropagation();roLedgerGenerateInvoice(\''+roEsc+'\')">+ Generate</button>'
           : '<span style="color:var(--muted)">\u2014</span>');
+    var status = roLedgerDeriveStatus(g);
+    var statusBadge = '<span style="display:inline-block;padding:2px 9px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:'+status.bg+';color:'+status.fg+'">'+esc(status.label)+'</span>';
     return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="roLedgerOpenDetail(\''+roEsc+'\')">'
       + '<td style="padding:.5rem 1rem;text-align:center">'+invCell+'</td>'
       + '<td style="padding:.5rem 1rem;font-family:\'DM Mono\',monospace">'+esc(g.ro_number)+'</td>'
+      + '<td style="padding:.5rem 1rem;text-align:center">'+statusBadge+'</td>'
       + '<td style="padding:.5rem 1rem">'+esc(created ? (formatWarehouse(created.warehouse)||'\u2014') : '\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem">'+esc(created ? (formatDateSimple(created.creation_date)||'\u2014') : '\u2014')+'</td>'
+      + '<td style="padding:.5rem 1rem">'+esc(created ? (formatDateSimple(created.expiration_date)||'\u2014') : '\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem">'+apptText+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+(reschedCount > 0 ? ('<span style="color:var(--accent);font-weight:700">'+reschedCount+'\u00d7</span>') : '\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+skuText+'</td>'
@@ -4076,23 +4114,40 @@ function closeRoDetailModal() {
   _roDetailCurrent = null;
 }
 
-// Deletes the whole RO's entry from the ledger — every row for this RO
-// number, including its full appointment history. Meant for cancelled
-// ROs. Only removes it from this log, not from Gmail itself.
+// Marks the RO as Cancelled — it stays visible in the ledger with a
+// Cancelled badge (matching how Blinkit's own table still lists
+// cancelled ROs), rather than disappearing. Applies to every row for
+// this RO number. Can be reversed via roLedgerUncancelEntry.
 function roLedgerDeleteEntry() {
   var g = _roDetailCurrent;
   if (!g) return;
-  if (!confirm('Delete RO ' + g.ro_number + ' from the ledger? This removes its full history (creation + all appointments/reschedules). Cannot be undone.')) return;
+  if (!confirm('Mark RO ' + g.ro_number + ' as Cancelled? It stays in the ledger with a Cancelled badge — this does not delete anything.')) return;
 
-  fetch(WORKER_URL + '?action=blinkitDeleteRoLog', {
+  fetch(WORKER_URL + '?action=blinkitSetRoStatus', {
     method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ ro_number: g.ro_number })
+    body: JSON.stringify({ ro_number: g.ro_number, status: 'cancelled' })
   }).then(function(r){ return r.json(); }).then(function(data){
-    if (!data.ok) throw new Error(data.error || 'Delete failed');
-    toast('RO ' + g.ro_number + ' removed from ledger', 'ok');
+    if (!data.ok) throw new Error(data.error || 'Failed to update status');
+    toast('RO ' + g.ro_number + ' marked as Cancelled', 'ok');
     closeRoDetailModal();
     roLedgerLoad();
-  }).catch(function(err){ toast('Delete failed: ' + err.message, 'err'); });
+  }).catch(function(err){ toast('Failed: ' + err.message, 'err'); });
+}
+
+// Clears a manually-set Cancelled status, returning the RO to its
+// normal derived status (Unscheduled/Scheduled/Expired).
+function roLedgerUncancelEntry() {
+  var g = _roDetailCurrent;
+  if (!g) return;
+  fetch(WORKER_URL + '?action=blinkitSetRoStatus', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ ro_number: g.ro_number, status: null })
+  }).then(function(r){ return r.json(); }).then(function(data){
+    if (!data.ok) throw new Error(data.error || 'Failed to update status');
+    toast('RO ' + g.ro_number + ' un-cancelled', 'ok');
+    closeRoDetailModal();
+    roLedgerLoad();
+  }).catch(function(err){ toast('Failed: ' + err.message, 'err'); });
 }
 
 function roLedgerRenderItems() {
