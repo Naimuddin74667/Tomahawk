@@ -139,7 +139,7 @@ const ACTION_TIERS = {
   //   every other Blinkit write. List is viewer_read to match the rest
   //   of Marketplace-Shipments' read tier. —
   blinkitCheckRoEmails: 'manager_up', blinkitListRoLog: 'viewer_read',
-  blinkitGetRoAttachment: 'manager_up', blinkitSaveRoItems: 'manager_up',
+  blinkitGetRoAttachment: 'manager_up', blinkitSaveRoItems: 'manager_up', blinkitDeleteRoLog: 'manager_up',
 
   // — Inward Label Generator (Gate Pass): admin + manager ONLY, no viewer
   //   access at all, not even read —
@@ -1435,6 +1435,22 @@ export default {
             UPDATE blinkit_ro_log SET items_json = ? WHERE gmail_msg_id = ?
           `).bind(items_json, gmail_msg_id).run();
           return json({ ok: true });
+        }
+
+        // ── BLINKIT RO EMAIL WATCHER — delete a whole RO's entry ──────
+        // Removes every row for this RO number (the RO-created email
+        // AND every appointment/reschedule email) — e.g. when the RO
+        // itself gets cancelled and shouldn't keep showing in the
+        // Ledger. Does not touch Gmail — only removes it from this log,
+        // so nothing gets "un-cancelled" by mistake on the next check.
+        if (act === 'blinkitDeleteRoLog') {
+          await ensureBlinkitRoTable(env.DB);
+          const { ro_number } = body;
+          if (!ro_number) return json({ ok: false, error: 'ro_number required' }, 400);
+          const result = await env.DB.prepare(
+            'DELETE FROM blinkit_ro_log WHERE ro_number = ?'
+          ).bind(ro_number).run();
+          return json({ ok: true, deleted: result.meta.changes });
         }
 
         // ── BLINKIT SKU LIBRARY — save ────────────────────────
