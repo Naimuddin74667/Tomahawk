@@ -819,6 +819,7 @@
     <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128197; RO Ledger &mdash; auto-detected from Gmail</div>
     <input type="text" id="roLedgerSearch" placeholder="Search RO number or warehouse..." oninput="roLedgerRender()" style="width:240px;font-size:11px;padding:5px 10px">
     <button class="btn btn-secondary btn-sm" onclick="roLedgerLoad()" style="width:auto">&#8635; Refresh</button>
+    <button class="btn btn-secondary btn-sm" onclick="roLedgerRepairAll()" style="width:auto;color:var(--rd);border-color:var(--rd)" title="Wipes the log and rebuilds it from Gmail from scratch \u2014 use if attachments/SKU data won't show up">&#128295; Repair</button>
   </div>
 
   <!-- Stats strip -->
@@ -3823,6 +3824,30 @@ function formatWarehouse(raw) {
 var _roLedgerRows = [];    // raw rows from blinkitListRoLog
 var _roLedgerGroups = [];  // grouped by ro_number
 var _roDetailCurrent = null; // the group currently open in the detail modal
+
+// [ADMIN] Wipes the entire RO log and rebuilds it fresh from Gmail.
+// Needed when rows were logged before a parsing change — e.g. entries
+// created before attachment capture existed have no attachment data,
+// and the normal dedup-by-message-id check will never re-fetch them on
+// its own to backfill it. This forces a full clean rebuild.
+function roLedgerRepairAll() {
+  if (!confirm('This clears the entire RO Ledger and rebuilds it fresh from Gmail. Use this if SKU/Qty data won\'t show up for older entries. Continue?')) return;
+
+  document.getElementById('roLedgerTbody').innerHTML =
+    '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Rebuilding from Gmail\u2026 this can take a moment.</td></tr>';
+
+  fetch(WORKER_URL + '?action=blinkitWipeRoLog', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' })
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      if (!data.ok) throw new Error(data.error || 'Repair failed');
+      toast('Rebuilt from Gmail \u2014 ' + (data.rebuilt && data.rebuilt.newLogged || 0) + ' entries restored', 'ok');
+      roLedgerLoad();
+    })
+    .catch(function(err){
+      toast('Repair failed: ' + err.message, 'err');
+      roLedgerLoad();
+    });
+}
 
 function roLedgerLoad() {
   document.getElementById('roLedgerTbody').innerHTML =
