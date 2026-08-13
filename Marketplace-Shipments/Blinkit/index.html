@@ -850,11 +850,12 @@
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Rescheduled</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">No. of SKU</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Total Qty</th>
+          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Invoice No.</th>
           <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">&nbsp;</th>
         </tr>
       </thead>
       <tbody id="roLedgerTbody">
-        <tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+        <tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -2714,42 +2715,54 @@ function invParseRO(file) {
 
   var reader = new FileReader();
   reader.onload = function(e) {
-    var typedArr = new Uint8Array(e.target.result);
-    pdfjsLib.getDocument({ data: typedArr }).promise.then(function(pdf) {
-      var total = pdf.numPages;
-      var allWords = []; // {x, y, str} across all pages
-      var allText = '';
-      var done = 0;
-      for (var p = 1; p <= total; p++) {
-        (function(pn) {
-          pdf.getPage(pn).then(function(page) {
-            var vp = page.getViewport({scale:1});
-            page.getTextContent().then(function(tc) {
-              tc.items.forEach(function(item) {
-                if (!item.str || !item.str.trim()) return;
-                // transform[4]=x, transform[5]=y (from bottom), convert to top
-                var x = Math.round(item.transform[4]);
-                var y = Math.round(vp.height - item.transform[5]);
-                allWords.push({x:x, y:y, str:item.str.trim(), page:pn});
-              });
-              // Also build flat text for metadata extraction
-              var pageText = tc.items.map(function(i){ return i.str; }).filter(function(s){ return s.trim(); }).join(' ');
-              allText += pageText + ' ';
-              done++;
-              document.getElementById('invFill').style.width = Math.round(30 + (done/total)*50) + '%';
-              if (done === total) {
-                invExtractData(allText.replace(/\s+/g,' ').trim(), allWords, file.name);
-              }
-            });
-          });
-        })(p);
-      }
-    }).catch(function(err) {
-      prog.classList.remove('show');
-      toast('PDF parse error: ' + err.message, 'err');
-    });
+    invParsePdfBytes(new Uint8Array(e.target.result), file.name);
   };
   reader.readAsArrayBuffer(file);
+}
+
+// Core PDF extraction, shared by two entry points:
+//   invParseRO(file)        — manual upload, reads the File then calls this
+//   roLedgerGenerateInvoice — RO Ledger's "Generate Invoice" button, already
+//                             has the PDF bytes fetched from Gmail, calls
+//                             this directly
+// Kept as one function so both paths always extract identically — no risk
+// of the RO Ledger's auto-fetched invoices drifting from what a manual
+// upload would have produced.
+function invParsePdfBytes(typedArr, filename) {
+  var prog = document.getElementById('invProgress');
+  pdfjsLib.getDocument({ data: typedArr }).promise.then(function(pdf) {
+    var total = pdf.numPages;
+    var allWords = []; // {x, y, str} across all pages
+    var allText = '';
+    var done = 0;
+    for (var p = 1; p <= total; p++) {
+      (function(pn) {
+        pdf.getPage(pn).then(function(page) {
+          var vp = page.getViewport({scale:1});
+          page.getTextContent().then(function(tc) {
+            tc.items.forEach(function(item) {
+              if (!item.str || !item.str.trim()) return;
+              // transform[4]=x, transform[5]=y (from bottom), convert to top
+              var x = Math.round(item.transform[4]);
+              var y = Math.round(vp.height - item.transform[5]);
+              allWords.push({x:x, y:y, str:item.str.trim(), page:pn});
+            });
+            // Also build flat text for metadata extraction
+            var pageText = tc.items.map(function(i){ return i.str; }).filter(function(s){ return s.trim(); }).join(' ');
+            allText += pageText + ' ';
+            done++;
+            document.getElementById('invFill').style.width = Math.round(30 + (done/total)*50) + '%';
+            if (done === total) {
+              invExtractData(allText.replace(/\s+/g,' ').trim(), allWords, filename);
+            }
+          });
+        });
+      })(p);
+    }
+  }).catch(function(err) {
+    prog.classList.remove('show');
+    toast('PDF parse error: ' + err.message, 'err');
+  });
 }
 
 function invExtractData(text, words, filename) {
@@ -3841,7 +3854,7 @@ function roLedgerRepairAll() {
   if (!confirm('This clears the entire RO Ledger and rebuilds it fresh from Gmail. Use this if SKU/Qty data won\'t show up for older entries. Continue?')) return;
 
   document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Rebuilding from Gmail\u2026 this can take a moment.</td></tr>';
+    '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Rebuilding from Gmail\u2026 this can take a moment.</td></tr>';
 
   fetch(WORKER_URL + '?action=blinkitWipeRoLog', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' })
     .then(function(r){ return r.json(); })
@@ -3856,22 +3869,29 @@ function roLedgerRepairAll() {
     });
 }
 
+var _roLedgerInvMap = {}; // ro_number -> inv_number, for the Invoice No. column
+
 function roLedgerLoad() {
   document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+    '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
 
-  fetch(WORKER_URL + '?action=blinkitListRoLog')
-    .then(function(r){ return r.json(); })
-    .then(function(data){
-      if (!data.ok) throw new Error(data.error || 'Load failed');
-      _roLedgerRows = data.rows || [];
+  Promise.all([
+    fetch(WORKER_URL + '?action=blinkitListRoLog').then(function(r){ return r.json(); }),
+    fetch(WORKER_URL + '?action=blinkitListInv').then(function(r){ return r.json(); }).catch(function(){ return { records: [] }; })
+  ])
+    .then(function(results){
+      var roData = results[0];
+      if (!roData.ok) throw new Error(roData.error || 'Load failed');
+      _roLedgerRows = roData.rows || [];
+      _roLedgerInvMap = {};
+      (results[1].records || []).forEach(function(inv){ _roLedgerInvMap[inv.ro_number] = inv.inv_number; });
       roLedgerGroup();
       roLedgerRender();
       roLedgerAutoParseAll();
     })
     .catch(function(err){
       document.getElementById('roLedgerTbody').innerHTML =
-        '<tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
+        '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
     });
 }
 
@@ -3927,7 +3947,7 @@ function roLedgerRender() {
 
   if (!groups.length) {
     document.getElementById('roLedgerTbody').innerHTML =
-      '<tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
+      '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
     return;
   }
 
@@ -3942,6 +3962,12 @@ function roLedgerRender() {
     var skuText = stats.count > 0 ? stats.count : '<span style="color:var(--muted)">\u2014</span>';
     var qtyText = stats.count > 0 ? stats.totalQty : '<span style="color:var(--muted)">\u2014</span>';
     var roEsc = esc(g.ro_number).replace(/'/g, "\\'");
+    var invNum = _roLedgerInvMap[g.ro_number];
+    var invCell = invNum
+      ? '<span style="color:var(--accent);font-weight:700;font-family:\'DM Mono\',monospace">'+esc(invNum)+'</span>'
+      : (created
+          ? '<button class="btn btn-secondary btn-sm" style="width:auto" onclick="event.stopPropagation();roLedgerGenerateInvoice(\''+roEsc+'\')">+ Generate</button>'
+          : '<span style="color:var(--muted)">\u2014</span>');
     return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="roLedgerOpenDetail(\''+roEsc+'\')">'
       + '<td style="padding:.5rem 1rem;font-family:\'DM Mono\',monospace">'+esc(g.ro_number)+'</td>'
       + '<td style="padding:.5rem 1rem">'+esc(created ? (formatWarehouse(created.warehouse)||'\u2014') : '\u2014')+'</td>'
@@ -3950,9 +3976,62 @@ function roLedgerRender() {
       + '<td style="padding:.5rem 1rem;text-align:center">'+(reschedCount > 0 ? ('<span style="color:var(--accent);font-weight:700">'+reschedCount+'\u00d7</span>') : '\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+skuText+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+qtyText+'</td>'
+      + '<td style="padding:.5rem 1rem;text-align:center">'+invCell+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:right"><button class="btn btn-secondary btn-sm" style="width:auto" onclick="event.stopPropagation();roLedgerOpenDetail(\''+roEsc+'\')">View \u2192</button></td>'
       + '</tr>';
   }).join('');
+}
+
+// Fetches this RO's PDF attachment from Gmail (never stored) and runs
+// it through the SAME extraction pipeline (invParsePdfBytes) a manual
+// PDF upload on the Generate Invoice tab already uses — so GSTIN,
+// address, tax type, and line items come out identically either way.
+// Switches to the Generate Invoice tab with the form pre-filled; the
+// person still reviews and clicks Preview/Confirm themselves before
+// anything is actually generated — this never finalizes an invoice on
+// its own.
+function roLedgerGenerateInvoice(roNumber) {
+  var g = _roLedgerGroups.filter(function(x){ return x.ro_number === roNumber; })[0];
+  if (!g || !g.created) { toast('No RO-created email found for this number', 'err'); return; }
+  var created = g.created;
+
+  var attachments = [];
+  try { attachments = JSON.parse(created.attachments_json || '[]'); } catch(e) {}
+  // The RO document itself is named after the RO number (e.g.
+  // "43886110067504.pdf") — distinct from the generic "Seller Supply
+  // Chain Guide" PDF attached to every RO email.
+  var pdfAttachment = attachments.filter(function(a){
+    return /\.pdf$/i.test(a.filename||'') && a.filename.indexOf(roNumber) !== -1;
+  })[0];
+  if (!pdfAttachment) {
+    pdfAttachment = attachments.filter(function(a){
+      return /\.pdf$/i.test(a.filename||'') && !/supply\s*chain/i.test(a.filename||'');
+    })[0];
+  }
+  if (!pdfAttachment) { toast('No RO PDF attachment found for this RO', 'err'); return; }
+
+  toast('Fetching RO PDF from Gmail\u2026', 'info');
+
+  fetch(WORKER_URL + '?action=blinkitGetRoAttachment'
+      + '&gmail_msg_id=' + encodeURIComponent(created.gmail_msg_id)
+      + '&attachment_id=' + encodeURIComponent(pdfAttachment.attachmentId))
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      if (!data.ok) throw new Error(data.error || 'Fetch failed');
+      var binary = atob(data.base64);
+      var bytes = new Uint8Array(binary.length);
+      for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+      switchTab('invoice', document.getElementById('tabBtnInvoice'));
+      document.getElementById('roFileName').textContent = pdfAttachment.filename;
+      var prog = document.getElementById('invProgress');
+      prog.classList.add('show');
+      document.getElementById('invFill').style.width = '30%';
+      document.getElementById('invProgressText').textContent = 'Reading RO PDF from Gmail\u2026';
+
+      invParsePdfBytes(bytes, pdfAttachment.filename);
+    })
+    .catch(function(err){ toast('Could not load RO PDF: ' + err.message, 'err'); });
 }
 
 function roLedgerOpenDetail(roNumber) {
