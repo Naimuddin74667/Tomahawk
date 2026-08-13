@@ -853,7 +853,6 @@
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Received Qty</th>
           <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Credit Note</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Cr. Note Qty</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Status</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Gatepass</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Appointment (latest)</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Status</th>
@@ -861,7 +860,7 @@
         </tr>
       </thead>
       <tbody id="roLedgerTbody">
-        <tr><td colspan="14" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+        <tr><td colspan="13" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -896,7 +895,10 @@
     <div id="roDetailItems" style="font-size:12px;color:var(--text)"></div>
 
     <div style="margin-top:1.2rem;display:flex;align-items:center;justify-content:space-between">
-      <button class="btn btn-secondary btn-sm" style="width:auto;color:var(--rd);border-color:var(--rd)" onclick="roLedgerDeleteEntry()">&#128683; Mark as Cancelled</button>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-secondary btn-sm" id="roDetailPickupBtn" style="width:auto" onclick="roLedgerTogglePickedUp()">&#128666; Mark as Picked Up</button>
+        <button class="btn btn-secondary btn-sm" style="width:auto;color:var(--rd);border-color:var(--rd)" onclick="roLedgerDeleteEntry()">&#128683; Mark as Cancelled</button>
+      </div>
       <a id="roDetailGmailLink" href="#" target="_blank" style="font-size:11px;color:var(--muted);text-decoration:underline">Open original email in Gmail &#8599;</a>
     </div>
   </div>
@@ -3919,7 +3921,7 @@ function roLedgerRepairAll() {
   if (!confirm('This clears the entire RO Ledger and rebuilds it fresh from Gmail. Use this if SKU/Qty data won\'t show up for older entries. Continue?')) return;
 
   document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="14" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Rebuilding from Gmail\u2026 this can take a moment.</td></tr>';
+    '<tr><td colspan="13" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Rebuilding from Gmail\u2026 this can take a moment.</td></tr>';
 
   fetch(WORKER_URL + '?action=blinkitWipeRoLog', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' })
     .then(function(r){ return r.json(); })
@@ -3939,7 +3941,7 @@ var _roLedgerGatepassMap = {}; // ro_number -> gatepass record (from UC_Gatepass
 
 function roLedgerLoad() {
   document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="14" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+    '<tr><td colspan="13" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
 
   Promise.all([
     fetch(WORKER_URL + '?action=blinkitListRoLog').then(function(r){ return r.json(); }),
@@ -3980,7 +3982,7 @@ function roLedgerLoad() {
     })
     .catch(function(err){
       document.getElementById('roLedgerTbody').innerHTML =
-        '<tr><td colspan="14" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
+        '<tr><td colspan="13" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
     });
 }
 
@@ -4055,36 +4057,88 @@ function roLedgerItemStats(row) {
   } catch(e) { return { count: 0, totalQty: 0 }; }
 }
 
-// Derives a Blinkit-style status badge from what we can actually tell
-// from email data:
-//   Scheduled    — has at least one appointment email
-//   Unscheduled  — no appointment yet
-// No "Expired" — every RO expires on a fixed ~30-day window regardless,
-// so it isn't a meaningful distinguishing status. No "Cancelled" here
-// either — cancelled ROs are filtered out before this ever runs (see
-// roLedgerGroup). Deliberately does NOT attempt "Fulfilled" — that
-// requires knowing goods were actually received (GRN), which no email
-// we read reports.
-function roLedgerDeriveStatus(g) {
-  if (g.stoRows.length > 0) return { label: 'Scheduled', bg: 'rgba(62,207,142,.15)', fg: '#3ecf8e' };
-  return { label: 'Unscheduled', bg: 'rgba(224,166,62,.15)', fg: '#e0a63e' };
+// Returns the latest appointment date as a Date object (midnight,
+// local time), or null if no appointment is scheduled at all.
+function roLedgerApptDateObj(g) {
+  var latestSto = g.stoRows.length ? g.stoRows[g.stoRows.length - 1] : null;
+  if (!latestSto || !latestSto.scheduled_date) return null;
+  var m = String(latestSto.scheduled_date).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  var d = new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
+  d.setHours(0,0,0,0);
+  return d;
 }
 
 // Received Qty shouldn't be enterable until the delivery appointment
 // has actually happened — otherwise it's guaranteed to be entered
 // before goods even arrive. "Passed" means the day AFTER the
 // appointment date, not the appointment day itself (e.g. appt on the
-// 14th \u2192 enterable from the 15th onward).
+// 14th \u2192 enterable from the 15th onward). Also doubles as the
+// "Overdue" trigger in roLedgerUnifiedStatus.
 function roLedgerApptHasPassed(g) {
-  var latestSto = g.stoRows.length ? g.stoRows[g.stoRows.length - 1] : null;
-  if (!latestSto || !latestSto.scheduled_date) return false;
-  var m = String(latestSto.scheduled_date).match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (!m) return false;
-  var apptDate = new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
-  apptDate.setHours(0,0,0,0);
+  var apptDate = roLedgerApptDateObj(g);
+  if (!apptDate) return false;
   var today = new Date();
   today.setHours(0,0,0,0);
   return today > apptDate;
+}
+
+// "Picked up" (the moment the delivery partner actually took the
+// shipment) has no email or system signal anywhere — Blinkit's
+// appointment gets booked almost immediately after RO creation, and
+// the gatepass gets closed on our end instantly too, so neither
+// reflects the real physical pickup moment. This is deliberately a
+// manual flag, set via the "Mark as Picked Up" button in the detail
+// modal (reuses the same manual_status mechanism as Cancel).
+function roLedgerIsPickedUp(g) {
+  return !!((g.created && g.created.manual_status === 'picked_up')
+    || g.stoRows.some(function(r){ return r.manual_status === 'picked_up'; }));
+}
+
+// Full unified Status — one column covering the whole RO lifecycle,
+// replacing the old separate Unscheduled/Scheduled badge and RO Status
+// badge. Priority order, first match wins:
+//   1. Received Qty entered \u2192 defer entirely to the existing detailed
+//      Fulfilled/Partially Received/Mismatch/Rejected/Cancelled logic
+//      (roStatusDerive) \u2014 goods being done wins over everything else.
+//   2. Appointment date has passed with nothing received \u2192 Overdue
+//   3. Appointment date is today \u2192 Out for Delivery
+//   4. Marked picked up (manual) \u2192 In Transit
+//   5. Gatepass exists \u2192 Ready to Dispatch
+//   6. None of the above yet \u2192 Created
+function roLedgerUnifiedStatus(g) {
+  var inv = _roLedgerInvMap[g.ro_number];
+
+  if (inv) {
+    var recvQty = (inv.received_qty === null || inv.received_qty === undefined || inv.received_qty === '') ? null : parseInt(inv.received_qty);
+    if (recvQty !== null) {
+      var sentQty = inv.total_qty || 0;
+      var cns = _cnByInv[inv.inv_number] || [];
+      var cn = cns.length ? cns[0] : null;
+      var cnQty = cn ? (cn.total_qty || 0) : 0;
+      var isFullCancel = !!(cn && sentQty > 0 && cnQty >= sentQty);
+      return roStatusDerive(inv, cn, cnQty, isFullCancel, sentQty);
+    }
+  }
+
+  if (roLedgerApptHasPassed(g)) {
+    return { key: 'overdue', label: 'OVERDUE', bg: '#3a1414', fg: '#ff6b6b' };
+  }
+  var apptDate = roLedgerApptDateObj(g);
+  if (apptDate) {
+    var today = new Date();
+    today.setHours(0,0,0,0);
+    if (today.getTime() === apptDate.getTime()) {
+      return { key: 'out_for_delivery', label: 'OUT FOR DELIVERY', bg: '#122a3a', fg: '#64b5f6' };
+    }
+  }
+  if (roLedgerIsPickedUp(g)) {
+    return { key: 'in_transit', label: 'IN TRANSIT', bg: '#1a1a3a', fg: '#9d8cff' };
+  }
+  if (_roLedgerGatepassMap[g.ro_number]) {
+    return { key: 'ready', label: 'READY TO DISPATCH', bg: '#1a2a3a', fg: '#7fb3d9' };
+  }
+  return { key: 'created', label: 'CREATED', bg: '#232323', fg: '#aaaaaa' };
 }
 
 function roLedgerRender() {
@@ -4103,7 +4157,7 @@ function roLedgerRender() {
 
   if (!groups.length) {
     document.getElementById('roLedgerTbody').innerHTML =
-      '<tr><td colspan="14" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
+      '<tr><td colspan="13" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
     document.getElementById('roLedgerPagerControls').style.display = 'none';
     return;
   }
@@ -4161,15 +4215,11 @@ function roLedgerRender() {
           ? '<button class="btn btn-secondary btn-sm" style="width:auto" onclick="event.stopPropagation();roLedgerGenerateInvoice(\''+roEsc+'\')">+ Generate</button>'
           : '<span style="color:var(--muted)">\u2014</span>');
 
-    var status = roLedgerDeriveStatus(g);
-    var statusBadge = '<span style="display:inline-block;padding:2px 9px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:'+status.bg+';color:'+status.fg+'">'+esc(status.label)+'</span>';
-
     // ── Invoice-derived columns — same logic as Invoice Ledger, only
     // populated once an invoice actually exists for this RO. ──
     var recvCell = '<span style="color:var(--muted)">\u2014</span>';
     var cnCell = '<span style="color:var(--muted)">\u2014</span>';
     var cnQtyCell = '<span style="color:var(--muted)">\u2014</span>';
-    var roStatusCell = '<span style="color:var(--muted)">\u2014</span>';
 
     if (inv) {
       var sentQty = inv.total_qty || 0;
@@ -4209,17 +4259,25 @@ function roLedgerRender() {
         + (cns.length ? '' : '<button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:3px 8px;margin-top:2px" onclick="event.stopPropagation();openCnModal(\''+(inv.inv_number||'')+'\', \''+roEsc+'\', '+sentQty+')">+ Create</button>');
 
       cnQtyCell = cn ? cnQty : '<span style="color:var(--muted)">\u2014</span>';
+    }
 
-      var statusInfo = roStatusDerive(inv, cn, cnQty, isFullCancel, sentQty);
-      roStatusCell = '<span style="display:inline-block;padding:3px 9px;border-radius:11px;font-size:10px;font-weight:700;letter-spacing:.03em;background:'+statusInfo.bg+';color:'+statusInfo.fg+'">'+statusInfo.label+'</span>';
-      if (statusInfo.key === 'mismatch') {
-        var noteVal = (inv.status_note || '').replace(/"/g,'&quot;');
-        roStatusCell += '<div style="margin-top:3px;display:flex;gap:3px;align-items:center" onclick="event.stopPropagation()">'
-          + '<input type="text" id="ro-status-note-'+i+'" value="'+noteVal+'" placeholder="Why? (remark)" style="width:110px;font-size:10px;padding:2px 5px">'
-          + '<button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:2px 6px" onclick="ledgerSaveStatusNote(\''+(inv.inv_number||'')+'\', document.getElementById(\'ro-status-note-'+i+'\').value)">&#10003;</button>'
-        + '</div>';
-      } else if ((statusInfo.key === 'rejected' || statusInfo.key === 'cancelled' || statusInfo.key === 'partial' || statusInfo.key === 'partial-check') && cn && cn.reason) {
-        roStatusCell += '<div style="margin-top:3px;font-size:9.5px;color:var(--muted);max-width:130px">'+cn.reason.replace(/&/g,'&amp;')+'</div>';
+    // ── Unified Status — one column covering the whole RO lifecycle:
+    // Created -> Ready to Dispatch -> In Transit -> Out for Delivery /
+    // Overdue -> Fulfilled (with the existing Partial/Mismatch/Rejected/
+    // Cancelled nuance once qty is actually received). See
+    // roLedgerUnifiedStatus for the priority order. ──
+    var statusInfo = roLedgerUnifiedStatus(g);
+    var statusBadge = '<span style="display:inline-block;padding:3px 9px;border-radius:11px;font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;background:'+statusInfo.bg+';color:'+statusInfo.fg+'">'+statusInfo.label+'</span>';
+    if (statusInfo.key === 'mismatch' && inv) {
+      var noteVal = (inv.status_note || '').replace(/"/g,'&quot;');
+      statusBadge += '<div style="margin-top:3px;display:flex;gap:3px;align-items:center" onclick="event.stopPropagation()">'
+        + '<input type="text" id="ro-status-note-'+i+'" value="'+noteVal+'" placeholder="Why? (remark)" style="width:110px;font-size:10px;padding:2px 5px">'
+        + '<button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:2px 6px" onclick="ledgerSaveStatusNote(\''+(inv.inv_number||'')+'\', document.getElementById(\'ro-status-note-'+i+'\').value)">&#10003;</button>'
+      + '</div>';
+    } else if (inv && (statusInfo.key === 'rejected' || statusInfo.key === 'cancelled' || statusInfo.key === 'partial' || statusInfo.key === 'partial-check')) {
+      var cnForReason = (_cnByInv[inv.inv_number] || [])[0];
+      if (cnForReason && cnForReason.reason) {
+        statusBadge += '<div style="margin-top:3px;font-size:9.5px;color:var(--muted);max-width:130px">'+cnForReason.reason.replace(/&/g,'&amp;')+'</div>';
       }
     }
 
@@ -4233,10 +4291,9 @@ function roLedgerRender() {
       + '<td style="padding:.5rem 1rem;text-align:center">'+recvCell+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:right;white-space:nowrap">'+cnCell+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+cnQtyCell+'</td>'
-      + '<td style="padding:.5rem 1rem;text-align:center;white-space:nowrap">'+roStatusCell+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+gpCell+'</td>'
       + '<td style="padding:.5rem 1rem">'+apptText+'</td>'
-      + '<td style="padding:.5rem 1rem;text-align:center">'+statusBadge+'</td>'
+      + '<td style="padding:.5rem 1rem;text-align:center;white-space:nowrap">'+statusBadge+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:right"><button class="btn btn-secondary btn-sm" style="width:auto" onclick="event.stopPropagation();roLedgerOpenDetail(\''+roEsc+'\')">View \u2192</button></td>'
       + '</tr>';
   }).join('');
@@ -4370,6 +4427,17 @@ function roLedgerOpenDetail(roNumber) {
   var linkRow = g.created || g.stoRows[g.stoRows.length - 1];
   document.getElementById('roDetailGmailLink').href = linkRow ? (linkRow.gmail_link || '#') : '#';
 
+  var pickupBtn = document.getElementById('roDetailPickupBtn');
+  if (roLedgerIsPickedUp(g)) {
+    pickupBtn.innerHTML = '&#10003; Picked Up (click to undo)';
+    pickupBtn.style.color = 'var(--accent)';
+    pickupBtn.style.borderColor = 'var(--accent)';
+  } else {
+    pickupBtn.innerHTML = '&#128666; Mark as Picked Up';
+    pickupBtn.style.color = '';
+    pickupBtn.style.borderColor = '';
+  }
+
   document.getElementById('roDetailModal').classList.add('show');
 }
 function closeRoDetailModal() {
@@ -4382,6 +4450,27 @@ function closeRoDetailModal() {
 // this RO number. Nothing is deleted; clicking "Repair" rebuilds the
 // whole log fresh from Gmail, which clears any manual_status along the
 // way — that's the recovery path if one gets cancelled by mistake.
+// Toggles the manual "picked up" flag — the only way to mark In
+// Transit, since no email or system field reflects the actual physical
+// pickup moment. Reuses the same blinkitSetRoStatus action as Cancel
+// (manual_status can independently hold 'picked_up' or 'cancelled').
+function roLedgerTogglePickedUp() {
+  var g = _roDetailCurrent;
+  if (!g) return;
+  var currentlyPickedUp = roLedgerIsPickedUp(g);
+  var newStatus = currentlyPickedUp ? null : 'picked_up';
+
+  fetch(WORKER_URL + '?action=blinkitSetRoStatus', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ ro_number: g.ro_number, status: newStatus })
+  }).then(function(r){ return r.json(); }).then(function(data){
+    if (!data.ok) throw new Error(data.error || 'Failed to update status');
+    toast(newStatus ? 'Marked as picked up' : 'Pickup flag cleared', 'ok');
+    closeRoDetailModal();
+    roLedgerLoad();
+  }).catch(function(err){ toast('Failed: ' + err.message, 'err'); });
+}
+
 function roLedgerDeleteEntry() {
   var g = _roDetailCurrent;
   if (!g) return;
