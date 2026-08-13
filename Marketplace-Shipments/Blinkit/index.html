@@ -820,6 +820,7 @@
     <input type="text" id="roLedgerSearch" placeholder="Search RO number or warehouse..." oninput="roLedgerRender()" style="width:240px;font-size:11px;padding:5px 10px">
     <button class="btn btn-secondary btn-sm" onclick="roLedgerLoad()" style="width:auto">&#8635; Refresh</button>
     <button class="btn btn-secondary btn-sm" onclick="roLedgerRepairAll()" style="width:auto;color:var(--rd);border-color:var(--rd)" title="Wipes the log and rebuilds it from Gmail from scratch \u2014 use if attachments/SKU data won't show up">&#128295; Repair</button>
+    <button class="btn btn-secondary btn-sm" onclick="roLedgerRunManualBackfill()" style="width:auto" title="One-time: backfills appointment dates for ROs from before the Gmail watcher existed">&#128229; Backfill appts</button>
   </div>
 
   <!-- Stats strip -->
@@ -3855,6 +3856,46 @@ var _roDetailCurrent = null; // the group currently open in the detail modal
 // created before attachment capture existed have no attachment data,
 // and the normal dedup-by-message-id check will never re-fetch them on
 // its own to backfill it. This forces a full clean rebuild.
+// [ONE-TIME] Backfills appointment dates for ROs that predate the
+// Gmail watcher's existence — no email exists for these, so this data
+// came directly from Blinkit's own Seller Hub dashboard instead. Safe
+// to click more than once (updates in place, never duplicates). Not
+// meant to stay in the UI long-term — remove this button once done.
+function roLedgerRunManualBackfill() {
+  var appointments = [
+    { ro_number: '2738110066999',  scheduled_date: '2026-08-11', scheduled_time: '09:30:00' },
+    { ro_number: '50033210033541', scheduled_date: '2026-08-15', scheduled_time: '19:30:00' },
+    { ro_number: '43886110063631', scheduled_date: '2026-08-14', scheduled_time: '06:30:00' },
+    { ro_number: '43886110058068', scheduled_date: '2026-08-08', scheduled_time: '08:30:00' },
+    { ro_number: '43886110057592', scheduled_date: '2026-07-31', scheduled_time: '06:30:00' },
+    { ro_number: '50033210022256', scheduled_date: '2026-07-27', scheduled_time: '08:00:00' },
+    { ro_number: '50033210019594', scheduled_date: '2026-07-12', scheduled_time: '19:30:00' },
+    { ro_number: '43886110048383', scheduled_date: '2026-07-01', scheduled_time: '06:30:00' },
+    { ro_number: '6769710070652',  scheduled_date: '2026-07-06', scheduled_time: '07:30:00' },
+    { ro_number: '43886110043351', scheduled_date: '2026-06-20', scheduled_time: '06:30:00' },
+    { ro_number: '2273910079178',  scheduled_date: '2026-06-19', scheduled_time: '07:30:00' },
+    { ro_number: '43886110039495', scheduled_date: '2026-06-18', scheduled_time: '06:30:00' },
+    { ro_number: '6769710063404',  scheduled_date: '2026-06-15', scheduled_time: '10:00:00' },
+    { ro_number: '43886110033867', scheduled_date: '2026-05-27', scheduled_time: '08:30:00' },
+    { ro_number: '43886110033054', scheduled_date: '2026-05-25', scheduled_time: '08:30:00' },
+    { ro_number: '43886110032356', scheduled_date: '2026-05-24', scheduled_time: '06:30:00' },
+    { ro_number: '43886110030431', scheduled_date: '2026-05-19', scheduled_time: '06:30:00' },
+    { ro_number: '43886110028393', scheduled_date: '2026-05-11', scheduled_time: '10:30:00' },
+    { ro_number: '8525210029700',  scheduled_date: '2026-05-04', scheduled_time: '13:30:00' }
+  ];
+
+  if (!confirm('Backfill appointment dates for ' + appointments.length + ' ROs from before the Gmail watcher existed? Safe to run more than once.')) return;
+
+  fetch(WORKER_URL + '?action=blinkitBulkSetAppointments', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ appointments: appointments })
+  }).then(function(r){ return r.json(); }).then(function(data){
+    if (!data.ok) throw new Error(data.error || 'Backfill failed');
+    toast('Backfilled ' + data.count + ' appointment(s)', 'ok');
+    roLedgerLoad();
+  }).catch(function(err){ toast('Backfill failed: ' + err.message, 'err'); });
+}
+
 function roLedgerRepairAll() {
   if (!confirm('This clears the entire RO Ledger and rebuilds it fresh from Gmail. Use this if SKU/Qty data won\'t show up for older entries. Continue?')) return;
 
