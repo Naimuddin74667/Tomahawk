@@ -878,7 +878,8 @@
     </div>
     <div id="roDetailItems" style="font-size:12px;color:var(--text)"></div>
 
-    <div style="margin-top:1.2rem;text-align:right">
+    <div style="margin-top:1.2rem;display:flex;align-items:center;justify-content:space-between">
+      <button class="btn btn-secondary btn-sm" style="width:auto;color:var(--rd);border-color:var(--rd)" onclick="roLedgerDeleteEntry()">&#128465; Delete this RO (cancelled)</button>
       <a id="roDetailGmailLink" href="#" target="_blank" style="font-size:11px;color:var(--muted);text-decoration:underline">Open original email in Gmail &#8599;</a>
     </div>
   </div>
@@ -3930,6 +3931,25 @@ function roLedgerOpenDetail(roNumber) {
 function closeRoDetailModal() {
   document.getElementById('roDetailModal').classList.remove('show');
   _roDetailCurrent = null;
+}
+
+// Deletes the whole RO's entry from the ledger — every row for this RO
+// number, including its full appointment history. Meant for cancelled
+// ROs. Only removes it from this log, not from Gmail itself.
+function roLedgerDeleteEntry() {
+  var g = _roDetailCurrent;
+  if (!g) return;
+  if (!confirm('Delete RO ' + g.ro_number + ' from the ledger? This removes its full history (creation + all appointments/reschedules). Cannot be undone.')) return;
+
+  fetch(WORKER_URL + '?action=blinkitDeleteRoLog', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ ro_number: g.ro_number })
+  }).then(function(r){ return r.json(); }).then(function(data){
+    if (!data.ok) throw new Error(data.error || 'Delete failed');
+    toast('RO ' + g.ro_number + ' removed from ledger', 'ok');
+    closeRoDetailModal();
+    roLedgerLoad();
+  }).catch(function(err){ toast('Delete failed: ' + err.message, 'err'); });
 }
 
 function roLedgerRenderItems() {
