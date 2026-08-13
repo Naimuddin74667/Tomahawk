@@ -845,7 +845,6 @@
         <tr>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Invoice No.</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Number</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Status</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Warehouse</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Created</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Expiry Date</th>
@@ -853,11 +852,16 @@
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Rescheduled</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">No. of SKU</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Total Qty</th>
+          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Received Qty</th>
+          <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Credit Note</th>
+          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Cr. Note Qty</th>
+          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Status</th>
+          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Status</th>
           <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">&nbsp;</th>
         </tr>
       </thead>
       <tbody id="roLedgerTbody">
-        <tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+        <tr><td colspan="14" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -3856,7 +3860,7 @@ function roLedgerRepairAll() {
   if (!confirm('This clears the entire RO Ledger and rebuilds it fresh from Gmail. Use this if SKU/Qty data won\'t show up for older entries. Continue?')) return;
 
   document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Rebuilding from Gmail\u2026 this can take a moment.</td></tr>';
+    '<tr><td colspan="14" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Rebuilding from Gmail\u2026 this can take a moment.</td></tr>';
 
   fetch(WORKER_URL + '?action=blinkitWipeRoLog', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' })
     .then(function(r){ return r.json(); })
@@ -3871,29 +3875,43 @@ function roLedgerRepairAll() {
     });
 }
 
-var _roLedgerInvMap = {}; // ro_number -> inv_number, for the Invoice No. column
+var _roLedgerInvMap = {}; // ro_number -> full invoice record (from blinkitListInv)
 
 function roLedgerLoad() {
   document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+    '<tr><td colspan="14" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
 
   Promise.all([
     fetch(WORKER_URL + '?action=blinkitListRoLog').then(function(r){ return r.json(); }),
-    fetch(WORKER_URL + '?action=blinkitListInv').then(function(r){ return r.json(); }).catch(function(){ return { records: [] }; })
+    fetch(WORKER_URL + '?action=blinkitListInv').then(function(r){ return r.json(); }).catch(function(){ return { records: [] }; }),
+    fetch(WORKER_URL + '?action=blinkitListCN').then(function(r){ return r.json(); }).catch(function(){ return { records: [] }; })
   ])
     .then(function(results){
       var roData = results[0];
       if (!roData.ok) throw new Error(roData.error || 'Load failed');
       _roLedgerRows = roData.rows || [];
+
+      // Full invoice record per RO (not just the number) — needed for
+      // Received Qty / RO Status / download, same fields Invoice Ledger
+      // already uses.
       _roLedgerInvMap = {};
-      (results[1].records || []).forEach(function(inv){ _roLedgerInvMap[inv.ro_number] = inv.inv_number; });
+      (results[1].records || []).forEach(function(inv){ _roLedgerInvMap[inv.ro_number] = inv; });
+
+      // Shared with Invoice Ledger — same global, same shape, so
+      // roStatusDerive/cnDownload/openCnModal work identically here.
+      _cnByInv = {};
+      (results[2].records || []).forEach(function(cn){
+        if (!_cnByInv[cn.inv_number]) _cnByInv[cn.inv_number] = [];
+        _cnByInv[cn.inv_number].push(cn);
+      });
+
       roLedgerGroup();
       roLedgerRender();
       roLedgerAutoParseAll();
     })
     .catch(function(err){
       document.getElementById('roLedgerTbody').innerHTML =
-        '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
+        '<tr><td colspan="14" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
     });
 }
 
@@ -3979,11 +3997,11 @@ function roLedgerRender() {
 
   if (!groups.length) {
     document.getElementById('roLedgerTbody').innerHTML =
-      '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
+      '<tr><td colspan="14" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
     return;
   }
 
-  document.getElementById('roLedgerTbody').innerHTML = groups.map(function(g){
+  document.getElementById('roLedgerTbody').innerHTML = groups.map(function(g, i){
     var created = g.created;
     var latestSto = g.stoRows.length ? g.stoRows[g.stoRows.length - 1] : null;
     var reschedCount = Math.max(0, g.stoRows.length - 1);
@@ -3994,18 +4012,77 @@ function roLedgerRender() {
     var skuText = stats.count > 0 ? stats.count : '<span style="color:var(--muted)">\u2014</span>';
     var qtyText = stats.count > 0 ? stats.totalQty : '<span style="color:var(--muted)">\u2014</span>';
     var roEsc = esc(g.ro_number).replace(/'/g, "\\'");
-    var invNum = _roLedgerInvMap[g.ro_number];
+
+    var inv = _roLedgerInvMap[g.ro_number]; // full invoice record, or undefined if none generated yet
+    var invNum = inv ? inv.inv_number : null;
     var invCell = invNum
-      ? '<span style="color:var(--accent);font-weight:700;font-family:\'DM Mono\',monospace">'+esc(invNum)+'</span>'
+      ? ('<span style="color:var(--accent);font-weight:700;font-family:\'DM Mono\',monospace">'+esc(invNum)+'</span>'
+         + ' <button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:2px 6px;margin-left:4px" title="Download" onclick="event.stopPropagation();ledgerDownload('+JSON.stringify(inv).replace(/"/g,'&quot;')+')">&#8595;</button>')
       : (created
           ? '<button class="btn btn-secondary btn-sm" style="width:auto" onclick="event.stopPropagation();roLedgerGenerateInvoice(\''+roEsc+'\')">+ Generate</button>'
           : '<span style="color:var(--muted)">\u2014</span>');
+
     var status = roLedgerDeriveStatus(g);
     var statusBadge = '<span style="display:inline-block;padding:2px 9px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:'+status.bg+';color:'+status.fg+'">'+esc(status.label)+'</span>';
+
+    // ── Invoice-derived columns — same logic as Invoice Ledger, only
+    // populated once an invoice actually exists for this RO. ──
+    var recvCell = '<span style="color:var(--muted)">\u2014</span>';
+    var cnCell = '<span style="color:var(--muted)">\u2014</span>';
+    var cnQtyCell = '<span style="color:var(--muted)">\u2014</span>';
+    var roStatusCell = '<span style="color:var(--muted)">\u2014</span>';
+
+    if (inv) {
+      var sentQty = inv.total_qty || 0;
+      var cns = _cnByInv[inv.inv_number] || [];
+      var cn = cns.length ? cns[0] : null;
+      var cnQty = cn ? (cn.total_qty || 0) : 0;
+      var isFullCancel = !!(cn && sentQty > 0 && cnQty >= sentQty);
+      var canEdit = (typeof window.TM_CAN_EDIT === 'undefined') || window.TM_CAN_EDIT;
+
+      if (isFullCancel) {
+        recvCell = '<span style="color:#ffb74d;font-size:11px;font-weight:700">NA</span>';
+      } else if (inv.received_qty === null || inv.received_qty === undefined || inv.received_qty === '') {
+        recvCell = canEdit
+          ? ('<input type="number" id="ro-recv-inp-'+i+'" placeholder="Recv qty" min="0" max="'+sentQty+'" oninput="ledgerClampRecv(this,'+sentQty+')" style="width:70px;font-size:11px;padding:3px 6px;text-align:center" onclick="event.stopPropagation()">'
+            + ' <button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:3px 8px" onclick="event.stopPropagation();ledgerSaveReceived(\''+(inv.inv_number||'')+'\', document.getElementById(\'ro-recv-inp-'+i+'\').value, '+sentQty+')">&#10003;</button>')
+          : '<span style="color:var(--muted);font-size:11px">&#8212; not received</span>';
+      } else if (parseInt(inv.received_qty) === sentQty) {
+        recvCell = '<span style="color:#6dc87a;font-size:11px;font-weight:700">&#10003; '+inv.received_qty+'</span>'
+          + (canEdit ? (' <span style="cursor:pointer;color:var(--muted);font-size:10px" title="Edit" onclick="event.stopPropagation();ledgerEditReceived(this,\''+(inv.inv_number||'')+'\','+JSON.stringify(inv.received_qty)+','+sentQty+')">&#9998;</span>') : '');
+      } else {
+        var diff = parseInt(inv.received_qty) - sentQty;
+        recvCell = '<span style="color:#e05555;font-size:11px;font-weight:700">&#9888; '+inv.received_qty+' (sent '+sentQty+', &Delta;'+(diff>0?'+':'')+diff+')</span>'
+          + (canEdit ? (' <span style="cursor:pointer;color:var(--muted);font-size:10px" title="Edit" onclick="event.stopPropagation();ledgerEditReceived(this,\''+(inv.inv_number||'')+'\','+JSON.stringify(inv.received_qty)+','+sentQty+')">&#9998;</span>') : '');
+      }
+
+      var cnBadges = cns.map(function(cnRec){
+        return '<div style="display:inline-flex;align-items:center;gap:4px;background:#111;border:1px solid var(--border);border-radius:5px;padding:2px 6px;margin:1px;font-size:10px;font-family:\'DM Mono\',monospace">'
+          + '<span style="color:var(--accent)">'+cnRec.cn_number+'</span>'
+          + '<span style="cursor:pointer;color:var(--muted)" title="Download" onclick="event.stopPropagation();cnDownload(\''+cnRec.cn_number+'\')">&#8595;</span>'
+        + '</div>';
+      }).join('');
+      cnCell = cnBadges
+        + (cns.length ? '' : '<button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:3px 8px;margin-top:2px" onclick="event.stopPropagation();openCnModal(\''+(inv.inv_number||'')+'\', \''+roEsc+'\', '+sentQty+')">+ Create</button>');
+
+      cnQtyCell = cn ? cnQty : '<span style="color:var(--muted)">\u2014</span>';
+
+      var statusInfo = roStatusDerive(inv, cn, cnQty, isFullCancel, sentQty);
+      roStatusCell = '<span style="display:inline-block;padding:3px 9px;border-radius:11px;font-size:10px;font-weight:700;letter-spacing:.03em;background:'+statusInfo.bg+';color:'+statusInfo.fg+'">'+statusInfo.label+'</span>';
+      if (statusInfo.key === 'mismatch') {
+        var noteVal = (inv.status_note || '').replace(/"/g,'&quot;');
+        roStatusCell += '<div style="margin-top:3px;display:flex;gap:3px;align-items:center" onclick="event.stopPropagation()">'
+          + '<input type="text" id="ro-status-note-'+i+'" value="'+noteVal+'" placeholder="Why? (remark)" style="width:110px;font-size:10px;padding:2px 5px">'
+          + '<button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:2px 6px" onclick="ledgerSaveStatusNote(\''+(inv.inv_number||'')+'\', document.getElementById(\'ro-status-note-'+i+'\').value)">&#10003;</button>'
+        + '</div>';
+      } else if ((statusInfo.key === 'rejected' || statusInfo.key === 'cancelled' || statusInfo.key === 'partial' || statusInfo.key === 'partial-check') && cn && cn.reason) {
+        roStatusCell += '<div style="margin-top:3px;font-size:9.5px;color:var(--muted);max-width:130px">'+cn.reason.replace(/&/g,'&amp;')+'</div>';
+      }
+    }
+
     return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="roLedgerOpenDetail(\''+roEsc+'\')">'
       + '<td style="padding:.5rem 1rem;text-align:center">'+invCell+'</td>'
       + '<td style="padding:.5rem 1rem;font-family:\'DM Mono\',monospace">'+esc(g.ro_number)+'</td>'
-      + '<td style="padding:.5rem 1rem;text-align:center">'+statusBadge+'</td>'
       + '<td style="padding:.5rem 1rem">'+esc(created ? (formatWarehouse(created.warehouse)||'\u2014') : '\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem">'+esc(created ? (formatDateSimple(created.creation_date)||'\u2014') : '\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem">'+esc(created ? (formatDateSimple(created.expiration_date)||'\u2014') : '\u2014')+'</td>'
@@ -4013,6 +4090,11 @@ function roLedgerRender() {
       + '<td style="padding:.5rem 1rem;text-align:center">'+(reschedCount > 0 ? ('<span style="color:var(--accent);font-weight:700">'+reschedCount+'\u00d7</span>') : '\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+skuText+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+qtyText+'</td>'
+      + '<td style="padding:.5rem 1rem;text-align:center;white-space:nowrap">'+recvCell+'</td>'
+      + '<td style="padding:.5rem 1rem;text-align:right;white-space:nowrap">'+cnCell+'</td>'
+      + '<td style="padding:.5rem 1rem;text-align:center">'+cnQtyCell+'</td>'
+      + '<td style="padding:.5rem 1rem;text-align:center;white-space:nowrap">'+roStatusCell+'</td>'
+      + '<td style="padding:.5rem 1rem;text-align:center">'+statusBadge+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:right"><button class="btn btn-secondary btn-sm" style="width:auto" onclick="event.stopPropagation();roLedgerOpenDetail(\''+roEsc+'\')">View \u2192</button></td>'
       + '</tr>';
   }).join('');
@@ -4337,12 +4419,17 @@ function ledgerSaveStatusNote(invNumber, note) {
   if (!invNumber) return;
   var rec = _ledgerRecords.find(function(r){ return r.inv_number === invNumber; });
   if (rec) rec.status_note = note;
-  if (!IS_LIVE) { ledgerRender(); toast('Remark saved (local)', 'ok'); return; }
+  var roRec = _roLedgerInvMap && Object.values(_roLedgerInvMap).filter(function(r){ return r && r.inv_number === invNumber; })[0];
+  if (roRec) roRec.status_note = note;
+  if (!IS_LIVE) { ledgerRender(); if (document.getElementById('roLedgerTbody')) roLedgerRender(); toast('Remark saved (local)', 'ok'); return; }
   fetch(WORKER_URL + '?action=blinkitSaveStatusNote', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ inv_number: invNumber, status_note: note })
   }).then(function(r){ return r.json(); })
-    .then(function(d){ if (d.ok) toast('Remark saved', 'ok'); else toast('Save failed', 'err'); })
+    .then(function(d){
+      if (d.ok) { toast('Remark saved', 'ok'); ledgerRender(); if (document.getElementById('roLedgerTbody')) roLedgerRender(); }
+      else toast('Save failed', 'err');
+    })
     .catch(function(){ toast('Network error saving remark', 'err'); });
 }
 
@@ -4366,15 +4453,18 @@ function ledgerSaveReceived(invNumber, value, sentQty) {
 
   var rec = _ledgerRecords.find(function(r){ return r.inv_number === invNumber; });
   if (rec) rec.received_qty = qty;
+  // Keep RO Ledger's own cache in sync too — same invoice record, different map.
+  var roRec = _roLedgerInvMap && Object.values(_roLedgerInvMap).filter(function(r){ return r && r.inv_number === invNumber; })[0];
+  if (roRec) roRec.received_qty = qty;
 
-  if (!IS_LIVE) { ledgerRender(); toast('Received qty saved (local)', 'ok'); return; }
+  if (!IS_LIVE) { ledgerRender(); if (document.getElementById('roLedgerTbody')) roLedgerRender(); toast('Received qty saved (local)', 'ok'); return; }
 
   fetch(WORKER_URL + '?action=blinkitSaveReceivedQty', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ inv_number: invNumber, received_qty: qty })
   }).then(function(r){ return r.json(); })
     .then(function(d){
-      if (d.ok) { toast('Received qty saved', 'ok'); ledgerRender(); }
+      if (d.ok) { toast('Received qty saved', 'ok'); ledgerRender(); if (document.getElementById('roLedgerTbody')) roLedgerRender(); }
       else { toast('Save failed', 'err'); }
     }).catch(function(){ toast('Network error saving received qty', 'err'); });
 }
