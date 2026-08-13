@@ -390,6 +390,7 @@
   <button id="tabBtnInvoice" class="tab-btn active" onclick="switchTab('invoice',this)">&#128196; Generate Invoice</button>
   <button id="tabBtnBulk" class="tab-btn" onclick="switchTab('bulk',this)">Label Print</button>
   <button id="tabBtnLedger" class="tab-btn" onclick="switchTab('ledger',this)">&#128203; Invoice Ledger</button>
+  <button id="tabBtnRoLedger" class="tab-btn" onclick="switchTab('roledger',this)">&#128197; RO Ledger</button>
   <button id="tabBtnLibrary" class="tab-btn" onclick="switchTab('library',this)">SKU Library</button>
 </div>
 
@@ -807,10 +808,81 @@
     <span id="ledgerPageIndicator" style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap"></span>
     <button class="btn btn-secondary btn-sm" id="ledgerNextBtn" style="width:auto" onclick="ledgerGoToPage(_ledgerPage+1)">Next &#8594;</button>
   </div>
+</div>
+
+
+<!-- RO LEDGER FULL-WIDTH AREA -->
+<div id="roLedgerArea" style="display:none;flex:1;height:0;min-height:0;overflow:hidden;flex-direction:column">
+
+  <!-- Top bar -->
+  <div style="flex-shrink:0;padding:.7rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.8rem;background:var(--surface)">
+    <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128197; RO Ledger &mdash; auto-detected from Gmail</div>
+    <input type="text" id="roLedgerSearch" placeholder="Search RO number or warehouse..." oninput="roLedgerRender()" style="width:240px;font-size:11px;padding:5px 10px">
+    <button class="btn btn-secondary btn-sm" onclick="roLedgerLoad()" style="width:auto">&#8635; Refresh</button>
+  </div>
+
+  <!-- Stats strip -->
+  <div style="flex-shrink:0;display:flex;gap:0;border-bottom:1px solid var(--border);background:#111">
+    <div style="padding:.6rem 1.4rem;border-right:1px solid var(--border)">
+      <div style="font-size:9px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-family:'DM Mono',monospace">Total ROs</div>
+      <div id="roLedgerStatTotal" style="font-size:20px;font-weight:700;color:var(--text);font-family:'DM Mono',monospace">&mdash;</div>
+    </div>
+    <div style="padding:.6rem 1.4rem;border-right:1px solid var(--border)">
+      <div style="font-size:9px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-family:'DM Mono',monospace">Awaiting Appointment</div>
+      <div id="roLedgerStatPending" style="font-size:20px;font-weight:700;color:var(--accent);font-family:'DM Mono',monospace">&mdash;</div>
+    </div>
+    <div style="padding:.6rem 1.4rem">
+      <div style="font-size:9px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-family:'DM Mono',monospace">Rescheduled at least once</div>
+      <div id="roLedgerStatResched" style="font-size:20px;font-weight:700;color:var(--text);font-family:'DM Mono',monospace">&mdash;</div>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div style="flex:1;overflow-y:auto;min-height:0">
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead style="position:sticky;top:0;z-index:2;background:var(--surface)">
+        <tr>
+          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Number</th>
+          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Warehouse</th>
+          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Created</th>
+          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Expires</th>
+          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Appointment (latest)</th>
+          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Rescheduled</th>
+          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">SKU Items</th>
+          <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">&nbsp;</th>
+        </tr>
+      </thead>
+      <tbody id="roLedgerTbody">
+        <tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
 
 </div>
 
 
+<!-- RO DETAIL MODAL — reschedule history + parsed SKU items -->
+<div class="modal-bg" id="roDetailModal">
+  <div class="modal" style="width:680px;max-height:90vh;overflow-y:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem">
+      <div class="modal-title" style="margin-bottom:0">&#128197; RO Detail &mdash; <span id="roDetailNumber"></span></div>
+      <button onclick="closeRoDetailModal()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
+    </div>
+
+    <div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:1rem 0 .5rem;font-family:'DM Mono',monospace">Appointment History</div>
+    <div id="roDetailHistory" style="font-size:12px;color:var(--text);margin-bottom:1rem"></div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:1rem 0 .5rem">
+      <div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace">SKU Items</div>
+      <button class="btn btn-secondary btn-sm" id="roDetailParseBtn" style="width:auto" onclick="roLedgerParseItems()">&#128203; Parse from Excel</button>
+    </div>
+    <div id="roDetailItems" style="font-size:12px;color:var(--text)"></div>
+
+    <div style="margin-top:1.2rem;text-align:right">
+      <a id="roDetailGmailLink" href="#" target="_blank" style="font-size:11px;color:var(--muted);text-decoration:underline">Open original email in Gmail &#8599;</a>
+    </div>
+  </div>
+</div>
 <!-- CREDIT NOTE MODAL -->
 <div class="modal-bg" id="cnModal">
   <div class="modal" style="width:640px;max-height:90vh;overflow-y:auto">
@@ -1096,19 +1168,24 @@ function saveSettings() {
 function switchTab(name, btn) {
   document.querySelectorAll('.tab-btn').forEach(function(b){ b.classList.remove('active'); });
   btn.classList.add('active');
-  if(name==='invoice'||name==='ledger'){
+  if(name==='invoice'||name==='ledger'||name==='roledger'){
     document.querySelectorAll('.tab-content').forEach(function(t){ t.style.display='none'; });
     document.querySelector('.app-body').style.display='none';
     document.getElementById('invoiceArea').style.display='none';
     document.getElementById('invoiceArea').style.flex='none';
     document.getElementById('ledgerArea').style.display='none';
+    document.getElementById('roLedgerArea').style.display='none';
     if(name==='invoice'){
       var ia=document.getElementById('invoiceArea');
       ia.style.display='flex'; ia.style.height=''; ia.style.flex='1';
-    } else {
+    } else if(name==='ledger'){
       var la=document.getElementById('ledgerArea');
       la.style.display='flex'; la.style.height='0'; la.style.flex='1';
       ledgerLoad();
+    } else {
+      var ra=document.getElementById('roLedgerArea');
+      ra.style.display='flex'; ra.style.height='0'; ra.style.flex='1';
+      roLedgerLoad();
     }
     return;
   }
@@ -1116,6 +1193,7 @@ function switchTab(name, btn) {
   document.getElementById('invoiceArea').style.display='none';
   document.getElementById('invoiceArea').style.flex='none';
   document.getElementById('ledgerArea').style.display='none';
+  document.getElementById('roLedgerArea').style.display='none';
   document.querySelectorAll('.tab-content').forEach(function(t){ t.style.display='none'; });
   document.getElementById('tab-'+name).style.display='flex';
   if(name==='library'){
@@ -3699,6 +3777,278 @@ function ledgerRenderPagination(totalRows, totalPages) {
 function ledgerGoToPage(p) {
   _ledgerPage = p;
   ledgerRender();
+}
+
+// ══════════════════════════════════════════════════════════════════
+// RO LEDGER — auto-detected RO / STO-appointment emails from Gmail
+// ══════════════════════════════════════════════════════════════════
+// Data comes from blinkit_ro_log (populated automatically by the
+// Worker's Gmail watcher, independent of this app being open). Every
+// email — the original RO-created email, the first appointment
+// schedule, and every reschedule after it — is its own row there,
+// deduped by Gmail message ID. This groups those rows by RO number so
+// one line here represents one RO, with its full appointment history
+// available in the detail modal.
+
+// Minimal HTML-escape — RO Ledger values come from parsed email text,
+// not typed by hand like most of this app's other data, so escape
+// before inserting into innerHTML rather than assuming it's clean.
+function esc(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+var _roLedgerRows = [];    // raw rows from blinkitListRoLog
+var _roLedgerGroups = [];  // grouped by ro_number
+var _roDetailCurrent = null; // the group currently open in the detail modal
+
+function roLedgerLoad() {
+  document.getElementById('roLedgerTbody').innerHTML =
+    '<tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+
+  fetch(WORKER_URL + '?action=blinkitListRoLog')
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      if (!data.ok) throw new Error(data.error || 'Load failed');
+      _roLedgerRows = data.rows || [];
+      roLedgerGroup();
+      roLedgerRender();
+    })
+    .catch(function(err){
+      document.getElementById('roLedgerTbody').innerHTML =
+        '<tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
+    });
+}
+
+function roLedgerGroup() {
+  var map = {};
+  _roLedgerRows.forEach(function(r){
+    var ro = r.ro_number;
+    if (!ro) return;
+    if (!map[ro]) map[ro] = { ro_number: ro, created: null, stoRows: [] };
+    if (r.email_type === 'sto_scheduled') {
+      map[ro].stoRows.push(r);
+    } else if (!map[ro].created) {
+      map[ro].created = r; // the ro_created email — there should only be one per RO
+    }
+  });
+  // Chronological order within each RO — oldest schedule first, so the
+  // last item in the array is always the current/latest appointment.
+  Object.keys(map).forEach(function(ro){
+    map[ro].stoRows.sort(function(a,b){ return (a.detected_at||'').localeCompare(b.detected_at||''); });
+  });
+  // Newest RO first
+  _roLedgerGroups = Object.values(map).sort(function(a,b){
+    var da = (a.created ? a.created.detected_at : (a.stoRows[a.stoRows.length-1]||{}).detected_at) || '';
+    var db = (b.created ? b.created.detected_at : (b.stoRows[b.stoRows.length-1]||{}).detected_at) || '';
+    return db.localeCompare(da);
+  });
+}
+
+function roLedgerItemCount(row) {
+  if (!row || !row.items_json) return 0;
+  try { return (JSON.parse(row.items_json) || []).length; } catch(e) { return 0; }
+}
+
+function roLedgerRender() {
+  var q = (document.getElementById('roLedgerSearch').value || '').trim().toLowerCase();
+  var groups = _roLedgerGroups.filter(function(g){
+    if (!q) return true;
+    var wh = ((g.created && g.created.warehouse) || '').toLowerCase();
+    return g.ro_number.toLowerCase().indexOf(q) !== -1 || wh.indexOf(q) !== -1;
+  });
+
+  document.getElementById('roLedgerStatTotal').textContent = _roLedgerGroups.length;
+  document.getElementById('roLedgerStatPending').textContent =
+    _roLedgerGroups.filter(function(g){ return g.stoRows.length === 0; }).length;
+  document.getElementById('roLedgerStatResched').textContent =
+    _roLedgerGroups.filter(function(g){ return g.stoRows.length > 1; }).length;
+
+  if (!groups.length) {
+    document.getElementById('roLedgerTbody').innerHTML =
+      '<tr><td colspan="8" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
+    return;
+  }
+
+  document.getElementById('roLedgerTbody').innerHTML = groups.map(function(g){
+    var created = g.created;
+    var latestSto = g.stoRows.length ? g.stoRows[g.stoRows.length - 1] : null;
+    var reschedCount = Math.max(0, g.stoRows.length - 1);
+    var apptText = latestSto
+      ? esc((latestSto.scheduled_date||'\u2014') + ' ' + (latestSto.scheduled_time||''))
+      : '<span style="color:var(--muted)">Not scheduled yet</span>';
+    var itemsCount = roLedgerItemCount(created);
+    var itemsText = itemsCount > 0
+      ? itemsCount + ' SKU' + (itemsCount === 1 ? '' : 's')
+      : '<span style="color:var(--muted)">Not parsed</span>';
+    var roEsc = esc(g.ro_number).replace(/'/g, "\\'");
+    return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="roLedgerOpenDetail(\''+roEsc+'\')">'
+      + '<td style="padding:.5rem 1rem;font-family:\'DM Mono\',monospace">'+esc(g.ro_number)+'</td>'
+      + '<td style="padding:.5rem 1rem">'+esc(created ? (created.warehouse||'\u2014') : '\u2014')+'</td>'
+      + '<td style="padding:.5rem 1rem">'+esc(created ? (created.creation_date||'\u2014') : '\u2014')+'</td>'
+      + '<td style="padding:.5rem 1rem">'+esc(created ? (created.expiration_date||'\u2014') : '\u2014')+'</td>'
+      + '<td style="padding:.5rem 1rem">'+apptText+'</td>'
+      + '<td style="padding:.5rem 1rem;text-align:center">'+(reschedCount > 0 ? ('<span style="color:var(--accent);font-weight:700">'+reschedCount+'\u00d7</span>') : '\u2014')+'</td>'
+      + '<td style="padding:.5rem 1rem;text-align:center">'+itemsText+'</td>'
+      + '<td style="padding:.5rem 1rem;text-align:right"><button class="btn btn-secondary btn-sm" style="width:auto" onclick="event.stopPropagation();roLedgerOpenDetail(\''+roEsc+'\')">View \u2192</button></td>'
+      + '</tr>';
+  }).join('');
+}
+
+function roLedgerOpenDetail(roNumber) {
+  var g = _roLedgerGroups.filter(function(x){ return x.ro_number === roNumber; })[0];
+  if (!g) return;
+  _roDetailCurrent = g;
+  document.getElementById('roDetailNumber').textContent = roNumber;
+
+  var historyHtml;
+  if (!g.stoRows.length) {
+    historyHtml = '<div style="color:var(--muted)">No appointment scheduled yet.</div>';
+  } else {
+    historyHtml = g.stoRows.map(function(r, i){
+      var isLatest = i === g.stoRows.length - 1;
+      var label = i === 0 ? 'Originally scheduled' : 'Rescheduled';
+      return '<div style="padding:.4rem 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;'
+        + (isLatest ? 'font-weight:700;color:var(--accent)' : 'color:var(--muted)') + '">'
+        + '<span>'+esc(label)+' \u2014 Appointment ID '+esc(r.appointment_id||'\u2014')+'</span>'
+        + '<span>'+esc(r.scheduled_date||'\u2014')+' '+esc(r.scheduled_time||'')+(isLatest ? ' (current)' : '')+'</span>'
+        + '</div>';
+    }).join('');
+  }
+  document.getElementById('roDetailHistory').innerHTML = historyHtml;
+
+  roLedgerRenderItems();
+
+  var linkRow = g.created || g.stoRows[g.stoRows.length - 1];
+  document.getElementById('roDetailGmailLink').href = linkRow ? (linkRow.gmail_link || '#') : '#';
+
+  document.getElementById('roDetailModal').classList.add('show');
+}
+function closeRoDetailModal() {
+  document.getElementById('roDetailModal').classList.remove('show');
+  _roDetailCurrent = null;
+}
+
+function roLedgerRenderItems() {
+  var g = _roDetailCurrent;
+  if (!g) return;
+  var created = g.created;
+  var parseBtn = document.getElementById('roDetailParseBtn');
+
+  if (!created) {
+    document.getElementById('roDetailItems').innerHTML =
+      '<div style="color:var(--muted)">No RO-created email found for this number yet \u2014 can\'t parse items.</div>';
+    parseBtn.style.display = 'none';
+    return;
+  }
+
+  var attachments = [];
+  try { attachments = JSON.parse(created.attachments_json || '[]'); } catch(e) {}
+  var xlsxAttachment = attachments.filter(function(a){ return /\.xlsx?$/i.test(a.filename||''); })[0];
+
+  var items = [];
+  if (created.items_json) {
+    try { items = JSON.parse(created.items_json) || []; } catch(e) { items = []; }
+  }
+
+  if (items.length) {
+    parseBtn.textContent = '\u21bb Re-parse from Excel';
+    parseBtn.style.display = xlsxAttachment ? 'inline-block' : 'none';
+    document.getElementById('roDetailItems').innerHTML =
+      '<table style="width:100%;border-collapse:collapse;font-size:11px">'
+      + '<thead><tr>'
+      + '<th style="text-align:left;padding:.3rem;color:var(--muted)">SKU</th>'
+      + '<th style="text-align:left;padding:.3rem;color:var(--muted)">UPC</th>'
+      + '<th style="text-align:right;padding:.3rem;color:var(--muted)">Qty</th>'
+      + '<th style="text-align:right;padding:.3rem;color:var(--muted)">MRP</th>'
+      + '</tr></thead><tbody>'
+      + items.map(function(it){
+          return '<tr style="border-top:1px solid var(--border)">'
+            + '<td style="padding:.3rem">'+esc(it.skuId||'\u2014')+'</td>'
+            + '<td style="padding:.3rem">'+esc(it.upc||'\u2014')+'</td>'
+            + '<td style="padding:.3rem;text-align:right">'+esc(it.qty||0)+'</td>'
+            + '<td style="padding:.3rem;text-align:right">'+esc(it.mrp||'\u2014')+'</td>'
+            + '</tr>';
+        }).join('')
+      + '</tbody></table>';
+    return;
+  }
+
+  if (!xlsxAttachment) {
+    document.getElementById('roDetailItems').innerHTML =
+      '<div style="color:var(--muted)">No Excel attachment found on the RO email.</div>';
+    parseBtn.style.display = 'none';
+    return;
+  }
+
+  parseBtn.textContent = '\ud83d\udccb Parse from Excel';
+  parseBtn.style.display = 'inline-block';
+  document.getElementById('roDetailItems').innerHTML =
+    '<div style="color:var(--muted)">Not parsed yet \u2014 click "Parse from Excel" above.</div>';
+}
+
+// Fetches the RO's Excel attachment bytes on demand (never stored),
+// parses it with the SAME column logic the Generate Invoice tab's
+// manual XLSX upload already uses (Item Code / Product UPC / Quantity /
+// MRP / Product Description), then saves only the extracted values.
+function roLedgerParseItems() {
+  var g = _roDetailCurrent;
+  if (!g || !g.created) return;
+  var created = g.created;
+
+  var attachments = [];
+  try { attachments = JSON.parse(created.attachments_json || '[]'); } catch(e) {}
+  var xlsxAttachment = attachments.filter(function(a){ return /\.xlsx?$/i.test(a.filename||''); })[0];
+  if (!xlsxAttachment) { toast('No Excel attachment on this RO email', 'err'); return; }
+
+  var btn = document.getElementById('roDetailParseBtn');
+  btn.disabled = true;
+  var origLabel = btn.textContent;
+  btn.textContent = 'Parsing\u2026';
+
+  fetch(WORKER_URL + '?action=blinkitGetRoAttachment'
+      + '&gmail_msg_id=' + encodeURIComponent(created.gmail_msg_id)
+      + '&attachment_id=' + encodeURIComponent(xlsxAttachment.attachmentId))
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      if (!data.ok) throw new Error(data.error || 'Fetch failed');
+      var binary = atob(data.base64);
+      var bytes = new Uint8Array(binary.length);
+      for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+      var wb = XLSX.read(bytes, { type: 'array' });
+      var ws = wb.Sheets[wb.SheetNames[0]];
+      var rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      var skuQtyMap = {};
+      rows.forEach(function(row) {
+        var ic   = String(row['Item Code'] || '').trim();
+        var upc  = String(row['Product UPC'] || '').trim();
+        var qty  = parseInt(row['Quantity'] || row['Qty'] || row['Qty.'] || '1') || 1;
+        var mrp  = String(row['MRP'] || '').trim();
+        var desc = String(row['Product Description'] || '').trim();
+        if (!ic || !upc) return;
+        if (!skuQtyMap[ic]) skuQtyMap[ic] = { skuId: ic, qty: qty, upc: upc, mrp: mrp, desc: desc };
+      });
+      var items = Object.values(skuQtyMap);
+      if (!items.length) throw new Error('No items found in Excel \u2014 check column names');
+
+      return fetch(WORKER_URL + '?action=blinkitSaveRoItems', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ gmail_msg_id: created.gmail_msg_id, items_json: JSON.stringify(items) })
+      }).then(function(r){ return r.json(); }).then(function(saveData){
+        if (!saveData.ok) throw new Error(saveData.error || 'Save failed');
+        created.items_json = JSON.stringify(items);
+        _roLedgerRows.forEach(function(r){
+          if (r.gmail_msg_id === created.gmail_msg_id) r.items_json = created.items_json;
+        });
+        toast('Parsed ' + items.length + ' SKU(s) from Excel', 'ok');
+        roLedgerRenderItems();
+        roLedgerRender();
+      });
+    })
+    .catch(function(err){ toast('Parse failed: ' + err.message, 'err'); })
+    .then(function(){ btn.disabled = false; if (btn.textContent === 'Parsing\u2026') btn.textContent = origLabel; });
 }
 
 // Hard-clamps the received-qty input to [0, sentQty] on every keystroke — can never
