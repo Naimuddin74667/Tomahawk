@@ -3955,6 +3955,16 @@ function roLedgerLoad() {
     });
 }
 
+// Extracts the trailing sequence number from an invoice number like
+// "ITH/2526/022" -> 22, for sorting newest-invoice-first. Returns -1
+// for anything that doesn't parse (used to sink "no invoice yet" ROs
+// to the bottom).
+function roLedgerInvNumSuffix(invNum) {
+  if (!invNum) return -1;
+  var m = String(invNum).match(/(\d+)\s*$/);
+  return m ? parseInt(m[1], 10) : -1;
+}
+
 function roLedgerGroup() {
   var map = {};
   _roLedgerRows.forEach(function(r){
@@ -3989,19 +3999,14 @@ function roLedgerGroup() {
       return (a.email_date||a.detected_at||'').localeCompare(b.email_date||b.detected_at||'');
     });
   });
-  // Sorted by mail date/time, newest first — using each RO's creation
-  // email if we have it, otherwise its most recent appointment email,
-  // otherwise (invoice-only ROs with no email at all) its invoice date
-  // so it doesn't just default to the very bottom of the list.
+  // Sorted by Invoice Number, descending (newest invoice first — e.g.
+  // ITH/2526/022 before .../021). ROs with no invoice yet have nothing
+  // to sort by, so they sink to the bottom.
   var allGroups = Object.values(map).sort(function(a,b){
     var invA = _roLedgerInvMap[a.ro_number], invB = _roLedgerInvMap[b.ro_number];
-    var da = (a.created ? (a.created.email_date||a.created.detected_at) : null)
-      || (a.stoRows.length ? (a.stoRows[a.stoRows.length-1].email_date||a.stoRows[a.stoRows.length-1].detected_at) : null)
-      || (invA ? (invA.created_at||'') : '') || '';
-    var db = (b.created ? (b.created.email_date||b.created.detected_at) : null)
-      || (b.stoRows.length ? (b.stoRows[b.stoRows.length-1].email_date||b.stoRows[b.stoRows.length-1].detected_at) : null)
-      || (invB ? (invB.created_at||'') : '') || '';
-    return db.localeCompare(da);
+    var na = invA ? roLedgerInvNumSuffix(invA.inv_number) : -1;
+    var nb = invB ? roLedgerInvNumSuffix(invB.inv_number) : -1;
+    return nb - na;
   });
   // Cancelled ROs are hidden from the ledger entirely — not shown with
   // a badge, just not listed. Marking one via "Mark as Cancelled" (in
@@ -4303,6 +4308,16 @@ function roLedgerDeleteEntry() {
   }).catch(function(err){ toast('Failed: ' + err.message, 'err'); });
 }
 
+// Looks up an item's SKU Name from the SKU Library tab's model data —
+// each library model has a `blSkus` array of the Blinkit Item IDs that
+// belong to it, so this just finds whichever model lists this Item ID.
+function roLedgerFindSkuName(skuId) {
+  if (!skuId) return null;
+  var lib = loadLib();
+  var found = Object.values(lib).filter(function(m){ return (m.blSkus||[]).indexOf(skuId) !== -1; })[0];
+  return found ? found.model : null;
+}
+
 function roLedgerRenderItems() {
   var g = _roDetailCurrent;
   if (!g) return;
@@ -4328,20 +4343,31 @@ function roLedgerRenderItems() {
   if (items.length) {
     parseBtn.textContent = '\u21bb Re-parse from Excel';
     parseBtn.style.display = xlsxAttachment ? 'inline-block' : 'none';
+    // Received Qty here is the overall invoice figure (same value on
+    // every row) — there's no per-item receiving breakdown, only a
+    // single received-qty for the whole invoice.
+    var inv = _roLedgerInvMap[g.ro_number];
+    var recvDisplay = (inv && inv.received_qty !== null && inv.received_qty !== undefined && inv.received_qty !== '')
+      ? inv.received_qty : '\u2014';
     document.getElementById('roDetailItems').innerHTML =
       '<table style="width:100%;border-collapse:collapse;font-size:11px">'
       + '<thead><tr>'
-      + '<th style="text-align:left;padding:.3rem;color:var(--muted)">SKU</th>'
+      + '<th style="text-align:left;padding:.3rem;color:var(--muted)">SKU Name</th>'
+      + '<th style="text-align:left;padding:.3rem;color:var(--muted)">Item ID</th>'
       + '<th style="text-align:left;padding:.3rem;color:var(--muted)">UPC</th>'
       + '<th style="text-align:right;padding:.3rem;color:var(--muted)">Qty</th>'
       + '<th style="text-align:right;padding:.3rem;color:var(--muted)">MRP</th>'
+      + '<th style="text-align:right;padding:.3rem;color:var(--muted)" title="Overall invoice received qty — not tracked per item">Recv Qty</th>'
       + '</tr></thead><tbody>'
       + items.map(function(it){
+          var skuName = roLedgerFindSkuName(it.skuId);
           return '<tr style="border-top:1px solid var(--border)">'
+            + '<td style="padding:.3rem">'+(skuName ? esc(skuName) : '<span style="color:var(--muted)">Not in library</span>')+'</td>'
             + '<td style="padding:.3rem">'+esc(it.skuId||'\u2014')+'</td>'
             + '<td style="padding:.3rem">'+esc(it.upc||'\u2014')+'</td>'
             + '<td style="padding:.3rem;text-align:right">'+esc(it.qty||0)+'</td>'
             + '<td style="padding:.3rem;text-align:right">'+esc(it.mrp||'\u2014')+'</td>'
+            + '<td style="padding:.3rem;text-align:right">'+esc(recvDisplay)+'</td>'
             + '</tr>';
         }).join('')
       + '</tbody></table>';
