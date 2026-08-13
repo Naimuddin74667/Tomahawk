@@ -845,17 +845,16 @@
         <tr>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Invoice No.</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Number</th>
+          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Date Created</th>
           <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Warehouse</th>
-          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Created</th>
-          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Expiry Date</th>
-          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Appointment (latest)</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Rescheduled</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">No. of SKU</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Total Qty</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Received Qty</th>
+          <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Invoice</th>
           <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Credit Note</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Cr. Note Qty</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Status</th>
+          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Appointment (latest)</th>
           <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Status</th>
           <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">&nbsp;</th>
         </tr>
@@ -4037,8 +4036,11 @@ function roLedgerRender() {
     var created = g.created;
     var latestSto = g.stoRows.length ? g.stoRows[g.stoRows.length - 1] : null;
     var reschedCount = Math.max(0, g.stoRows.length - 1);
+    // Reschedule shown as a small inline icon next to the date, not its
+    // own column — hover shows how many times.
     var apptText = latestSto
       ? esc(formatDateSimple(latestSto.scheduled_date||'') || '\u2014')
+        + (reschedCount > 0 ? ' <span title="Rescheduled '+reschedCount+'\u00d7" style="color:var(--accent);cursor:help">&#8635;</span>' : '')
       : '<span style="color:var(--muted)">Not scheduled yet</span>';
     var roEsc = esc(g.ro_number).replace(/'/g, "\\'");
 
@@ -4060,13 +4062,17 @@ function roLedgerRender() {
     var whDisplay = created ? formatWarehouse(created.warehouse) : (inv ? formatWarehouse(inv.warehouse) : '');
     var createdDisplay = created ? formatDateSimple(created.creation_date) : (inv ? (inv.inv_date || '') : '');
 
+    // Invoice No. cell — number/link, or the Generate button if none exists yet.
     var invNum = inv ? inv.inv_number : null;
-    var invCell = invNum
-      ? ('<span style="color:var(--accent);font-weight:700;font-family:\'DM Mono\',monospace">'+esc(invNum)+'</span>'
-         + ' <button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:2px 6px;margin-left:4px" title="Download" onclick="event.stopPropagation();ledgerDownload('+JSON.stringify(inv).replace(/"/g,'&quot;')+')">&#8595;</button>')
+    var invNoCell = invNum
+      ? '<span style="color:var(--accent);font-weight:700;font-family:\'DM Mono\',monospace">'+esc(invNum)+'</span>'
       : (created
           ? '<button class="btn btn-secondary btn-sm" style="width:auto" onclick="event.stopPropagation();roLedgerGenerateInvoice(\''+roEsc+'\')">+ Generate</button>'
           : '<span style="color:var(--muted)">\u2014</span>');
+    // Invoice cell — the download action, its own column (matching Invoice Ledger).
+    var invDownloadCell = invNum
+      ? '<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();ledgerDownload('+JSON.stringify(inv).replace(/"/g,'&quot;')+')" style="width:auto;font-size:10px">&#8595; Download</button>'
+      : '<span style="color:var(--muted)">\u2014</span>';
 
     var status = roLedgerDeriveStatus(g);
     var statusBadge = '<span style="display:inline-block;padding:2px 9px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:'+status.bg+';color:'+status.fg+'">'+esc(status.label)+'</span>';
@@ -4131,19 +4137,18 @@ function roLedgerRender() {
     }
 
     return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="roLedgerOpenDetail(\''+roEsc+'\')">'
-      + '<td style="padding:.5rem 1rem;text-align:center">'+invCell+'</td>'
+      + '<td style="padding:.5rem 1rem;text-align:center">'+invNoCell+'</td>'
       + '<td style="padding:.5rem 1rem;font-family:\'DM Mono\',monospace">'+esc(g.ro_number)+'</td>'
-      + '<td style="padding:.5rem 1rem">'+esc(whDisplay||'\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem">'+esc(createdDisplay||'\u2014')+'</td>'
-      + '<td style="padding:.5rem 1rem">'+esc(created ? (formatDateSimple(created.expiration_date)||'\u2014') : '\u2014')+'</td>'
-      + '<td style="padding:.5rem 1rem">'+apptText+'</td>'
-      + '<td style="padding:.5rem 1rem;text-align:center">'+(reschedCount > 0 ? ('<span style="color:var(--accent);font-weight:700">'+reschedCount+'\u00d7</span>') : '\u2014')+'</td>'
+      + '<td style="padding:.5rem 1rem">'+esc(whDisplay||'\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+skuText+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+qtyText+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center;white-space:nowrap">'+recvCell+'</td>'
+      + '<td style="padding:.5rem 1rem;text-align:right">'+invDownloadCell+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:right;white-space:nowrap">'+cnCell+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+cnQtyCell+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center;white-space:nowrap">'+roStatusCell+'</td>'
+      + '<td style="padding:.5rem 1rem">'+apptText+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+statusBadge+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:right"><button class="btn btn-secondary btn-sm" style="width:auto" onclick="event.stopPropagation();roLedgerOpenDetail(\''+roEsc+'\')">View \u2192</button></td>'
       + '</tr>';
