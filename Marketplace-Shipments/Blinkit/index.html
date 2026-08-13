@@ -3981,6 +3981,23 @@ function roLedgerDeriveStatus(g) {
   return { label: 'Unscheduled', bg: 'rgba(224,166,62,.15)', fg: '#e0a63e' };
 }
 
+// Received Qty shouldn't be enterable until the delivery appointment
+// has actually happened — otherwise it's guaranteed to be entered
+// before goods even arrive. "Passed" means the day AFTER the
+// appointment date, not the appointment day itself (e.g. appt on the
+// 14th \u2192 enterable from the 15th onward).
+function roLedgerApptHasPassed(g) {
+  var latestSto = g.stoRows.length ? g.stoRows[g.stoRows.length - 1] : null;
+  if (!latestSto || !latestSto.scheduled_date) return false;
+  var m = String(latestSto.scheduled_date).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return false;
+  var apptDate = new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
+  apptDate.setHours(0,0,0,0);
+  var today = new Date();
+  today.setHours(0,0,0,0);
+  return today > apptDate;
+}
+
 function roLedgerRender() {
   var q = (document.getElementById('roLedgerSearch').value || '').trim().toLowerCase();
   var groups = _roLedgerGroups.filter(function(g){
@@ -4006,7 +4023,7 @@ function roLedgerRender() {
     var latestSto = g.stoRows.length ? g.stoRows[g.stoRows.length - 1] : null;
     var reschedCount = Math.max(0, g.stoRows.length - 1);
     var apptText = latestSto
-      ? esc(formatDateSimple(latestSto.scheduled_date||'') || '\u2014') + (latestSto.scheduled_time ? esc(' ' + formatTimeSimple(latestSto.scheduled_time)) : '')
+      ? esc(formatDateSimple(latestSto.scheduled_date||'') || '\u2014')
       : '<span style="color:var(--muted)">Not scheduled yet</span>';
     var stats = roLedgerItemStats(created);
     var skuText = stats.count > 0 ? stats.count : '<span style="color:var(--muted)">\u2014</span>';
@@ -4043,10 +4060,14 @@ function roLedgerRender() {
       if (isFullCancel) {
         recvCell = '<span style="color:#ffb74d;font-size:11px;font-weight:700">NA</span>';
       } else if (inv.received_qty === null || inv.received_qty === undefined || inv.received_qty === '') {
-        recvCell = canEdit
-          ? ('<input type="number" id="ro-recv-inp-'+i+'" placeholder="Recv qty" min="0" max="'+sentQty+'" oninput="ledgerClampRecv(this,'+sentQty+')" style="width:70px;font-size:11px;padding:3px 6px;text-align:center" onclick="event.stopPropagation()">'
-            + ' <button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:3px 8px" onclick="event.stopPropagation();ledgerSaveReceived(\''+(inv.inv_number||'')+'\', document.getElementById(\'ro-recv-inp-'+i+'\').value, '+sentQty+')">&#10003;</button>')
-          : '<span style="color:var(--muted);font-size:11px">&#8212; not received</span>';
+        if (!roLedgerApptHasPassed(g)) {
+          recvCell = '<span style="color:var(--muted);font-size:11px">Available after appt date</span>';
+        } else {
+          recvCell = canEdit
+            ? ('<input type="number" id="ro-recv-inp-'+i+'" placeholder="Recv qty" min="0" max="'+sentQty+'" oninput="ledgerClampRecv(this,'+sentQty+')" style="width:70px;font-size:11px;padding:3px 6px;text-align:center" onclick="event.stopPropagation()">'
+              + ' <button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:3px 8px" onclick="event.stopPropagation();ledgerSaveReceived(\''+(inv.inv_number||'')+'\', document.getElementById(\'ro-recv-inp-'+i+'\').value, '+sentQty+')">&#10003;</button>')
+            : '<span style="color:var(--muted);font-size:11px">&#8212; not received</span>';
+        }
       } else if (parseInt(inv.received_qty) === sentQty) {
         recvCell = '<span style="color:#6dc87a;font-size:11px;font-weight:700">&#10003; '+inv.received_qty+'</span>'
           + (canEdit ? (' <span style="cursor:pointer;color:var(--muted);font-size:10px" title="Edit" onclick="event.stopPropagation();ledgerEditReceived(this,\''+(inv.inv_number||'')+'\','+JSON.stringify(inv.received_qty)+','+sentQty+')">&#9998;</span>') : '');
