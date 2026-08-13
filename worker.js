@@ -1929,17 +1929,31 @@ function parseRoEmailBody(text) {
 // Ledger tab can fetch/parse them on demand later. Safe to call as
 // often as needed — re-running never creates duplicate rows, and every
 // reschedule email becomes its own new row automatically.
+//
+// Pages through ALL matching results rather than stopping at the first
+// batch — the combined RO+STO query can easily exceed one page as more
+// reschedules accumulate, and a single-page fetch would silently let
+// older RO-created emails fall out of view forever once enough newer
+// STO/reschedule emails push them past the page boundary. Capped at 10
+// pages (~300 messages) as a sane safety limit, not an expected ceiling.
 async function checkNewRoEmails(env) {
   await ensureBlinkitRoTable(env.DB);
   const accessToken = await getGmailAccessToken(env);
 
   const query = encodeURIComponent('label:Blinkit ("R.O. Number" OR "S.T.O. Number")');
-  const listRes = await fetch(`${GMAIL_API_BASE}/messages?q=${query}&maxResults=30`, {
-    headers: { Authorization: 'Bearer ' + accessToken }
-  });
-  if (!listRes.ok) throw new Error('Gmail list failed: ' + listRes.status);
-  const listData = await listRes.json();
-  const messages = listData.messages || [];
+  let messages = [];
+  let pageToken = '';
+  for (let page = 0; page < 10; page++) {
+    const pageParam = pageToken ? `&pageToken=${pageToken}` : '';
+    const listRes = await fetch(`${GMAIL_API_BASE}/messages?q=${query}&maxResults=100${pageParam}`, {
+      headers: { Authorization: 'Bearer ' + accessToken }
+    });
+    if (!listRes.ok) throw new Error('Gmail list failed: ' + listRes.status);
+    const listData = await listRes.json();
+    messages = messages.concat(listData.messages || []);
+    if (!listData.nextPageToken) break;
+    pageToken = listData.nextPageToken;
+  }
 
   let newCount = 0;
   for (const m of messages) {
