@@ -3800,6 +3800,25 @@ function esc(v) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// Blinkit's dates arrive as "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS+00:00"
+// — this pulls just the date part and reformats it as DD-MM-YYYY,
+// dropping any time/timezone suffix. Returns '' untouched if it doesn't
+// match (so a genuinely missing value still renders as '—' upstream).
+function formatDateSimple(raw) {
+  if (!raw) return '';
+  var m = String(raw).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return raw;
+  return m[3] + '-' + m[2] + '-' + m[1];
+}
+
+// Blinkit prefixes every warehouse name with "BCPL - " / "BCPL – " —
+// strips that off for display since it's the same on every RO and adds
+// nothing but visual noise.
+function formatWarehouse(raw) {
+  if (!raw) return '';
+  return String(raw).replace(/^BCPL\s*[-\u2013]\s*/i, '');
+}
+
 var _roLedgerRows = [];    // raw rows from blinkitListRoLog
 var _roLedgerGroups = [];  // grouped by ro_number
 var _roDetailCurrent = null; // the group currently open in the detail modal
@@ -3879,7 +3898,7 @@ function roLedgerRender() {
     var latestSto = g.stoRows.length ? g.stoRows[g.stoRows.length - 1] : null;
     var reschedCount = Math.max(0, g.stoRows.length - 1);
     var apptText = latestSto
-      ? esc((latestSto.scheduled_date||'\u2014') + ' ' + (latestSto.scheduled_time||''))
+      ? esc(formatDateSimple(latestSto.scheduled_date||'') || '\u2014') + (latestSto.scheduled_time ? esc(' ' + latestSto.scheduled_time) : '')
       : '<span style="color:var(--muted)">Not scheduled yet</span>';
     var itemsCount = roLedgerItemCount(created);
     var itemsText = itemsCount > 0
@@ -3888,9 +3907,9 @@ function roLedgerRender() {
     var roEsc = esc(g.ro_number).replace(/'/g, "\\'");
     return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="roLedgerOpenDetail(\''+roEsc+'\')">'
       + '<td style="padding:.5rem 1rem;font-family:\'DM Mono\',monospace">'+esc(g.ro_number)+'</td>'
-      + '<td style="padding:.5rem 1rem">'+esc(created ? (created.warehouse||'\u2014') : '\u2014')+'</td>'
-      + '<td style="padding:.5rem 1rem">'+esc(created ? (created.creation_date||'\u2014') : '\u2014')+'</td>'
-      + '<td style="padding:.5rem 1rem">'+esc(created ? (created.expiration_date||'\u2014') : '\u2014')+'</td>'
+      + '<td style="padding:.5rem 1rem">'+esc(created ? (formatWarehouse(created.warehouse)||'\u2014') : '\u2014')+'</td>'
+      + '<td style="padding:.5rem 1rem">'+esc(created ? (formatDateSimple(created.creation_date)||'\u2014') : '\u2014')+'</td>'
+      + '<td style="padding:.5rem 1rem">'+esc(created ? (formatDateSimple(created.expiration_date)||'\u2014') : '\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem">'+apptText+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+(reschedCount > 0 ? ('<span style="color:var(--accent);font-weight:700">'+reschedCount+'\u00d7</span>') : '\u2014')+'</td>'
       + '<td style="padding:.5rem 1rem;text-align:center">'+itemsText+'</td>'
@@ -3915,7 +3934,7 @@ function roLedgerOpenDetail(roNumber) {
       return '<div style="padding:.4rem 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;'
         + (isLatest ? 'font-weight:700;color:var(--accent)' : 'color:var(--muted)') + '">'
         + '<span>'+esc(label)+' \u2014 Appointment ID '+esc(r.appointment_id||'\u2014')+'</span>'
-        + '<span>'+esc(r.scheduled_date||'\u2014')+' '+esc(r.scheduled_time||'')+(isLatest ? ' (current)' : '')+'</span>'
+        + '<span>'+esc(formatDateSimple(r.scheduled_date)||'\u2014')+' '+esc(r.scheduled_time||'')+(isLatest ? ' (current)' : '')+'</span>'
         + '</div>';
     }).join('');
   }
