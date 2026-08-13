@@ -817,7 +817,7 @@
   <!-- Top bar -->
   <div style="flex-shrink:0;padding:.7rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.8rem;background:var(--surface)">
     <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128197; RO Ledger &mdash; auto-detected from Gmail</div>
-    <input type="text" id="roLedgerSearch" placeholder="Search RO number or warehouse..." oninput="roLedgerRender()" style="width:240px;font-size:11px;padding:5px 10px">
+    <input type="text" id="roLedgerSearch" placeholder="Search RO number or warehouse..." oninput="_roLedgerPage=1;roLedgerRender()" style="width:240px;font-size:11px;padding:5px 10px">
     <button class="btn btn-secondary btn-sm" onclick="roLedgerLoad()" style="width:auto">&#8635; Refresh</button>
     <button class="btn btn-secondary btn-sm" onclick="roLedgerRepairAll()" style="width:auto;color:var(--rd);border-color:var(--rd)" title="Wipes the log and rebuilds it from Gmail from scratch \u2014 use if attachments/SKU data won't show up">&#128295; Repair</button>
     <button class="btn btn-secondary btn-sm" onclick="roLedgerRunManualBackfill()" style="width:auto" title="One-time: backfills appointment dates for ROs from before the Gmail watcher existed">&#128229; Backfill appts</button>
@@ -866,6 +866,13 @@
     </table>
   </div>
 
+  <!-- Pagination footer — same pattern as Invoice Ledger's, sits below the
+       table as its own flex-shrink:0 row rather than inside the table. -->
+  <div id="roLedgerPagerControls" style="display:none;flex-shrink:0;align-items:center;justify-content:center;gap:1rem;padding:.6rem 1.4rem;border-top:1px solid var(--border);background:var(--surface)">
+    <button class="btn btn-secondary btn-sm" id="roLedgerPrevBtn" style="width:auto" onclick="roLedgerGoToPage(_roLedgerPage-1)">&#8592; Prev</button>
+    <span id="roLedgerPageIndicator" style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap"></span>
+    <button class="btn btn-secondary btn-sm" id="roLedgerNextBtn" style="width:auto" onclick="roLedgerGoToPage(_roLedgerPage+1)">Next &#8594;</button>
+  </div>
 </div>
 
 
@@ -3859,6 +3866,8 @@ function formatTimeSimple(raw) {
 var _roLedgerRows = [];    // raw rows from blinkitListRoLog
 var _roLedgerGroups = [];  // grouped by ro_number
 var _roDetailCurrent = null; // the group currently open in the detail modal
+var _roLedgerPage = 1;
+var _roLedgerPageSize = 10;
 
 // [ADMIN] Wipes the entire RO log and rebuilds it fresh from Gmail.
 // Needed when rows were logged before a parsing change — e.g. entries
@@ -4094,10 +4103,17 @@ function roLedgerRender() {
   if (!groups.length) {
     document.getElementById('roLedgerTbody').innerHTML =
       '<tr><td colspan="14" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
+    document.getElementById('roLedgerPagerControls').style.display = 'none';
     return;
   }
 
-  document.getElementById('roLedgerTbody').innerHTML = groups.map(function(g, i){
+  var totalPages = Math.max(1, Math.ceil(groups.length / _roLedgerPageSize));
+  if (_roLedgerPage > totalPages) _roLedgerPage = totalPages;
+  if (_roLedgerPage < 1) _roLedgerPage = 1;
+  var startIdx = (_roLedgerPage - 1) * _roLedgerPageSize;
+  var pageRows = groups.slice(startIdx, startIdx + _roLedgerPageSize);
+
+  document.getElementById('roLedgerTbody').innerHTML = pageRows.map(function(g, i){
     var created = g.created;
     var latestSto = g.stoRows.length ? g.stoRows[g.stoRows.length - 1] : null;
     var reschedCount = Math.max(0, g.stoRows.length - 1);
@@ -4223,6 +4239,30 @@ function roLedgerRender() {
       + '<td style="padding:.5rem 1rem;text-align:right"><button class="btn btn-secondary btn-sm" style="width:auto" onclick="event.stopPropagation();roLedgerOpenDetail(\''+roEsc+'\')">View \u2192</button></td>'
       + '</tr>';
   }).join('');
+
+  roLedgerRenderPagination(groups.length, totalPages);
+}
+
+// Same pattern as Invoice Ledger's pagination footer.
+function roLedgerRenderPagination(totalRows, totalPages) {
+  var wrap = document.getElementById('roLedgerPagerControls');
+  if (totalRows <= _roLedgerPageSize) { wrap.style.display = 'none'; return; } // single page — nothing to paginate
+  wrap.style.display = 'flex';
+
+  var startRow = (_roLedgerPage - 1) * _roLedgerPageSize + 1;
+  var endRow = Math.min(_roLedgerPage * _roLedgerPageSize, totalRows);
+  document.getElementById('roLedgerPageIndicator').textContent =
+    startRow + '\u2013' + endRow + ' of ' + totalRows + ' \u00b7 Page ' + _roLedgerPage + ' of ' + totalPages;
+
+  var prevBtn = document.getElementById('roLedgerPrevBtn');
+  var nextBtn = document.getElementById('roLedgerNextBtn');
+  prevBtn.disabled = (_roLedgerPage <= 1);
+  nextBtn.disabled = (_roLedgerPage >= totalPages);
+}
+
+function roLedgerGoToPage(p) {
+  _roLedgerPage = p;
+  roLedgerRender();
 }
 
 // Fetches this RO's PDF attachment from Gmail (never stored) and runs
