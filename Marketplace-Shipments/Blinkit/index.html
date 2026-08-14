@@ -362,8 +362,8 @@
       if (el) el.style.display = window.TM_CAN_EDIT ? '' : 'none';
     });
 
-    // Re-render the ledger in case it already drew before the role was known
-    if (typeof ledgerRender === 'function') { try { ledgerRender(); } catch (e) {} }
+    // Re-render RO Ledger in case it already drew before the role was known
+    if (typeof roLedgerRender === 'function') { try { roLedgerRender(); } catch (e) {} }
   }
 
   function showApp(user) {
@@ -426,7 +426,6 @@
 <div class="tabs">
   <button id="tabBtnInvoice" class="tab-btn active" onclick="switchTab('invoice',this)">&#128196; Generate Invoice</button>
   <button id="tabBtnBulk" class="tab-btn" onclick="switchTab('bulk',this)">Label Print</button>
-  <button id="tabBtnLedger" class="tab-btn" onclick="switchTab('ledger',this)">&#128203; Invoice Ledger</button>
   <button id="tabBtnRoLedger" class="tab-btn" onclick="switchTab('roledger',this)">&#128197; RO Ledger</button>
   <button id="tabBtnLibrary" class="tab-btn" onclick="switchTab('library',this)">SKU Library</button>
 </div>
@@ -783,68 +782,6 @@
     </div>
   </div>
 
-</div>
-
-
-<!-- INVOICE LEDGER FULL-WIDTH AREA -->
-<div id="ledgerArea" style="display:none;flex:1;height:0;min-height:0;overflow:hidden;flex-direction:column">
-
-  <!-- Top bar -->
-  <div style="flex-shrink:0;padding:.7rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.8rem;background:var(--surface)">
-    <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128203; Invoice Ledger</div>
-    <input type="text" id="ledgerSearch" placeholder="Search RO or Invoice No..." oninput="_ledgerPage=1;ledgerRender()" style="width:220px;font-size:11px;padding:5px 10px">
-    <button class="btn btn-secondary btn-sm" onclick="ledgerLoad()" style="width:auto">&#8635; Refresh</button>
-  </div>
-
-  <!-- Stats strip -->
-  <div style="flex-shrink:0;display:flex;gap:0;border-bottom:1px solid var(--border);background:#111">
-    <div style="padding:.6rem 1.4rem;border-right:1px solid var(--border)">
-      <div style="font-size:9px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-family:'DM Mono',monospace">Total Invoices</div>
-      <div id="ledgerStatTotal" style="font-size:20px;font-weight:700;color:var(--text);font-family:'DM Mono',monospace">—</div>
-    </div>
-    <div style="padding:.6rem 1.4rem;border-right:1px solid var(--border)">
-      <div style="font-size:9px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-family:'DM Mono',monospace">This Month</div>
-      <div id="ledgerStatMonth" style="font-size:20px;font-weight:700;color:var(--accent);font-family:'DM Mono',monospace">—</div>
-    </div>
-    <div style="padding:.6rem 1.4rem">
-      <div style="font-size:9px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-family:'DM Mono',monospace">Last Invoice</div>
-      <div id="ledgerStatLast" style="font-size:13px;font-weight:700;color:var(--text);font-family:'DM Mono',monospace;margin-top:4px">—</div>
-    </div>
-  </div>
-
-  <!-- Table -->
-  <div style="flex:1;overflow-y:auto;min-height:0">
-    <table style="width:100%;border-collapse:collapse;font-size:12px">
-      <thead style="position:sticky;top:0;z-index:2;background:var(--surface)">
-        <tr>
-          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Invoice No.</th>
-          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Number</th>
-          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Date Created</th>
-          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Warehouse</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">No. of SKU</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Total Qty</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Received Qty</th>
-          <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Invoice</th>
-          <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Credit Note</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Cr. Note Qty</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Status</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Delete</th>
-        </tr>
-      </thead>
-      <tbody id="ledgerTbody">
-        <tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <!-- Pagination footer — sits below the table as its own flex-shrink:0 row, same
-       pattern as the top bar and stats strip above (both of which always render
-       correctly), rather than living inside the table itself. -->
-  <div id="ledgerPagerControls" style="display:none;flex-shrink:0;align-items:center;justify-content:center;gap:1rem;padding:.6rem 1.4rem;border-top:1px solid var(--border);background:var(--surface)">
-    <button class="btn btn-secondary btn-sm" id="ledgerPrevBtn" style="width:auto" onclick="ledgerGoToPage(_ledgerPage-1)">&#8592; Prev</button>
-    <span id="ledgerPageIndicator" style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap"></span>
-    <button class="btn btn-secondary btn-sm" id="ledgerNextBtn" style="width:auto" onclick="ledgerGoToPage(_ledgerPage+1)">Next &#8594;</button>
-  </div>
 </div>
 
 
@@ -1233,20 +1170,15 @@ function saveSettings() {
 function switchTab(name, btn) {
   document.querySelectorAll('.tab-btn').forEach(function(b){ b.classList.remove('active'); });
   btn.classList.add('active');
-  if(name==='invoice'||name==='ledger'||name==='roledger'){
+  if(name==='invoice'||name==='roledger'){
     document.querySelectorAll('.tab-content').forEach(function(t){ t.style.display='none'; });
     document.querySelector('.app-body').style.display='none';
     document.getElementById('invoiceArea').style.display='none';
     document.getElementById('invoiceArea').style.flex='none';
-    document.getElementById('ledgerArea').style.display='none';
     document.getElementById('roLedgerArea').style.display='none';
     if(name==='invoice'){
       var ia=document.getElementById('invoiceArea');
       ia.style.display='flex'; ia.style.height=''; ia.style.flex='1';
-    } else if(name==='ledger'){
-      var la=document.getElementById('ledgerArea');
-      la.style.display='flex'; la.style.height='0'; la.style.flex='1';
-      ledgerLoad();
     } else {
       var ra=document.getElementById('roLedgerArea');
       ra.style.display='flex'; ra.style.height='0'; ra.style.flex='1';
@@ -1257,7 +1189,6 @@ function switchTab(name, btn) {
   document.querySelector('.app-body').style.display='flex';
   document.getElementById('invoiceArea').style.display='none';
   document.getElementById('invoiceArea').style.flex='none';
-  document.getElementById('ledgerArea').style.display='none';
   document.getElementById('roLedgerArea').style.display='none';
   document.querySelectorAll('.tab-content').forEach(function(t){ t.style.display='none'; });
   document.getElementById('tab-'+name).style.display='flex';
@@ -3606,255 +3537,12 @@ function invReset() {
 }
 
 
-// ═══════════════════════════════════════════════════════════════
-// DELETE ONE INVOICE (by RO number) — emergency use only.
-// Button is admin-only (see the isAdmin check inside ledgerRender()
-// that draws it) and always password-gated below, regardless of role.
-// ═══════════════════════════════════════════════════════════════
-function ledgerDeleteRowPrompt(ro) {
-  var pw = prompt('EMERGENCY USE ONLY.\nEnter admin password to delete the invoice for RO ' + ro + ':');
-  if (pw === null) return; // cancelled
-  if (pw !== 'Admin@8411') { toast('Incorrect password', 'err'); return; }
-  if (!confirm('This will PERMANENTLY delete the invoice for RO ' + ro + ' (cloud + local). This cannot be undone. Continue?')) return;
-
-  // Remove this RO's record from the local record map, plus its cached
-  // invoice HTML/items snapshot (keyed by invoice number, not RO).
-  var saved = JSON.parse(localStorage.getItem('blinkit_inv_records') || '{}');
-  var rec = saved[ro];
-  var invNum = rec ? (typeof rec === 'object' ? rec.inv_number : rec) : null;
-  delete saved[ro];
-  localStorage.setItem('blinkit_inv_records', JSON.stringify(saved));
-  if (invNum) {
-    try { localStorage.removeItem('blinkit_inv_html_' + invNum); } catch(e) {}
-    try { localStorage.removeItem('blinkit_inv_items_' + invNum); } catch(e) {}
-  }
-
-  if (!IS_LIVE) {
-    toast('Invoice deleted (local)', 'ok');
-    ledgerLoad();
-    return;
-  }
-
-  fetch(WORKER_URL + '?action=blinkitDeleteInvoiceByRO', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ ro_number: ro }) })
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      if (d.ok) { toast('Invoice deleted (cloud + local)', 'ok'); }
-      else { toast('Cloud delete failed — local data was still cleared', 'err'); }
-      ledgerLoad();
-    })
-    .catch(function(){ toast('Network error — local data cleared, but cloud delete may have failed', 'err'); ledgerLoad(); });
-}
-
-// ═══════════════════════════════════════════════════════════════
-// INVOICE LEDGER
-// ═══════════════════════════════════════════════════════════════
-var _ledgerRecords = [];
+// Shared with RO Ledger — same global, same shape, so roStatusDerive/
+// cnDownload/openCnModal work identically there (Invoice Ledger, the
+// tab that originally owned this data, was removed since RO Ledger
+// fully absorbed it — every invoice shows up there too, RO-detected
+// or not).
 var _cnByInv = {}; // inv_number -> array of credit note records
-var _ledgerPage = 1;
-var _ledgerPageSize = 10;
-
-function ledgerLoad() {
-  _ledgerPage = 1;
-  document.getElementById('ledgerTbody').innerHTML =
-    '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
-
-  if (!IS_LIVE) {
-    var saved = JSON.parse(localStorage.getItem('blinkit_inv_records') || '{}');
-    _ledgerRecords = Object.keys(saved).map(function(ro) {
-      var rec = saved[ro];
-      if (typeof rec === 'object') {
-        return { ro_number: ro, inv_number: rec.inv_number, created_at: rec.created_at||'', warehouse: rec.warehouse||'', inv_date: rec.inv_date||'', sku_count: rec.sku_count||0, total_qty: rec.total_qty||0, received_qty: rec.received_qty };
-      }
-      return { ro_number: ro, inv_number: rec, created_at: '', warehouse: '', inv_date: '' };
-    }).reverse();
-    ledgerRender();
-    return;
-  }
-
-  Promise.all([
-    fetch(WORKER_URL + '?action=blinkitListInv').then(function(r){ return r.json(); }).catch(function(){ return {records:[]}; }),
-    fetch(WORKER_URL + '?action=blinkitListCN').then(function(r){ return r.json(); }).catch(function(){ return {records:[]}; })
-  ]).then(function(results){
-    _ledgerRecords = results[0].records || [];
-    _cnByInv = {};
-    (results[1].records || []).forEach(function(cn){
-      if (!_cnByInv[cn.inv_number]) _cnByInv[cn.inv_number] = [];
-      _cnByInv[cn.inv_number].push(cn);
-    });
-    ledgerRender();
-  }).catch(function(){
-    // Fallback to localStorage
-    var saved = JSON.parse(localStorage.getItem('blinkit_inv_records') || '{}');
-    _ledgerRecords = Object.keys(saved).map(function(ro) {
-      return { ro_number: ro, inv_number: saved[ro], created_at: '', warehouse: '' };
-    }).reverse();
-    ledgerRender();
-  });
-}
-
-function ledgerRender() {
-  var q = (document.getElementById('ledgerSearch').value || '').trim().toLowerCase();
-  var rows = _ledgerRecords.filter(function(r) {
-    if (!q) return true;
-    return (r.inv_number||'').toLowerCase().includes(q) ||
-           (r.ro_number||'').toLowerCase().includes(q) ||
-           (r.warehouse||'').toLowerCase().includes(q);
-  });
-
-  // Explicit descending order by invoice sequence number (latest first), regardless of
-  // what order the data arrived in from D1/localStorage.
-  rows.sort(function(a, b) {
-    var na = parseInt(((a.inv_number||'').match(/(\d+)$/)||[])[0]) || 0;
-    var nb = parseInt(((b.inv_number||'').match(/(\d+)$/)||[])[0]) || 0;
-    return nb - na;
-  });
-
-  // Stats
-  document.getElementById('ledgerStatTotal').textContent = _ledgerRecords.length;
-  var now = new Date();
-  var thisMonth = _ledgerRecords.filter(function(r) {
-    if (!r.created_at) return false;
-    var d = new Date(r.created_at);
-    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-  }).length;
-  document.getElementById('ledgerStatMonth').textContent = thisMonth || '—';
-  var last = _ledgerRecords[0];
-  document.getElementById('ledgerStatLast').textContent = last ? last.inv_number : '—';
-
-  if (!rows.length) {
-    document.getElementById('ledgerTbody').innerHTML =
-      '<tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">' +
-      (q ? 'No results for "' + q + '"' : 'No invoices generated yet') + '</td></tr>';
-    document.getElementById('ledgerPagerControls').style.display = 'none';
-    return;
-  }
-
-  // ── Pagination — 10 per page ──
-  var totalPages = Math.max(1, Math.ceil(rows.length / _ledgerPageSize));
-  if (_ledgerPage > totalPages) _ledgerPage = totalPages;
-  if (_ledgerPage < 1) _ledgerPage = 1;
-  var startIdx = (_ledgerPage - 1) * _ledgerPageSize;
-  var pageRows = rows.slice(startIdx, startIdx + _ledgerPageSize);
-
-  ledgerRenderPagination(rows.length, totalPages);
-
-  document.getElementById('ledgerTbody').innerHTML = pageRows.map(function(r, i) {
-    var dateStr = r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) : '—';
-    var bg = i % 2 === 0 ? '' : 'background:#0a0a0a';
-        // Show inv_date as date created; warehouse trimmed
-    var wh = (r.warehouse||'').replace(/^Blinkit\s*/i,'').replace(/\s*warehouse\s*$/i,'').trim() || '\u2014';
-    var dateDisplay = r.inv_date || dateStr;
-    var rSafe = JSON.stringify(r).replace(/"/g,'&quot;');
-
-    // ── Items cell ──
-    var skuCountCell = r.sku_count ? r.sku_count : '<span style="color:var(--muted)">\u2014</span>';
-    var totalQtyCell = r.sku_count ? (r.total_qty||0) : '<span style="color:var(--muted)">\u2014</span>';
-
-    var sentQty = r.total_qty || 0;
-
-    // ── Credit Note lookup (needed before Received Qty, since a full cancellation
-    // overrides how Received Qty is displayed) ──
-    var cns = _cnByInv[r.inv_number] || [];
-    var cn = cns.length ? cns[0] : null; // only one CN allowed per invoice
-    var cnQty = cn ? (cn.total_qty || 0) : 0;
-    var isFullCancel = !!(cn && sentQty > 0 && cnQty >= sentQty);
-
-    // ── Received qty cell ── (hard-capped at sent qty — can't receive more than was sent)
-    // canEdit is false for viewer role — read-only text instead of input/edit controls.
-    var canEdit = (typeof window.TM_CAN_EDIT === 'undefined') || window.TM_CAN_EDIT;
-    var recvCell;
-    if (isFullCancel) {
-      // Full cancellation makes "received qty" not meaningful — show NA instead of 0
-      recvCell = '<span style="color:#ffb74d;font-size:11px;font-weight:700">NA</span>';
-    } else if (r.received_qty === null || r.received_qty === undefined || r.received_qty === '') {
-      recvCell = canEdit
-        ? ('<input type="number" id="recv-inp-' + i + '" placeholder="Recv qty" min="0" max="' + sentQty + '" oninput="ledgerClampRecv(this,' + sentQty + ')" style="width:70px;font-size:11px;padding:3px 6px;text-align:center">'
-          + ' <button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:3px 8px" onclick="ledgerSaveReceived(\'' + (r.inv_number||'') + '\', document.getElementById(\'recv-inp-' + i + '\').value, ' + sentQty + ')">&#10003;</button>')
-        : '<span style="color:var(--muted);font-size:11px">&#8212; not received</span>';
-    } else if (parseInt(r.received_qty) === sentQty) {
-      recvCell = '<span style="color:#6dc87a;font-size:11px;font-weight:700">&#10003; ' + r.received_qty + '</span>'
-        + (canEdit ? (' <span style="cursor:pointer;color:var(--muted);font-size:10px" title="Edit" onclick="ledgerEditReceived(this,\'' + (r.inv_number||'') + '\',' + JSON.stringify(r.received_qty) + ',' + sentQty + ')">&#9998;</span>') : '');
-    } else {
-      var diff = parseInt(r.received_qty) - sentQty;
-      recvCell = '<span style="color:#e05555;font-size:11px;font-weight:700">&#9888; ' + r.received_qty + ' (sent ' + sentQty + ', &Delta;' + (diff>0?'+':'') + diff + ')</span>'
-        + (canEdit ? (' <span style="cursor:pointer;color:var(--muted);font-size:10px" title="Edit" onclick="ledgerEditReceived(this,\'' + (r.inv_number||'') + '\',' + JSON.stringify(r.received_qty) + ',' + sentQty + ')">&#9998;</span>') : '');
-    }
-
-    // ── Credit Note cell ──
-    var cnBadges = cns.map(function(cnRec){
-      return '<div style="display:inline-flex;align-items:center;gap:4px;background:#111;border:1px solid var(--border);border-radius:5px;padding:2px 6px;margin:1px;font-size:10px;font-family:\'DM Mono\',monospace">'
-        + '<span style="color:var(--accent)">' + cnRec.cn_number + '</span>'
-        + '<span style="cursor:pointer;color:var(--muted)" title="Download" onclick="cnDownload(\'' + cnRec.cn_number + '\')">&#8595;</span>'
-      + '</div>';
-    }).join('');
-    var cnCell = cnBadges
-      + (cns.length ? '' : '<button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:3px 8px;margin-top:2px" onclick="openCnModal(\'' + (r.inv_number||'') + '\', \'' + (r.ro_number||'') + '\', ' + sentQty + ')">+ Create</button>');
-
-    // ── Cr. Note Qty cell ──
-    var cnQtyCell = cn ? cnQty : '<span style="color:var(--muted)">\u2014</span>';
-
-    // ── RO Status cell — derived from received qty + CN state (see roStatusDerive) ──
-    var statusInfo = roStatusDerive(r, cn, cnQty, isFullCancel, sentQty);
-    var statusCell = '<span style="display:inline-block;padding:3px 9px;border-radius:11px;font-size:10px;font-weight:700;letter-spacing:.03em;background:' + statusInfo.bg + ';color:' + statusInfo.fg + '">' + statusInfo.label + '</span>';
-    if (statusInfo.key === 'mismatch') {
-      var noteVal = (r.status_note || '').replace(/"/g,'&quot;');
-      statusCell += '<div style="margin-top:3px;display:flex;gap:3px;align-items:center">'
-        + '<input type="text" id="status-note-' + i + '" value="' + noteVal + '" placeholder="Why? (remark)" style="width:110px;font-size:10px;padding:2px 5px">'
-        + '<button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:2px 6px" onclick="ledgerSaveStatusNote(\'' + (r.inv_number||'') + '\', document.getElementById(\'status-note-' + i + '\').value)">&#10003;</button>'
-      + '</div>';
-    } else if ((statusInfo.key === 'rejected' || statusInfo.key === 'cancelled' || statusInfo.key === 'partial' || statusInfo.key === 'partial-check') && cn && cn.reason) {
-      statusCell += '<div style="margin-top:3px;font-size:9.5px;color:var(--muted);max-width:130px">' + cn.reason.replace(/&/g,'&amp;') + '</div>';
-    }
-
-    // ── Delete cell — admin-only, emergency use, always password-gated
-    //    (see ledgerDeleteRowPrompt). Non-admins get an empty cell. ──
-    var isAdminRow = window.TM_ROLE === 'admin';
-    var deleteCell = isAdminRow
-      ? '<button class="btn btn-sm" title="Emergency delete — admin password required" onclick="ledgerDeleteRowPrompt(\'' + (r.ro_number||'').replace(/'/g,"\\'") + '\')" style="width:auto;font-size:10px;padding:3px 8px;background:#3a1414;border:1px solid #6b2020;color:#ff8080">&#128465;</button>'
-      : '<span style="color:var(--muted)">&#8212;</span>';
-
-    return '<tr style="' + bg + ';border-bottom:1px solid var(--border)">'
-      + '<td style="padding:.6rem 1rem;font-family:\'DM Mono\',monospace;font-size:11px;color:var(--accent);font-weight:700">' + (r.inv_number||'\u2014') + '</td>'
-      + '<td style="padding:.6rem 1rem;font-family:\'DM Mono\',monospace;font-size:11px;color:var(--text)">' + (r.ro_number||'\u2014') + '</td>'
-      + '<td style="padding:.6rem 1rem;font-size:11px;color:var(--muted)">' + dateDisplay + '</td>'
-      + '<td style="padding:.6rem 1rem;font-size:11px;color:var(--text)">' + wh + '</td>'
-      + '<td style="padding:.6rem 1rem;font-size:11px;color:var(--text);text-align:center">' + skuCountCell + '</td>'
-      + '<td style="padding:.6rem 1rem;font-size:11px;color:var(--text);text-align:center">' + totalQtyCell + '</td>'
-      + '<td style="padding:.6rem 1rem;font-size:11px;text-align:center;white-space:nowrap">' + recvCell + '</td>'
-      + '<td style="padding:.6rem 1rem;text-align:right">'
-        + '<button class="btn btn-secondary btn-sm" onclick="ledgerDownload(' + rSafe + ')" style="width:auto;font-size:10px">&#8595; Download</button>'
-      + '</td>'
-      + '<td style="padding:.6rem 1rem;text-align:right;white-space:nowrap">' + cnCell + '</td>'
-      + '<td style="padding:.6rem 1rem;font-size:11px;color:var(--text);text-align:center">' + cnQtyCell + '</td>'
-      + '<td style="padding:.6rem 1rem;text-align:center;white-space:nowrap">' + statusCell + '</td>'
-      + '<td style="padding:.6rem 1rem;text-align:center;white-space:nowrap">' + deleteCell + '</td>'
-    + '</tr>';
-  }).join('');
-}
-
-// Updates the Prev/Next + page indicator controls in the top bar. Deliberately does NOT
-// rebuild any HTML — the buttons and span already exist in the page; we just toggle
-// visibility, update the label text, and set disabled state on the two buttons directly.
-function ledgerRenderPagination(totalRows, totalPages) {
-  var wrap = document.getElementById('ledgerPagerControls');
-  if (totalRows <= _ledgerPageSize) { wrap.style.display = 'none'; return; } // single page — nothing to paginate
-  wrap.style.display = 'flex';
-
-  var startRow = (_ledgerPage - 1) * _ledgerPageSize + 1;
-  var endRow = Math.min(_ledgerPage * _ledgerPageSize, totalRows);
-  document.getElementById('ledgerPageIndicator').textContent =
-    startRow + '\u2013' + endRow + ' of ' + totalRows + ' \u00b7 Page ' + _ledgerPage + ' of ' + totalPages;
-
-  var prevBtn = document.getElementById('ledgerPrevBtn');
-  var nextBtn = document.getElementById('ledgerNextBtn');
-  prevBtn.disabled = (_ledgerPage <= 1);
-  nextBtn.disabled = (_ledgerPage >= totalPages);
-}
-
-function ledgerGoToPage(p) {
-  _ledgerPage = p;
-  ledgerRender();
-}
 
 // ══════════════════════════════════════════════════════════════════
 // RO LEDGER — auto-detected RO / STO-appointment emails from Gmail
@@ -4812,17 +4500,15 @@ function roStatusDerive(r, cn, cnQty, isFullCancel, sentQty) {
 
 function ledgerSaveStatusNote(invNumber, note) {
   if (!invNumber) return;
-  var rec = _ledgerRecords.find(function(r){ return r.inv_number === invNumber; });
-  if (rec) rec.status_note = note;
   var roRec = _roLedgerInvMap && Object.values(_roLedgerInvMap).filter(function(r){ return r && r.inv_number === invNumber; })[0];
   if (roRec) roRec.status_note = note;
-  if (!IS_LIVE) { ledgerRender(); if (document.getElementById('roLedgerTbody')) roLedgerRender(); toast('Remark saved (local)', 'ok'); return; }
+  if (!IS_LIVE) { if (document.getElementById('roLedgerTbody')) roLedgerRender(); toast('Remark saved (local)', 'ok'); return; }
   fetch(WORKER_URL + '?action=blinkitSaveStatusNote', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ inv_number: invNumber, status_note: note })
   }).then(function(r){ return r.json(); })
     .then(function(d){
-      if (d.ok) { toast('Remark saved', 'ok'); ledgerRender(); if (document.getElementById('roLedgerTbody')) roLedgerRender(); }
+      if (d.ok) { toast('Remark saved', 'ok'); if (document.getElementById('roLedgerTbody')) roLedgerRender(); }
       else toast('Save failed', 'err');
     })
     .catch(function(){ toast('Network error saving remark', 'err'); });
@@ -4846,20 +4532,18 @@ function ledgerSaveReceived(invNumber, value, sentQty) {
     qty = sentQty;
   }
 
-  var rec = _ledgerRecords.find(function(r){ return r.inv_number === invNumber; });
-  if (rec) rec.received_qty = qty;
   // Keep RO Ledger's own cache in sync too — same invoice record, different map.
   var roRec = _roLedgerInvMap && Object.values(_roLedgerInvMap).filter(function(r){ return r && r.inv_number === invNumber; })[0];
   if (roRec) roRec.received_qty = qty;
 
-  if (!IS_LIVE) { ledgerRender(); if (document.getElementById('roLedgerTbody')) roLedgerRender(); toast('Received qty saved (local)', 'ok'); return; }
+  if (!IS_LIVE) { if (document.getElementById('roLedgerTbody')) roLedgerRender(); toast('Received qty saved (local)', 'ok'); return; }
 
   fetch(WORKER_URL + '?action=blinkitSaveReceivedQty', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ inv_number: invNumber, received_qty: qty })
   }).then(function(r){ return r.json(); })
     .then(function(d){
-      if (d.ok) { toast('Received qty saved', 'ok'); ledgerRender(); if (document.getElementById('roLedgerTbody')) roLedgerRender(); }
+      if (d.ok) { toast('Received qty saved', 'ok'); if (document.getElementById('roLedgerTbody')) roLedgerRender(); }
       else { toast('Save failed', 'err'); }
     }).catch(function(){ toast('Network error saving received qty', 'err'); });
 }
@@ -5209,7 +4893,7 @@ function cnGenerate() {
         btn.disabled = false;
         btn.innerHTML = '&#10003; Generate Credit Note';
         closeCnModal();
-        ledgerLoad();
+        if (typeof roLedgerLoad === 'function') roLedgerLoad();
         return;
       }
       proceed();
@@ -5257,8 +4941,8 @@ function _cnGenerateProceed(reason, cancelledItems, btn) {
     reason: reason, total_qty: totalQty, amount: totalAmt, created_at: new Date().toISOString()
   });
   if (isFullCancel) {
-    var rec = _ledgerRecords.find(function(r){ return r.inv_number === _cnCurrentInv.inv_number; });
-    if (rec) rec.received_qty = 0;
+    var roRec = _roLedgerInvMap && Object.values(_roLedgerInvMap).filter(function(r){ return r && r.inv_number === _cnCurrentInv.inv_number; })[0];
+    if (roRec) roRec.received_qty = 0;
   }
 
   toast('Credit Note ' + cnNumber + ' generated', 'ok');
@@ -5266,7 +4950,8 @@ function _cnGenerateProceed(reason, cancelledItems, btn) {
   btn.innerHTML = '&#10003; Generate Credit Note';
   closeCnModal();
   _docRenderPDF(cnNumber, html, 'CreditNote');
-  ledgerRender(); // instant — no network round-trip needed to see the new badge
+  // instant — no network round-trip needed to see the new badge
+  if (document.getElementById('roLedgerTbody')) roLedgerRender();
 }
 
 function cnBuildHTML(d) {
