@@ -4509,8 +4509,19 @@ function ledgerClampRecv(el, sentQty) {
 function roStatusDerive(r, cn, cnQty, isFullCancel, sentQty) {
   var recvQty = (r.received_qty === null || r.received_qty === undefined || r.received_qty === '') ? null : parseInt(r.received_qty);
   if (cn) {
+    // Two different things can look like "cancelled" — kept distinct:
+    //   1. RO cancelled/created-by-mistake on Blinkit's side, before
+    //      anything was ever shipped \u2014 handled entirely by the manual
+    //      "Mark as Cancelled" flow (manual_status field), which hides
+    //      the RO from the ledger outright. No badge needed here.
+    //   2. RO was created, invoice generated, and goods actually sent
+    //      \u2014 but the full sent qty came back on a credit note. This
+    //      DID go out the door, so it's a REJECTED shipment, not a
+    //      cancelled one. Folded into the same 'rejected' key/badge as
+    //      the partial-rejection case below (same business meaning:
+    //      fully rejected vs. partially rejected).
     if (isFullCancel) {
-      return { key:'cancelled', label:'CANCELLED', bg:'#3a1414', fg:'#ff6b6b' };
+      return { key:'rejected', label:'REJECTED', bg:'#3a1a24', fg:'#ff8fa3' };
     }
     if (recvQty !== null && recvQty === sentQty) {
       return { key:'rejected', label:'REJECTED', bg:'#3a1a24', fg:'#ff8fa3' };
