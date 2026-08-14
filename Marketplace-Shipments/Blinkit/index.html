@@ -3911,6 +3911,33 @@ function roLedgerSetCardFilter(view) {
   roLedgerRender();
 }
 
+// One-click copy of the RO number — clipboard API with a manual
+// textarea+execCommand fallback for older/non-HTTPS contexts.
+function roLedgerCopyRoNumber(roNumber) {
+  function ok() { toast('RO number copied: ' + roNumber, 'ok'); }
+  function fail() {
+    var ta = document.createElement('textarea');
+    ta.value = roNumber;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try {
+      document.execCommand('copy');
+      ok();
+    } catch (e) {
+      toast('Could not copy — select manually: ' + roNumber, 'err', 4000);
+    }
+    document.body.removeChild(ta);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(roNumber).then(ok).catch(fail);
+  } else {
+    fail();
+  }
+}
+
 // [ADMIN] Wipes the entire RO log and rebuilds it fresh from Gmail.
 // Needed when rows were logged before a parsing change — e.g. entries
 // created before attachment capture existed have no attachment data,
@@ -4337,7 +4364,8 @@ function roLedgerRender() {
 
     return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="roLedgerOpenDetail(\''+roEsc+'\')">'
       + '<td style="padding:.9rem 1rem;text-align:center">'+invNoCell+'</td>'
-      + '<td style="padding:.9rem 1rem;font-family:\'DM Mono\',monospace">'+esc(g.ro_number)+'</td>'
+      + '<td style="padding:.9rem 1rem;font-family:\'DM Mono\',monospace;white-space:nowrap">'+esc(g.ro_number)
+        + ' <span title="Copy RO Number" style="cursor:pointer;color:var(--muted)" onclick="event.stopPropagation();roLedgerCopyRoNumber(\''+roEsc+'\',this)">&#128203;</span></td>'
       + '<td style="padding:.9rem 1rem">'+esc(createdDisplay||'\u2014')+'</td>'
       + '<td style="padding:.9rem 1rem">'+esc(whDisplay||'\u2014')+'</td>'
       + '<td style="padding:.9rem 1rem;text-align:center">'+skuText+'</td>'
