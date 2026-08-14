@@ -3806,13 +3806,17 @@ function roLedgerGroup() {
       return (a.email_date||a.detected_at||'').localeCompare(b.email_date||b.detected_at||'');
     });
   });
-  // Sorted by Invoice Number, descending (newest invoice first — e.g.
-  // ITH/2526/022 before .../021). ROs with no invoice yet have nothing
-  // to sort by, so they sink to the bottom.
+  // ROs with no invoice number yet float to the top (they need attention
+  // first — nothing generated for them yet). Below that, sorted by
+  // Invoice Number, descending (newest invoice first — e.g.
+  // ITH/2526/022 before .../021).
   var allGroups = Object.values(map).sort(function(a,b){
     var invA = _roLedgerInvMap[a.ro_number], invB = _roLedgerInvMap[b.ro_number];
     var na = invA ? roLedgerInvNumSuffix(invA.inv_number) : -1;
     var nb = invB ? roLedgerInvNumSuffix(invB.inv_number) : -1;
+    if (na === -1 && nb === -1) return 0;
+    if (na === -1) return -1; // a has no invoice -> a comes first
+    if (nb === -1) return 1;  // b has no invoice -> b comes first
     return nb - na;
   });
   // Cancelled ROs are hidden from the ledger entirely — not shown with
