@@ -183,8 +183,18 @@
 
   /* RO Ledger — table scrolls in its own area; header stays sticky at
      its top (see thead style) on every page; pagination footer (a
-     sibling, flex-shrink:0) stays pinned to the bottom of the panel. */
-  .ro-table-scroll{flex:1;overflow-y:auto;min-height:0}
+     sibling, flex-shrink:0) stays pinned to the bottom of the panel.
+     Table itself is height:100% (fills this container — a ratio of
+     the viewport, not a fixed px value) with table-layout:fixed +
+     colgroup %-widths, so both row height and column width scale
+     with the screen instead of being hardcoded. Combined with the
+     filler rows in roLedgerRender(), the table is always exactly the
+     same shape on every page — Next/Prev only swaps the data inside
+     fixed cells, nothing about the grid itself moves. overflow-x:auto
+     is the safety valve on narrow/mobile screens so columns shrink
+     together (scroll sideways) instead of text overlapping. */
+  .ro-table-scroll{flex:1;overflow-y:auto;overflow-x:auto;min-height:0}
+  .ro-table-scroll table{min-width:1040px}
 
   @media print{
     @page{size:75mm 50mm;margin:0}
@@ -872,7 +882,12 @@
   <!-- Table (scrolls in its own area; header stays sticky at its top on
        every page). Pagination footer is pinned to the panel's bottom. -->
   <div class="ro-table-scroll">
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
+    <table style="width:100%;height:100%;table-layout:fixed;border-collapse:collapse;font-size:13px">
+      <colgroup>
+        <col style="width:9%"><col style="width:10%"><col style="width:8%"><col style="width:9%">
+        <col style="width:6%"><col style="width:6%"><col style="width:10%"><col style="width:9%">
+        <col style="width:6%"><col style="width:8%"><col style="width:9%"><col style="width:10%">
+      </colgroup>
       <thead style="position:sticky;top:0;z-index:2;background:var(--surface)">
         <tr>
           <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Invoice No.</th>
@@ -4363,18 +4378,18 @@ function roLedgerRender() {
     }
 
     return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="roLedgerOpenDetail(\''+roEsc+'\')">'
-      + '<td style="padding:.9rem 1rem;text-align:center">'+invNoCell+'</td>'
+      + '<td style="padding:.9rem 1rem;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+invNoCell+'</td>'
       + '<td style="padding:.9rem 1rem;font-family:\'DM Mono\',monospace;white-space:nowrap">'+esc(g.ro_number)
         + ' <span title="Copy RO Number" style="cursor:pointer;color:var(--muted)" onclick="event.stopPropagation();roLedgerCopyRoNumber(\''+roEsc+'\',this)">&#128203;</span></td>'
-      + '<td style="padding:.9rem 1rem">'+esc(createdDisplay||'\u2014')+'</td>'
-      + '<td style="padding:.9rem 1rem">'+esc(whDisplay||'\u2014')+'</td>'
+      + '<td style="padding:.9rem 1rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(createdDisplay||'\u2014')+'</td>'
+      + '<td style="padding:.9rem 1rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(whDisplay||'')+'">'+esc(whDisplay||'\u2014')+'</td>'
       + '<td style="padding:.9rem 1rem;text-align:center">'+skuText+'</td>'
       + '<td style="padding:.9rem 1rem;text-align:center">'+qtyText+'</td>'
       + '<td style="padding:.9rem 1rem;text-align:center">'+recvCell+'</td>'
       + '<td style="padding:.9rem 1rem;text-align:right;white-space:nowrap">'+cnCell+'</td>'
       + '<td style="padding:.9rem 1rem;text-align:center">'+cnQtyCell+'</td>'
-      + '<td style="padding:.9rem 1rem;text-align:center">'+gpCell+'</td>'
-      + '<td style="padding:.9rem 1rem">'+apptText+'</td>'
+      + '<td style="padding:.9rem 1rem;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+gpCell+'</td>'
+      + '<td style="padding:.9rem 1rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+apptText+'</td>'
       + '<td style="padding:.9rem 1rem;text-align:center;white-space:nowrap">'+statusBadge+'</td>'
       + '</tr>';
   }).join('') + roLedgerFillerRows(_roLedgerPageSize - pageRows.length);
