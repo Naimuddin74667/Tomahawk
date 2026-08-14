@@ -159,6 +159,30 @@
   .fk-sku-tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
   .fk-sku-tag{display:inline-flex;align-items:center;gap:4px;background:rgba(74,144,217,0.08);border:1px solid rgba(74,144,217,0.25);border-radius:4px;padding:2px 8px;font-size:10px;color:#4a90d9;font-family:'DM Mono',monospace}
   .fk-sku-tag button{background:none;border:none;color:rgba(74,144,217,0.5);cursor:pointer;font-size:12px;padding:0;line-height:1}
+
+  /* RO Ledger — stat cards (grid, responsive) */
+  .ro-stats-row{flex-shrink:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:.85rem 1.4rem;border-bottom:1px solid var(--border);background:var(--bg-surface)}
+  .ro-stat-card{background:var(--bg-raised);border:1px solid var(--border-subtle);border-radius:9px;padding:.6rem .9rem;min-width:0}
+  .ro-stat-card.is-accent{border-color:rgba(245,168,0,.35)}
+  .ro-stat-label{font-size:9.5px;color:var(--text-secondary);letter-spacing:.07em;text-transform:uppercase;font-family:'DM Mono',monospace;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ro-stat-value{font-size:21px;font-weight:800;color:var(--text);font-family:'DM Mono',monospace;line-height:1.35;margin-top:2px}
+  .ro-stat-value.accent{color:var(--accent)}
+  .ro-stat-sub{font-size:9.5px;color:var(--text-secondary);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  @media (max-width:900px){
+    .ro-stats-row{padding:.7rem 1rem;gap:8px}
+    .ro-stat-value{font-size:18px}
+  }
+  @media (max-width:560px){
+    .ro-stats-row{grid-template-columns:1fr 1fr;gap:8px}
+    .ro-stat-card:nth-child(3){grid-column:1 / -1}
+  }
+
+  /* RO Ledger — table + pagination scroll together so pagination sits
+     right under the last row instead of being pinned to the bottom with
+     a dead gap above it on short pages. */
+  .ro-table-scroll{flex:1;overflow-y:auto;min-height:0;display:flex;flex-direction:column}
+  .ro-table-scroll table{flex-shrink:0}
+
   @media print{
     @page{size:75mm 50mm;margin:0}
     *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -824,23 +848,26 @@
   </div>
 
   <!-- Stats strip -->
-  <div style="flex-shrink:0;display:flex;gap:0;border-bottom:1px solid var(--border);background:#111">
-    <div style="padding:.6rem 1.4rem;border-right:1px solid var(--border)">
-      <div style="font-size:9px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-family:'DM Mono',monospace">Total ROs</div>
-      <div id="roLedgerStatTotal" style="font-size:20px;font-weight:700;color:var(--text);font-family:'DM Mono',monospace">&mdash;</div>
+  <div class="ro-stats-row">
+    <div class="ro-stat-card">
+      <div class="ro-stat-label">Total ROs</div>
+      <div class="ro-stat-value" id="roLedgerStatTotal">&mdash;</div>
+      <div class="ro-stat-sub">all detected ROs</div>
     </div>
-    <div style="padding:.6rem 1.4rem;border-right:1px solid var(--border)">
-      <div style="font-size:9px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-family:'DM Mono',monospace">Awaiting Appointment</div>
-      <div id="roLedgerStatPending" style="font-size:20px;font-weight:700;color:var(--accent);font-family:'DM Mono',monospace">&mdash;</div>
+    <div class="ro-stat-card is-accent">
+      <div class="ro-stat-label">Awaiting Appointment</div>
+      <div class="ro-stat-value accent" id="roLedgerStatPending">&mdash;</div>
+      <div class="ro-stat-sub">no STO scheduled yet</div>
     </div>
-    <div style="padding:.6rem 1.4rem">
-      <div style="font-size:9px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-family:'DM Mono',monospace">Rescheduled at least once</div>
-      <div id="roLedgerStatResched" style="font-size:20px;font-weight:700;color:var(--text);font-family:'DM Mono',monospace">&mdash;</div>
+    <div class="ro-stat-card">
+      <div class="ro-stat-label">Rescheduled at least once</div>
+      <div class="ro-stat-value" id="roLedgerStatResched">&mdash;</div>
+      <div class="ro-stat-sub">appointment moved &gt;1&times;</div>
     </div>
   </div>
 
-  <!-- Table -->
-  <div style="flex:1;overflow-y:auto;min-height:0">
+  <!-- Table + pagination (scroll together — see .ro-table-scroll) -->
+  <div class="ro-table-scroll">
     <table style="width:100%;border-collapse:collapse;font-size:12px">
       <thead style="position:sticky;top:0;z-index:2;background:var(--surface)">
         <tr>
@@ -863,14 +890,15 @@
         <tr><td colspan="13" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
     </table>
-  </div>
 
-  <!-- Pagination footer — same pattern as Invoice Ledger's, sits below the
-       table as its own flex-shrink:0 row rather than inside the table. -->
-  <div id="roLedgerPagerControls" style="display:none;flex-shrink:0;align-items:center;justify-content:center;gap:1rem;padding:.6rem 1.4rem;border-top:1px solid var(--border);background:var(--surface)">
-    <button class="btn btn-secondary btn-sm" id="roLedgerPrevBtn" style="width:auto" onclick="roLedgerGoToPage(_roLedgerPage-1)">&#8592; Prev</button>
-    <span id="roLedgerPageIndicator" style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap"></span>
-    <button class="btn btn-secondary btn-sm" id="roLedgerNextBtn" style="width:auto" onclick="roLedgerGoToPage(_roLedgerPage+1)">Next &#8594;</button>
+    <!-- Pagination — now sits directly under the table inside the same
+         scroll container, so on a short page it appears right after the
+         last row instead of being pinned to the bottom with a gap above it. -->
+    <div id="roLedgerPagerControls" style="display:none;flex-shrink:0;align-items:center;justify-content:center;gap:1rem;padding:.6rem 1.4rem;border-top:1px solid var(--border);background:var(--surface)">
+      <button class="btn btn-secondary btn-sm" id="roLedgerPrevBtn" style="width:auto" onclick="roLedgerGoToPage(_roLedgerPage-1)">&#8592; Prev</button>
+      <span id="roLedgerPageIndicator" style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap"></span>
+      <button class="btn btn-secondary btn-sm" id="roLedgerNextBtn" style="width:auto" onclick="roLedgerGoToPage(_roLedgerPage+1)">Next &#8594;</button>
+    </div>
   </div>
 </div>
 
