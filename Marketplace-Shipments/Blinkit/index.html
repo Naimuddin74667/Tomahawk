@@ -3925,17 +3925,37 @@ function roLedgerUnifiedStatus(g) {
   return { key: 'created', label: 'CREATED', bg: '#232323', fg: '#aaaaaa' };
 }
 
-// "Active Shipment" — an RO that's been created but hasn't reached an
-// end state yet. End states are FULFILLED (goods fully received, clean)
-// and CANCELLED (credit-noted in full) — everything else (Created,
-// Ready to Dispatch, In Transit, Out for Delivery, Overdue, Mismatch,
-// Partially Received, Rejected) still needs eyes on it, so it counts
-// as active. Note: ROs manually marked Cancelled are already excluded
-// from _roLedgerGroups entirely (see roLedgerGroup), so this only
-// needs to catch the credit-note-driven "cancelled" status.
+// "Active Shipment" — an RO that's been created but hasn't reached a
+// CLOSED state yet. Closed is defined directly off the numbers (not the
+// badge label, since REJECTED now covers two different reconciliations):
+//   1. Sent Qty == Received Qty                          -> closed (fulfilled)
+//   2. Sent Qty == Received Qty + Credit Note Qty          -> closed (partial, reconciled)
+//      Sent Qty == Credit Note Qty alone (nothing received,
+//      everything credited back)                          -> closed (fully rejected)
+// Anything else — no invoice yet, in transit, overdue, a plain mismatch,
+// or a credit note that doesn't yet reconcile with what was sent — is
+// still active and needs eyes on it. Note: ROs manually marked Cancelled
+// (case 1 — mistake/cancelled on Blinkit before anything shipped) are
+// already excluded from _roLedgerGroups entirely (see roLedgerGroup), so
+// they never reach this check either way.
+function roLedgerIsClosed(g) {
+  var inv = _roLedgerInvMap[g.ro_number];
+  if (!inv) return false; // no invoice yet -> definitely still active
+  var recvQty = (inv.received_qty === null || inv.received_qty === undefined || inv.received_qty === '') ? null : parseInt(inv.received_qty);
+  var sentQty = inv.total_qty || 0;
+  if (recvQty !== null && recvQty === sentQty) return true; // rule 1
+  var cns = _cnByInv[inv.inv_number] || [];
+  var cn = cns.length ? cns[0] : null;
+  if (cn) {
+    var cnQty = cn.total_qty || 0;
+    if (recvQty !== null && (recvQty + cnQty) === sentQty) return true; // rule 2, reconciled with a partial receipt
+    if (sentQty > 0 && cnQty === sentQty) return true; // rule 2, fully rejected (credit note alone covers it)
+  }
+  return false;
+}
+
 function roLedgerIsActiveShipment(g) {
-  var key = roLedgerUnifiedStatus(g).key;
-  return key !== 'fulfilled' && key !== 'cancelled';
+  return !roLedgerIsClosed(g);
 }
 
 function roLedgerRender() {
