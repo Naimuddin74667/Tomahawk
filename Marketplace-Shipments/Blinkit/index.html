@@ -160,10 +160,13 @@
   .fk-sku-tag{display:inline-flex;align-items:center;gap:4px;background:rgba(74,144,217,0.08);border:1px solid rgba(74,144,217,0.25);border-radius:4px;padding:2px 8px;font-size:10px;color:#4a90d9;font-family:'DM Mono',monospace}
   .fk-sku-tag button{background:none;border:none;color:rgba(74,144,217,0.5);cursor:pointer;font-size:12px;padding:0;line-height:1}
 
-  /* RO Ledger — stat cards (grid, responsive) */
+  /* RO Ledger — stat cards (grid, responsive, clickable filters) */
   .ro-stats-row{flex-shrink:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:.85rem 1.4rem;border-bottom:1px solid var(--border);background:var(--bg-surface)}
-  .ro-stat-card{background:var(--bg-raised);border:1px solid var(--border-subtle);border-radius:9px;padding:.6rem .9rem;min-width:0}
+  .ro-stat-card{background:var(--bg-raised);border:1px solid var(--border-subtle);border-radius:9px;padding:.6rem .9rem;min-width:0;cursor:pointer;transition:border-color .15s,background .15s,box-shadow .15s}
+  .ro-stat-card:hover{border-color:var(--accent);background:var(--bg-hover)}
+  .ro-stat-card:active{transform:scale(.99)}
   .ro-stat-card.is-accent{border-color:rgba(245,168,0,.35)}
+  .ro-stat-card.is-active-view{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
   .ro-stat-label{font-size:9.5px;color:var(--text-secondary);letter-spacing:.07em;text-transform:uppercase;font-family:'DM Mono',monospace;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .ro-stat-value{font-size:21px;font-weight:800;color:var(--text);font-family:'DM Mono',monospace;line-height:1.35;margin-top:2px}
   .ro-stat-value.accent{color:var(--accent)}
@@ -177,11 +180,9 @@
     .ro-stat-card:nth-child(3){grid-column:1 / -1}
   }
 
-  /* RO Ledger — table + pagination scroll together so pagination sits
-     right under the last row instead of being pinned to the bottom with
-     a dead gap above it on short pages. */
-  .ro-table-scroll{flex:1;overflow-y:auto;min-height:0;display:flex;flex-direction:column}
-  .ro-table-scroll table{flex-shrink:0}
+  /* RO Ledger — table scrolls in its own area; pagination footer (a
+     sibling, flex-shrink:0) stays pinned to the bottom of the panel. */
+  .ro-table-scroll{flex:1;overflow-y:auto;min-height:0}
 
   @media print{
     @page{size:75mm 50mm;margin:0}
@@ -847,58 +848,55 @@
     <button class="btn btn-secondary btn-sm" onclick="roLedgerRunManualBackfill()" style="width:auto" title="One-time: backfills appointment dates for ROs from before the Gmail watcher existed">&#128229; Backfill appts</button>
   </div>
 
-  <!-- Stats strip -->
+  <!-- Stats strip — cards are clickable filters (click again to clear) -->
   <div class="ro-stats-row">
-    <div class="ro-stat-card">
+    <div class="ro-stat-card is-active-view" id="roCardTotal" onclick="roLedgerSetCardFilter('all')" title="Show all ROs">
       <div class="ro-stat-label">Total ROs</div>
       <div class="ro-stat-value" id="roLedgerStatTotal">&mdash;</div>
       <div class="ro-stat-sub">all detected ROs</div>
     </div>
-    <div class="ro-stat-card is-accent">
+    <div class="ro-stat-card is-accent" id="roCardPending" onclick="roLedgerSetCardFilter('pending')" title="Filter: awaiting appointment">
       <div class="ro-stat-label">Awaiting Appointment</div>
       <div class="ro-stat-value accent" id="roLedgerStatPending">&mdash;</div>
-      <div class="ro-stat-sub">no STO scheduled yet</div>
+      <div class="ro-stat-sub">no STO scheduled yet &middot; click to filter</div>
     </div>
-    <div class="ro-stat-card">
+    <div class="ro-stat-card" id="roCardResched" onclick="roLedgerSetCardFilter('resched')" title="Filter: rescheduled at least once">
       <div class="ro-stat-label">Rescheduled at least once</div>
       <div class="ro-stat-value" id="roLedgerStatResched">&mdash;</div>
-      <div class="ro-stat-sub">appointment moved &gt;1&times;</div>
+      <div class="ro-stat-sub">appointment moved &gt;1&times; &middot; click to filter</div>
     </div>
   </div>
 
-  <!-- Table + pagination (scroll together — see .ro-table-scroll) -->
+  <!-- Table (scrolls on its own; pagination stays pinned below it) -->
   <div class="ro-table-scroll">
-    <table style="width:100%;border-collapse:collapse;font-size:12px">
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
       <thead style="position:sticky;top:0;z-index:2;background:var(--surface)">
         <tr>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Invoice No.</th>
-          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Number</th>
-          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Date Created</th>
-          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Warehouse</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">No. of SKU</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Total Qty</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Received Qty</th>
-          <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Credit Note</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Cr. Note Qty</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Gatepass</th>
-          <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Appointment (latest)</th>
-          <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Status</th>
-          <th style="padding:.6rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">&nbsp;</th>
+          <th style="padding:.75rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Invoice No.</th>
+          <th style="padding:.75rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">RO Number</th>
+          <th style="padding:.75rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Date Created</th>
+          <th style="padding:.75rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Warehouse</th>
+          <th style="padding:.75rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">No. of SKU</th>
+          <th style="padding:.75rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Total Qty</th>
+          <th style="padding:.75rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Received Qty</th>
+          <th style="padding:.75rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Credit Note</th>
+          <th style="padding:.75rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Cr. Note Qty</th>
+          <th style="padding:.75rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Gatepass</th>
+          <th style="padding:.75rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Appointment (latest)</th>
+          <th style="padding:.75rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Status</th>
         </tr>
       </thead>
       <tbody id="roLedgerTbody">
-        <tr><td colspan="13" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+        <tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
     </table>
+  </div>
 
-    <!-- Pagination — now sits directly under the table inside the same
-         scroll container, so on a short page it appears right after the
-         last row instead of being pinned to the bottom with a gap above it. -->
-    <div id="roLedgerPagerControls" style="display:none;flex-shrink:0;align-items:center;justify-content:center;gap:1rem;padding:.6rem 1.4rem;border-top:1px solid var(--border);background:var(--surface)">
-      <button class="btn btn-secondary btn-sm" id="roLedgerPrevBtn" style="width:auto" onclick="roLedgerGoToPage(_roLedgerPage-1)">&#8592; Prev</button>
-      <span id="roLedgerPageIndicator" style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap"></span>
-      <button class="btn btn-secondary btn-sm" id="roLedgerNextBtn" style="width:auto" onclick="roLedgerGoToPage(_roLedgerPage+1)">Next &#8594;</button>
-    </div>
+  <!-- Pagination footer — pinned to the bottom of the panel. -->
+  <div id="roLedgerPagerControls" style="display:none;flex-shrink:0;align-items:center;justify-content:center;gap:1rem;padding:.7rem 1.4rem;border-top:1px solid var(--border);background:var(--surface)">
+    <button class="btn btn-secondary btn-sm" id="roLedgerPrevBtn" style="width:auto" onclick="roLedgerGoToPage(_roLedgerPage-1)">&#8592; Prev</button>
+    <span id="roLedgerPageIndicator" style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap"></span>
+    <button class="btn btn-secondary btn-sm" id="roLedgerNextBtn" style="width:auto" onclick="roLedgerGoToPage(_roLedgerPage+1)">Next &#8594;</button>
   </div>
 </div>
 
@@ -3899,6 +3897,15 @@ var _roLedgerGroups = [];  // grouped by ro_number
 var _roDetailCurrent = null; // the group currently open in the detail modal
 var _roLedgerPage = 1;
 var _roLedgerPageSize = 10;
+var _roLedgerCardFilter = 'all'; // 'all' | 'pending' | 'resched' — driven by clicking the stat cards
+
+// Clicking a stat card filters the table to that slice; clicking the
+// same card again (or the Total card) resets to showing everything.
+function roLedgerSetCardFilter(view) {
+  _roLedgerCardFilter = (_roLedgerCardFilter === view || view === 'all') ? 'all' : view;
+  _roLedgerPage = 1;
+  roLedgerRender();
+}
 
 // [ADMIN] Wipes the entire RO log and rebuilds it fresh from Gmail.
 // Needed when rows were logged before a parsing change — e.g. entries
@@ -3949,7 +3956,7 @@ function roLedgerRepairAll() {
   if (!confirm('This clears the entire RO Ledger and rebuilds it fresh from Gmail. Use this if SKU/Qty data won\'t show up for older entries. Continue?')) return;
 
   document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="13" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Rebuilding from Gmail\u2026 this can take a moment.</td></tr>';
+    '<tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Rebuilding from Gmail\u2026 this can take a moment.</td></tr>';
 
   fetch(WORKER_URL + '?action=blinkitWipeRoLog', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' })
     .then(function(r){ return r.json(); })
@@ -3969,7 +3976,7 @@ var _roLedgerGatepassMap = {}; // ro_number -> gatepass record (from UC_Gatepass
 
 function roLedgerLoad() {
   document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="13" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+    '<tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
 
   Promise.all([
     fetch(WORKER_URL + '?action=blinkitListRoLog').then(function(r){ return r.json(); }),
@@ -4010,7 +4017,7 @@ function roLedgerLoad() {
     })
     .catch(function(err){
       document.getElementById('roLedgerTbody').innerHTML =
-        '<tr><td colspan="13" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
+        '<tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
     });
 }
 
@@ -4177,15 +4184,30 @@ function roLedgerRender() {
     return g.ro_number.toLowerCase().indexOf(q) !== -1 || wh.indexOf(q) !== -1;
   });
 
+  // Card filter — narrows the search results further to whichever stat
+  // card is currently selected.
+  if (_roLedgerCardFilter === 'pending') {
+    groups = groups.filter(function(g){ return g.stoRows.length === 0; });
+  } else if (_roLedgerCardFilter === 'resched') {
+    groups = groups.filter(function(g){ return g.stoRows.length > 1; });
+  }
+
   document.getElementById('roLedgerStatTotal').textContent = _roLedgerGroups.length;
   document.getElementById('roLedgerStatPending').textContent =
     _roLedgerGroups.filter(function(g){ return g.stoRows.length === 0; }).length;
   document.getElementById('roLedgerStatResched').textContent =
     _roLedgerGroups.filter(function(g){ return g.stoRows.length > 1; }).length;
 
+  var cardTotal = document.getElementById('roCardTotal');
+  var cardPending = document.getElementById('roCardPending');
+  var cardResched = document.getElementById('roCardResched');
+  if (cardTotal) cardTotal.classList.toggle('is-active-view', _roLedgerCardFilter === 'all');
+  if (cardPending) cardPending.classList.toggle('is-active-view', _roLedgerCardFilter === 'pending');
+  if (cardResched) cardResched.classList.toggle('is-active-view', _roLedgerCardFilter === 'resched');
+
   if (!groups.length) {
     document.getElementById('roLedgerTbody').innerHTML =
-      '<tr><td colspan="13" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
+      '<tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
     document.getElementById('roLedgerPagerControls').style.display = 'none';
     return;
   }
@@ -4310,19 +4332,18 @@ function roLedgerRender() {
     }
 
     return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="roLedgerOpenDetail(\''+roEsc+'\')">'
-      + '<td style="padding:.5rem 1rem;text-align:center">'+invNoCell+'</td>'
-      + '<td style="padding:.5rem 1rem;font-family:\'DM Mono\',monospace">'+esc(g.ro_number)+'</td>'
-      + '<td style="padding:.5rem 1rem">'+esc(createdDisplay||'\u2014')+'</td>'
-      + '<td style="padding:.5rem 1rem">'+esc(whDisplay||'\u2014')+'</td>'
-      + '<td style="padding:.5rem 1rem;text-align:center">'+skuText+'</td>'
-      + '<td style="padding:.5rem 1rem;text-align:center">'+qtyText+'</td>'
-      + '<td style="padding:.5rem 1rem;text-align:center">'+recvCell+'</td>'
-      + '<td style="padding:.5rem 1rem;text-align:right;white-space:nowrap">'+cnCell+'</td>'
-      + '<td style="padding:.5rem 1rem;text-align:center">'+cnQtyCell+'</td>'
-      + '<td style="padding:.5rem 1rem;text-align:center">'+gpCell+'</td>'
-      + '<td style="padding:.5rem 1rem">'+apptText+'</td>'
-      + '<td style="padding:.5rem 1rem;text-align:center;white-space:nowrap">'+statusBadge+'</td>'
-      + '<td style="padding:.5rem 1rem;text-align:right"><button class="btn btn-secondary btn-sm" style="width:auto" onclick="event.stopPropagation();roLedgerOpenDetail(\''+roEsc+'\')">View \u2192</button></td>'
+      + '<td style="padding:.75rem 1rem;text-align:center">'+invNoCell+'</td>'
+      + '<td style="padding:.75rem 1rem;font-family:\'DM Mono\',monospace">'+esc(g.ro_number)+'</td>'
+      + '<td style="padding:.75rem 1rem">'+esc(createdDisplay||'\u2014')+'</td>'
+      + '<td style="padding:.75rem 1rem">'+esc(whDisplay||'\u2014')+'</td>'
+      + '<td style="padding:.75rem 1rem;text-align:center">'+skuText+'</td>'
+      + '<td style="padding:.75rem 1rem;text-align:center">'+qtyText+'</td>'
+      + '<td style="padding:.75rem 1rem;text-align:center">'+recvCell+'</td>'
+      + '<td style="padding:.75rem 1rem;text-align:right;white-space:nowrap">'+cnCell+'</td>'
+      + '<td style="padding:.75rem 1rem;text-align:center">'+cnQtyCell+'</td>'
+      + '<td style="padding:.75rem 1rem;text-align:center">'+gpCell+'</td>'
+      + '<td style="padding:.75rem 1rem">'+apptText+'</td>'
+      + '<td style="padding:.75rem 1rem;text-align:center;white-space:nowrap">'+statusBadge+'</td>'
       + '</tr>';
   }).join('');
 
