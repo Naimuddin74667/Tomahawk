@@ -4496,6 +4496,7 @@ function roLedgerAutoGenerateCN(invNumber, roNumber, sentQty, dnItems, dnId) {
         if (match && qty > match.qty) qty = match.qty; // never cancel more than was actually sent
         var netAmount = parseFloat(dnIt.net_amount) || 0;
         var unitPrice = parseFloat(dnIt.unit_price) || (qty ? netAmount / qty : 0);
+        var gstPct = dnIt.gst_pct != null && dnIt.gst_pct !== '' ? parseFloat(dnIt.gst_pct) : null;
         return {
           item_id: match ? match.item_id : dnIt.upc,
           upc: dnIt.upc,
@@ -4505,7 +4506,8 @@ function roLedgerAutoGenerateCN(invNumber, roNumber, sentQty, dnItems, dnId) {
           landing: unitPrice,
           qty: qty,
           reason: dnIt.reason,
-          amount: netAmount
+          amount: netAmount,
+          gst_pct: gstPct
         };
       }).filter(function(it){ return it.qty > 0; });
 
@@ -5349,19 +5351,38 @@ function cnBuildHTML(d) {
   // reason (i.e. this CN came from a DN, which lists a distinct reason per
   // SKU) -- manually-created CNs keep the original single-reason banner layout.
   var hasPerItemReason = d.items.some(function(it){ return it.reason; });
+  // GST% column only appears when the DN supplied it -- makes the tax math
+  // legible at a glance (Landing x Qty x (1+GST%) = Amount), matching how
+  // Blinkit's own DN presents the same figures. Manually-created CNs never
+  // set gst_pct, so their layout is unaffected.
+  var hasGstPct = d.items.some(function(it){ return it.gst_pct != null; });
+
+  // Column widths shift depending on which optional columns are present --
+  // sized so the table stays readable with up to two extra columns.
+  var wId, wDesc, wLanding, wReason, wGst, wAmt;
+  if (hasPerItemReason && hasGstPct) {
+    wId='10'; wDesc='22'; wLanding='9'; wReason='14'; wGst='7'; wAmt='21';
+  } else if (hasPerItemReason) {
+    wId='11'; wDesc='25'; wLanding='10'; wReason='16'; wGst='0'; wAmt='16';
+  } else if (hasGstPct) {
+    wId='11'; wDesc='27'; wLanding='10'; wReason='0'; wGst='8'; wAmt='24';
+  } else {
+    wId='12'; wDesc='33'; wLanding='12'; wReason='0'; wGst='0'; wAmt='18';
+  }
 
   var itemRows = d.items.map(function(it,i) {
     var rowTotal = it.amount != null ? it.amount : it.landing * it.qty;
     return '<tr>'
       +'<td class="tc" style="width:5%">'+(i+1)+'</td>'
-      +'<td style="width:'+(hasPerItemReason?'11':'12')+'%"><span class="mono">'+it.item_id+'</span></td>'
-      +'<td style="width:'+(hasPerItemReason?'25':'33')+'%"><strong>'+it.description.replace(/&/g,'&amp;')+'</strong>'
+      +'<td style="width:'+wId+'%"><span class="mono">'+it.item_id+'</span></td>'
+      +'<td style="width:'+wDesc+'%"><strong>'+it.description.replace(/&/g,'&amp;')+'</strong>'
         +'<div class="sub">UPC / EAN: <span class="mono">'+it.upc+'</span></div></td>'
       +'<td class="tc" style="width:8%"><span class="mono">'+it.hsn+'</span></td>'
-      +'<td class="tr" style="width:'+(hasPerItemReason?'10':'12')+'%">'+fmt(it.landing)+'</td>'
+      +'<td class="tr" style="width:'+wLanding+'%">'+fmt(it.landing)+'</td>'
       +'<td class="tc" style="width:7%">'+it.qty+'</td>'
-      + (hasPerItemReason ? '<td style="width:16%">'+String(it.reason||'\u2014').replace(/&/g,'&amp;')+'</td>' : '')
-      +'<td class="tr" style="width:'+(hasPerItemReason?'16':'18')+'%"><strong>'+fmt(rowTotal)+'</strong></td>'
+      + (hasPerItemReason ? '<td style="width:'+wReason+'%">'+String(it.reason||'\u2014').replace(/&/g,'&amp;')+'</td>' : '')
+      + (hasGstPct ? '<td class="tc" style="width:'+wGst+'%">'+(it.gst_pct != null ? Number(it.gst_pct).toFixed(2)+'%' : '\u2014')+'</td>' : '')
+      +'<td class="tr" style="width:'+wAmt+'%"><strong>'+fmt(rowTotal)+'</strong></td>'
     +'</tr>';
   }).join('');
 
@@ -5445,10 +5466,11 @@ function cnBuildHTML(d) {
       +'<th class="tc">#</th><th>Item ID</th><th>Description of Goods</th><th class="tc">HSN</th>'
       +'<th class="tr">Landing (Rs.)</th><th class="tc">Cancelled Qty</th>'
       + (hasPerItemReason ? '<th>Reason</th>' : '')
+      + (hasGstPct ? '<th class="tc">GST %</th>' : '')
       +'<th class="tr">Amount (Rs.)</th>'
     +'</tr></thead>'
     +'<tbody>'+itemRows+'</tbody>'
-    +'<tr class="tgrand"><td colspan="'+(hasPerItemReason?7:6)+'">CREDIT TOTAL</td><td class="tr">'+fmt(totalAmt)+'</td></tr>'
+    +'<tr class="tgrand"><td colspan="'+(6+(hasPerItemReason?1:0)+(hasGstPct?1:0))+'">CREDIT TOTAL</td><td class="tr">'+fmt(totalAmt)+'</td></tr>'
   +'</table>'
   +'<div class="words">Amount in Words: &nbsp;'+words+'</div>'
   +'<div class="bottom">'
