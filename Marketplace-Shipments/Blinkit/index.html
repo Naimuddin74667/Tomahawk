@@ -426,9 +426,9 @@
 </script>
 
 <div class="tabs">
-  <button id="tabBtnInvoice" class="tab-btn active" onclick="switchTab('invoice',this)">&#128196; Generate Invoice</button>
+  <button id="tabBtnRoLedger" class="tab-btn active" onclick="switchTab('roledger',this)">&#128197; RO Ledger</button>
+  <button id="tabBtnInvoice" class="tab-btn" onclick="switchTab('invoice',this)">&#128196; Generate Invoice</button>
   <button id="tabBtnBulk" class="tab-btn" onclick="switchTab('bulk',this)">Label Print</button>
-  <button id="tabBtnRoLedger" class="tab-btn" onclick="switchTab('roledger',this)">&#128197; RO Ledger</button>
   <button id="tabBtnLibrary" class="tab-btn" onclick="switchTab('library',this)">SKU Library</button>
 </div>
 
@@ -674,7 +674,7 @@
 </div>
 
 <!-- INVOICE FULL-WIDTH AREA (shown when Generate Invoice tab is active) -->
-<div id="invoiceArea" style="display:flex;flex:1;min-height:0;overflow:hidden">
+<div id="invoiceArea" style="display:none;flex:1;min-height:0;overflow:hidden">
 
   <!-- LEFT: Upload + Form -->
   <div style="width:42%;min-width:320px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden">
@@ -788,7 +788,7 @@
 
 
 <!-- RO LEDGER FULL-WIDTH AREA -->
-<div id="roLedgerArea" style="display:none;flex:1;height:0;min-height:0;overflow:hidden;flex-direction:column">
+<div id="roLedgerArea" style="display:flex;flex:1;height:0;min-height:0;overflow:hidden;flex-direction:column">
 
   <!-- Top bar -->
   <div style="flex-shrink:0;padding:.7rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.8rem;background:var(--surface)">
@@ -804,6 +804,11 @@
       <div class="ro-stat-value" id="roLedgerStatTotal">&mdash;</div>
       <div class="ro-stat-sub">all detected ROs</div>
     </div>
+    <div class="ro-stat-card" id="roCardActive" onclick="roLedgerSetCardFilter('active')" title="Filter: created but not yet fulfilled or cancelled">
+      <div class="ro-stat-label">Active Shipment</div>
+      <div class="ro-stat-value" id="roLedgerStatActive">&mdash;</div>
+      <div class="ro-stat-sub">not fulfilled or cancelled yet &middot; click to filter</div>
+    </div>
     <div class="ro-stat-card is-accent" id="roCardPending" onclick="roLedgerSetCardFilter('pending')" title="Filter: awaiting appointment">
       <div class="ro-stat-label">Awaiting Appointment</div>
       <div class="ro-stat-value accent" id="roLedgerStatPending">&mdash;</div>
@@ -814,21 +819,6 @@
       <div class="ro-stat-value" id="roLedgerStatResched">&mdash;</div>
       <div class="ro-stat-sub">appointment moved &gt;1&times; &middot; click to filter</div>
     </div>
-    <div class="ro-stat-card" id="roCardActive" onclick="roLedgerSetCardFilter('active')" title="Filter: created but not yet fulfilled or cancelled">
-      <div class="ro-stat-label">Active Shipment</div>
-      <div class="ro-stat-value" id="roLedgerStatActive">&mdash;</div>
-      <div class="ro-stat-sub">not fulfilled or cancelled yet &middot; click to filter</div>
-    </div>
-    <div class="ro-stat-card" id="roCardNoEmail" onclick="roLedgerSetCardFilter('noemail')" title="Filter: no RO-created email logged for this RO">
-      <div class="ro-stat-label">Missing RO Email</div>
-      <div class="ro-stat-value" id="roLedgerStatNoEmail">&mdash;</div>
-      <div class="ro-stat-sub">no ro_created email logged &middot; click to filter</div>
-    </div>
-    <div class="ro-stat-card" id="roCardShortNoDn" onclick="roLedgerSetCardFilter('shortnodn')" title="Filter: shortage received but no Discrepancy Note on file">
-      <div class="ro-stat-label">Shortage, No DN</div>
-      <div class="ro-stat-value" id="roLedgerStatShortNoDn">&mdash;</div>
-      <div class="ro-stat-sub">past appt, short-received, no DN &middot; click to filter</div>
-    </div>
   </div>
 
   <!-- Table (scrolls in its own area; header stays sticky at its top on
@@ -836,9 +826,9 @@
   <div class="ro-table-scroll">
     <table style="width:100%;height:100%;table-layout:fixed;border-collapse:collapse;font-size:13px">
       <colgroup>
-        <col style="width:9%"><col style="width:10%"><col style="width:8%"><col style="width:9%">
-        <col style="width:6%"><col style="width:6%"><col style="width:10%"><col style="width:9%">
-        <col style="width:6%"><col style="width:8%"><col style="width:9%"><col style="width:10%">
+        <col style="width:10%"><col style="width:11%"><col style="width:9%"><col style="width:10%">
+        <col style="width:6%"><col style="width:6%"><col style="width:11%"><col style="width:9%">
+        <col style="width:6%"><col style="width:11%"><col style="width:11%">
       </colgroup>
       <thead style="position:sticky;top:0;z-index:2;background:var(--surface)">
         <tr>
@@ -851,13 +841,12 @@
           <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Received Qty</th>
           <th style="padding:.9rem 1rem;text-align:right;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Credit Note</th>
           <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Cr. Note Qty</th>
-          <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Gatepass</th>
           <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Appointment (latest)</th>
           <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Status</th>
         </tr>
       </thead>
       <tbody id="roLedgerTbody">
-        <tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+        <tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -891,14 +880,11 @@
     </div>
     <div id="roDetailItems" style="font-size:12px;color:var(--text)"></div>
 
-    <div style="margin-top:1.2rem;display:flex;align-items:center;justify-content:space-between">
-      <div style="display:flex;gap:.5rem">
-        <button class="btn btn-secondary btn-sm" id="roDetailPickupBtn" style="width:auto" onclick="roLedgerTogglePickedUp()">&#128666; Mark as Picked Up</button>
-        <button class="btn btn-secondary btn-sm" id="roDetailCancelBtn" style="width:auto;color:var(--rd);border-color:var(--rd)" onclick="roLedgerDeleteEntry()">&#128683; Mark as Cancelled</button>
-        <button class="btn btn-secondary btn-sm" id="roDetailDnBtn" style="width:auto" onclick="roLedgerDnUploadClick()">&#128196; Upload Discrepancy Note</button>
-        <input type="file" id="roDetailDnFile" accept=".pdf" style="display:none" onchange="roLedgerDnFileSelected(this)">
-      </div>
-      <a id="roDetailGmailLink" href="#" target="_blank" style="font-size:11px;color:var(--muted);text-decoration:underline">Open original email in Gmail &#8599;</a>
+    <div style="margin-top:1.2rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+      <button class="btn btn-secondary btn-sm" id="roDetailPickupBtn" style="width:auto" onclick="roLedgerTogglePickedUp()">&#128666; Mark as Picked Up</button>
+      <button class="btn btn-secondary btn-sm" id="roDetailCancelBtn" style="width:auto;color:var(--rd);border-color:var(--rd)" onclick="roLedgerDeleteEntry()">&#128683; Mark as Cancelled</button>
+      <button class="btn btn-secondary btn-sm" id="roDetailDnBtn" style="width:auto" onclick="roLedgerDnUploadClick()">&#128196; Upload Discrepancy Note</button>
+      <input type="file" id="roDetailDnFile" accept=".pdf" style="display:none" onchange="roLedgerDnFileSelected(this)">
     </div>
   </div>
 </div>
@@ -1266,6 +1252,12 @@ function zoom(delta) {
   }
 }
 zoom(0);
+
+// RO Ledger is now the default/first tab (see tab bar + #roLedgerArea's
+// default display above) — switchTab('roledger', ...) normally triggers
+// this load, but since the tab is shown by default without a click,
+// kick it off here instead so data's already there when the page paints.
+roLedgerLoad();
 
 // ── TOAST ──
 function toast(msg, type, dur) {
@@ -3626,7 +3618,7 @@ var _roLedgerGroups = [];  // grouped by ro_number
 var _roDetailCurrent = null; // the group currently open in the detail modal
 var _roLedgerPage = 1;
 var _roLedgerPageSize = 10;
-var _roLedgerCardFilter = 'all'; // 'all' | 'pending' | 'resched' | 'active' | 'noemail' | 'shortnodn' — driven by clicking the stat cards
+var _roLedgerCardFilter = 'all'; // 'all' | 'pending' | 'resched' | 'active' — driven by clicking the stat cards
 
 // Clicking a stat card filters the table to that slice; clicking the
 // same card again (or the Total card) resets to showing everything.
@@ -3676,7 +3668,7 @@ var _roLedgerDnMap = {}; // ro_number -> array of Discrepancy Note records (item
 
 function roLedgerLoad() {
   document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+    '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
 
   Promise.all([
     fetch(WORKER_URL + '?action=blinkitListRoLog').then(function(r){ return r.json(); }),
@@ -3728,7 +3720,7 @@ function roLedgerLoad() {
     })
     .catch(function(err){
       document.getElementById('roLedgerTbody').innerHTML =
-        '<tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
+        '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--rd);font-size:11px">Failed to load: '+err.message+'</td></tr>';
     });
 }
 
@@ -3939,35 +3931,6 @@ function roLedgerIsActiveShipment(g) {
   return !roLedgerIsClosed(g);
 }
 
-// "Missing RO Email" — this RO has no ro_created row at all (Gmail never
-// caught it, or it predates the watcher — e.g. RO 43886110058068, which
-// only ever had its appointment email logged). Without it, item data has
-// to fall back to the invoice's own stored items (see roLedgerRenderItems)
-// and "+ Generate Invoice" from the RO email has nothing to work from —
-// worth a standing flag rather than only noticing it RO-by-RO in the modal.
-function roLedgerMissingRoEmail(g) {
-  return !g.created;
-}
-
-// "Shortage, No DN" — the revenue-risk case: the appointment has passed,
-// Received Qty has actually been entered and is less than what was sent
-// (a real, on-the-books shortfall), but no Discrepancy Note was ever
-// uploaded for this RO to back it with a Credit Note. Without the DN,
-// there's a shortage sitting on the books with nothing behind it — either
-// the DN still needs uploading, or Received Qty was entered without
-// checking Blinkit actually issued one.
-function roLedgerShortageNoDn(g) {
-  var inv = _roLedgerInvMap[g.ro_number];
-  if (!inv) return false;
-  if (!roLedgerApptHasPassed(g)) return false;
-  var recvQty = (inv.received_qty === null || inv.received_qty === undefined || inv.received_qty === '') ? null : parseInt(inv.received_qty);
-  if (recvQty === null) return false;
-  var sentQty = inv.total_qty || 0;
-  if (recvQty >= sentQty) return false;
-  var dns = _roLedgerDnMap[g.ro_number] || [];
-  return dns.length === 0;
-}
-
 function roLedgerRender() {
   var q = (document.getElementById('roLedgerSearch').value || '').trim().toLowerCase();
   var groups = _roLedgerGroups.filter(function(g){
@@ -3984,10 +3947,6 @@ function roLedgerRender() {
     groups = groups.filter(function(g){ return g.stoRows.length > 1; });
   } else if (_roLedgerCardFilter === 'active') {
     groups = groups.filter(roLedgerIsActiveShipment);
-  } else if (_roLedgerCardFilter === 'noemail') {
-    groups = groups.filter(roLedgerMissingRoEmail);
-  } else if (_roLedgerCardFilter === 'shortnodn') {
-    groups = groups.filter(roLedgerShortageNoDn);
   }
 
   document.getElementById('roLedgerStatTotal').textContent = _roLedgerGroups.length;
@@ -3997,27 +3956,19 @@ function roLedgerRender() {
     _roLedgerGroups.filter(function(g){ return g.stoRows.length > 1; }).length;
   document.getElementById('roLedgerStatActive').textContent =
     _roLedgerGroups.filter(roLedgerIsActiveShipment).length;
-  document.getElementById('roLedgerStatNoEmail').textContent =
-    _roLedgerGroups.filter(roLedgerMissingRoEmail).length;
-  document.getElementById('roLedgerStatShortNoDn').textContent =
-    _roLedgerGroups.filter(roLedgerShortageNoDn).length;
 
   var cardTotal = document.getElementById('roCardTotal');
   var cardPending = document.getElementById('roCardPending');
   var cardResched = document.getElementById('roCardResched');
   var cardActive = document.getElementById('roCardActive');
-  var cardNoEmail = document.getElementById('roCardNoEmail');
-  var cardShortNoDn = document.getElementById('roCardShortNoDn');
   if (cardTotal) cardTotal.classList.toggle('is-active-view', _roLedgerCardFilter === 'all');
   if (cardPending) cardPending.classList.toggle('is-active-view', _roLedgerCardFilter === 'pending');
   if (cardResched) cardResched.classList.toggle('is-active-view', _roLedgerCardFilter === 'resched');
   if (cardActive) cardActive.classList.toggle('is-active-view', _roLedgerCardFilter === 'active');
-  if (cardNoEmail) cardNoEmail.classList.toggle('is-active-view', _roLedgerCardFilter === 'noemail');
-  if (cardShortNoDn) cardShortNoDn.classList.toggle('is-active-view', _roLedgerCardFilter === 'shortnodn');
 
   if (!groups.length) {
     document.getElementById('roLedgerTbody').innerHTML =
-      '<tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
+      '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No ROs detected yet \u2014 the Worker checks Gmail every 15 minutes.</td></tr>';
     document.getElementById('roLedgerPagerControls').style.display = 'none';
     return;
   }
@@ -4041,13 +3992,6 @@ function roLedgerRender() {
     var roEsc = esc(g.ro_number).replace(/'/g, "\\'");
 
     var inv = _roLedgerInvMap[g.ro_number]; // full invoice record, or undefined if none generated yet
-
-    // Gatepass — presence of a Blinkit-addressed gatepass for this RO is
-    // the "Ready to Dispatch" signal. Shows the actual gatepass number.
-    var gatepass = _roLedgerGatepassMap[g.ro_number];
-    var gpCell = gatepass
-      ? '<span style="color:var(--accent);font-weight:700;font-family:\'DM Mono\',monospace;font-size:11px" title="Status: '+esc(gatepass.status||'')+'">'+esc(gatepass.gatepass_code)+'</span>'
-      : '<span style="color:var(--muted)">\u2014</span>';
 
     // SKU count / Qty: prefer the RO email's own parsed Excel data: if
     // that's not available (no email, or not parsed yet), fall back to
@@ -4102,7 +4046,7 @@ function roLedgerRender() {
       } else {
         var diff = parseInt(inv.received_qty) - sentQty;
         recvCell = '<span style="color:#ffb74d;font-size:11px;font-weight:700">'+inv.received_qty+'</span>'
-          + ' <span style="color:#ffb74d;font-size:10px;font-family:\'DM Mono\',monospace">&Delta;'+(diff>0?'+':'')+diff+'</span>';
+          + ' <span style="color:#ffb74d;font-size:10px;font-family:\'DM Mono\',monospace">(&Delta;'+(diff>0?'+':'')+diff+')</span>';
       }
 
       var cnBadges = cns.map(function(cnRec){
@@ -4133,7 +4077,7 @@ function roLedgerRender() {
     var statusBadge = '<span style="display:inline-block;padding:3px 9px;border-radius:11px;font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;background:'+statusInfo.bg+';color:'+statusInfo.fg+'">'+statusInfo.label+'</span>';
 
     return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="roLedgerOpenDetail(\''+roEsc+'\')">'
-      + '<td style="padding:.9rem 1rem;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+invNoCell+'</td>'
+      + '<td style="padding:.9rem 1rem;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span title="Download Label" style="cursor:pointer;color:var(--muted);margin-right:6px" onclick="event.stopPropagation();roLedgerDownloadLabel(\''+roEsc+'\')">&#127991;&#65039;</span>'+invNoCell+'</td>'
       + '<td style="padding:.9rem 1rem;font-family:\'DM Mono\',monospace;white-space:nowrap">'+esc(g.ro_number)
         + ' <span title="Copy RO Number" style="cursor:pointer;color:var(--muted)" onclick="event.stopPropagation();roLedgerCopyRoNumber(\''+roEsc+'\',this)">&#128203;</span></td>'
       + '<td style="padding:.9rem 1rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(createdDisplay||'\u2014')+'</td>'
@@ -4143,7 +4087,6 @@ function roLedgerRender() {
       + '<td style="padding:.9rem 1rem;text-align:center">'+recvCell+'</td>'
       + '<td style="padding:.9rem 1rem;text-align:right;white-space:nowrap">'+cnCell+'</td>'
       + '<td style="padding:.9rem 1rem;text-align:center">'+cnQtyCell+'</td>'
-      + '<td style="padding:.9rem 1rem;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+gpCell+'</td>'
       + '<td style="padding:.9rem 1rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+apptText+'</td>'
       + '<td style="padding:.9rem 1rem;text-align:center;white-space:nowrap">'+statusBadge+'</td>'
       + '</tr>';
@@ -4158,7 +4101,7 @@ function roLedgerRender() {
 function roLedgerFillerRows(count) {
   if (count <= 0) return '';
   var cell = '<td style="padding:.9rem 1rem">&nbsp;</td>';
-  var row = '<tr aria-hidden="true" style="border-bottom:1px solid var(--border)">' + cell.repeat(12) + '</tr>';
+  var row = '<tr aria-hidden="true" style="border-bottom:1px solid var(--border)">' + cell.repeat(11) + '</tr>';
   return row.repeat(count);
 }
 
@@ -4236,6 +4179,68 @@ function roLedgerGenerateInvoice(roNumber) {
     .catch(function(err){ toast('Could not load RO PDF: ' + err.message, 'err'); });
 }
 
+// "Download Label" — shortcut left of the Invoice No. cell so labels can
+// be printed for an RO straight from the ledger, without visiting Label
+// Print and re-uploading the RO PDF by hand. Two modes, decided by
+// whether an invoice already exists for this RO:
+//   - No invoice yet -> items aren't finalized, so this only pre-fills
+//     Label Print from the RO's own items (same matching invGenerateLabels
+//     already does from the Generate Invoice tab) and switches there for
+//     review before printing.
+//   - Invoice already exists -> items are final. If every SKU cleanly
+//     matches the SKU Library (status 'saved'), skips the tab and
+//     downloads the label PDF immediately. If anything's unmatched, falls
+//     back to opening Label Print instead of silently shipping a PDF
+//     that's missing labels for those SKUs.
+function roLedgerDownloadLabel(roNumber) {
+  var g = _roLedgerGroups.filter(function(x){ return x.ro_number === roNumber; })[0];
+  if (!g) return;
+
+  function toSkuQtyMap(items) {
+    var map = {};
+    items.forEach(function(it) {
+      var skuId = it.item_id || it.upc;
+      if (!skuId) return;
+      map[skuId] = { skuId: skuId, qty: it.qty || 0, upc: it.upc || '', mrp: it.mrp || '', desc: it.description || it.name || '' };
+    });
+    return map;
+  }
+
+  function goReview(skuQtyMap, msg) {
+    buildBulkRows(skuQtyMap);
+    switchTab('bulk', document.getElementById('tabBtnBulk'));
+    toast(msg, 'info');
+  }
+
+  var inv = _roLedgerInvMap[roNumber];
+
+  if (!inv) {
+    var roItems = [];
+    if (g.created && g.created.items_json) {
+      try { roItems = JSON.parse(g.created.items_json) || []; } catch(e) {}
+    }
+    if (!roItems.length) { toast('No item data for this RO yet \u2014 generate the invoice or parse the RO Excel first', 'err'); return; }
+    goReview(toSkuQtyMap(roItems), 'Labels matched from RO \u2014 review in Label Print.');
+    return;
+  }
+
+  toast('Preparing labels\u2026', 'info');
+  _cnResolveInvoiceItemsAsync(inv.inv_number).then(function(res) {
+    var items = res.items || [];
+    if (!items.length) { toast('No item data found for invoice ' + inv.inv_number, 'err'); return; }
+    var skuQtyMap = toSkuQtyMap(items);
+    buildBulkRows(skuQtyMap);
+    var allMatched = _bulkRows.length > 0 && _bulkRows.every(function(r){ return r.status === 'saved'; });
+    if (!allMatched) {
+      switchTab('bulk', document.getElementById('tabBtnBulk'));
+      toast('Some SKUs need a Library match \u2014 review in Label Print', 'info');
+      return;
+    }
+    _bulkCN = roNumber; // names the downloaded file after the RO (invoice numbers contain "/", unsafe in a filename)
+    generateBulkPDF();
+  });
+}
+
 function roLedgerOpenDetail(roNumber) {
   var g = _roLedgerGroups.filter(function(x){ return x.ro_number === roNumber; })[0];
   if (!g) return;
@@ -4293,14 +4298,19 @@ function roLedgerOpenDetail(roNumber) {
 
   roLedgerRenderItems();
 
-  var linkRow = g.created || g.stoRows[g.stoRows.length - 1];
-  document.getElementById('roDetailGmailLink').href = linkRow ? (linkRow.gmail_link || '#') : '#';
-
   // "Mark as Cancelled" is only for ROs that got created/booked by mistake
   // before anything physically moved -- once a gatepass exists, goods are
   // on their way out the door, so cancelling from here no longer applies
   // (use a Credit Note / DN for anything that goes wrong after that point).
-  document.getElementById('roDetailCancelBtn').style.display = _roLedgerGatepassMap[g.ro_number] ? 'none' : '';
+  // "Mark as Cancelled" is only for an RO that's still sitting at pure
+  // "Created" -- nothing booked, nothing shipped. The moment it moves to
+  // Ready to Dispatch (gatepass) or anything past that (in transit, OFD,
+  // received, rejected via Credit Note, etc.), cancelling from here no
+  // longer applies -- checked via the RO's own unified status key rather
+  // than the gatepass map alone, since some ROs reach a clearly-past-RTD
+  // status (e.g. REJECTED, already fully credit-noted) without ever
+  // having a matching Gatepass sheet row to key off of.
+  document.getElementById('roDetailCancelBtn').style.display = (roLedgerUnifiedStatus(g).key === 'created') ? '' : 'none';
 
   // "Mark as Picked Up" only makes sense in the window between Ready to
   // Dispatch (gatepass exists) and Out for Delivery -- before RTD there's
