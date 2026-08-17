@@ -885,7 +885,7 @@
     <div style="margin-top:1.2rem;display:flex;align-items:center;justify-content:space-between">
       <div style="display:flex;gap:.5rem">
         <button class="btn btn-secondary btn-sm" id="roDetailPickupBtn" style="width:auto" onclick="roLedgerTogglePickedUp()">&#128666; Mark as Picked Up</button>
-        <button class="btn btn-secondary btn-sm" style="width:auto;color:var(--rd);border-color:var(--rd)" onclick="roLedgerDeleteEntry()">&#128683; Mark as Cancelled</button>
+        <button class="btn btn-secondary btn-sm" id="roDetailCancelBtn" style="width:auto;color:var(--rd);border-color:var(--rd)" onclick="roLedgerDeleteEntry()">&#128683; Mark as Cancelled</button>
         <button class="btn btn-secondary btn-sm" id="roDetailDnBtn" style="width:auto" onclick="roLedgerDnUploadClick()">&#128196; Upload Discrepancy Note</button>
         <input type="file" id="roDetailDnFile" accept=".pdf" style="display:none" onchange="roLedgerDnFileSelected(this)">
       </div>
@@ -4276,6 +4276,12 @@ function roLedgerOpenDetail(roNumber) {
 
   var linkRow = g.created || g.stoRows[g.stoRows.length - 1];
   document.getElementById('roDetailGmailLink').href = linkRow ? (linkRow.gmail_link || '#') : '#';
+
+  // "Mark as Cancelled" is only for ROs that got created/booked by mistake
+  // before anything physically moved -- once a gatepass exists, goods are
+  // on their way out the door, so cancelling from here no longer applies
+  // (use a Credit Note / DN for anything that goes wrong after that point).
+  document.getElementById('roDetailCancelBtn').style.display = _roLedgerGatepassMap[g.ro_number] ? 'none' : '';
 
   // "Mark as Picked Up" only makes sense in the window between Ready to
   // Dispatch (gatepass exists) and Out for Delivery -- before RTD there's
