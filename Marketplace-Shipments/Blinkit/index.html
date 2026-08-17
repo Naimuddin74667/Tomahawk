@@ -4368,7 +4368,12 @@ function roLedgerParseDN(text, fileName) {
   console.log('[Blinkit DN] combined text (first 800):', combined.substring(0, 800));
 
   var roMatch = combined.match(/RO Number\s*:?\s*(\d{6,15})/);
-  var invMatch = combined.match(/Original\s*Invoice\s*ID\s*:?\s*([A-Z0-9\/]+)/i);
+  // Naive join(' ') between every PDF text run can insert a fake space
+  // between visually-adjacent tokens (observed: "ITH" and "/2526/019" come
+  // back as separate runs) -- allow whitespace around the slashes and strip
+  // it back out of the captured group so the invoice number comes out clean.
+  var invMatchRaw = combined.match(/Original\s*Invoice\s*ID\s*:?\s*([A-Z0-9]+(?:\s*\/\s*[A-Z0-9]+)*)/i);
+  var invMatch = invMatchRaw ? [invMatchRaw[0], invMatchRaw[1].replace(/\s+/g, '')] : null;
   var dateMatch = combined.match(/\bDate\s*:?\s*(\d{1,2}-[A-Za-z]{3}-\d{4})/);
 
   // DN's own ID (e.g. D438861DN2630382) — try the filename first (Blinkit
@@ -4412,27 +4417,126 @@ function roLedgerParseDN(text, fileName) {
   var summary = items.map(function(it) { return '\u2022 ' + it.name + ' \u2014 short ' + it.qty + ' (' + it.reason + ')'; }).join('\n');
   if (!confirm('Discrepancy Note ' + (dnId || fileName) + '\n\n' + summary + '\n\nTotal short: ' + totalShort + ' units.\n\nSave this and update Received Qty accordingly?')) return;
 
+  var dnIdFinal = dnId || fileName;
+  // Prefer the RO ledger's own invoice mapping (set when the invoice was
+  // generated in this app -- the authoritative source) over the value
+  // scraped from the DN's PDF text; only fall back to the parsed one if this
+  // RO isn't in the ledger yet (e.g. invoice created on another device).
+  var invNumberFinal = ((_roLedgerInvMap[g.ro_number]||{}).inv_number) || (invMatch ? invMatch[1] : '');
+  var totalNetAmount = items.reduce(function(s, it) { return s + (parseFloat(it.net_amount) || 0); }, 0);
+
   fetch(WORKER_URL + '?action=blinkitSaveDN', {
     method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({
-      dn_id: dnId || fileName, ro_number: roMatch ? roMatch[1] : g.ro_number,
-      inv_number: invMatch ? invMatch[1] : ((_roLedgerInvMap[g.ro_number]||{}).inv_number || ''),
-      dn_date: dateMatch ? dateMatch[1] : '', items: items
+      dn_id: dnIdFinal, ro_number: roMatch ? roMatch[1] : g.ro_number,
+      inv_number: invNumberFinal, dn_date: dateMatch ? dateMatch[1] : '',
+      items_json: JSON.stringify(items), total_qty: totalShort, total_amount: totalNetAmount
     })
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (!data.ok) throw new Error(data.error || 'Save failed');
-    toast('Discrepancy Note saved \u2014 ' + items.length + ' line(s)', 'ok');
+
+    if (data.duplicate) {
+      toast('This Discrepancy Note was already processed' + (data.cn_number ? ' \u2014 Credit Note ' + data.cn_number + ' exists' : ''), 'info');
+      closeRoDetailModal();
+      roLedgerLoad();
+      return;
+    }
+
+    toast('Discrepancy Note saved \u2014 ' + items.length + ' line(s). Generating Credit Note\u2026', 'ok');
 
     var inv = _roLedgerInvMap[g.ro_number];
     var sentQty = inv ? (inv.total_qty || 0) : 0;
-    var invNumber = inv ? inv.inv_number : null;
+    var invNumber = inv ? inv.inv_number : invNumberFinal;
+
     if (invNumber && sentQty > 0) {
       var recvQty = Math.max(0, sentQty - totalShort);
       ledgerSaveReceived(invNumber, recvQty, sentQty);
     }
+
     closeRoDetailModal();
-    roLedgerLoad();
+
+    if (!invNumber) {
+      toast('DN saved, but no invoice number to attach a Credit Note to \u2014 generate it manually', 'err');
+      roLedgerLoad();
+      return;
+    }
+
+    roLedgerAutoGenerateCN(invNumber, g.ro_number, sentQty, items, dnIdFinal);
   }).catch(function(err) { toast('DN save failed: ' + err.message, 'err'); });
+}
+
+// Called right after a Discrepancy Note is saved \u2014 builds and saves the
+// Credit Note automatically (no modal, no click) by matching each DN line
+// (by UPC) to this invoice's own item list for HSN/MRP/description, then
+// using the DN's own qty/reason/net-amount per line so the CN always
+// reconciles exactly with what Blinkit's DN says it will settle.
+function roLedgerAutoGenerateCN(invNumber, roNumber, sentQty, dnItems, dnId) {
+  // Guard: Credit Note is one-per-invoice \u2014 if one already exists, don't
+  // silently create a second. Surface it so the DN can be reconciled by hand.
+  var checkPromise = IS_LIVE
+    ? fetch(WORKER_URL + '?action=blinkitCheckCN&inv=' + encodeURIComponent(invNumber)).then(function(r){ return r.json(); }).catch(function(){ return {}; })
+    : Promise.resolve({ cn_number: (_cnByInv[invNumber]||[])[0] ? _cnByInv[invNumber][0].cn_number : null });
+
+  checkPromise.then(function(d) {
+    if (d.cn_number) {
+      toast('Credit Note ' + d.cn_number + ' already exists for invoice ' + invNumber + ' \u2014 DN saved but not auto-applied, reconcile manually', 'err');
+      roLedgerLoad();
+      return;
+    }
+
+    _cnResolveInvoiceItemsAsync(invNumber).then(function(res) {
+      var invItems = res.items || [];
+      var party = res.party;
+      var byUpc = {};
+      invItems.forEach(function(it){ if (it.upc) byUpc[it.upc] = it; });
+
+      var cancelledItems = dnItems.map(function(dnIt) {
+        var match = byUpc[dnIt.upc];
+        var qty = dnIt.qty;
+        if (match && qty > match.qty) qty = match.qty; // never cancel more than was actually sent
+        var netAmount = parseFloat(dnIt.net_amount) || 0;
+        var unitPrice = parseFloat(dnIt.unit_price) || (qty ? netAmount / qty : 0);
+        return {
+          item_id: match ? match.item_id : dnIt.upc,
+          upc: dnIt.upc,
+          hsn: match ? match.hsn : '',
+          description: match ? match.description : dnIt.name,
+          mrp: match ? match.mrp : '',
+          landing: unitPrice,
+          qty: qty,
+          reason: dnIt.reason,
+          amount: netAmount
+        };
+      }).filter(function(it){ return it.qty > 0; });
+
+      if (!cancelledItems.length) {
+        toast('DN saved, but no matching invoice items to build a Credit Note from \u2014 generate it manually', 'err');
+        roLedgerLoad();
+        return;
+      }
+
+      var unmatched = dnItems.filter(function(dnIt){ return !byUpc[dnIt.upc]; });
+      if (unmatched.length) {
+        console.warn('[Blinkit DN\u2192CN] ' + unmatched.length + ' DN line(s) had no matching invoice item by UPC \u2014 used DN values as-is:', unmatched);
+      }
+
+      // Reason shown per-line on the CN PDF; the top-level `reason` column in
+      // blinkit_credit_notes gets a short summary of the distinct DN reasons.
+      var reasonSummary = Array.from(new Set(dnItems.map(function(it){ return it.reason; }))).join('; ') || ('Discrepancy Note ' + dnId);
+
+      _cnPersistFromDN({
+        inv_number: invNumber, ro_number: roNumber, sentQty: sentQty, party: party,
+        reason: reasonSummary, items: cancelledItems, dn_id: dnId
+      }).then(function(result) {
+        toast('Credit Note ' + result.cnNumber + ' auto-generated from DN', 'ok');
+        _docRenderPDF(result.cnNumber, result.html, 'CreditNote');
+        roLedgerLoad();
+      }).catch(function(err) {
+        toast('Credit Note generation failed: ' + err.message, 'err');
+        roLedgerLoad();
+      });
+    });
+  });
 }
 
 // Looks up an item's SKU Name from the SKU Library tab's model data —
@@ -4806,6 +4910,108 @@ function _docRenderPDF(docNum, html, prefix) {
 // ═══════════════════════════════════════════════════════════════
 var _cnCurrentInv = null; // { inv_number, ro_number, sentQty, items }
 
+// Promise-wrapped version of the tiered invoice-item lookup openCnModal uses
+// below (local snapshot -> D1 items_json -> stored invoice HTML fallback) --
+// used by the automatic DN -> Credit Note pipeline, which has no modal UI to
+// thread callbacks through.
+function _cnResolveInvoiceItemsAsync(invNumber) {
+  return new Promise(function(resolve) {
+    var snapshot = null;
+    try { snapshot = JSON.parse(localStorage.getItem('blinkit_inv_items_' + invNumber) || 'null'); } catch(e) {}
+    if (snapshot) {
+      var items = Array.isArray(snapshot) ? snapshot : (snapshot.items || []);
+      if (items.length) {
+        var party = Array.isArray(snapshot) ? null : { warehouse: snapshot.warehouse, addr1: snapshot.addr1, addr2: snapshot.addr2, gstin: snapshot.gstin };
+        if (party) { resolve({ items: items, party: party }); return; }
+        _cnResolvePartyAsync(invNumber, items).then(resolve);
+        return;
+      }
+    }
+    if (!IS_LIVE) { _cnLoadItemsFromHtmlFallbackAsync(invNumber).then(resolve); return; }
+    fetch(WORKER_URL + '?action=blinkitGetInvItems&inv=' + encodeURIComponent(invNumber))
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        var items = [];
+        try { items = JSON.parse(d.items_json || '[]'); } catch(e) { items = []; }
+        if (items.length) { _cnResolvePartyAsync(invNumber, items).then(resolve); return; }
+        _cnLoadItemsFromHtmlFallbackAsync(invNumber).then(resolve);
+      })
+      .catch(function(){ _cnLoadItemsFromHtmlFallbackAsync(invNumber).then(resolve); });
+  });
+}
+
+function _cnResolvePartyAsync(invNumber, items) {
+  return new Promise(function(resolve) {
+    var cachedHtml = null;
+    try { cachedHtml = localStorage.getItem('blinkit_inv_html_' + invNumber); } catch(e) {}
+    if (cachedHtml) { resolve({ items: items, party: _parsePartyFromInvoiceHtml(cachedHtml) }); return; }
+    if (!IS_LIVE) { resolve({ items: items, party: null }); return; }
+    fetch(WORKER_URL + '?action=blinkitGetInvHtml&inv=' + encodeURIComponent(invNumber))
+      .then(function(r){ return r.json(); })
+      .then(function(d){ resolve({ items: items, party: _parsePartyFromInvoiceHtml(d.inv_html || '') }); })
+      .catch(function(){ resolve({ items: items, party: null }); });
+  });
+}
+
+function _cnLoadItemsFromHtmlFallbackAsync(invNumber) {
+  return new Promise(function(resolve) {
+    var cachedHtml = null;
+    try { cachedHtml = localStorage.getItem('blinkit_inv_html_' + invNumber); } catch(e) {}
+    if (cachedHtml) { resolve({ items: _parseItemsFromInvoiceHtml(cachedHtml), party: _parsePartyFromInvoiceHtml(cachedHtml) }); return; }
+    fetch(WORKER_URL + '?action=blinkitGetInvHtml&inv=' + encodeURIComponent(invNumber))
+      .then(function(r){ return r.json(); })
+      .then(function(d){ resolve({ items: _parseItemsFromInvoiceHtml(d.inv_html || ''), party: _parsePartyFromInvoiceHtml(d.inv_html || '') }); })
+      .catch(function(){ resolve({ items: [], party: null }); });
+  });
+}
+
+// Persists + renders a Credit Note the same way the manual "Generate Credit
+// Note" flow does (_cnGenerateProceed below), but driven entirely by data
+// already in hand -- no modal, no button -- so the DN auto-pipeline can call
+// it directly. ctx: { inv_number, ro_number, sentQty, party, reason, items, dn_id }
+//   items: [{ item_id, upc, hsn, description, mrp, landing, qty, reason, amount }]
+//   `amount` (tax-inclusive, straight from the DN) drives the CN total when
+//   present; falls back to qty*landing for any item missing it.
+function _cnPersistFromDN(ctx) {
+  var cnNumber = cnDeriveNumber(ctx.inv_number);
+  var totalQty = ctx.items.reduce(function(s,it){ return s + it.qty; }, 0);
+  var totalAmt = ctx.items.reduce(function(s,it){
+    return s + (it.amount != null ? it.amount : it.qty * (it.landing || 0));
+  }, 0);
+  var sentQty = ctx.sentQty || 0;
+  var isFullCancel = sentQty > 0 && totalQty >= sentQty;
+  var cnData = {
+    cn_number: cnNumber, inv_number: ctx.inv_number, ro_number: ctx.ro_number,
+    reason: ctx.reason, items: ctx.items, party: ctx.party || { warehouse:'', addr1:'', addr2:'', gstin:'' }
+  };
+  var html = cnBuildHTML(cnData);
+  try { localStorage.setItem('blinkit_cn_html_' + cnNumber, html); } catch(e) {}
+
+  var savePromise = Promise.resolve();
+  if (IS_LIVE) {
+    savePromise = fetch(WORKER_URL + '?action=blinkitSaveCreditNote', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        cn_number: cnNumber, inv_number: ctx.inv_number, ro_number: ctx.ro_number,
+        reason: ctx.reason, items_json: JSON.stringify(ctx.items), total_qty: totalQty, amount: totalAmt,
+        cn_html: html, sent_qty: sentQty, dn_id: ctx.dn_id || ''
+      })
+    }).catch(function(){});
+  }
+
+  if (!_cnByInv[ctx.inv_number]) _cnByInv[ctx.inv_number] = [];
+  _cnByInv[ctx.inv_number].push({
+    cn_number: cnNumber, inv_number: ctx.inv_number, ro_number: ctx.ro_number,
+    reason: ctx.reason, total_qty: totalQty, amount: totalAmt, created_at: new Date().toISOString()
+  });
+  if (isFullCancel) {
+    var roRec = _roLedgerInvMap && Object.values(_roLedgerInvMap).filter(function(r){ return r && r.inv_number === ctx.inv_number; })[0];
+    if (roRec) roRec.received_qty = 0;
+  }
+
+  return savePromise.then(function(){ return { cnNumber: cnNumber, html: html, totalQty: totalQty, totalAmt: totalAmt }; });
+}
+
 function openCnModal(invNumber, roNumber, sentQty) {
   if (!invNumber) { toast('No invoice to reference', 'err'); return; }
   // Credit Note is generated only once per invoice — block if one already exists
@@ -5134,20 +5340,28 @@ function _cnGenerateProceed(reason, cancelledItems, btn) {
 function cnBuildHTML(d) {
   var fmt = function(n){ return Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); };
   var totalQty = d.items.reduce(function(s,it){ return s+it.qty; },0);
-  var totalAmt = d.items.reduce(function(s,it){ return s+it.qty*it.landing; },0);
+  // `amount` (tax-inclusive) comes straight from a Discrepancy Note when this CN
+  // was auto-generated from one; manually-created CNs never set it, so those
+  // fall back to the original qty*landing calc unchanged.
+  var totalAmt = d.items.reduce(function(s,it){ return s+(it.amount != null ? it.amount : it.qty*it.landing); },0);
   var words = invAmountWords(totalAmt);
+  // Per-item Reason column only appears when at least one line carries its own
+  // reason (i.e. this CN came from a DN, which lists a distinct reason per
+  // SKU) -- manually-created CNs keep the original single-reason banner layout.
+  var hasPerItemReason = d.items.some(function(it){ return it.reason; });
 
   var itemRows = d.items.map(function(it,i) {
-    var rowTotal = it.landing * it.qty;
+    var rowTotal = it.amount != null ? it.amount : it.landing * it.qty;
     return '<tr>'
       +'<td class="tc" style="width:5%">'+(i+1)+'</td>'
-      +'<td style="width:12%"><span class="mono">'+it.item_id+'</span></td>'
-      +'<td style="width:33%"><strong>'+it.description.replace(/&/g,'&amp;')+'</strong>'
+      +'<td style="width:'+(hasPerItemReason?'11':'12')+'%"><span class="mono">'+it.item_id+'</span></td>'
+      +'<td style="width:'+(hasPerItemReason?'25':'33')+'%"><strong>'+it.description.replace(/&/g,'&amp;')+'</strong>'
         +'<div class="sub">UPC / EAN: <span class="mono">'+it.upc+'</span></div></td>'
-      +'<td class="tc" style="width:10%"><span class="mono">'+it.hsn+'</span></td>'
-      +'<td class="tr" style="width:12%">'+fmt(it.landing)+'</td>'
-      +'<td class="tc" style="width:10%">'+it.qty+'</td>'
-      +'<td class="tr" style="width:18%"><strong>'+fmt(rowTotal)+'</strong></td>'
+      +'<td class="tc" style="width:8%"><span class="mono">'+it.hsn+'</span></td>'
+      +'<td class="tr" style="width:'+(hasPerItemReason?'10':'12')+'%">'+fmt(it.landing)+'</td>'
+      +'<td class="tc" style="width:7%">'+it.qty+'</td>'
+      + (hasPerItemReason ? '<td style="width:16%">'+String(it.reason||'\u2014').replace(/&/g,'&amp;')+'</td>' : '')
+      +'<td class="tr" style="width:'+(hasPerItemReason?'16':'18')+'%"><strong>'+fmt(rowTotal)+'</strong></td>'
     +'</tr>';
   }).join('');
 
@@ -5229,10 +5443,12 @@ function cnBuildHTML(d) {
   +'<table>'
     +'<thead><tr>'
       +'<th class="tc">#</th><th>Item ID</th><th>Description of Goods</th><th class="tc">HSN</th>'
-      +'<th class="tr">Landing (Rs.)</th><th class="tc">Cancelled Qty</th><th class="tr">Amount (Rs.)</th>'
+      +'<th class="tr">Landing (Rs.)</th><th class="tc">Cancelled Qty</th>'
+      + (hasPerItemReason ? '<th>Reason</th>' : '')
+      +'<th class="tr">Amount (Rs.)</th>'
     +'</tr></thead>'
     +'<tbody>'+itemRows+'</tbody>'
-    +'<tr class="tgrand"><td colspan="6">CREDIT TOTAL</td><td class="tr">'+fmt(totalAmt)+'</td></tr>'
+    +'<tr class="tgrand"><td colspan="'+(hasPerItemReason?7:6)+'">CREDIT TOTAL</td><td class="tr">'+fmt(totalAmt)+'</td></tr>'
   +'</table>'
   +'<div class="words">Amount in Words: &nbsp;'+words+'</div>'
   +'<div class="bottom">'

@@ -127,9 +127,10 @@ const ACTION_TIERS = {
   blinkitGetInvSeq: 'viewer_read', blinkitCheckInv: 'viewer_read', blinkitListInv: 'viewer_read',
   blinkitGetInvHtml: 'viewer_read', blinkitGetInvItems: 'viewer_read', blinkitGetCnSeq: 'viewer_read',
   blinkitListCN: 'viewer_read', blinkitGetCnHtml: 'viewer_read', blinkitCheckCN: 'viewer_read',
+  blinkitListDN: 'viewer_read', blinkitCheckDN: 'viewer_read',
   bk_libLoad: 'viewer_read',
   blinkitSaveInv: 'manager_up', blinkitSaveReceivedQty: 'manager_up',
-  blinkitSaveCreditNote: 'manager_up', blinkitSaveStatusNote: 'manager_up',
+  blinkitSaveCreditNote: 'manager_up', blinkitSaveStatusNote: 'manager_up', blinkitSaveDN: 'manager_up',
   bk_libSave: 'manager_up', blinkitDeleteInvoiceByRO: 'manager_up',
   fkLedgerLoad: 'viewer_read', fkWarehouseMapLoad: 'viewer_read', fkLibLoad: 'viewer_read',
   fkLedgerSave: 'manager_up', fkLibSave: 'manager_up',
@@ -749,6 +750,28 @@ export default {
             'SELECT cn_number FROM blinkit_credit_notes WHERE inv_number = ? LIMIT 1'
           ).bind(inv).first();
           return json({ cn_number: row ? row.cn_number : null });
+        }
+
+        // ── BLINKIT DISCREPANCY NOTE — list all (history / audit trail) ──
+        if (action === 'blinkitListDN') {
+          await ensureBlinkitTables(env.DB);
+          const rows = await env.DB.prepare(
+            'SELECT dn_id, ro_number, inv_number, dn_date, total_qty, total_amount, cn_number, created_at FROM blinkit_dn ORDER BY id DESC'
+          ).all();
+          return json({ ok: true, records: rows.results || [] });
+        }
+
+        // ── BLINKIT DISCREPANCY NOTE — has this DN already been processed? ──
+        // dn_id is UNIQUE, so re-uploading the same DN PDF is safe to detect
+        // here and skip re-generating a duplicate Credit Note client-side.
+        if (action === 'blinkitCheckDN') {
+          await ensureBlinkitTables(env.DB);
+          const dn = url.searchParams.get('dn');
+          if (!dn) return json({ exists: false });
+          const row = await env.DB.prepare(
+            'SELECT dn_id, cn_number FROM blinkit_dn WHERE dn_id = ? LIMIT 1'
+          ).bind(dn).first();
+          return json({ exists: !!row, cn_number: row ? row.cn_number : null });
         }
 
         // ── BLINKIT SKU LIBRARY — load ────────────────────────
@@ -1408,13 +1431,16 @@ export default {
         }
 
         // ── BLINKIT CREDIT NOTE — save record + HTML ──────────
+        // dn_id is optional — set only when this CN was auto-generated from an
+        // uploaded Discrepancy Note, so blinkit_dn can be linked back to the CN
+        // it produced (audit trail: DN in -> CN out).
         if (act === 'blinkitSaveCreditNote') {
           await ensureBlinkitTables(env.DB);
-          const { cn_number, inv_number, ro_number, reason, items_json, total_qty, amount, cn_html, sent_qty } = body;
+          const { cn_number, inv_number, ro_number, reason, items_json, total_qty, amount, cn_html, sent_qty, dn_id } = body;
           if (!cn_number || !inv_number) return json({ ok: false, error: 'cn_number and inv_number required' }, 400);
           await env.DB.prepare(`
-            INSERT INTO blinkit_credit_notes (cn_number, inv_number, ro_number, reason, items_json, total_qty, amount, cn_html, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            INSERT INTO blinkit_credit_notes (cn_number, inv_number, ro_number, reason, items_json, total_qty, amount, cn_html, dn_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             ON CONFLICT(cn_number) DO UPDATE SET
               inv_number = excluded.inv_number,
               ro_number  = excluded.ro_number,
@@ -1423,17 +1449,48 @@ export default {
               total_qty  = excluded.total_qty,
               amount     = excluded.amount,
               cn_html    = excluded.cn_html,
+              dn_id      = excluded.dn_id,
               created_at = datetime('now')
           `).bind(
             cn_number, inv_number, ro_number || '', reason || '',
-            items_json || '[]', total_qty || 0, amount || 0, cn_html || ''
+            items_json || '[]', total_qty || 0, amount || 0, cn_html || '', dn_id || ''
           ).run();
           if (sent_qty && (total_qty || 0) >= sent_qty) {
             await env.DB.prepare(`
               UPDATE blinkit_invoices SET received_qty = 0, received_at = datetime('now') WHERE inv_number = ?
             `).bind(inv_number).run();
           }
+          if (dn_id) {
+            await env.DB.prepare(`UPDATE blinkit_dn SET cn_number = ? WHERE dn_id = ?`).bind(cn_number, dn_id).run();
+          }
           return json({ ok: true });
+        }
+
+        // ── BLINKIT DISCREPANCY NOTE — save parsed DN ─────────
+        // Blinkit issues a "Discrepancy Note" PDF whenever an RO comes back
+        // short/rejected — no email trail for these (unlike RO/STO notices),
+        // must be uploaded manually from their Seller Hub. dn_id is UNIQUE so
+        // re-uploading the same PDF is a safe no-op: it returns the DN's
+        // already-linked cn_number instead of letting the caller generate a
+        // duplicate Credit Note for the same shortfall.
+        if (act === 'blinkitSaveDN') {
+          await ensureBlinkitTables(env.DB);
+          const { dn_id, ro_number, inv_number, dn_date, items_json, total_qty, total_amount } = body;
+          if (!dn_id) return json({ ok: false, error: 'dn_id required' }, 400);
+          const existing = await env.DB.prepare(
+            'SELECT dn_id, cn_number FROM blinkit_dn WHERE dn_id = ? LIMIT 1'
+          ).bind(dn_id).first();
+          if (existing) {
+            return json({ ok: true, duplicate: true, cn_number: existing.cn_number || null });
+          }
+          await env.DB.prepare(`
+            INSERT INTO blinkit_dn (dn_id, ro_number, inv_number, dn_date, items_json, total_qty, total_amount, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+          `).bind(
+            dn_id, ro_number || '', inv_number || '', dn_date || '',
+            items_json || '[]', total_qty || 0, total_amount || 0
+          ).run();
+          return json({ ok: true, duplicate: false });
         }
 
         // ── BLINKIT INVOICE — save RO status remark ───────────
@@ -1565,6 +1622,7 @@ export default {
           await env.DB.batch([
             env.DB.prepare('DELETE FROM blinkit_invoices'),
             env.DB.prepare('DELETE FROM blinkit_credit_notes'),
+            env.DB.prepare('DELETE FROM blinkit_dn'),
             env.DB.prepare(`INSERT INTO blinkit_meta (key, value) VALUES ('inv_seq', '0') ON CONFLICT(key) DO UPDATE SET value='0'`),
             env.DB.prepare(`INSERT INTO blinkit_meta (key, value) VALUES ('cn_seq', '0') ON CONFLICT(key) DO UPDATE SET value='0'`)
           ]);
@@ -1579,6 +1637,7 @@ export default {
           const result = await env.DB.prepare(
             'DELETE FROM blinkit_invoices WHERE ro_number = ?'
           ).bind(ro_number).run();
+          await env.DB.prepare('DELETE FROM blinkit_dn WHERE ro_number = ?').bind(ro_number).run();
           return json({ ok: true, deleted: result.meta.changes });
         }
 
@@ -2366,7 +2425,24 @@ async function ensureBlinkitTables(DB) {
       total_qty   INTEGER DEFAULT 0,
       amount      REAL DEFAULT 0,
       cn_html     TEXT DEFAULT '',
+      dn_id       TEXT DEFAULT '',
       created_at  TEXT DEFAULT (datetime('now'))
+    )`),
+    // Discrepancy Notes — Blinkit's own record of a short/rejected RO, uploaded
+    // as a PDF from their Seller Hub. Kept separately from blinkit_credit_notes
+    // (1 DN can in principle arrive without ever producing a CN, e.g. if one
+    // already existed for the invoice) with a back-link once a CN is generated.
+    DB.prepare(`CREATE TABLE IF NOT EXISTS blinkit_dn (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      dn_id         TEXT UNIQUE NOT NULL,
+      ro_number     TEXT DEFAULT '',
+      inv_number    TEXT DEFAULT '',
+      dn_date       TEXT DEFAULT '',
+      items_json    TEXT DEFAULT '[]',
+      total_qty     INTEGER DEFAULT 0,
+      total_amount  REAL DEFAULT 0,
+      cn_number     TEXT DEFAULT '',
+      created_at    TEXT DEFAULT (datetime('now'))
     )`)
   ]);
   const migrations = [
@@ -2376,6 +2452,7 @@ async function ensureBlinkitTables(DB) {
     `ALTER TABLE blinkit_invoices ADD COLUMN received_qty INTEGER DEFAULT NULL`,
     `ALTER TABLE blinkit_invoices ADD COLUMN received_at  TEXT DEFAULT ''`,
     `ALTER TABLE blinkit_invoices ADD COLUMN status_note  TEXT DEFAULT ''`,
+    `ALTER TABLE blinkit_credit_notes ADD COLUMN dn_id    TEXT DEFAULT ''`,
   ];
   for (const sql of migrations) {
     try { await DB.prepare(sql).run(); } catch(e) { /* column already exists — safe to ignore */ }
