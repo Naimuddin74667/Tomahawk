@@ -4726,6 +4726,17 @@ function roLedgerBuildItemsTableHtml(g, items, fromInvoiceFallback) {
   });
   var hasDnData = dnRecords.length > 0;
 
+  // No DN doesn't always mean "unknown" -- if the invoice's own Received
+  // Qty already equals its Total Qty, that's proof nothing was ever
+  // rejected (100% accepted), so every SKU's DN Qty is 0 and Recv Qty
+  // equals Sent Qty with certainty, no DN required to say so. Only fall
+  // back to '—' when we genuinely can't tell (nothing received yet, or a
+  // qty mismatch that isn't explained by any DN on file).
+  var inv = _roLedgerInvMap[g.ro_number];
+  var invReceived = (inv && inv.received_qty !== null && inv.received_qty !== undefined && inv.received_qty !== '') ? parseInt(inv.received_qty) : null;
+  var invSent = inv ? (inv.total_qty || 0) : null;
+  var fullyAcceptedNoDn = !hasDnData && invReceived !== null && invSent !== null && invReceived === invSent;
+
   return (fromInvoiceFallback ? '<div style="color:var(--muted);font-size:10px;margin-bottom:.4rem">No RO-created email on file — showing items from the invoice instead.</div>' : '')
     + '<table style="width:100%;border-collapse:collapse;font-size:11px">'
     + '<thead><tr>'
@@ -4740,8 +4751,8 @@ function roLedgerBuildItemsTableHtml(g, items, fromInvoiceFallback) {
         var skuName = roLedgerFindSkuName(it.skuId);
         var sentQty = parseInt(it.qty) || 0;
         var short = shortByUpc[it.upc] || 0;
-        var dnDisplay = hasDnData ? short : '—';
-        var recvDisplay = hasDnData ? Math.max(0, sentQty - short) : '—';
+        var dnDisplay = hasDnData ? short : (fullyAcceptedNoDn ? 0 : '—');
+        var recvDisplay = hasDnData ? Math.max(0, sentQty - short) : (fullyAcceptedNoDn ? sentQty : '—');
         return '<tr style="border-top:1px solid var(--border)">'
           + '<td style="padding:.3rem">'+(skuName ? esc(skuName) : '<span style="color:var(--muted)">Not in library</span>')+'</td>'
           + '<td style="padding:.3rem">'+esc(it.skuId||'—')+'</td>'
