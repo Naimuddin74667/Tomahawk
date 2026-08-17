@@ -4626,25 +4626,41 @@ function roLedgerRenderItems() {
   var created = g.created;
   var parseBtn = document.getElementById('roDetailParseBtn');
 
-  if (!created) {
-    document.getElementById('roDetailItems').innerHTML =
-      '<div style="color:var(--muted)">No RO-created email found for this number yet \u2014 can\'t parse items.</div>';
-    parseBtn.style.display = 'none';
-    return;
-  }
-
   var attachments = [];
-  try { attachments = JSON.parse(created.attachments_json || '[]'); } catch(e) {}
+  if (created) { try { attachments = JSON.parse(created.attachments_json || '[]'); } catch(e) {} }
   var xlsxAttachment = attachments.filter(function(a){ return /\.xlsx?$/i.test(a.filename||''); })[0];
 
   var items = [];
-  if (created.items_json) {
+  if (created && created.items_json) {
     try { items = JSON.parse(created.items_json) || []; } catch(e) { items = []; }
+  }
+
+  // Fallback for ROs with no usable RO-created email on the Gmail side at
+  // all (no email logged, or logged with no Excel attachment to parse) --
+  // e.g. RO 43886110058068, whose invoice exists (generated 21-07-2026) but
+  // has no 'ro_created' row in blinkit_ro_log, only an appointment email.
+  // The invoice's own stored item list (blinkit_invoices.items_json, saved
+  // whenever the invoice was generated regardless of source) still has the
+  // real SKU/qty data, just normalized here into the same {skuId, qty, upc,
+  // mrp} shape the RO-email items use so the rest of this function doesn't
+  // need to care which source it came from.
+  var fromInvoiceFallback = false;
+  if (!items.length && !xlsxAttachment) {
+    var inv = _roLedgerInvMap[g.ro_number];
+    if (inv && inv.items_json) {
+      try {
+        var invItems = JSON.parse(inv.items_json) || [];
+        if (invItems.length) {
+          items = invItems.map(function(it){ return { skuId: it.item_id, qty: it.qty, upc: it.upc, mrp: it.mrp }; });
+          fromInvoiceFallback = true;
+        }
+      } catch(e) {}
+    }
   }
 
   if (items.length) {
     parseBtn.textContent = '\u21bb Re-parse from Excel';
-    parseBtn.style.display = xlsxAttachment ? 'inline-block' : 'none';
+    parseBtn.style.display = (!fromInvoiceFallback && xlsxAttachment) ? 'inline-block' : 'none';
 
     // Real per-SKU received qty, computed from every Discrepancy Note filed
     // against this RO: sum each SKU's own short qty (matched by UPC, same
@@ -4667,7 +4683,8 @@ function roLedgerRenderItems() {
     var hasDnData = dnRecords.length > 0;
 
     document.getElementById('roDetailItems').innerHTML =
-      '<table style="width:100%;border-collapse:collapse;font-size:11px">'
+      (fromInvoiceFallback ? '<div style="color:var(--muted);font-size:10px;margin-bottom:.4rem">No RO-created email on file \u2014 showing items from the invoice instead.</div>' : '')
+      + '<table style="width:100%;border-collapse:collapse;font-size:11px">'
       + '<thead><tr>'
       + '<th style="text-align:left;padding:.3rem;color:var(--muted)">SKU Name</th>'
       + '<th style="text-align:left;padding:.3rem;color:var(--muted)">Item ID</th>'
@@ -4692,6 +4709,13 @@ function roLedgerRenderItems() {
             + '</tr>';
         }).join('')
       + '</tbody></table>';
+    return;
+  }
+
+  if (!created) {
+    document.getElementById('roDetailItems').innerHTML =
+      '<div style="color:var(--muted)">No RO-created email or invoice item data found for this number yet \u2014 can\'t show items.</div>';
+    parseBtn.style.display = 'none';
     return;
   }
 
