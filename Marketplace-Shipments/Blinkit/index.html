@@ -4635,101 +4635,123 @@ function roLedgerRenderItems() {
     try { items = JSON.parse(created.items_json) || []; } catch(e) { items = []; }
   }
 
-  // Fallback for ROs with no usable RO-created email on the Gmail side at
-  // all (no email logged, or logged with no Excel attachment to parse) --
-  // e.g. RO 43886110058068, whose invoice exists (generated 21-07-2026) but
-  // has no 'ro_created' row in blinkit_ro_log, only an appointment email.
-  // The invoice's own stored item list (blinkit_invoices.items_json, saved
-  // whenever the invoice was generated regardless of source) still has the
-  // real SKU/qty data, just normalized here into the same {skuId, qty, upc,
-  // mrp} shape the RO-email items use so the rest of this function doesn't
-  // need to care which source it came from.
-  var fromInvoiceFallback = false;
-  if (!items.length && !xlsxAttachment) {
-    var inv = _roLedgerInvMap[g.ro_number];
-    if (inv && inv.items_json) {
-      try {
-        var invItems = JSON.parse(inv.items_json) || [];
-        if (invItems.length) {
-          items = invItems.map(function(it){ return { skuId: it.item_id, qty: it.qty, upc: it.upc, mrp: it.mrp }; });
-          fromInvoiceFallback = true;
-        }
-      } catch(e) {}
-    }
-  }
-
   if (items.length) {
-    parseBtn.textContent = '\u21bb Re-parse from Excel';
-    parseBtn.style.display = (!fromInvoiceFallback && xlsxAttachment) ? 'inline-block' : 'none';
-
-    // Real per-SKU received qty, computed from every Discrepancy Note filed
-    // against this RO: sum each SKU's own short qty (matched by UPC, same
-    // barcode field DN lines carry) across all DNs, then Recv = Sent - Short.
-    // This replaces the old behaviour of repeating the single invoice-level
-    // received total on every row, which could show e.g. "74" against a SKU
-    // that only had 11 units sent -- correct in aggregate, nonsensical per
-    // row. Falls back to '—' when this RO has no DN yet (nothing to compute
-    // a per-SKU figure from), same as before.
-    var dnRecords = _roLedgerDnMap[g.ro_number] || [];
-    var shortByUpc = {};
-    dnRecords.forEach(function(dn){
-      var dnItems = [];
-      try { dnItems = JSON.parse(dn.items_json || '[]'); } catch(e) {}
-      dnItems.forEach(function(di){
-        if (!di.upc) return;
-        shortByUpc[di.upc] = (shortByUpc[di.upc] || 0) + (parseInt(di.qty) || 0);
-      });
-    });
-    var hasDnData = dnRecords.length > 0;
-
-    document.getElementById('roDetailItems').innerHTML =
-      (fromInvoiceFallback ? '<div style="color:var(--muted);font-size:10px;margin-bottom:.4rem">No RO-created email on file \u2014 showing items from the invoice instead.</div>' : '')
-      + '<table style="width:100%;border-collapse:collapse;font-size:11px">'
-      + '<thead><tr>'
-      + '<th style="text-align:left;padding:.3rem;color:var(--muted)">SKU Name</th>'
-      + '<th style="text-align:left;padding:.3rem;color:var(--muted)">Item ID</th>'
-      + '<th style="text-align:left;padding:.3rem;color:var(--muted)">UPC</th>'
-      + '<th style="text-align:right;padding:.3rem;color:var(--muted)">Sent Qty</th>'
-      + '<th style="text-align:right;padding:.3rem;color:var(--muted)" title="This SKU\'s own short/rejected qty, summed across every Discrepancy Note filed against this RO">DN Qty</th>'
-      + '<th style="text-align:right;padding:.3rem;color:var(--muted)" title="Sent Qty minus DN Qty">Recv Qty</th>'
-      + '</tr></thead><tbody>'
-      + items.map(function(it){
-          var skuName = roLedgerFindSkuName(it.skuId);
-          var sentQty = parseInt(it.qty) || 0;
-          var short = shortByUpc[it.upc] || 0;
-          var dnDisplay = hasDnData ? short : '\u2014';
-          var recvDisplay = hasDnData ? Math.max(0, sentQty - short) : '\u2014';
-          return '<tr style="border-top:1px solid var(--border)">'
-            + '<td style="padding:.3rem">'+(skuName ? esc(skuName) : '<span style="color:var(--muted)">Not in library</span>')+'</td>'
-            + '<td style="padding:.3rem">'+esc(it.skuId||'\u2014')+'</td>'
-            + '<td style="padding:.3rem">'+esc(it.upc||'\u2014')+'</td>'
-            + '<td style="padding:.3rem;text-align:right">'+esc(it.qty||0)+'</td>'
-            + '<td style="padding:.3rem;text-align:right">'+esc(dnDisplay)+'</td>'
-            + '<td style="padding:.3rem;text-align:right">'+esc(recvDisplay)+'</td>'
-            + '</tr>';
-        }).join('')
-      + '</tbody></table>';
+    parseBtn.textContent = '↻ Re-parse from Excel';
+    parseBtn.style.display = xlsxAttachment ? 'inline-block' : 'none';
+    document.getElementById('roDetailItems').innerHTML = roLedgerBuildItemsTableHtml(g, items, false);
     return;
   }
 
-  if (!created) {
+  if (created && xlsxAttachment) {
+    parseBtn.textContent = '📋 Parse from Excel';
+    parseBtn.style.display = 'inline-block';
     document.getElementById('roDetailItems').innerHTML =
-      '<div style="color:var(--muted)">No RO-created email or invoice item data found for this number yet \u2014 can\'t show items.</div>';
-    parseBtn.style.display = 'none';
+      '<div style="color:var(--muted)">Not parsed yet — click "Parse from Excel" above.</div>';
     return;
   }
 
-  if (!xlsxAttachment) {
-    document.getElementById('roDetailItems').innerHTML =
-      '<div style="color:var(--muted)">No Excel attachment found on the RO email.</div>';
-    parseBtn.style.display = 'none';
+  // Dead end on the RO-email side (no 'RO created' email logged at all --
+  // e.g. RO 43886110058068, whose invoice exists but Gmail only ever
+  // caught its appointment email -- or one logged with no Excel to parse).
+  // Fall back to the invoice's own stored item list. blinkitListInv (which
+  // _roLedgerInvMap is built from) deliberately doesn't carry items_json to
+  // keep the whole-ledger load light, so this fetches it on demand via
+  // blinkitGetInvItems -- the same source Credit Note generation already
+  // relies on -- checking the local snapshot cache first (same key
+  // openCnModal uses) to skip the round-trip when it's already on hand.
+  parseBtn.style.display = 'none';
+  var inv = _roLedgerInvMap[g.ro_number];
+  var invNumber = inv ? inv.inv_number : null;
+  var notFoundHtml = '<div style="color:var(--muted)">No RO-created email or invoice item data found for this number yet — can\'t show items.</div>';
+  if (!invNumber) {
+    document.getElementById('roDetailItems').innerHTML = notFoundHtml;
     return;
   }
 
-  parseBtn.textContent = '\ud83d\udccb Parse from Excel';
-  parseBtn.style.display = 'inline-block';
+  var cachedItems = null;
+  try {
+    var snap = JSON.parse(localStorage.getItem('blinkit_inv_items_' + invNumber) || 'null');
+    cachedItems = Array.isArray(snap) ? snap : (snap && snap.items);
+  } catch(e) {}
+
+  if (cachedItems && cachedItems.length) {
+    var normalizedCached = cachedItems.map(function(it){ return { skuId: it.item_id, qty: it.qty, upc: it.upc, mrp: it.mrp }; });
+    document.getElementById('roDetailItems').innerHTML = roLedgerBuildItemsTableHtml(g, normalizedCached, true);
+    return;
+  }
+
+  if (!IS_LIVE) {
+    document.getElementById('roDetailItems').innerHTML = notFoundHtml;
+    return;
+  }
+
   document.getElementById('roDetailItems').innerHTML =
-    '<div style="color:var(--muted)">Not parsed yet \u2014 click "Parse from Excel" above.</div>';
+    '<div style="color:var(--muted)">Loading item data from the invoice…</div>';
+
+  fetch(WORKER_URL + '?action=blinkitGetInvItems&inv=' + encodeURIComponent(invNumber))
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (_roDetailCurrent !== g) return; // modal moved on to a different RO while this was in flight
+      var invItems = [];
+      try { invItems = JSON.parse(d.items_json || '[]') || []; } catch(e) {}
+      if (!invItems.length) {
+        document.getElementById('roDetailItems').innerHTML = notFoundHtml;
+        return;
+      }
+      var normalized = invItems.map(function(it){ return { skuId: it.item_id, qty: it.qty, upc: it.upc, mrp: it.mrp }; });
+      document.getElementById('roDetailItems').innerHTML = roLedgerBuildItemsTableHtml(g, normalized, true);
+    })
+    .catch(function(){
+      if (_roDetailCurrent !== g) return;
+      document.getElementById('roDetailItems').innerHTML =
+        '<div style="color:var(--muted)">Failed to load invoice item data.</div>';
+    });
+}
+
+// Shared table renderer for roLedgerRenderItems -- builds the SKU Items
+// table markup from a normalized {skuId, qty, upc, mrp} item list, computing
+// the real per-SKU DN/Recv qty from every Discrepancy Note filed against
+// this RO (summed by UPC). Used for both the RO-email item source and the
+// invoice-fallback source so neither path duplicates the DN math.
+function roLedgerBuildItemsTableHtml(g, items, fromInvoiceFallback) {
+  var dnRecords = _roLedgerDnMap[g.ro_number] || [];
+  var shortByUpc = {};
+  dnRecords.forEach(function(dn){
+    var dnItems = [];
+    try { dnItems = JSON.parse(dn.items_json || '[]'); } catch(e) {}
+    dnItems.forEach(function(di){
+      if (!di.upc) return;
+      shortByUpc[di.upc] = (shortByUpc[di.upc] || 0) + (parseInt(di.qty) || 0);
+    });
+  });
+  var hasDnData = dnRecords.length > 0;
+
+  return (fromInvoiceFallback ? '<div style="color:var(--muted);font-size:10px;margin-bottom:.4rem">No RO-created email on file — showing items from the invoice instead.</div>' : '')
+    + '<table style="width:100%;border-collapse:collapse;font-size:11px">'
+    + '<thead><tr>'
+    + '<th style="text-align:left;padding:.3rem;color:var(--muted)">SKU Name</th>'
+    + '<th style="text-align:left;padding:.3rem;color:var(--muted)">Item ID</th>'
+    + '<th style="text-align:left;padding:.3rem;color:var(--muted)">UPC</th>'
+    + '<th style="text-align:right;padding:.3rem;color:var(--muted)">Sent Qty</th>'
+    + '<th style="text-align:right;padding:.3rem;color:var(--muted)" title="This SKU\'s own short/rejected qty, summed across every Discrepancy Note filed against this RO">DN Qty</th>'
+    + '<th style="text-align:right;padding:.3rem;color:var(--muted)" title="Sent Qty minus DN Qty">Recv Qty</th>'
+    + '</tr></thead><tbody>'
+    + items.map(function(it){
+        var skuName = roLedgerFindSkuName(it.skuId);
+        var sentQty = parseInt(it.qty) || 0;
+        var short = shortByUpc[it.upc] || 0;
+        var dnDisplay = hasDnData ? short : '—';
+        var recvDisplay = hasDnData ? Math.max(0, sentQty - short) : '—';
+        return '<tr style="border-top:1px solid var(--border)">'
+          + '<td style="padding:.3rem">'+(skuName ? esc(skuName) : '<span style="color:var(--muted)">Not in library</span>')+'</td>'
+          + '<td style="padding:.3rem">'+esc(it.skuId||'—')+'</td>'
+          + '<td style="padding:.3rem">'+esc(it.upc||'—')+'</td>'
+          + '<td style="padding:.3rem;text-align:right">'+esc(it.qty||0)+'</td>'
+          + '<td style="padding:.3rem;text-align:right">'+esc(dnDisplay)+'</td>'
+          + '<td style="padding:.3rem;text-align:right">'+esc(recvDisplay)+'</td>'
+          + '</tr>';
+      }).join('')
+    + '</tbody></table>';
 }
 
 // Core parse+save logic — fetches the given RO's Excel attachment on
