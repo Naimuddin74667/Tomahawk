@@ -4079,27 +4079,22 @@ function roLedgerRender() {
       var cn = cns.length ? cns[0] : null;
       var cnQty = cn ? (cn.total_qty || 0) : 0;
       var isFullCancel = !!(cn && sentQty > 0 && cnQty >= sentQty);
-      var canEdit = (typeof window.TM_CAN_EDIT === 'undefined') || window.TM_CAN_EDIT;
 
+      // Read-only in the table — editing only happens inside the RO Detail
+      // modal now (see roDetailEditReceived), same "click into the RO to
+      // change things" pattern as Mark as Picked Up / Cancelled / Upload DN.
       if (isFullCancel) {
         recvCell = '<span style="color:#ffb74d;font-size:11px;font-weight:700">NA</span>';
       } else if (inv.received_qty === null || inv.received_qty === undefined || inv.received_qty === '') {
-        if (!roLedgerApptHasPassed(g)) {
-          recvCell = '<span style="color:var(--muted);font-size:11px">Available after appt date</span>';
-        } else {
-          recvCell = canEdit
-            ? ('<input type="number" id="ro-recv-inp-'+i+'" placeholder="Recv qty" min="0" max="'+sentQty+'" oninput="ledgerClampRecv(this,'+sentQty+')" style="width:70px;font-size:11px;padding:3px 6px;text-align:center" onclick="event.stopPropagation()">'
-              + ' <button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:3px 8px" onclick="event.stopPropagation();ledgerSaveReceived(\''+(inv.inv_number||'')+'\', document.getElementById(\'ro-recv-inp-'+i+'\').value, '+sentQty+')">&#10003;</button>')
-            : '<span style="color:var(--muted);font-size:11px">&#8212; not received</span>';
-        }
+        recvCell = roLedgerApptHasPassed(g)
+          ? '<span style="color:var(--muted);font-size:11px">&#8212; not received</span>'
+          : '<span style="color:var(--muted);font-size:11px">Available after appt date</span>';
       } else if (parseInt(inv.received_qty) === sentQty) {
-        recvCell = '<span style="color:#6dc87a;font-size:11px;font-weight:700">&#10003; '+inv.received_qty+'</span>'
-          + (canEdit ? (' <span style="cursor:pointer;color:var(--muted);font-size:10px" title="Edit" onclick="event.stopPropagation();ledgerEditReceived(this,\''+(inv.inv_number||'')+'\','+JSON.stringify(inv.received_qty)+','+sentQty+')">&#9998;</span>') : '');
+        recvCell = '<span style="color:#6dc87a;font-size:11px;font-weight:700">&#10003; '+inv.received_qty+'</span>';
       } else {
         var diff = parseInt(inv.received_qty) - sentQty;
         recvCell = '<span style="color:#ffb74d;font-size:11px;font-weight:700">'+inv.received_qty+'</span>'
-          + ' <span style="color:#ffb74d;font-size:10px;font-family:\'DM Mono\',monospace">&Delta;'+(diff>0?'+':'')+diff+'</span>'
-          + (canEdit ? (' <span style="cursor:pointer;color:var(--muted);font-size:10px" title="Edit" onclick="event.stopPropagation();ledgerEditReceived(this,\''+(inv.inv_number||'')+'\','+JSON.stringify(inv.received_qty)+','+sentQty+')">&#9998;</span>') : '');
+          + ' <span style="color:#ffb74d;font-size:10px;font-family:\'DM Mono\',monospace">&Delta;'+(diff>0?'+':'')+diff+'</span>';
       }
 
       var cnBadges = cns.map(function(cnRec){
@@ -4247,16 +4242,23 @@ function roLedgerOpenDetail(roNumber) {
   var createdDisplay = created ? formatDateSimple(created.creation_date) : (inv ? (inv.inv_date || '') : '');
   var gatepass = _roLedgerGatepassMap[g.ro_number];
 
-  function summaryField(label, value) {
-    return '<div><div style="color:var(--muted);font-size:9px;letter-spacing:.05em;text-transform:uppercase;margin-bottom:2px">'+esc(label)+'</div><div style="font-weight:600">'+(value || '<span style="color:var(--muted)">\u2014</span>')+'</div></div>';
+  function summaryField(label, value, id) {
+    return '<div><div style="color:var(--muted);font-size:9px;letter-spacing:.05em;text-transform:uppercase;margin-bottom:2px">'+esc(label)+'</div><div'+(id ? ' id="'+id+'"' : '')+' style="font-weight:600">'+(value || '<span style="color:var(--muted)">\u2014</span>')+'</div></div>';
   }
+  // Received Qty is the one summary field that's actually editable — click
+  // the pencil to enter/change it (roDetailEditReceived below). This is now
+  // the only place it can be edited at all; the RO Ledger table itself is
+  // read-only for it.
+  var recvHasValue = inv && inv.received_qty !== null && inv.received_qty !== undefined && inv.received_qty !== '';
+  var recvQtyValueHtml = (recvHasValue ? inv.received_qty : '<span style="color:var(--muted)">\u2014</span>')
+    + (inv ? ' <span style="cursor:pointer;color:var(--muted);font-size:10px" title="Edit Received Qty" onclick="roDetailEditReceived()">&#9998;</span>' : '');
   document.getElementById('roDetailSummary').innerHTML =
     summaryField('Invoice No.', inv ? esc(inv.inv_number) : null)
     + summaryField('Warehouse', whDisplay ? esc(whDisplay) : null)
     + summaryField('Created', createdDisplay ? esc(createdDisplay) : null)
     + summaryField('No. of SKU', skuCount > 0 ? skuCount : null)
     + summaryField('Total Qty', totalQty > 0 ? totalQty : null)
-    + summaryField('Received Qty', (inv && inv.received_qty !== null && inv.received_qty !== undefined && inv.received_qty !== '') ? inv.received_qty : null)
+    + summaryField('Received Qty', recvQtyValueHtml, 'roDetailRecvValue')
     + summaryField('Gatepass', gatepass ? (esc(gatepass.gatepass_code) + ' <span style="color:var(--muted);font-weight:400">('+esc(gatepass.status||'')+')</span>') : null);
 
   var historyHtml;
@@ -4942,11 +4944,28 @@ function ledgerSaveStatusNote(invNumber, note) {
     .catch(function(){ toast('Network error saving remark', 'err'); });
 }
 
-function ledgerEditReceived(el, invNumber, currentVal, sentQty) {
-  var td = el.closest('td');
-  var uid = 'recv-edit-' + Math.random().toString(36).slice(2,8);
-  td.innerHTML = '<input type="number" id="' + uid + '" value="' + currentVal + '" min="0" max="' + sentQty + '" oninput="ledgerClampRecv(this,' + sentQty + ')" style="width:70px;font-size:11px;padding:3px 6px;text-align:center">'
-    + ' <button class="btn btn-secondary btn-sm" style="width:auto;font-size:9px;padding:3px 8px" onclick="ledgerSaveReceived(\'' + invNumber + '\', document.getElementById(\'' + uid + '\').value, ' + sentQty + ')">&#10003;</button>';
+// Only entry point for editing Received Qty now — the RO Ledger table row
+// itself is read-only (see roLedgerRender's recvCell), matching the same
+// "click into the RO to change things" pattern as Mark as Picked Up /
+// Cancelled / Upload DN. Preserves the existing rule that it isn't
+// enterable until the delivery appointment has actually passed.
+function roDetailEditReceived() {
+  var g = _roDetailCurrent;
+  if (!g) return;
+  if (!roLedgerApptHasPassed(g)) {
+    toast('Received qty isn\'t enterable until the delivery appointment date has passed', 'err');
+    return;
+  }
+  var inv = _roLedgerInvMap[g.ro_number];
+  var invNumber = inv ? inv.inv_number : null;
+  if (!invNumber) { toast('No invoice to attach a received qty to yet', 'err'); return; }
+  var sentQty = inv.total_qty || 0;
+  var currentVal = (inv.received_qty !== null && inv.received_qty !== undefined && inv.received_qty !== '') ? inv.received_qty : '';
+  var valueEl = document.getElementById('roDetailRecvValue');
+  if (!valueEl) return;
+  var uid = 'roDetailRecvInput';
+  valueEl.innerHTML = '<input type="number" id="'+uid+'" value="'+currentVal+'" min="0" max="'+sentQty+'" oninput="ledgerClampRecv(this,'+sentQty+')" style="width:70px;font-size:12px;padding:3px 6px;text-align:center">'
+    + ' <button class="btn btn-secondary btn-sm" style="width:auto;font-size:10px;padding:3px 8px;margin-left:4px" onclick="ledgerSaveReceived(\''+invNumber+'\', document.getElementById(\''+uid+'\').value, '+sentQty+')">&#10003;</button>';
 }
 
 function ledgerSaveReceived(invNumber, value, sentQty) {
@@ -4963,15 +4982,21 @@ function ledgerSaveReceived(invNumber, value, sentQty) {
   // Keep RO Ledger's own cache in sync too — same invoice record, different map.
   var roRec = _roLedgerInvMap && Object.values(_roLedgerInvMap).filter(function(r){ return r && r.inv_number === invNumber; })[0];
   if (roRec) roRec.received_qty = qty;
+  // If the RO Detail modal is open for this same RO, refresh it too — this
+  // is now the only place Received Qty gets edited from, so the modal
+  // needs to reflect the save immediately, not just the table underneath it.
+  var refreshModal = function(){
+    if (roRec && _roDetailCurrent && _roDetailCurrent.ro_number === roRec.ro_number) roLedgerOpenDetail(roRec.ro_number);
+  };
 
-  if (!IS_LIVE) { if (document.getElementById('roLedgerTbody')) roLedgerRender(); toast('Received qty saved (local)', 'ok'); return; }
+  if (!IS_LIVE) { if (document.getElementById('roLedgerTbody')) roLedgerRender(); refreshModal(); toast('Received qty saved (local)', 'ok'); return; }
 
   fetch(WORKER_URL + '?action=blinkitSaveReceivedQty', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ inv_number: invNumber, received_qty: qty })
   }).then(function(r){ return r.json(); })
     .then(function(d){
-      if (d.ok) { toast('Received qty saved', 'ok'); if (document.getElementById('roLedgerTbody')) roLedgerRender(); }
+      if (d.ok) { toast('Received qty saved', 'ok'); if (document.getElementById('roLedgerTbody')) roLedgerRender(); refreshModal(); }
       else { toast('Save failed', 'err'); }
     }).catch(function(){ toast('Network error saving received qty', 'err'); });
 }
