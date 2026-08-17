@@ -886,7 +886,7 @@
       <div style="display:flex;gap:.5rem">
         <button class="btn btn-secondary btn-sm" id="roDetailPickupBtn" style="width:auto" onclick="roLedgerTogglePickedUp()">&#128666; Mark as Picked Up</button>
         <button class="btn btn-secondary btn-sm" style="width:auto;color:var(--rd);border-color:var(--rd)" onclick="roLedgerDeleteEntry()">&#128683; Mark as Cancelled</button>
-        <button class="btn btn-secondary btn-sm" style="width:auto" onclick="document.getElementById('roDetailDnFile').click()">&#128196; Upload Discrepancy Note</button>
+        <button class="btn btn-secondary btn-sm" id="roDetailDnBtn" style="width:auto" onclick="roLedgerDnUploadClick()">&#128196; Upload Discrepancy Note</button>
         <input type="file" id="roDetailDnFile" accept=".pdf" style="display:none" onchange="roLedgerDnFileSelected(this)">
       </div>
       <a id="roDetailGmailLink" href="#" target="_blank" style="font-size:11px;color:var(--muted);text-decoration:underline">Open original email in Gmail &#8599;</a>
@@ -4302,6 +4302,21 @@ function roLedgerOpenDetail(roNumber) {
     }
   }
 
+  // DN upload button reflects whether one's already on file for this RO --
+  // roLedgerDnUploadClick() below does the "upload again?" confirm before
+  // ever opening the file picker.
+  var dnBtn = document.getElementById('roDetailDnBtn');
+  var dnRecords = _roLedgerDnMap[g.ro_number] || [];
+  if (dnRecords.length) {
+    dnBtn.innerHTML = '&#10003; DN Uploaded' + (dnRecords.length > 1 ? ' (' + dnRecords.length + ')' : '') + ' \u2014 click to re-upload';
+    dnBtn.style.color = 'var(--accent)';
+    dnBtn.style.borderColor = 'var(--accent)';
+  } else {
+    dnBtn.innerHTML = '&#128196; Upload Discrepancy Note';
+    dnBtn.style.color = '';
+    dnBtn.style.borderColor = '';
+  }
+
   document.getElementById('roDetailModal').classList.add('show');
 }
 function closeRoDetailModal() {
@@ -4349,6 +4364,23 @@ function roLedgerDeleteEntry() {
     closeRoDetailModal();
     roLedgerLoad();
   }).catch(function(err){ toast('Failed: ' + err.message, 'err'); });
+}
+
+// Entry point for the "Upload Discrepancy Note" button — if one's already
+// on file for this RO, confirm before opening the file picker again (each
+// upload auto-generates a Credit Note, see roLedgerAutoGenerateCN, so an
+// accidental re-upload isn't harmless). blinkitSaveDN's dn_id UNIQUE
+// constraint would also catch re-uploading the exact same PDF, but this
+// catches the "meant to upload a different/second DN" case up front too.
+function roLedgerDnUploadClick() {
+  var g = _roDetailCurrent;
+  if (!g) return;
+  var existing = _roLedgerDnMap[g.ro_number] || [];
+  if (existing.length) {
+    var names = existing.map(function(dn){ return dn.dn_id; }).join(', ');
+    if (!confirm('A Discrepancy Note is already on file for this RO (' + names + ').\n\nUpload another one?')) return;
+  }
+  document.getElementById('roDetailDnFile').click();
 }
 
 // DISCREPANCY NOTE (DN) UPLOAD — Blinkit issues a "Discrepancy Note"
