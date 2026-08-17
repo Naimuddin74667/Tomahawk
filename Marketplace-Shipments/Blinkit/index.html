@@ -886,6 +886,8 @@
       <div style="display:flex;gap:.5rem">
         <button class="btn btn-secondary btn-sm" id="roDetailPickupBtn" style="width:auto" onclick="roLedgerTogglePickedUp()">&#128666; Mark as Picked Up</button>
         <button class="btn btn-secondary btn-sm" style="width:auto;color:var(--rd);border-color:var(--rd)" onclick="roLedgerDeleteEntry()">&#128683; Mark as Cancelled</button>
+        <button class="btn btn-secondary btn-sm" style="width:auto" onclick="document.getElementById('roDetailDnFile').click()">&#128196; Upload Discrepancy Note</button>
+        <input type="file" id="roDetailDnFile" accept=".pdf" style="display:none" onchange="roLedgerDnFileSelected(this)">
       </div>
       <a id="roDetailGmailLink" href="#" target="_blank" style="font-size:11px;color:var(--muted);text-decoration:underline">Open original email in Gmail &#8599;</a>
     </div>
@@ -4321,6 +4323,116 @@ function roLedgerDeleteEntry() {
     closeRoDetailModal();
     roLedgerLoad();
   }).catch(function(err){ toast('Failed: ' + err.message, 'err'); });
+}
+
+// DISCREPANCY NOTE (DN) UPLOAD — Blinkit issues a "Discrepancy Note"
+// PDF whenever a RO comes back short/rejected, downloadable from their
+// Seller Hub (no email trail for these, unlike RO/STO notices — see
+// roLedgerDnFileSelected). Parses the DN's line-item table (UPC, Qty
+// short, Reason, Net Amount per SKU) and logs it via blinkitSaveDN so
+// shortfalls are tracked per-SKU over time instead of disappearing into
+// one aggregate Received Qty number. Then auto-fills Received Qty
+// (Sent Qty minus total DN short qty) so the Status badge updates
+// without retyping what the DN already told us.
+function roLedgerDnFileSelected(el) {
+  var file = el.files && el.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    pdfjsLib.getDocument({ data: e.target.result }).promise.then(function(pdf) {
+      var allText = '';
+      var pages = [];
+      for (var i = 1; i <= pdf.numPages; i++) pages.push(i);
+      pages.reduce(function(p, n) {
+        return p.then(function() {
+          return pdf.getPage(n).then(function(pg) {
+            return pg.getTextContent().then(function(c) {
+              allText += c.items.map(function(it) { return it.str; }).join(' ') + '\n';
+            });
+          });
+        });
+      }, Promise.resolve()).then(function() {
+        roLedgerParseDN(allText, file.name);
+      });
+    }).catch(function(err) { toast('DN PDF error: ' + err.message, 'err'); });
+  };
+  reader.readAsArrayBuffer(file);
+  el.value = '';
+}
+
+function roLedgerParseDN(text, fileName) {
+  var g = _roDetailCurrent;
+  if (!g) return;
+  var combined = text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+  console.log('[Blinkit DN] combined text (first 800):', combined.substring(0, 800));
+
+  var roMatch = combined.match(/RO Number\s*:?\s*(\d{6,15})/);
+  var invMatch = combined.match(/Original\s*Invoice\s*ID\s*:?\s*([A-Z0-9\/]+)/i);
+  var dateMatch = combined.match(/\bDate\s*:?\s*(\d{1,2}-[A-Za-z]{3}-\d{4})/);
+
+  // DN's own ID (e.g. D438861DN2630382) — try the filename first (Blinkit
+  // names the download after it, same trick used for the bulk RO PDF's
+  // reference number), fall back to the "Id :" field in the PDF text.
+  var dnId = null;
+  var fileMatch = fileName.match(/([A-Z0-9]+DN[A-Z0-9]+)/);
+  if (fileMatch) dnId = fileMatch[1];
+  if (!dnId) {
+    var idMatch = combined.match(/\bId\s*:?\s*([A-Za-z0-9]+DN[A-Za-z0-9]+)/);
+    if (idMatch) dnId = idMatch[1];
+  }
+
+  if (roMatch && roMatch[1] !== g.ro_number) {
+    if (!confirm('This DN is for RO ' + roMatch[1] + ', but you\'re viewing RO ' + g.ro_number + '. Continue anyway?')) return;
+  }
+
+  // Row anchor: an integer Qty followed by four 2-decimal money fields
+  // (Unit Price, Sub Total, GST%, Net Amount) is a reliable fingerprint
+  // regardless of how PDF.js breaks up the surrounding text. UPC + Name
+  // are captured from what precedes the Qty; Reason is what follows,
+  // terminated by the next row's UPC or the summary section.
+  var items = [];
+  var rowRe = /(\d{6,14})\s+([\s\S]{3,80}?)\s+(\d{1,4})\s+(\d+\.\d{2})\s+(\d+\.\d{2})\s+(\d+\.\d{2})\s+(\d+\.\d{2})\s+([A-Za-z][A-Za-z ]{2,30}?)(?=\s+\d{6,14}\s|\s+MRP|\s+Number of Items|$)/g;
+  var m;
+  while ((m = rowRe.exec(combined)) !== null) {
+    items.push({
+      upc: m[1], name: m[2].trim(), qty: parseInt(m[3]) || 0,
+      unit_price: m[4], sub_total: m[5], gst_pct: m[6], net_amount: m[7],
+      reason: m[8].trim()
+    });
+  }
+
+  if (!items.length) {
+    toast('No line items found in this DN \u2014 check console for the extracted text', 'err');
+    console.warn('[Blinkit DN] No items found. Full text:', combined);
+    return;
+  }
+
+  var totalShort = items.reduce(function(s, it) { return s + it.qty; }, 0);
+  var summary = items.map(function(it) { return '\u2022 ' + it.name + ' \u2014 short ' + it.qty + ' (' + it.reason + ')'; }).join('\n');
+  if (!confirm('Discrepancy Note ' + (dnId || fileName) + '\n\n' + summary + '\n\nTotal short: ' + totalShort + ' units.\n\nSave this and update Received Qty accordingly?')) return;
+
+  fetch(WORKER_URL + '?action=blinkitSaveDN', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      dn_id: dnId || fileName, ro_number: roMatch ? roMatch[1] : g.ro_number,
+      inv_number: invMatch ? invMatch[1] : ((_roLedgerInvMap[g.ro_number]||{}).inv_number || ''),
+      dn_date: dateMatch ? dateMatch[1] : '', items: items
+    })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (!data.ok) throw new Error(data.error || 'Save failed');
+    toast('Discrepancy Note saved \u2014 ' + items.length + ' line(s)', 'ok');
+
+    var inv = _roLedgerInvMap[g.ro_number];
+    var sentQty = inv ? (inv.total_qty || 0) : 0;
+    var invNumber = inv ? inv.inv_number : null;
+    if (invNumber && sentQty > 0) {
+      var recvQty = Math.max(0, sentQty - totalShort);
+      ledgerSaveReceived(invNumber, recvQty, sentQty);
+    }
+    closeRoDetailModal();
+    roLedgerLoad();
+  }).catch(function(err) { toast('DN save failed: ' + err.message, 'err'); });
 }
 
 // Looks up an item's SKU Name from the SKU Library tab's model data —
