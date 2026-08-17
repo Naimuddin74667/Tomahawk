@@ -722,10 +722,14 @@ export default {
         }
 
         // ── BLINKIT CREDIT NOTE — list all (for ledger badges) ─
+        // items_json is included so the RO Ledger can flag CNs that were
+        // auto-generated from a DN line with no matching invoice item (blank
+        // HSN -- see roLedgerAutoGenerateCN's `unmatched` check) with a
+        // persistent badge instead of a toast that's gone in a few seconds.
         if (action === 'blinkitListCN') {
           await ensureBlinkitTables(env.DB);
           const rows = await env.DB.prepare(
-            'SELECT cn_number, inv_number, ro_number, reason, total_qty, amount, created_at FROM blinkit_credit_notes ORDER BY id DESC'
+            'SELECT cn_number, inv_number, ro_number, reason, items_json, total_qty, amount, created_at FROM blinkit_credit_notes ORDER BY id DESC'
           ).all();
           return json({ ok: true, records: rows.results || [] });
         }
@@ -1485,7 +1489,30 @@ export default {
             'SELECT dn_id, cn_number FROM blinkit_dn WHERE dn_id = ? LIMIT 1'
           ).bind(dn_id).first();
           if (existing) {
+            // Exact same DN re-uploaded (identical dn_id) -- no-op, same as before.
             return json({ ok: true, duplicate: true, cn_number: existing.cn_number || null });
+          }
+          // Blinkit only ever issues one DN per RO. If this RO already has a
+          // *different* DN on file, this new upload is a correction (the
+          // wrong file was attached the first time) -- remove the old DN and
+          // whatever Credit Note it produced before recording the new one,
+          // so the RO always ends up with exactly one DN/CN pair rather than
+          // silently blocking the correction or leaving two CNs behind.
+          let replaced = false;
+          if (ro_number) {
+            const priorRows = await env.DB.prepare(
+              'SELECT dn_id, cn_number FROM blinkit_dn WHERE ro_number = ?'
+            ).bind(ro_number).all();
+            const priors = priorRows.results || [];
+            if (priors.length) {
+              replaced = true;
+              for (const prior of priors) {
+                if (prior.cn_number) {
+                  await env.DB.prepare('DELETE FROM blinkit_credit_notes WHERE cn_number = ?').bind(prior.cn_number).run();
+                }
+              }
+              await env.DB.prepare('DELETE FROM blinkit_dn WHERE ro_number = ?').bind(ro_number).run();
+            }
           }
           await env.DB.prepare(`
             INSERT INTO blinkit_dn (dn_id, ro_number, inv_number, dn_date, items_json, total_qty, total_amount, created_at)
@@ -1494,7 +1521,7 @@ export default {
             dn_id, ro_number || '', inv_number || '', dn_date || '',
             items_json || '[]', total_qty || 0, total_amount || 0
           ).run();
-          return json({ ok: true, duplicate: false });
+          return json({ ok: true, duplicate: false, replaced });
         }
 
         // ── BLINKIT INVOICE — save RO status remark ───────────

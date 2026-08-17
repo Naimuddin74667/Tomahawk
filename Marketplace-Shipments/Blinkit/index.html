@@ -163,7 +163,7 @@
   .fk-sku-tag button{background:none;border:none;color:rgba(74,144,217,0.5);cursor:pointer;font-size:12px;padding:0;line-height:1}
 
   /* RO Ledger — stat cards (grid, responsive, clickable filters) */
-  .ro-stats-row{flex-shrink:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:.85rem 1.4rem;border-bottom:1px solid var(--border);background:var(--bg-surface)}
+  .ro-stats-row{flex-shrink:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;padding:.85rem 1.4rem;border-bottom:1px solid var(--border);background:var(--bg-surface)}
   .ro-stat-card{background:var(--bg-raised);border:1px solid var(--border-subtle);border-radius:9px;padding:1.325rem .9rem;min-width:0;cursor:pointer;transition:border-color .15s,background .15s,box-shadow .15s}
   .ro-stat-card:hover{border-color:var(--accent);background:var(--bg-hover)}
   .ro-stat-card:active{transform:scale(.99)}
@@ -179,7 +179,7 @@
     .ro-stat-value{font-size:18px}
   }
   @media (max-width:560px){
-    .ro-stats-row{grid-template-columns:1fr 1fr;gap:8px}
+    .ro-stats-row{grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}
   }
 
   /* RO Ledger — table scrolls in its own area; header stays sticky at
@@ -818,6 +818,16 @@
       <div class="ro-stat-label">Active Shipment</div>
       <div class="ro-stat-value" id="roLedgerStatActive">&mdash;</div>
       <div class="ro-stat-sub">not fulfilled or cancelled yet &middot; click to filter</div>
+    </div>
+    <div class="ro-stat-card" id="roCardNoEmail" onclick="roLedgerSetCardFilter('noemail')" title="Filter: no RO-created email logged for this RO">
+      <div class="ro-stat-label">Missing RO Email</div>
+      <div class="ro-stat-value" id="roLedgerStatNoEmail">&mdash;</div>
+      <div class="ro-stat-sub">no ro_created email logged &middot; click to filter</div>
+    </div>
+    <div class="ro-stat-card" id="roCardShortNoDn" onclick="roLedgerSetCardFilter('shortnodn')" title="Filter: shortage received but no Discrepancy Note on file">
+      <div class="ro-stat-label">Shortage, No DN</div>
+      <div class="ro-stat-value" id="roLedgerStatShortNoDn">&mdash;</div>
+      <div class="ro-stat-sub">past appt, short-received, no DN &middot; click to filter</div>
     </div>
   </div>
 
@@ -3616,7 +3626,7 @@ var _roLedgerGroups = [];  // grouped by ro_number
 var _roDetailCurrent = null; // the group currently open in the detail modal
 var _roLedgerPage = 1;
 var _roLedgerPageSize = 10;
-var _roLedgerCardFilter = 'all'; // 'all' | 'pending' | 'resched' — driven by clicking the stat cards
+var _roLedgerCardFilter = 'all'; // 'all' | 'pending' | 'resched' | 'active' | 'noemail' | 'shortnodn' — driven by clicking the stat cards
 
 // Clicking a stat card filters the table to that slice; clicking the
 // same card again (or the Total card) resets to showing everything.
@@ -3788,6 +3798,21 @@ function roLedgerGroup() {
   });
 }
 
+// A Credit Note auto-generated from a DN line with no matching invoice
+// item (by UPC) still gets created -- using the DN's own qty/reason/amount
+// -- but its HSN comes back blank since there was nothing to look it up
+// from. That used to only be logged to the console (invisible in normal
+// use); this makes it a persistent ⚠ badge next to the CN in the ledger
+// and RO detail modal instead, so it stays visible until someone actually
+// checks the HSN by hand -- not just for the few seconds a toast lasts.
+function roLedgerCnUnmatchedCount(cnRec) {
+  if (!cnRec || !cnRec.items_json) return 0;
+  try {
+    var items = JSON.parse(cnRec.items_json) || [];
+    return items.filter(function(it){ return !it.hsn; }).length;
+  } catch(e) { return 0; }
+}
+
 function roLedgerItemStats(row) {
   if (!row || !row.items_json) return { count: 0, totalQty: 0 };
   try {
@@ -3914,6 +3939,35 @@ function roLedgerIsActiveShipment(g) {
   return !roLedgerIsClosed(g);
 }
 
+// "Missing RO Email" — this RO has no ro_created row at all (Gmail never
+// caught it, or it predates the watcher — e.g. RO 43886110058068, which
+// only ever had its appointment email logged). Without it, item data has
+// to fall back to the invoice's own stored items (see roLedgerRenderItems)
+// and "+ Generate Invoice" from the RO email has nothing to work from —
+// worth a standing flag rather than only noticing it RO-by-RO in the modal.
+function roLedgerMissingRoEmail(g) {
+  return !g.created;
+}
+
+// "Shortage, No DN" — the revenue-risk case: the appointment has passed,
+// Received Qty has actually been entered and is less than what was sent
+// (a real, on-the-books shortfall), but no Discrepancy Note was ever
+// uploaded for this RO to back it with a Credit Note. Without the DN,
+// there's a shortage sitting on the books with nothing behind it — either
+// the DN still needs uploading, or Received Qty was entered without
+// checking Blinkit actually issued one.
+function roLedgerShortageNoDn(g) {
+  var inv = _roLedgerInvMap[g.ro_number];
+  if (!inv) return false;
+  if (!roLedgerApptHasPassed(g)) return false;
+  var recvQty = (inv.received_qty === null || inv.received_qty === undefined || inv.received_qty === '') ? null : parseInt(inv.received_qty);
+  if (recvQty === null) return false;
+  var sentQty = inv.total_qty || 0;
+  if (recvQty >= sentQty) return false;
+  var dns = _roLedgerDnMap[g.ro_number] || [];
+  return dns.length === 0;
+}
+
 function roLedgerRender() {
   var q = (document.getElementById('roLedgerSearch').value || '').trim().toLowerCase();
   var groups = _roLedgerGroups.filter(function(g){
@@ -3930,6 +3984,10 @@ function roLedgerRender() {
     groups = groups.filter(function(g){ return g.stoRows.length > 1; });
   } else if (_roLedgerCardFilter === 'active') {
     groups = groups.filter(roLedgerIsActiveShipment);
+  } else if (_roLedgerCardFilter === 'noemail') {
+    groups = groups.filter(roLedgerMissingRoEmail);
+  } else if (_roLedgerCardFilter === 'shortnodn') {
+    groups = groups.filter(roLedgerShortageNoDn);
   }
 
   document.getElementById('roLedgerStatTotal').textContent = _roLedgerGroups.length;
@@ -3939,15 +3997,23 @@ function roLedgerRender() {
     _roLedgerGroups.filter(function(g){ return g.stoRows.length > 1; }).length;
   document.getElementById('roLedgerStatActive').textContent =
     _roLedgerGroups.filter(roLedgerIsActiveShipment).length;
+  document.getElementById('roLedgerStatNoEmail').textContent =
+    _roLedgerGroups.filter(roLedgerMissingRoEmail).length;
+  document.getElementById('roLedgerStatShortNoDn').textContent =
+    _roLedgerGroups.filter(roLedgerShortageNoDn).length;
 
   var cardTotal = document.getElementById('roCardTotal');
   var cardPending = document.getElementById('roCardPending');
   var cardResched = document.getElementById('roCardResched');
   var cardActive = document.getElementById('roCardActive');
+  var cardNoEmail = document.getElementById('roCardNoEmail');
+  var cardShortNoDn = document.getElementById('roCardShortNoDn');
   if (cardTotal) cardTotal.classList.toggle('is-active-view', _roLedgerCardFilter === 'all');
   if (cardPending) cardPending.classList.toggle('is-active-view', _roLedgerCardFilter === 'pending');
   if (cardResched) cardResched.classList.toggle('is-active-view', _roLedgerCardFilter === 'resched');
   if (cardActive) cardActive.classList.toggle('is-active-view', _roLedgerCardFilter === 'active');
+  if (cardNoEmail) cardNoEmail.classList.toggle('is-active-view', _roLedgerCardFilter === 'noemail');
+  if (cardShortNoDn) cardShortNoDn.classList.toggle('is-active-view', _roLedgerCardFilter === 'shortnodn');
 
   if (!groups.length) {
     document.getElementById('roLedgerTbody').innerHTML =
@@ -4040,8 +4106,13 @@ function roLedgerRender() {
       }
 
       var cnBadges = cns.map(function(cnRec){
-        return '<div style="display:inline-flex;align-items:center;gap:4px;background:#111;border:1px solid var(--border);border-radius:5px;padding:2px 6px;margin:1px;font-size:10px;font-family:\'DM Mono\',monospace">'
+        var unmatchedN = roLedgerCnUnmatchedCount(cnRec);
+        var warnIcon = unmatchedN
+          ? '<span title="'+unmatchedN+' line(s) auto-matched by DN data alone \u2014 no matching invoice item found, HSN left blank. Verify before sending." style="color:#ffb74d;cursor:help">&#9888;</span>'
+          : '';
+        return '<div style="display:inline-flex;align-items:center;gap:4px;background:#111;border:1px solid '+(unmatchedN?'#5a4318':'var(--border)')+';border-radius:5px;padding:2px 6px;margin:1px;font-size:10px;font-family:\'DM Mono\',monospace">'
           + '<span style="color:var(--accent)">'+cnRec.cn_number+'</span>'
+          + warnIcon
           + '<span style="cursor:pointer;color:var(--muted)" title="Download" onclick="event.stopPropagation();cnDownload(\''+cnRec.cn_number+'\')">&#8595;</span>'
         + '</div>';
       }).join('');
@@ -4334,7 +4405,7 @@ function roLedgerDnUploadClick() {
   var existing = _roLedgerDnMap[g.ro_number] || [];
   if (existing.length) {
     var names = existing.map(function(dn){ return dn.dn_id; }).join(', ');
-    if (!confirm('A Discrepancy Note is already on file for this RO (' + names + ').\n\nUpload another one?')) return;
+    if (!confirm('A Discrepancy Note is already on file for this RO (' + names + ').\n\nBlinkit only issues one DN per RO, so uploading a different one here will replace it \u2014 the old DN and the Credit Note it generated will be removed and rebuilt from the new file.\n\nContinue?')) return;
   }
   document.getElementById('roDetailDnFile').click();
 }
@@ -4401,8 +4472,15 @@ function roLedgerParseDN(text, fileName) {
     if (idMatch) dnId = idMatch[1];
   }
 
+  // Hard block, not just a confirm() escape hatch -- Blinkit issues exactly
+  // one DN per RO, so if the DN's own "RO Number" field doesn't match the RO
+  // this was uploaded from, it's almost certainly the wrong file attached to
+  // the wrong RO. Refuse it outright rather than letting it through and
+  // risk saving DN data (and the CN it generates) against the wrong RO --
+  // the user re-uploads it from the correct RO's detail page instead.
   if (roMatch && roMatch[1] !== g.ro_number) {
-    if (!confirm('This DN is for RO ' + roMatch[1] + ', but you\'re viewing RO ' + g.ro_number + '. Continue anyway?')) return;
+    toast('This Discrepancy Note is for RO ' + roMatch[1] + ', not RO ' + g.ro_number + ' \u2014 open that RO\'s detail page and upload it there instead.', 'err', 6000);
+    return;
   }
 
   // Row anchor: an integer Qty followed by four 2-decimal money fields
@@ -4456,7 +4534,7 @@ function roLedgerParseDN(text, fileName) {
       return;
     }
 
-    toast('Discrepancy Note saved \u2014 ' + items.length + ' line(s). Generating Credit Note\u2026', 'ok');
+    toast((data.replaced ? 'Previous Discrepancy Note replaced \u2014 ' : 'Discrepancy Note saved \u2014 ') + items.length + ' line(s). Generating Credit Note\u2026', 'ok');
 
     var inv = _roLedgerInvMap[g.ro_number];
     var sentQty = inv ? (inv.total_qty || 0) : 0;
@@ -4493,7 +4571,15 @@ function roLedgerAutoGenerateCN(invNumber, roNumber, sentQty, dnItems, dnId) {
 
   checkPromise.then(function(d) {
     if (d.cn_number) {
-      toast('Credit Note ' + d.cn_number + ' already exists for invoice ' + invNumber + ' \u2014 DN saved but not auto-applied, reconcile manually', 'err');
+      // Shouldn't normally happen -- blinkitSaveDN already clears out the
+      // prior DN/CN pair for this RO before a new DN is even accepted -- so
+      // if a CN still turns up here it means this invoice has a Credit Note
+      // that didn't come from this RO's own DN (e.g. one entered by another
+      // route). That needs a human to reconcile, not a silent skip, so this
+      // blocks with an alert() as well as a long-lived toast.
+      var msg = 'Credit Note ' + d.cn_number + ' already exists for invoice ' + invNumber + ', but doesn\'t match this RO\'s Discrepancy Note.\n\nThe DN was saved, but no new Credit Note was generated. Reconcile ' + d.cn_number + ' against this DN manually.';
+      alert(msg);
+      toast('Blocked \u2014 ' + d.cn_number + ' already exists for ' + invNumber + ', reconcile manually', 'err', 9000);
       roLedgerLoad();
       return;
     }
@@ -4544,7 +4630,15 @@ function roLedgerAutoGenerateCN(invNumber, roNumber, sentQty, dnItems, dnId) {
         inv_number: invNumber, ro_number: roNumber, sentQty: sentQty, party: party,
         reason: reasonSummary, items: cancelledItems, dn_id: dnId
       }).then(function(result) {
-        toast('Credit Note ' + result.cnNumber + ' auto-generated from DN', 'ok');
+        if (unmatched.length) {
+          // Loud and persistent -- a toast alone disappears in seconds and
+          // this needs a human to actually fix the HSN before the CN goes
+          // out. The same warning stays as a ⚠ badge on the CN chip in
+          // the ledger (see roLedgerCnUnmatchedCount) until it's dealt with.
+          toast('Credit Note ' + result.cnNumber + ' generated, but ' + unmatched.length + ' line(s) had no matching invoice item \u2014 HSN left blank, check the \u26a0 badge and fix manually', 'err', 9000);
+        } else {
+          toast('Credit Note ' + result.cnNumber + ' auto-generated from DN', 'ok');
+        }
         _docRenderPDF(result.cnNumber, result.html, 'CreditNote');
         roLedgerLoad();
       }).catch(function(err) {
