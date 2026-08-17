@@ -794,8 +794,6 @@
     <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128197; RO Ledger &mdash; auto-detected from Gmail</div>
     <input type="text" id="roLedgerSearch" placeholder="Search RO number or warehouse..." oninput="_roLedgerPage=1;roLedgerRender()" style="width:240px;font-size:11px;padding:5px 10px">
     <button class="btn btn-secondary btn-sm" onclick="roLedgerLoad()" style="width:auto">&#8635; Refresh</button>
-    <button class="btn btn-secondary btn-sm" onclick="roLedgerRepairAll()" style="width:auto;color:var(--rd);border-color:var(--rd)" title="Wipes the log and rebuilds it from Gmail from scratch \u2014 use if attachments/SKU data won't show up">&#128295; Repair</button>
-    <button class="btn btn-secondary btn-sm" onclick="roLedgerRunManualBackfill()" style="width:auto" title="One-time: backfills appointment dates for ROs from before the Gmail watcher existed">&#128229; Backfill appts</button>
   </div>
 
   <!-- Stats strip — cards are clickable filters (click again to clear) -->
@@ -3654,69 +3652,12 @@ function roLedgerCopyRoNumber(roNumber) {
   }
 }
 
-// [ADMIN] Wipes the entire RO log and rebuilds it fresh from Gmail.
-// Needed when rows were logged before a parsing change — e.g. entries
-// created before attachment capture existed have no attachment data,
-// and the normal dedup-by-message-id check will never re-fetch them on
-// its own to backfill it. This forces a full clean rebuild.
-// [ONE-TIME] Backfills appointment dates for ROs that predate the
-// Gmail watcher's existence — no email exists for these, so this data
-// came directly from Blinkit's own Seller Hub dashboard instead. Safe
-// to click more than once (updates in place, never duplicates). Not
-// meant to stay in the UI long-term — remove this button once done.
-function roLedgerRunManualBackfill() {
-  var appointments = [
-    { ro_number: '2738110066999',  scheduled_date: '2026-08-11', scheduled_time: '09:30:00' },
-    { ro_number: '50033210033541', scheduled_date: '2026-08-15', scheduled_time: '19:30:00' },
-    { ro_number: '43886110063631', scheduled_date: '2026-08-14', scheduled_time: '06:30:00' },
-    { ro_number: '43886110058068', scheduled_date: '2026-08-08', scheduled_time: '08:30:00' },
-    { ro_number: '43886110057592', scheduled_date: '2026-07-31', scheduled_time: '06:30:00' },
-    { ro_number: '50033210022256', scheduled_date: '2026-07-27', scheduled_time: '08:00:00' },
-    { ro_number: '50033210019594', scheduled_date: '2026-07-12', scheduled_time: '19:30:00' },
-    { ro_number: '43886110048383', scheduled_date: '2026-07-01', scheduled_time: '06:30:00' },
-    { ro_number: '6769710070652',  scheduled_date: '2026-07-06', scheduled_time: '07:30:00' },
-    { ro_number: '43886110043351', scheduled_date: '2026-06-20', scheduled_time: '06:30:00' },
-    { ro_number: '2273910079178',  scheduled_date: '2026-06-19', scheduled_time: '07:30:00' },
-    { ro_number: '43886110039495', scheduled_date: '2026-06-18', scheduled_time: '06:30:00' },
-    { ro_number: '6769710063404',  scheduled_date: '2026-06-15', scheduled_time: '10:00:00' },
-    { ro_number: '43886110033867', scheduled_date: '2026-05-27', scheduled_time: '08:30:00' },
-    { ro_number: '43886110033054', scheduled_date: '2026-05-25', scheduled_time: '08:30:00' },
-    { ro_number: '43886110032356', scheduled_date: '2026-05-24', scheduled_time: '06:30:00' },
-    { ro_number: '43886110030431', scheduled_date: '2026-05-19', scheduled_time: '06:30:00' },
-    { ro_number: '43886110028393', scheduled_date: '2026-05-11', scheduled_time: '10:30:00' },
-    { ro_number: '8525210029700',  scheduled_date: '2026-05-04', scheduled_time: '13:30:00' }
-  ];
-
-  if (!confirm('Backfill appointment dates for ' + appointments.length + ' ROs from before the Gmail watcher existed? Safe to run more than once.')) return;
-
-  fetch(WORKER_URL + '?action=blinkitBulkSetAppointments', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ appointments: appointments })
-  }).then(function(r){ return r.json(); }).then(function(data){
-    if (!data.ok) throw new Error(data.error || 'Backfill failed');
-    toast('Backfilled ' + data.count + ' appointment(s)', 'ok');
-    roLedgerLoad();
-  }).catch(function(err){ toast('Backfill failed: ' + err.message, 'err'); });
-}
-
-function roLedgerRepairAll() {
-  if (!confirm('This clears the entire RO Ledger and rebuilds it fresh from Gmail. Use this if SKU/Qty data won\'t show up for older entries. Continue?')) return;
-
-  document.getElementById('roLedgerTbody').innerHTML =
-    '<tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Rebuilding from Gmail\u2026 this can take a moment.</td></tr>';
-
-  fetch(WORKER_URL + '?action=blinkitWipeRoLog', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' })
-    .then(function(r){ return r.json(); })
-    .then(function(data){
-      if (!data.ok) throw new Error(data.error || 'Repair failed');
-      toast('Rebuilt from Gmail \u2014 ' + (data.rebuilt && data.rebuilt.newLogged || 0) + ' entries restored', 'ok');
-      roLedgerLoad();
-    })
-    .catch(function(err){
-      toast('Repair failed: ' + err.message, 'err');
-      roLedgerLoad();
-    });
-}
+// NOTE: two one-time-use admin tools (a full Gmail-rebuild "Repair" button
+// and a hardcoded appointment "Backfill" for ROs that predated the Gmail
+// watcher) used to live here. Both did their job and were removed from the
+// UI; the underlying worker actions (blinkitWipeRoLog, admin_only, and
+// blinkitBulkSetAppointments) are still in worker.js if a full rebuild is
+// ever genuinely needed again, just not exposed as a standing button.
 
 var _roLedgerInvMap = {}; // ro_number -> full invoice record (from blinkitListInv)
 var _roLedgerGatepassMap = {}; // ro_number -> gatepass record (from UC_Gatepass, Blinkit rows only)
@@ -4339,9 +4280,9 @@ function closeRoDetailModal() {
 
 // Marks the RO as Cancelled — hides it from the RO Ledger entirely
 // (not shown with a badge, just not listed). Applies to every row for
-// this RO number. Nothing is deleted; clicking "Repair" rebuilds the
-// whole log fresh from Gmail, which clears any manual_status along the
-// way — that's the recovery path if one gets cancelled by mistake.
+// this RO number. Nothing is deleted from D1 — clicking "Mark as
+// Cancelled" again (once un-hidden) or a direct blinkitWipeRoLog rebuild
+// are the only ways to clear the manual_status flag if set by mistake.
 // Toggles the manual "picked up" flag — the only way to mark In
 // Transit, since no email or system field reflects the actual physical
 // pickup moment. Reuses the same blinkitSetRoStatus action as Cancel
@@ -4366,7 +4307,7 @@ function roLedgerTogglePickedUp() {
 function roLedgerDeleteEntry() {
   var g = _roDetailCurrent;
   if (!g) return;
-  if (!confirm('Mark RO ' + g.ro_number + ' as Cancelled? It will be hidden from the RO Ledger (nothing is deleted \u2014 hitting Repair later would bring it back).')) return;
+  if (!confirm('Mark RO ' + g.ro_number + ' as Cancelled? It will be hidden from the RO Ledger (nothing is deleted from the database).')) return;
 
   fetch(WORKER_URL + '?action=blinkitSetRoStatus', {
     method: 'POST', headers: {'Content-Type':'application/json'},
