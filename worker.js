@@ -753,10 +753,14 @@ export default {
         }
 
         // ── BLINKIT DISCREPANCY NOTE — list all (history / audit trail) ──
+        // items_json is included (unlike the other blinkitList* actions) so
+        // the RO Detail modal can compute a real per-SKU received qty from
+        // each DN's own per-line short quantities instead of just showing
+        // the one invoice-level total on every row.
         if (action === 'blinkitListDN') {
           await ensureBlinkitTables(env.DB);
           const rows = await env.DB.prepare(
-            'SELECT dn_id, ro_number, inv_number, dn_date, total_qty, total_amount, cn_number, created_at FROM blinkit_dn ORDER BY id DESC'
+            'SELECT dn_id, ro_number, inv_number, dn_date, items_json, total_qty, total_amount, cn_number, created_at FROM blinkit_dn ORDER BY id DESC'
           ).all();
           return json({ ok: true, records: rows.results || [] });
         }

@@ -3720,6 +3720,7 @@ function roLedgerRepairAll() {
 
 var _roLedgerInvMap = {}; // ro_number -> full invoice record (from blinkitListInv)
 var _roLedgerGatepassMap = {}; // ro_number -> gatepass record (from UC_Gatepass, Blinkit rows only)
+var _roLedgerDnMap = {}; // ro_number -> array of Discrepancy Note records (items_json included)
 
 function roLedgerLoad() {
   document.getElementById('roLedgerTbody').innerHTML =
@@ -3729,7 +3730,8 @@ function roLedgerLoad() {
     fetch(WORKER_URL + '?action=blinkitListRoLog').then(function(r){ return r.json(); }),
     fetch(WORKER_URL + '?action=blinkitListInv').then(function(r){ return r.json(); }).catch(function(){ return { records: [] }; }),
     fetch(WORKER_URL + '?action=blinkitListCN').then(function(r){ return r.json(); }).catch(function(){ return { records: [] }; }),
-    fetch(WORKER_URL + '?action=blinkitGetGatepass').then(function(r){ return r.json(); }).catch(function(){ return { records: [] }; })
+    fetch(WORKER_URL + '?action=blinkitGetGatepass').then(function(r){ return r.json(); }).catch(function(){ return { records: [] }; }),
+    fetch(WORKER_URL + '?action=blinkitListDN').then(function(r){ return r.json(); }).catch(function(){ return { records: [] }; })
   ])
     .then(function(results){
       var roData = results[0];
@@ -3756,6 +3758,16 @@ function roLedgerLoad() {
       _roLedgerGatepassMap = {};
       (results[3].records || []).forEach(function(gp){
         if (gp.ro_number && !_roLedgerGatepassMap[gp.ro_number]) _roLedgerGatepassMap[gp.ro_number] = gp;
+      });
+
+      // Discrepancy Notes — one RO can in principle have more than one DN
+      // over time, so keep all of them per RO; roLedgerRenderItems sums
+      // each SKU's short qty across all of them.
+      _roLedgerDnMap = {};
+      (results[4].records || []).forEach(function(dn){
+        if (!dn.ro_number) return;
+        if (!_roLedgerDnMap[dn.ro_number]) _roLedgerDnMap[dn.ro_number] = [];
+        _roLedgerDnMap[dn.ro_number].push(dn);
       });
 
       roLedgerGroup();
@@ -4576,12 +4588,27 @@ function roLedgerRenderItems() {
   if (items.length) {
     parseBtn.textContent = '\u21bb Re-parse from Excel';
     parseBtn.style.display = xlsxAttachment ? 'inline-block' : 'none';
-    // Received Qty here is the overall invoice figure (same value on
-    // every row) — there's no per-item receiving breakdown, only a
-    // single received-qty for the whole invoice.
-    var inv = _roLedgerInvMap[g.ro_number];
-    var recvDisplay = (inv && inv.received_qty !== null && inv.received_qty !== undefined && inv.received_qty !== '')
-      ? inv.received_qty : '\u2014';
+
+    // Real per-SKU received qty, computed from every Discrepancy Note filed
+    // against this RO: sum each SKU's own short qty (matched by UPC, same
+    // barcode field DN lines carry) across all DNs, then Recv = Sent - Short.
+    // This replaces the old behaviour of repeating the single invoice-level
+    // received total on every row, which could show e.g. "74" against a SKU
+    // that only had 11 units sent -- correct in aggregate, nonsensical per
+    // row. Falls back to '—' when this RO has no DN yet (nothing to compute
+    // a per-SKU figure from), same as before.
+    var dnRecords = _roLedgerDnMap[g.ro_number] || [];
+    var shortByUpc = {};
+    dnRecords.forEach(function(dn){
+      var dnItems = [];
+      try { dnItems = JSON.parse(dn.items_json || '[]'); } catch(e) {}
+      dnItems.forEach(function(di){
+        if (!di.upc) return;
+        shortByUpc[di.upc] = (shortByUpc[di.upc] || 0) + (parseInt(di.qty) || 0);
+      });
+    });
+    var hasDnData = dnRecords.length > 0;
+
     document.getElementById('roDetailItems').innerHTML =
       '<table style="width:100%;border-collapse:collapse;font-size:11px">'
       + '<thead><tr>'
@@ -4590,10 +4617,13 @@ function roLedgerRenderItems() {
       + '<th style="text-align:left;padding:.3rem;color:var(--muted)">UPC</th>'
       + '<th style="text-align:right;padding:.3rem;color:var(--muted)">Qty</th>'
       + '<th style="text-align:right;padding:.3rem;color:var(--muted)">MRP</th>'
-      + '<th style="text-align:right;padding:.3rem;color:var(--muted)" title="Overall invoice received qty — not tracked per item">Recv Qty</th>'
+      + '<th style="text-align:right;padding:.3rem;color:var(--muted)" title="Sent qty minus this SKU\'s own short qty from the Discrepancy Note(s) filed against this RO">Recv Qty</th>'
       + '</tr></thead><tbody>'
       + items.map(function(it){
           var skuName = roLedgerFindSkuName(it.skuId);
+          var sentQty = parseInt(it.qty) || 0;
+          var short = shortByUpc[it.upc] || 0;
+          var recvDisplay = hasDnData ? Math.max(0, sentQty - short) : '\u2014';
           return '<tr style="border-top:1px solid var(--border)">'
             + '<td style="padding:.3rem">'+(skuName ? esc(skuName) : '<span style="color:var(--muted)">Not in library</span>')+'</td>'
             + '<td style="padding:.3rem">'+esc(it.skuId||'\u2014')+'</td>'
