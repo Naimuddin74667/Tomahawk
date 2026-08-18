@@ -1257,7 +1257,15 @@ zoom(0);
 // default display above) — switchTab('roledger', ...) normally triggers
 // this load, but since the tab is shown by default without a click,
 // kick it off here instead so data's already there when the page paints.
-roLedgerLoad();
+// Deferred to the window 'load' event — calling this synchronously here
+// (at inline-script parse time) was unreliable: on some loads WORKER_URL
+// wasn't assigned yet at this point in script execution, so the very
+// first fetch went to a relative "undefined?action=..." URL, got back
+// GitHub Pages' HTML 404 page instead of JSON, and either silently
+// rendered an empty "No ROs detected" table or (if it hit the ungated
+// blinkitListRoLog call) showed "Failed to load: Unexpected token '<'".
+// Waiting for 'load' guarantees every top-level var below has run first.
+window.addEventListener('load', roLedgerLoad);
 
 // ── TOAST ──
 function toast(msg, type, dur) {
@@ -3671,7 +3679,10 @@ function roLedgerLoad() {
     '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
 
   Promise.all([
-    fetch(WORKER_URL + '?action=blinkitListRoLog').then(function(r){ return r.json(); }),
+    fetch(WORKER_URL + '?action=blinkitListRoLog').then(function(r){
+      if (!r.ok) throw new Error('RO log request failed (HTTP ' + r.status + ')');
+      return r.json();
+    }),
     fetch(WORKER_URL + '?action=blinkitListInv').then(function(r){ return r.json(); }).catch(function(){ return { records: [] }; }),
     fetch(WORKER_URL + '?action=blinkitListCN').then(function(r){ return r.json(); }).catch(function(){ return { records: [] }; }),
     fetch(WORKER_URL + '?action=blinkitGetGatepass').then(function(r){ return r.json(); }).catch(function(){ return { records: [] }; }),
