@@ -87,6 +87,10 @@
   .progress-bg{background:#111;border-radius:99px;height:5px;overflow:hidden;border:1px solid var(--border)}
   .progress-fill{height:100%;background:var(--accent);border-radius:99px;transition:width .2s;width:0}
   .progress-text{font-size:10px;color:var(--muted);margin-top:3px;font-family:'DM Mono',monospace}
+  .gen-progress-wrap{position:sticky;top:0;z-index:50;background:var(--bg);padding:0 24px 8px;border-bottom:1px solid var(--border);}
+  .gen-progress-bar{height:5px;background:var(--surface2);border-radius:3px;overflow:hidden;margin-top:8px;}
+  .gen-progress-fill{height:100%;background:var(--accent);width:0%;transition:width .25s ease;}
+  .gen-progress-text{font-family:'DM Mono',monospace;font-size:11px;color:var(--muted);margin-top:6px;letter-spacing:.3px;}
   .bulk-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem}
   .bulk-summary{font-size:12px;color:var(--muted)}
   .bulk-table-wrap{border:1px solid var(--border);border-radius:7px;overflow-y:auto;flex:1;min-height:0;display:flex;flex-direction:column}
@@ -295,6 +299,13 @@
   </div>
 
 </header>
+
+<!-- Label generation progress — spans full width, only visible while generating.
+     Mirrors the same progress-bar pattern used in Inward Label Generator. -->
+<div class="gen-progress-wrap" id="gen-progress-wrap" style="display:none;">
+  <div class="gen-progress-bar"><div class="gen-progress-fill" id="gen-progress-fill"></div></div>
+  <div class="gen-progress-text" id="gen-progress-text">Generating&hellip;</div>
+</div>
 
 <script>
 // ══════════════════════════════════════════════════════════════════
@@ -1268,6 +1279,37 @@ function toast(msg, type, dur) {
   t.className = 'toast '+(type||'info')+' show';
   clearTimeout(t._t);
   t._t = setTimeout(function(){ t.classList.remove('show'); }, dur || 2500);
+}
+
+// ── LABEL GENERATION PROGRESS BAR ───────────────────────────────────────
+// Same component/pattern as Inward Label Generator's box-generation bar.
+// Here it tracks the RO items being matched to Label Print rows one by one.
+var _genStartTime = 0;
+function showGenProgress(total) {
+  _genStartTime = Date.now();
+  var wrap = document.getElementById('gen-progress-wrap');
+  var fill = document.getElementById('gen-progress-fill');
+  var text = document.getElementById('gen-progress-text');
+  wrap.style.display = 'block';
+  fill.style.width = '0%';
+  text.textContent = 'Matching label 0 of ' + total + '\u2026';
+}
+function updateGenProgress(current, total) {
+  var fill = document.getElementById('gen-progress-fill');
+  var text = document.getElementById('gen-progress-text');
+  var pct = total > 0 ? Math.round((current/total)*100) : 0;
+  fill.style.width = pct + '%';
+  var eta = '';
+  if (current > 0 && current < total) {
+    var elapsedMs = Date.now() - _genStartTime;
+    var msPerItem = elapsedMs / current;
+    var remainingSec = Math.round((msPerItem * (total - current)) / 1000);
+    if (remainingSec > 0) eta = ' \u2014 ~' + remainingSec + 's left';
+  }
+  text.textContent = 'Matching label ' + current + ' of ' + total + ' (' + pct + '%)' + eta;
+}
+function hideGenProgress() {
+  document.getElementById('gen-progress-wrap').style.display = 'none';
 }
 
 // ── BARCODE ──
@@ -3518,19 +3560,35 @@ function invConfirmAndDownload() {
   });
 }
 
-function invGenerateLabels() {
+async function invGenerateLabels() {
   // Reads current form values (respects any edits the user made post-parse)
   var d = invCollectData();
   if (!d.items.length) { toast('No items found — upload an RO PDF first', 'err'); return; }
 
-  // Map RO items into the {skuId, qty, upc, mrp, desc} shape Label Print already expects
+  var btn = document.getElementById('invGenerateLabelsBtn');
+  var origLabel = btn.innerHTML;
+  btn.disabled = true;
+
+  var total = d.items.length;
+  showGenProgress(total);
+
+  // Map RO items into the {skuId, qty, upc, mrp, desc} shape Label Print already expects.
+  // Walked one item at a time (instead of .forEach) so the progress bar has
+  // something real to report — each tick yields a frame so it actually paints.
   var skuQtyMap = {};
-  d.items.forEach(function(it) {
-    if (!it.item_id) return;
-    skuQtyMap[it.item_id] = { skuId: it.item_id, qty: it.qty, upc: it.upc, mrp: it.mrp, desc: it.description };
-  });
+  for (var i = 0; i < d.items.length; i++) {
+    var it = d.items[i];
+    if (it.item_id) {
+      skuQtyMap[it.item_id] = { skuId: it.item_id, qty: it.qty, upc: it.upc, mrp: it.mrp, desc: it.description };
+    }
+    updateGenProgress(i + 1, total);
+    await new Promise(function(r){ requestAnimationFrame(r); });
+  }
 
   buildBulkRows(skuQtyMap); // existing Label Print SKU-matching logic — untouched
+  hideGenProgress();
+  btn.disabled = false;
+  btn.innerHTML = origLabel;
 
   var labelBtn = document.getElementById('tabBtnBulk');
   switchTab('bulk', labelBtn);
