@@ -20,6 +20,40 @@ function json(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: CORS });
 }
 
+// ── Shared edge-cached GAS fetch — used by the Ops Chatbot (chatAsk).
+// Deliberately separate from sa_loadAll's own local cachedGasFetch so this
+// never risks touching Stock Alert's existing behavior. Same pattern:
+// Cloudflare's default cache keyed by a synthetic internal URL, 5 min TTL,
+// so repeat questions don't hit Apps Script every time. ──
+async function fetchGasCached(gasUrl, cacheKeyUrl) {
+  const cache = caches.default;
+  const cacheKey = new Request(cacheKeyUrl);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached.json();
+  const res = await fetch(gasUrl);
+  if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
+  const text = await res.text();
+  const response = new Response(text, {
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300' }
+  });
+  await cache.put(cacheKey, response.clone());
+  return JSON.parse(text);
+}
+
+// ── Loose SKU matcher for the chatbot — exact code match first, then
+// "contains" on code or product name. Not real NLU, just enough for
+// "stock for TCD-20A" / "TCD-20A stock" / partial product names to work. ──
+function findSkuMatches(query, invRows) {
+  const q = String(query || '').toLowerCase().trim();
+  if (!q) return [];
+  const exact = invRows.filter(r => String(r.skuCode || '').toLowerCase() === q);
+  if (exact.length) return exact;
+  return invRows.filter(r =>
+    String(r.skuCode || '').toLowerCase().includes(q) ||
+    String(r.name || '').toLowerCase().includes(q)
+  ).slice(0, 8);
+}
+
 // ── CSV row parser (handles quoted fields with commas inside) ──
 function parseCSVRow(row) {
   if (!row || !row.trim()) return null;
@@ -165,6 +199,9 @@ const ACTION_TIERS = {
   //   refreshed on-demand from the hub (admin-only "Refresh SKU List"
   //   button) and read by Master Sheet's Add SKU dropdown. —
   ucsku_getList: 'viewer_read', ucsku_saveList: 'admin_only',
+
+  // — Ops Chatbot: read-only stock Q&A, same tier as ucsku_getList. —
+  chatAsk: 'viewer_read',
 
   // — Scanner Dashboard: admin + manager full access; viewer can view;
   //   picker_packer has no access to the dashboard itself. scannerLoadData
@@ -1394,6 +1431,78 @@ export default {
             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
           `).bind(JSON.stringify(skus)).run();
           return json({ ok: true, count: skus.length });
+        }
+
+        // ── OPS CHATBOT — natural-language stock lookup ───────────────────
+        // "How much stock do I have on <SKU>" style Q&A. Pulls two live
+        // feeds from the same UC_Inventory_API GAS bridge Stock Alert
+        // already uses (SA_UC_GAS_URL):
+        //   - unfiltered  -> UC_Inventory rows: skuCode, name, E3_stock,
+        //     G4_stock, total_stock (2h UC auto-sync cadence)
+        //   - ?type=gatepassPending -> { pending: { skuCode: qty } }, sum of
+        //     `quantity` on UC_Gatepass rows where status != 'CLOSED'
+        //     (open/pending gate passes not yet closed = stock committed
+        //     out but not shipped). NOTE: UC_Gatepass is NOT on the sheet's
+        //     own 2h live-sync list (confirmed separately — see the Aug-2026
+        //     outbound-inventory-pipeline design note), so this number can
+        //     lag behind E3/G4 stock until that gap is closed. Answer still
+        //     returns it, just treat it as "as of last gate pass tab sync"
+        //     rather than realtime.
+        // Both calls are edge-cached 5 min (same pattern as sa_loadAll) so
+        // repeat questions don't hammer Apps Script.
+        if (act === 'chatAsk') {
+          const { message } = body || {};
+          if (!message || !String(message).trim()) return json({ ok: false, error: 'message required' }, 400);
+
+          const [invData, gpData] = await Promise.all([
+            fetchGasCached(SA_UC_GAS_URL, 'https://cache.internal/chat-uc-inventory-v1').catch(e => ({ error: e.message })),
+            fetchGasCached(SA_UC_GAS_URL + '?type=gatepassPending', 'https://cache.internal/chat-gp-pending-v1').catch(e => ({ error: e.message }))
+          ]);
+
+          if (invData.error) return json({ ok: false, error: 'Inventory feed error: ' + invData.error });
+          const invRows = invData.rows || [];
+          const gpMap = (gpData && !gpData.error && gpData.pending) ? gpData.pending : {};
+          const gpUnavailable = !gpData || !!gpData.error;
+
+          let matches = findSkuMatches(message, invRows);
+          if (!matches.length) {
+            const words = String(message).split(/[\s,]+/).filter(w => w.length >= 3);
+            for (const w of words) {
+              matches = findSkuMatches(w, invRows);
+              if (matches.length) break;
+            }
+          }
+
+          if (!matches.length) {
+            return json({ ok: true, answer: "I couldn't find a SKU matching that in UC_Inventory — try the exact SKU code or part of the product name.", matches: [] });
+          }
+
+          const context = matches.slice(0, 5).map(r => ({
+            sku: r.skuCode,
+            name: r.name,
+            E3: Number(r.E3_stock) || 0,
+            G4: Number(r.G4_stock) || 0,
+            total: Number(r.total_stock) || 0,
+            gpReserved: gpUnavailable ? null : (Number(gpMap[r.skuCode]) || 0)
+          }));
+
+          const systemPrompt = 'You are a warehouse inventory assistant for TomahawkTools. Answer using ONLY the stock data provided in the user message — never guess or invent numbers, and say so plainly if the data doesn\'t cover what was asked. Be concise (1-3 sentences), plain text, no markdown, no bullet points.\n\n'
+            + 'Field meanings: E3 and G4 are live stock at those two warehouses (from Unicommerce, synced every 2 hours). total is E3+G4 combined. gpReserved is stock already gate-passed out on an open/pending gate pass that hasn\'t closed yet — it is a separate "committed but not yet shipped" bucket, NOT included in E3/G4/total. gpReserved being null means that feed is temporarily unavailable, not zero.';
+          const userPrompt = 'Stock data (JSON): ' + JSON.stringify(context) + '\n\nQuestion: ' + message;
+
+          try {
+            const aiResp = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt }
+              ]
+            });
+            return json({ ok: true, answer: (aiResp && aiResp.response) || null, matches: context });
+          } catch (e) {
+            // Workers AI binding missing/erroring — still return the raw
+            // numbers so the bot isn't fully broken while that's sorted out.
+            return json({ ok: true, answer: null, matches: context, aiError: e.message });
+          }
         }
 
         // ── BLINKIT INVOICE — save invoice record + HTML ──────
