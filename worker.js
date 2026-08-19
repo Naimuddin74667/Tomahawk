@@ -989,7 +989,36 @@ export default {
           const res = await fetch(SA_UC_GAS_URL + '?type=blinkitGatepass');
           if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
           const text = await res.text();
-          const response = new Response(text, {
+
+          // Backfill ro_number when GAS's own extraction comes back empty.
+          // Most Blinkit gatepasses have a reference like "RO 43886110058068",
+          // which GAS parses into ro_number cleanly. Some (e.g. bare-numeric
+          // "50033210036310.0", no "RO " text) don't match that upstream
+          // extraction, so ro_number comes back missing and the gatepass
+          // silently never links to its RO in the Ledger. This pulls the
+          // longest 6+ digit run out of whatever reference-like field is
+          // present as a fallback. Purely additive — a record that already
+          // has ro_number from GAS is left untouched, and any failure here
+          // just falls through to caching the raw GAS text unchanged.
+          let text2 = text;
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed && Array.isArray(parsed.records)) {
+              let backfilled = 0;
+              parsed.records.forEach(rec => {
+                if (!rec.ro_number) {
+                  const raw = rec.reference ?? rec.Reference ?? rec.ref ?? rec.purpose ?? '';
+                  const m = String(raw).match(/\d{6,}/);
+                  if (m) { rec.ro_number = m[0]; backfilled++; }
+                }
+              });
+              if (backfilled > 0) text2 = JSON.stringify(parsed);
+            }
+          } catch (e) {
+            // GAS response wasn't valid JSON — fall through, cache raw text.
+          }
+
+          const response = new Response(text2, {
             headers: { ...CORS, 'Cache-Control': 'public, max-age=300', 'X-Cache': 'MISS' }
           });
           await cache.put(cacheKey, response.clone());
