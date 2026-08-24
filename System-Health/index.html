@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Health · Tomahawk Operations</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%231a1a1a'/%3E%3Ctext x='32' y='48' font-family='Arial Black,sans-serif' font-weight='900' font-size='52' text-anchor='middle' fill='%23F5A800'%3ET%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+:root {
+  --bg-base:        #0c0c14;
+  --bg-surface:     #13131e;
+  --bg-raised:      #1a1a28;
+  --bg-hover:       #1f1f30;
+  --border-subtle:  #1f1f2e;
+  --border-default: #2a2a38;
+  --border-strong:  #55556a;
+
+  --text-primary:   #e8e8f0;
+  --text-secondary: #888899;
+  --text-muted:     #6b6b82;
+  --text-faint:     #52526a;
+
+  --accent:         #F5A800;
+  --accent-dim:     #F5A80018;
+  --accent-border:  #F5A80044;
+
+  --c-green:        #4ade80;
+  --c-green-dim:    #4ade8015;
+  --c-green-border: #4ade8040;
+
+  --c-orange:       #fb923c;
+  --c-orange-dim:   #fb923c15;
+  --c-orange-border:#fb923c40;
+
+  --c-red:          #f87171;
+  --c-red-dim:      #f8717115;
+  --c-red-border:   #f8717140;
+
+  --c-blue:         #60a5fa;
+  --c-blue-dim:     #60a5fa15;
+  --c-blue-border:  #60a5fa40;
+
+  --radius-sm: 6px; --radius-md: 10px; --radius-lg: 14px;
+  --font-display: 'Syne', sans-serif;
+  --font-body: 'DM Sans', sans-serif;
+}
+html[data-theme="light"] {
+  --bg-base: #f4f4f7; --bg-surface: #ffffff; --bg-raised: #ededf3; --bg-hover: #e4e4ee;
+  --border-subtle: #e0e0ea; --border-default: #d0d0dd; --border-strong: #9999b0;
+  --text-primary: #111118; --text-secondary: #555566; --text-muted: #888899; --text-faint: #999ab0;
+  --accent: #c98a00; --accent-dim: #F5A80014; --accent-border: #F5A80055;
+  --c-green: #16a34a; --c-green-dim: #16a34a12; --c-green-border: #16a34a40;
+  --c-orange: #ea580c; --c-orange-dim: #ea580c12; --c-orange-border: #ea580c40;
+  --c-red: #dc2626; --c-red-dim: #dc262612; --c-red-border: #dc262640;
+  --c-blue: #2563eb; --c-blue-dim: #2563eb12; --c-blue-border: #2563eb40;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: var(--bg-base); color: var(--text-primary); font-family: var(--font-body); min-height: 100%; }
+body { padding: 32px 24px 80px; max-width: 1100px; margin: 0 auto; }
+h1, h2, .brand { font-family: var(--font-display); font-weight: 800; }
+a { color: inherit; text-decoration: none; }
+
+.topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; flex-wrap: wrap; gap: 12px; }
+.brand-row { display: flex; align-items: center; gap: 10px; }
+.brand-row svg { flex-shrink: 0; }
+.brand { font-size: 20px; color: var(--text-primary); }
+.brand small { display: block; font-family: var(--font-body); font-weight: 500; font-size: 12px; color: var(--text-muted); margin-top: 1px; }
+.back-link { font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 4px; }
+.back-link:hover { color: var(--accent); }
+.top-actions { display: flex; align-items: center; gap: 10px; }
+.pill-btn { border: 1px solid var(--border-default); background: var(--bg-surface); color: var(--text-secondary); padding: 7px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600; cursor: pointer; font-family: var(--font-body); }
+.pill-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.section-head { display: flex; align-items: baseline; justify-content: space-between; margin: 30px 0 14px; }
+.section-head h2 { font-size: 15px; letter-spacing: .02em; color: var(--text-primary); }
+.section-head .count { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+
+.bridge-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+.bridge-card { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 16px; }
+.bridge-top { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
+.status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.status-dot.ok { background: var(--c-green); box-shadow: 0 0 0 4px var(--c-green-dim); }
+.status-dot.stale { background: var(--c-orange); box-shadow: 0 0 0 4px var(--c-orange-dim); }
+.status-dot.error, .status-dot.unknown { background: var(--c-red); box-shadow: 0 0 0 4px var(--c-red-dim); }
+.bridge-name { font-weight: 700; font-size: 14.5px; }
+.bridge-meta { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+.bridge-detail { font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; }
+.bridge-card.never { border-style: dashed; opacity: .7; }
+
+.issue-list { display: flex; flex-direction: column; gap: 10px; }
+.issue-card { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 14px 16px; display: flex; gap: 12px; align-items: flex-start; }
+.issue-card.resolved { opacity: .55; }
+.sev-badge { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 3px 8px; border-radius: 999px; flex-shrink: 0; margin-top: 2px; }
+.sev-critical { background: var(--c-red-dim); color: var(--c-red); border: 1px solid var(--c-red-border); }
+.sev-warning  { background: var(--c-orange-dim); color: var(--c-orange); border: 1px solid var(--c-orange-border); }
+.sev-info     { background: var(--c-blue-dim); color: var(--c-blue); border: 1px solid var(--c-blue-border); }
+.issue-body { flex: 1; min-width: 0; }
+.issue-title { font-weight: 700; font-size: 13.5px; margin-bottom: 3px; }
+.issue-desc { font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; white-space: pre-wrap; }
+.issue-meta { font-size: 11px; color: var(--text-faint); margin-top: 6px; }
+.resolve-btn { border: 1px solid var(--c-green-border); background: var(--c-green-dim); color: var(--c-green); padding: 6px 11px; border-radius: 999px; font-size: 11.5px; font-weight: 700; cursor: pointer; flex-shrink: 0; font-family: var(--font-body); }
+.resolve-btn:hover { filter: brightness(1.15); }
+.empty-note { color: var(--text-muted); font-size: 13px; padding: 18px 4px; }
+
+.auth-gate { max-width: 380px; margin: 90px auto; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 28px; text-align: center; }
+.auth-gate h2 { font-size: 17px; margin-bottom: 6px; }
+.auth-gate p { font-size: 13px; color: var(--text-muted); margin-bottom: 18px; }
+.auth-gate input { width: 100%; background: var(--bg-raised); border: 1px solid var(--border-default); color: var(--text-primary); padding: 10px 12px; border-radius: var(--radius-sm); font-size: 14px; margin-bottom: 10px; font-family: var(--font-body); }
+.auth-gate button { width: 100%; background: var(--accent); color: #1a1300; border: none; padding: 11px; border-radius: var(--radius-sm); font-weight: 700; font-size: 14px; cursor: pointer; font-family: var(--font-body); }
+.auth-error { color: var(--c-red); font-size: 12.5px; margin-top: 10px; min-height: 16px; }
+.denied { text-align: center; margin-top: 100px; color: var(--text-muted); }
+.denied strong { color: var(--text-primary); display: block; font-size: 16px; margin-bottom: 6px; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div id="gate" class="auth-gate">
+  <h2>System Health</h2>
+  <p>Admin sign-in required</p>
+  <form id="login-form">
+    <input type="text" id="login-user" placeholder="Username" autocomplete="username" required>
+    <input type="password" id="login-pass" placeholder="Password" autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+  </form>
+  <div class="auth-error" id="login-error"></div>
+</div>
+
+<div id="denied" class="denied hidden">
+  <strong>Admin access only</strong>
+  This dashboard is restricted to admin accounts.
+  <div style="margin-top:14px;"><a href="../" class="back-link">← Back to hub</a></div>
+</div>
+
+<div id="app" class="hidden">
+  <div class="topbar">
+    <div class="brand-row">
+      <svg width="30" height="30" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="#1a1a1a"/><text x="32" y="46" font-family="Arial Black,sans-serif" font-weight="900" font-size="46" text-anchor="middle" fill="#F5A800">T</text></svg>
+      <div>
+        <div class="brand">System Health</div>
+        <small>Every bridge that keeps the Tomahawk apps fed</small>
+      </div>
+    </div>
+    <div class="top-actions">
+      <a href="../" class="back-link pill-btn">← Hub</a>
+      <button class="pill-btn" id="theme-toggle">Theme</button>
+      <button class="pill-btn" id="refresh-btn">Refresh</button>
+      <button class="pill-btn" id="logout-btn">Sign out</button>
+    </div>
+  </div>
+
+  <div class="section-head">
+    <h2>Bridges</h2>
+    <span class="count" id="bridge-count"></span>
+  </div>
+  <div class="bridge-grid" id="bridge-grid"></div>
+
+  <div class="section-head">
+    <h2>Reported issues</h2>
+    <span class="count" id="issue-count"></span>
+  </div>
+  <div class="issue-list" id="issue-list"></div>
+</div>
+
+<script>
+(function () {
+  const WORKER_URL = 'https://tomahawk-returns.naimuddin.workers.dev';
+  const SESSION_KEY = 'tm_session_v1';
+  const THEME_KEY = 'tm_theme';
+
+  // — Every bridge we expect to hear from. If a bridge has never sent a
+  //   heartbeat yet, it still shows here as "never reported" rather than
+  //   silently missing from the grid. expected_interval_seconds from the
+  //   server (once it has reported) overrides these defaults. —
+  const KNOWN_BRIDGES = [
+    { id: 'uc_auto_sync',        name: 'UC API Auto Sync (Google Sheet)',      interval: 3600 },
+    { id: 'amazon_auto_sync',    name: 'Amazon Sync Sheet',                    interval: 3600 },
+    { id: 'blinkit_ro_watcher',  name: 'Blinkit RO Email Watcher (Worker cron)', interval: 900 },
+    { id: 'gas_flipkart_returns',name: 'GAS: Flipkart_All_Returns bridge',     interval: 7200 },
+    { id: 'gas_uc_inventory',    name: 'GAS: UC_Inventory_API bridge',         interval: 7200 },
+    { id: 'gas_returns_proxy',   name: 'GAS: Returns-Manager legacy proxy',    interval: 7200 },
+    { id: 'amazon_vldd',         name: 'Amazon VLDD integration',              interval: 86400 },
+    { id: 'cloudflare_worker',   name: 'Cloudflare Worker / D1 (this backend)',interval: 3600 }
+  ];
+
+  function getSession() { try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch (e) { return null; } }
+  function setSession(s) { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); }
+  function clearSession() { localStorage.removeItem(SESSION_KEY); }
+
+  async function api(action, { method = 'GET', body = null } = {}) {
+    const session = getSession();
+    const headers = { 'Content-Type': 'application/json' };
+    if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
+    const url = WORKER_URL + '?action=' + encodeURIComponent(action);
+    const res = await fetch(url, {
+      method,
+      headers,
+      body: method === 'POST' ? JSON.stringify(Object.assign({ action }, body || {})) : undefined
+    });
+    return res.json();
+  }
+
+  const gate = document.getElementById('gate');
+  const denied = document.getElementById('denied');
+  const app = document.getElementById('app');
+  const loginForm = document.getElementById('login-form');
+  const loginError = document.getElementById('login-error');
+
+  function timeAgo(iso) {
+    if (!iso) return 'never';
+    const then = new Date(iso.replace(' ', 'T') + 'Z').getTime();
+    const diff = Math.max(0, Date.now() - then);
+    const m = Math.floor(diff / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + 'm ago';
+    const h = Math.floor(m / 60);
+    if (h < 24) return h + 'h ' + (m % 60) + 'm ago';
+    const d = Math.floor(h / 24);
+    return d + 'd ago';
+  }
+
+  function computeStatus(bridge, def) {
+    if (!bridge || !bridge.last_heartbeat_at) return 'never';
+    if (bridge.status === 'error') return 'error';
+    const then = new Date(bridge.last_heartbeat_at.replace(' ', 'T') + 'Z').getTime();
+    const interval = (bridge.expected_interval_seconds || def.interval) * 1000;
+    const age = Date.now() - then;
+    if (age > interval * 3) return 'error';
+    if (age > interval * 1.5) return 'stale';
+    return 'ok';
+  }
+
+  function renderBridges(bridges) {
+    const byId = {};
+    (bridges || []).forEach(function (b) { byId[b.id] = b; });
+    const grid = document.getElementById('bridge-grid');
+    grid.innerHTML = '';
+    let known = 0;
+    KNOWN_BRIDGES.forEach(function (def) {
+      const b = byId[def.id];
+      delete byId[def.id];
+      known++;
+      const status = computeStatus(b, def);
+      const card = document.createElement('div');
+      card.className = 'bridge-card' + (status === 'never' ? ' never' : '');
+      card.innerHTML =
+        '<div class="bridge-top"><span class="status-dot ' + status + '"></span>' +
+        '<span class="bridge-name">' + (b && b.display_name || def.name) + '</span></div>' +
+        '<div class="bridge-meta">Last heartbeat: ' + timeAgo(b && b.last_heartbeat_at) + '</div>' +
+        (b && b.detail ? '<div class="bridge-detail">' + escapeHtml(b.detail) + '</div>' : '');
+      grid.appendChild(card);
+    });
+    // Any bridge reporting in that we didn't pre-list — show it too.
+    Object.keys(byId).forEach(function (id) {
+      const b = byId[id];
+      const status = computeStatus(b, { interval: 3600 });
+      const card = document.createElement('div');
+      card.className = 'bridge-card';
+      card.innerHTML =
+        '<div class="bridge-top"><span class="status-dot ' + status + '"></span>' +
+        '<span class="bridge-name">' + (b.display_name || id) + '</span></div>' +
+        '<div class="bridge-meta">Last heartbeat: ' + timeAgo(b.last_heartbeat_at) + '</div>' +
+        (b.detail ? '<div class="bridge-detail">' + escapeHtml(b.detail) + '</div>' : '');
+      grid.appendChild(card);
+      known++;
+    });
+    document.getElementById('bridge-count').textContent = known + ' tracked';
+  }
+
+  function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function renderIssues(issues) {
+    const list = document.getElementById('issue-list');
+    list.innerHTML = '';
+    const open = (issues || []).filter(function (i) { return !i.resolved; });
+    const resolved = (issues || []).filter(function (i) { return i.resolved; });
+    document.getElementById('issue-count').textContent = open.length + ' open';
+    if (!issues || issues.length === 0) {
+      list.innerHTML = '<div class="empty-note">No issues have been reported. Good sign.</div>';
+      return;
+    }
+    open.concat(resolved.slice(0, 15)).forEach(function (i) {
+      const card = document.createElement('div');
+      card.className = 'issue-card' + (i.resolved ? ' resolved' : '');
+      const sevClass = i.severity === 'critical' ? 'sev-critical' : (i.severity === 'info' ? 'sev-info' : 'sev-warning');
+      card.innerHTML =
+        '<span class="sev-badge ' + sevClass + '">' + (i.severity || 'warning') + '</span>' +
+        '<div class="issue-body">' +
+          '<div class="issue-title">' + escapeHtml(i.title) + '</div>' +
+          (i.description ? '<div class="issue-desc">' + escapeHtml(i.description) + '</div>' : '') +
+          '<div class="issue-meta">Source: ' + escapeHtml(i.source) + (i.reported_by ? ' · via ' + escapeHtml(i.reported_by) : '') +
+            ' · ' + timeAgo(i.created_at) + (i.resolved ? ' · resolved by ' + escapeHtml(i.resolved_by || '') : '') + '</div>' +
+        '</div>' +
+        (i.resolved ? '' : '<button class="resolve-btn" data-id="' + i.id + '">Mark resolved</button>');
+      list.appendChild(card);
+    });
+    list.querySelectorAll('.resolve-btn').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        btn.disabled = true;
+        await api('healthResolveIssue', { method: 'POST', body: { id: btn.dataset.id } });
+        loadData();
+      });
+    });
+  }
+
+  async function loadData() {
+    const res = await api('healthGetStatus');
+    if (res.ok) {
+      renderBridges(res.bridges);
+      renderIssues(res.issues);
+    }
+  }
+
+  async function showApp() {
+    gate.classList.add('hidden');
+    denied.classList.add('hidden');
+    app.classList.remove('hidden');
+    await loadData();
+  }
+
+  function showDenied() {
+    gate.classList.add('hidden');
+    app.classList.add('hidden');
+    denied.classList.remove('hidden');
+  }
+
+  function showGate() {
+    app.classList.add('hidden');
+    denied.classList.add('hidden');
+    gate.classList.remove('hidden');
+  }
+
+  loginForm.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    loginError.textContent = '';
+    const username = document.getElementById('login-user').value.trim();
+    const password = document.getElementById('login-pass').value;
+    const res = await api('login', { method: 'POST', body: { username, password } });
+    if (res.ok) {
+      setSession({ token: res.token, username: res.user.username, role: res.user.role, display_name: res.user.display_name });
+      if (res.user.role === 'admin') showApp(); else showDenied();
+    } else {
+      loginError.textContent = res.error || 'Login failed';
+    }
+  });
+
+  document.getElementById('logout-btn').addEventListener('click', async function () {
+    await api('logout', { method: 'POST' });
+    clearSession();
+    showGate();
+  });
+  document.getElementById('refresh-btn').addEventListener('click', loadData);
+  document.getElementById('theme-toggle').addEventListener('click', function () {
+    const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', cur === 'light' ? 'light' : '');
+    localStorage.setItem(THEME_KEY, cur);
+  });
+
+  (function initTheme() {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  })();
+
+  (async function init() {
+    const session = getSession();
+    if (!session || !session.token) { showGate(); return; }
+    const res = await api('validateSession');
+    if (res.ok && res.user) {
+      setSession({ token: session.token, username: res.user.username, role: res.user.role, display_name: res.user.display_name });
+      if (res.user.role === 'admin') showApp(); else showDenied();
+    } else {
+      clearSession();
+      showGate();
+    }
+  })();
+
+  // Auto-refresh every 30s while the tab is open.
+  setInterval(function () {
+    if (!app.classList.contains('hidden')) loadData();
+  }, 30000);
+})();
+</script>
+</body>
+</html>
