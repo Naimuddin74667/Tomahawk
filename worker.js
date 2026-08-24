@@ -212,7 +212,16 @@ const ACTION_TIERS = {
   scannerAddUser: 'manager_up', scannerDeleteUser: 'manager_up',
 
   // — Scanner App (phone scanning): admin, manager, or picker_packer —
-  scannerSaveRecord: 'scanner_app', scannerCheckBox: 'scanner_app'
+  scannerSaveRecord: 'scanner_app', scannerCheckBox: 'scanner_app',
+
+  // — System Health: bridges/scripts report in with a shared-secret
+  //   token (checked inside the handler via healthTokenOk, not via
+  //   session), so these are marked 'public' here on purpose — the real
+  //   gate is the X-Health-Token header. Reading the dashboard and
+  //   resolving issues stays admin_only, session-gated like everything
+  //   else in this file. —
+  healthHeartbeat: 'public', healthReportIssue: 'public',
+  healthGetStatus: 'admin_only', healthResolveIssue: 'admin_only'
 };
 
 function getAuthRequirement(act) {
@@ -326,6 +335,45 @@ async function ensureAuthTables(DB) {
     ).bind(hash, salt).run();
   }
 }
+
+async function ensureHealthTables(DB) {
+  await DB.batch([
+    DB.prepare(`CREATE TABLE IF NOT EXISTS health_bridges (
+      id                        TEXT PRIMARY KEY,
+      display_name              TEXT NOT NULL,
+      status                    TEXT NOT NULL DEFAULT 'unknown',
+      detail                    TEXT DEFAULT '',
+      expected_interval_seconds INTEGER DEFAULT 3600,
+      last_heartbeat_at         TEXT,
+      updated_at                TEXT DEFAULT (datetime('now'))
+    )`),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS health_issues (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      source        TEXT NOT NULL,
+      severity      TEXT NOT NULL DEFAULT 'warning',
+      title         TEXT NOT NULL,
+      description   TEXT DEFAULT '',
+      reported_by   TEXT DEFAULT '',
+      resolved      INTEGER DEFAULT 0,
+      resolved_at   TEXT,
+      resolved_by   TEXT,
+      created_at    TEXT DEFAULT (datetime('now'))
+    )`)
+  ]);
+}
+
+// Shared-secret auth for automated bridges/scripts (cron jobs, GAS bridges,
+// or an AI session working on one) — these aren't logged-in humans, so they
+// can't carry a tm_session_v1 token. HEALTH_REPORT_TOKEN lives only in
+// Cloudflare Dashboard -> Settings -> Variables and Secrets, never in this
+// repo. Give the same token value to anyone who needs to phone in a
+// heartbeat or report an issue.
+function healthTokenOk(request, env) {
+  const supplied = request.headers.get('X-Health-Token') || '';
+  const expected = env.HEALTH_REPORT_TOKEN || '';
+  return expected.length > 0 && supplied === expected;
+}
+
 
 export default {
   async fetch(request, env) {
@@ -1050,6 +1098,18 @@ export default {
           } catch (err) {
             return json({ ok: false, error: err.message }, 500);
           }
+        }
+
+        // ── SYSTEM HEALTH ── admin dashboard reads bridge status + open issues ──
+        if (action === 'healthGetStatus') {
+          await ensureHealthTables(env.DB);
+          const bridges = await env.DB.prepare(
+            'SELECT * FROM health_bridges ORDER BY display_name ASC'
+          ).all();
+          const issues = await env.DB.prepare(
+            'SELECT * FROM health_issues ORDER BY resolved ASC, created_at DESC LIMIT 200'
+          ).all();
+          return json({ ok: true, bridges: bridges.results || [], issues: issues.results || [] });
         }
 
         return json({ ok: false, error: 'Unknown action' }, 400);
@@ -2008,6 +2068,62 @@ export default {
               value = excluded.value,
               updated_at = excluded.updated_at
           `).bind(key, value == null ? '' : String(value)).run();
+          return json({ ok: true });
+        }
+
+        // ── SYSTEM HEALTH ── a bridge/script phones in a heartbeat. Auth is
+        //   the X-Health-Token header (shared secret), not a user session ─
+        //   this is called by cron scripts and GAS bridges, not logged-in
+        //   humans. Token lives in Cloudflare Dashboard -> Settings ->
+        //   Variables and Secrets as HEALTH_REPORT_TOKEN. ──
+        if (act === 'healthHeartbeat') {
+          if (!healthTokenOk(request, env)) return json({ ok: false, error: 'Invalid or missing health token' }, 401);
+          await ensureHealthTables(env.DB);
+          const { bridge_id, display_name, status, detail, expected_interval_seconds } = body || {};
+          if (!bridge_id) return json({ ok: false, error: 'bridge_id required' }, 400);
+          await env.DB.prepare(`
+            INSERT INTO health_bridges (id, display_name, status, detail, expected_interval_seconds, last_heartbeat_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            ON CONFLICT(id) DO UPDATE SET
+              display_name = excluded.display_name,
+              status = excluded.status,
+              detail = excluded.detail,
+              expected_interval_seconds = excluded.expected_interval_seconds,
+              last_heartbeat_at = datetime('now'),
+              updated_at = datetime('now')
+          `).bind(
+            bridge_id, display_name || bridge_id, status || 'ok', detail || '',
+            expected_interval_seconds || 3600
+          ).run();
+          return json({ ok: true });
+        }
+
+        // ── SYSTEM HEALTH ── any bridge (or an AI session working on one)
+        //   reports an anomaly. Same shared-secret auth as the heartbeat. ──
+        if (act === 'healthReportIssue') {
+          if (!healthTokenOk(request, env)) return json({ ok: false, error: 'Invalid or missing health token' }, 401);
+          await ensureHealthTables(env.DB);
+          const { source, severity, title, description, reported_by } = body || {};
+          if (!source || !title) return json({ ok: false, error: 'source and title required' }, 400);
+          await env.DB.prepare(`
+            INSERT INTO health_issues (source, severity, title, description, reported_by, created_at)
+            VALUES (?, ?, ?, ?, ?, datetime('now'))
+          `).bind(
+            source, severity || 'warning', title, description || '', reported_by || ''
+          ).run();
+          return json({ ok: true });
+        }
+
+        // ── SYSTEM HEALTH ── admin marks an issue resolved from the dashboard ──
+        if (act === 'healthResolveIssue') {
+          await ensureHealthTables(env.DB);
+          const { id } = body || {};
+          if (!id) return json({ ok: false, error: 'id required' }, 400);
+          const sessionUser = await resolveSession(request, env.DB);
+          await env.DB.prepare(`
+            UPDATE health_issues SET resolved = 1, resolved_at = datetime('now'), resolved_by = ?
+            WHERE id = ?
+          `).bind((sessionUser && sessionUser.username) || 'admin', id).run();
           return json({ ok: true });
         }
 
