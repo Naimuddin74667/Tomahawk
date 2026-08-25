@@ -401,6 +401,38 @@ async function maybeAlert(env, bridgeId, displayName, reasonText) {
   }
 }
 
+// Shared upsert+alert logic for a heartbeat, used by both the public
+// healthHeartbeat action (external bridges/scripts, HTTP + token) and by
+// this Worker's own scheduled() tick (self-reporting cloudflare_worker and
+// blinkit_ro_watcher — no HTTP round trip needed, it's already trusted
+// server-side code running right here).
+async function recordHeartbeat(env, bridgeId, displayName, status, detail, expectedIntervalSeconds) {
+  await ensureHealthTables(env.DB);
+  const incomingStatus = status || 'ok';
+  await env.DB.prepare(`
+    INSERT INTO health_bridges (id, display_name, status, detail, expected_interval_seconds, last_heartbeat_at, updated_at, alert_sent_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), NULL)
+    ON CONFLICT(id) DO UPDATE SET
+      display_name = excluded.display_name,
+      status = excluded.status,
+      detail = excluded.detail,
+      expected_interval_seconds = excluded.expected_interval_seconds,
+      last_heartbeat_at = datetime('now'),
+      updated_at = datetime('now'),
+      alert_sent_at = CASE WHEN excluded.status = 'ok' THEN NULL ELSE health_bridges.alert_sent_at END
+  `).bind(
+    bridgeId, displayName || bridgeId, incomingStatus, detail || '',
+    expectedIntervalSeconds || 3600
+  ).run();
+
+  // Self-reported failure — alert immediately, don't wait for the next
+  // staleness sweep to notice.
+  if (incomingStatus === 'error') {
+    await maybeAlert(env, bridgeId, displayName || bridgeId,
+      (detail || 'Bridge self-reported an error.') + ' (self-reported, not a staleness timeout)');
+  }
+}
+
 // Runs on every scheduled cron tick (independent of any single bridge's
 // own script — this keeps running even if a bridge's server/VPS is
 // completely down, which is the whole point of a watchdog). Checks every
@@ -2137,33 +2169,9 @@ export default {
         //   Variables and Secrets as HEALTH_REPORT_TOKEN. ──
         if (act === 'healthHeartbeat') {
           if (!healthTokenOk(request, env)) return json({ ok: false, error: 'Invalid or missing health token' }, 401);
-          await ensureHealthTables(env.DB);
           const { bridge_id, display_name, status, detail, expected_interval_seconds } = body || {};
           if (!bridge_id) return json({ ok: false, error: 'bridge_id required' }, 400);
-          const incomingStatus = status || 'ok';
-          await env.DB.prepare(`
-            INSERT INTO health_bridges (id, display_name, status, detail, expected_interval_seconds, last_heartbeat_at, updated_at, alert_sent_at)
-            VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), NULL)
-            ON CONFLICT(id) DO UPDATE SET
-              display_name = excluded.display_name,
-              status = excluded.status,
-              detail = excluded.detail,
-              expected_interval_seconds = excluded.expected_interval_seconds,
-              last_heartbeat_at = datetime('now'),
-              updated_at = datetime('now'),
-              alert_sent_at = CASE WHEN excluded.status = 'ok' THEN NULL ELSE health_bridges.alert_sent_at END
-          `).bind(
-            bridge_id, display_name || bridge_id, incomingStatus, detail || '',
-            expected_interval_seconds || 3600
-          ).run();
-
-          // A script can self-report a failure ('status: error') rather
-          // than just going silent — alert on that immediately too,
-          // don't wait for the next cron tick to notice via staleness.
-          if (incomingStatus === 'error') {
-            await maybeAlert(env, bridge_id, display_name || bridge_id,
-              (detail || 'Bridge self-reported an error.') + ' (self-reported, not a staleness timeout)');
-          }
+          await recordHeartbeat(env, bridge_id, display_name, status, detail, expected_interval_seconds);
           return json({ ok: true });
         }
 
@@ -2214,9 +2222,28 @@ export default {
   // page load, no manual trigger, no Claude involvement needed.
   async scheduled(event, env, ctx) {
     ctx.waitUntil(
-      checkNewRoEmails(env).catch(err => {
-        console.error('scheduled RO email check failed:', err.message);
-      })
+      checkNewRoEmails(env)
+        .then(result => recordHeartbeat(
+          env, 'blinkit_ro_watcher', 'Blinkit RO Email Watcher (Worker cron)', 'ok',
+          `Checked ${result.checked} email(s), logged ${result.newLogged} new.`, 900
+        ))
+        .catch(err => {
+          console.error('scheduled RO email check failed:', err.message);
+          return recordHeartbeat(
+            env, 'blinkit_ro_watcher', 'Blinkit RO Email Watcher (Worker cron)', 'error',
+            err.message, 900
+          ).catch(e2 => console.error('failed to record blinkit_ro_watcher error heartbeat:', e2.message));
+        })
+    );
+    // Self-heartbeat: reaching this line at all means the cron trigger fired
+    // and D1 is reachable (the write below would throw otherwise). This is
+    // the simplest possible proof the Worker + D1 backend is alive — it
+    // doesn't depend on any other bridge's script or server being up.
+    ctx.waitUntil(
+      recordHeartbeat(
+        env, 'cloudflare_worker', 'Cloudflare Worker / D1 (this backend)', 'ok',
+        'Cron tick completed, D1 reachable.', 900
+      ).catch(err => console.error('failed to record cloudflare_worker heartbeat:', err.message))
     );
     // Independent watchdog — runs on Cloudflare's own cron, decoupled from
     // every bridge's script/server. This is what still fires an alert even
