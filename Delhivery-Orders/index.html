@@ -122,13 +122,6 @@ html[data-theme="light"]       .icon-moon { display: none; }
 .field input[readonly] { color: var(--text2); cursor: not-allowed; background: var(--surface); }
 .field textarea { resize: vertical; min-height: 54px; }
 .field-hint { font-size: 10.5px; color: var(--text2); margin-top: 5px; line-height: 1.5; }
-.id-row { display: flex; gap: 8px; }
-.id-row input { flex: 1; }
-.btn-regen {
-  flex-shrink: 0; width: 36px; border-radius: 7px; background: var(--surface2); border: 1px solid var(--border);
-  color: var(--text2); cursor: pointer; font-size: 14px; transition: border-color .15s, color .15s;
-}
-.btn-regen:hover { border-color: var(--accent); color: var(--accent); }
 
 .submit-btn {
   width: 100%; margin-top: 6px; padding: 12px; border-radius: 8px; border: none;
@@ -254,11 +247,8 @@ table.log-table tr:last-child td { border-bottom: none; }
         <div class="form-row single">
           <div class="field">
             <label>Order ID</label>
-            <div class="id-row">
-              <input type="text" id="f-order" required>
-              <button type="button" class="btn-regen" id="regen-id-btn" title="Generate a new unique order ID">&#8635;</button>
-            </div>
-            <div class="field-hint">Auto-fills as RPR-&lt;phone&gt;-DDMM once you enter the phone number below. Note: two repairs for the same phone on the same day will collide — regenerate (&#8635;) or hand-edit if you get a "Duplicate order id" error.</div>
+            <input type="text" id="f-order" required readonly placeholder="Fills in once you enter the phone number below">
+            <div class="field-hint">Auto-fills as RPR-&lt;phone&gt;-DDMM from the phone number below — fully automatic, not editable. If two repairs for the same phone land on the same day and Delhivery rejects it as a duplicate, the app retries automatically with a new suffix.</div>
           </div>
         </div>
 
@@ -518,17 +508,22 @@ function initDelhiveryApp() {
 
   var orderIdField = document.getElementById('f-order');
   var phoneField = document.getElementById('f-phone');
-  var orderIdManuallyEdited = false;
 
-  orderIdField.value = genOrderId();
-  orderIdField.addEventListener('input', function () { orderIdManuallyEdited = true; });
-  document.getElementById('regen-id-btn').addEventListener('click', function () {
+  // Order ID is fully automatic and read-only — blank until a valid
+  // 10-digit phone is entered, then RPR-<phone>-DDMM. Updates live as
+  // the phone number is typed/corrected, not just on blur.
+  function bumpOrderIdForPhone() {
+    var phone = phoneField.value.trim();
+    orderIdField.value = /^\d{10}$/.test(phone) ? genOrderId(phone) : '';
+  }
+  phoneField.addEventListener('input', bumpOrderIdForPhone);
+
+  // Bumps a numeric suffix onto the current order ID: base -> base-2 ->
+  // base-3 -> ... Used automatically when Delhivery rejects an ID as a
+  // duplicate, so the person never has to manually resolve it.
+  function bumpOrderIdSuffix() {
     var base = genOrderId(phoneField.value.trim());
     var current = orderIdField.value.trim();
-    // Since RPR-<phone>-DDMM has no randomness, regenerating on the same
-    // phone/day would just produce the identical ID — useless as a
-    // duplicate-fix. So once we're already on this base, bump a numeric
-    // suffix instead: base -> base-2 -> base-3 -> ...
     if (current === base) {
       orderIdField.value = base + '-2';
     } else if (current.indexOf(base + '-') === 0 && /^\d+$/.test(current.slice(base.length + 1))) {
@@ -536,15 +531,7 @@ function initDelhiveryApp() {
     } else {
       orderIdField.value = base;
     }
-    orderIdManuallyEdited = false;
-  });
-  // Once a valid 10-digit phone is entered, rebuild the order ID around
-  // it automatically — unless the person has already hand-edited the ID.
-  phoneField.addEventListener('blur', function () {
-    if (orderIdManuallyEdited) return;
-    var phone = phoneField.value.trim();
-    if (/^\d{10}$/.test(phone)) orderIdField.value = genOrderId(phone);
-  });
+  }
 
   // ── Live volumetric-weight hint — Delhivery Surface uses (L×W×H)/5000
   // to get chargeable weight in kg, and bills whichever of that or actual
@@ -666,6 +653,13 @@ function initDelhiveryApp() {
     e.preventDefault();
     resultBox.className = 'result-box';
 
+    if (!orderIdField.value) {
+      resultBox.className = 'result-box show error';
+      resultTitle.textContent = 'Order ID not ready';
+      resultBody.textContent = 'Enter a valid 10-digit phone number above — the Order ID fills in automatically from it.';
+      return;
+    }
+
     var order = {
       order: document.getElementById('f-order').value.trim(),
       name: document.getElementById('f-name').value.trim(),
@@ -689,15 +683,28 @@ function initDelhiveryApp() {
     submitBtn.textContent = 'Creating order…';
 
     try {
-      var res = await callWorker('delhiveryCreateOrder', { order: order });
+      var res, attempts = 0;
+      while (true) {
+        order.order = orderIdField.value.trim();
+        res = await callWorker('delhiveryCreateOrder', { order: order });
+        if (res.ok) break;
+        var pkg = res.response && res.response.packages && res.response.packages[0];
+        var remarksArr = pkg && pkg.remarks ? [].concat(pkg.remarks) : [];
+        var isDuplicate = remarksArr.some(function (r) { return /duplicate order/i.test(String(r)); });
+        attempts++;
+        if (!isDuplicate || attempts >= 5) break;
+        submitBtn.textContent = 'Duplicate ID — retrying…';
+        bumpOrderIdSuffix();
+      }
+
       if (res.ok) {
         resultBox.className = 'result-box show success';
         resultTitle.textContent = 'Order created successfully';
-        resultBody.innerHTML = 'Waybill: <span class="result-waybill">' + escapeHtml(res.waybill) + '</span>';
+        resultBody.innerHTML = 'Waybill: <span class="result-waybill">' + escapeHtml(res.waybill) + '</span>' +
+          (attempts ? ' <span style="color:var(--text2)">(order ID auto-adjusted to avoid a duplicate)</span>' : '');
         form.reset();
         document.getElementById('f-hsn').value = '8467';
-        orderIdManuallyEdited = false;
-        orderIdField.value = genOrderId();
+        orderIdField.value = '';
         volHintBox.style.display = 'none';
         updateVolHint(); // re-show for the restored 1000g/10x10x10 defaults
         pinStatus.textContent = '';
@@ -707,8 +714,8 @@ function initDelhiveryApp() {
         resultTitle.textContent = 'Order failed';
         var remarks = '';
         try {
-          var pkg = res.response && res.response.packages && res.response.packages[0];
-          if (pkg && pkg.remarks) remarks = [].concat(pkg.remarks).join('; ');
+          var pkg2 = res.response && res.response.packages && res.response.packages[0];
+          if (pkg2 && pkg2.remarks) remarks = [].concat(pkg2.remarks).join('; ');
         } catch (e) {}
         resultBody.textContent = remarks || (res.response && res.response.rmk) || res.error || 'Unknown error — check the log details below.';
       }
