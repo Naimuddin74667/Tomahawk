@@ -258,7 +258,7 @@ table.log-table tr:last-child td { border-bottom: none; }
               <input type="text" id="f-order" required>
               <button type="button" class="btn-regen" id="regen-id-btn" title="Generate a new unique order ID">&#8635;</button>
             </div>
-            <div class="field-hint">Auto-fills as RPR-&lt;phone&gt;-&lt;time&gt; once you enter the phone number below, so it stays recognizable but still unique per repair job. Regenerate if you get a "Duplicate order id" error.</div>
+            <div class="field-hint">Auto-fills as RPR-&lt;phone&gt;-DDMM once you enter the phone number below. Note: two repairs for the same phone on the same day will collide — regenerate (&#8635;) or hand-edit if you get a "Duplicate order id" error.</div>
           </div>
         </div>
 
@@ -474,17 +474,21 @@ table.log-table tr:last-child td { border-bottom: none; }
 // DELHIVERY ORDER FORM + LOG
 // ══════════════════════════════════════════════════════════════════
 // Order ID defaults to a repair-job-style ID keyed on the customer's phone
-// number (so it's recognizable at a glance in the log), with a time suffix
-// so a repeat customer — or two repairs the same day — never collides.
+// number (so it's recognizable at a glance in the log): RPR-<phone>-DDMM.
+// Note: this collides if the same phone number ships twice on the same
+// day — Delhivery requires order IDs to be unique account-wide since
+// waybills are always auto-assigned here. If that happens, use the
+// regenerate (⟳) button or hand-edit the ID before submitting.
 // A bare timestamp ID is used as the fallback until a phone number is entered.
 function genOrderId(phone) {
   var d = new Date();
   var pad = function (n) { return String(n).padStart(2, '0'); };
+  var ddmm = pad(d.getDate()) + pad(d.getMonth() + 1);
+  if (phone && /^\d{10}$/.test(phone)) {
+    return 'RPR-' + phone + '-' + ddmm;
+  }
   var datePart = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate());
   var timePart = pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
-  if (phone && /^\d{10}$/.test(phone)) {
-    return 'RPR-' + phone + '-' + timePart;
-  }
   var rand = Math.floor(Math.random() * 900 + 100); // 3-digit random tail
   return 'TH-' + datePart + '-' + timePart + '-' + rand;
 }
@@ -517,8 +521,20 @@ function initDelhiveryApp() {
   orderIdField.value = genOrderId();
   orderIdField.addEventListener('input', function () { orderIdManuallyEdited = true; });
   document.getElementById('regen-id-btn').addEventListener('click', function () {
+    var base = genOrderId(phoneField.value.trim());
+    var current = orderIdField.value.trim();
+    // Since RPR-<phone>-DDMM has no randomness, regenerating on the same
+    // phone/day would just produce the identical ID — useless as a
+    // duplicate-fix. So once we're already on this base, bump a numeric
+    // suffix instead: base -> base-2 -> base-3 -> ...
+    if (current === base) {
+      orderIdField.value = base + '-2';
+    } else if (current.indexOf(base + '-') === 0 && /^\d+$/.test(current.slice(base.length + 1))) {
+      orderIdField.value = base + '-' + (parseInt(current.slice(base.length + 1), 10) + 1);
+    } else {
+      orderIdField.value = base;
+    }
     orderIdManuallyEdited = false;
-    orderIdField.value = genOrderId(phoneField.value.trim());
   });
   // Once a valid 10-digit phone is entered, rebuild the order ID around
   // it automatically — unless the person has already hand-edited the ID.
