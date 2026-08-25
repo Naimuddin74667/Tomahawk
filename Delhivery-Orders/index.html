@@ -174,6 +174,8 @@ table.log-table tr:last-child td { border-bottom: none; }
 .log-empty { color: var(--text2); font-size: 12.5px; padding: 20px 0; text-align: center; }
 .log-refresh { font-size: 11px; color: var(--text2); cursor: pointer; }
 .log-refresh:hover { color: var(--accent); }
+.field-hint.ok { color: var(--green); }
+.field-hint.bad { color: var(--red); }
 .panel-head-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .panel-head-row .panel-title { margin-bottom: 0; }
 </style>
@@ -255,7 +257,7 @@ table.log-table tr:last-child td { border-bottom: none; }
               <input type="text" id="f-order" required>
               <button type="button" class="btn-regen" id="regen-id-btn" title="Generate a new unique order ID">&#8635;</button>
             </div>
-            <div class="field-hint">Must be unique in Delhivery's system. Auto-generated — regenerate if you get a "Duplicate order id" error.</div>
+            <div class="field-hint">Auto-fills as RPR-&lt;phone&gt;-&lt;time&gt; once you enter the phone number below, so it stays recognizable but still unique per repair job. Regenerate if you get a "Duplicate order id" error.</div>
           </div>
         </div>
 
@@ -281,6 +283,7 @@ table.log-table tr:last-child td { border-bottom: none; }
           <div class="field">
             <label>Pincode</label>
             <input type="text" id="f-pin" required maxlength="6" pattern="[0-9]{6}">
+            <div class="field-hint" id="pin-status"></div>
           </div>
           <div class="field">
             <label>City</label>
@@ -324,16 +327,21 @@ table.log-table tr:last-child td { border-bottom: none; }
             <input type="text" id="f-hsn" required value="8467">
           </div>
           <div class="field">
-            <label>Weight (kg) <span class="opt">optional</span></label>
-            <input type="number" id="f-weight" min="0" step="0.01">
+            <label>Weight (grams) <span class="opt">optional</span></label>
+            <input type="number" id="f-weight" min="0" step="1" placeholder="e.g. 1800">
           </div>
           <div class="field">
-            <label>Dimensions (cm) <span class="opt">optional</span></label>
+            <label>Dimensions L×W×H (cm) <span class="opt">optional</span></label>
             <div style="display:flex;gap:6px;">
+              <input type="number" id="f-length" placeholder="L" min="0">
               <input type="number" id="f-width" placeholder="W" min="0">
               <input type="number" id="f-height" placeholder="H" min="0">
             </div>
           </div>
+        </div>
+
+        <div class="form-row single" id="vol-weight-hint" style="display:none;">
+          <div class="field-hint" id="vol-weight-text"></div>
         </div>
 
         <button type="submit" class="submit-btn" id="submit-btn">Create Delhivery Order</button>
@@ -464,11 +472,18 @@ table.log-table tr:last-child td { border-bottom: none; }
 // ══════════════════════════════════════════════════════════════════
 // DELHIVERY ORDER FORM + LOG
 // ══════════════════════════════════════════════════════════════════
-function genOrderId() {
+// Order ID defaults to a repair-job-style ID keyed on the customer's phone
+// number (so it's recognizable at a glance in the log), with a time suffix
+// so a repeat customer — or two repairs the same day — never collides.
+// A bare timestamp ID is used as the fallback until a phone number is entered.
+function genOrderId(phone) {
   var d = new Date();
   var pad = function (n) { return String(n).padStart(2, '0'); };
   var datePart = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate());
   var timePart = pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+  if (phone && /^\d{10}$/.test(phone)) {
+    return 'RPR-' + phone + '-' + timePart;
+  }
   var rand = Math.floor(Math.random() * 900 + 100); // 3-digit random tail
   return 'TH-' + datePart + '-' + timePart + '-' + rand;
 }
@@ -494,9 +509,77 @@ function initDelhiveryApp() {
   var resultTitle = document.getElementById('result-title');
   var resultBody = document.getElementById('result-body');
 
-  document.getElementById('f-order').value = genOrderId();
+  var orderIdField = document.getElementById('f-order');
+  var phoneField = document.getElementById('f-phone');
+  var orderIdManuallyEdited = false;
+
+  orderIdField.value = genOrderId();
+  orderIdField.addEventListener('input', function () { orderIdManuallyEdited = true; });
   document.getElementById('regen-id-btn').addEventListener('click', function () {
-    document.getElementById('f-order').value = genOrderId();
+    orderIdManuallyEdited = false;
+    orderIdField.value = genOrderId(phoneField.value.trim());
+  });
+  // Once a valid 10-digit phone is entered, rebuild the order ID around
+  // it automatically — unless the person has already hand-edited the ID.
+  phoneField.addEventListener('blur', function () {
+    if (orderIdManuallyEdited) return;
+    var phone = phoneField.value.trim();
+    if (/^\d{10}$/.test(phone)) orderIdField.value = genOrderId(phone);
+  });
+
+  // ── Live volumetric-weight hint — Delhivery Surface uses (L×W×H)/5000
+  // to get chargeable weight in kg, and bills whichever of that or actual
+  // weight is higher. Purely informational, calculated client-side. ──
+  var lengthField = document.getElementById('f-length');
+  var widthField = document.getElementById('f-width');
+  var heightField = document.getElementById('f-height');
+  var weightField = document.getElementById('f-weight');
+  var volHintBox = document.getElementById('vol-weight-hint');
+  var volHintText = document.getElementById('vol-weight-text');
+  function updateVolHint() {
+    var l = parseFloat(lengthField.value), w = parseFloat(widthField.value), h = parseFloat(heightField.value);
+    if (!l || !w || !h) { volHintBox.style.display = 'none'; return; }
+    var volKg = (l * w * h) / 5000;
+    var actualKg = (parseFloat(weightField.value) || 0) / 1000;
+    var chargeable = Math.max(volKg, actualKg);
+    var basis = volKg > actualKg ? 'volumetric' : 'actual';
+    volHintText.textContent = 'Volumetric weight: ' + volKg.toFixed(2) + ' kg. Chargeable weight will be ~' +
+      chargeable.toFixed(2) + ' kg (based on ' + basis + ' weight — Delhivery bills whichever is higher). Exact rounding/slab depends on their rate card.';
+    volHintBox.style.display = '';
+  }
+  [lengthField, widthField, heightField, weightField].forEach(function (f) {
+    f.addEventListener('input', updateVolHint);
+  });
+
+  // ── Pincode serviceability pre-check — fires on blur so a bad pincode
+  // is caught before submission, not after a failed order attempt. ──
+  var pinField = document.getElementById('f-pin');
+  var pinStatus = document.getElementById('pin-status');
+  var cityField = document.getElementById('f-city');
+  var stateField = document.getElementById('f-state');
+  pinField.addEventListener('blur', async function () {
+    var pin = pinField.value.trim();
+    pinStatus.className = 'field-hint';
+    if (!/^\d{6}$/.test(pin)) { pinStatus.textContent = ''; return; }
+    pinStatus.textContent = 'Checking serviceability…';
+    try {
+      var res = await fetch(window.TM_WORKER + '?action=delhiveryCheckPincode&pin=' + pin).then(function (r) { return r.json(); });
+      if (!res.ok) { pinStatus.textContent = ''; return; }
+      if (!res.serviceable) {
+        pinStatus.className = 'field-hint bad';
+        pinStatus.textContent = '✗ Not a serviceable Delhivery pincode — double-check it before submitting.';
+        return;
+      }
+      var modes = [];
+      if (res.prepaid) modes.push('Prepaid');
+      if (res.cod) modes.push('COD');
+      pinStatus.className = 'field-hint ok';
+      pinStatus.textContent = '✓ Serviceable' + (modes.length ? ' (' + modes.join(' & ') + ')' : '');
+      if (res.city && !cityField.value) cityField.value = res.city;
+      if (res.state && !stateField.value) stateField.value = res.state;
+    } catch (e) {
+      pinStatus.textContent = '';
+    }
   });
 
   async function callWorker(action, body) {
@@ -574,7 +657,8 @@ function initDelhiveryApp() {
       hsn_code: document.getElementById('f-hsn').value.trim(),
       weight: document.getElementById('f-weight').value || undefined,
       width: document.getElementById('f-width').value || undefined,
-      height: document.getElementById('f-height').value || undefined
+      height: document.getElementById('f-height').value || undefined,
+      length: document.getElementById('f-length').value || undefined
     };
 
     submitBtn.disabled = true;
@@ -586,7 +670,13 @@ function initDelhiveryApp() {
         resultBox.className = 'result-box show success';
         resultTitle.textContent = 'Order created successfully';
         resultBody.innerHTML = 'Waybill: <span class="result-waybill">' + escapeHtml(res.waybill) + '</span>';
-        document.getElementById('f-order').value = genOrderId();
+        form.reset();
+        document.getElementById('f-hsn').value = '8467';
+        orderIdManuallyEdited = false;
+        orderIdField.value = genOrderId();
+        volHintBox.style.display = 'none';
+        pinStatus.textContent = '';
+        pinStatus.className = 'field-hint';
       } else {
         resultBox.className = 'result-box show error';
         resultTitle.textContent = 'Order failed';
