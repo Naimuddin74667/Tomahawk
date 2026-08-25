@@ -229,7 +229,7 @@ const ACTION_TIERS = {
   //   manager_up; listing what's been created is viewer_read like
   //   everything else read-only in this file. —
   delhiveryCreateOrder: 'manager_up', delhiveryListOrders: 'viewer_read',
-  delhiveryCheckPincode: 'viewer_read'
+  delhiveryCheckPincode: 'viewer_read', delhiveryEstimateCharge: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -1252,6 +1252,53 @@ export default {
             // if present, but the frontend must not assume they always are.
             city: pc.city || '', state: pc.state_code || pc.state || ''
           });
+        }
+
+        // ── DELHIVERY — approximate shipping-charge estimate, fetched
+        //   before order creation so the person can see a rough cost
+        //   and confirm. Uses Delhivery's Invoice/Rate Calculator API.
+        //   Their own docs are explicit that this is an APPROXIMATION —
+        //   "the actual amount charged by Delhivery can be different
+        //   from what is calculated by this API" — so the frontend must
+        //   present it as an estimate, never a guaranteed price, and
+        //   must not block order creation if this call fails.
+        if (action === 'delhiveryEstimateCharge') {
+          const pin = url.searchParams.get('pin');
+          const weightGrams = url.searchParams.get('weight') || '500';
+          const paymentMode = url.searchParams.get('payment_mode') === 'COD' ? 'COD' : 'Pre-paid';
+          if (!pin || !/^\d{6}$/.test(pin)) return json({ ok: false, error: 'Valid 6-digit destination pincode required' }, 400);
+          if (!env.DELHIVERY_API_TOKEN) return json({ ok: false, error: 'DELHIVERY_API_TOKEN is not set in Worker secrets' }, 500);
+          const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
+          // Origin pincode: E3 Bhiwandi (421302) by default — override with
+          // DELHIVERY_ORIGIN_PIN if pickups ever move to a different warehouse.
+          const originPin = env.DELHIVERY_ORIGIN_PIN || '421302';
+          const params = new URLSearchParams({
+            md: 'S',                 // Surface
+            ss: 'Delivered',         // required by this endpoint; best-known value for a pre-booking estimate
+            d_pin: pin,
+            o_pin: originPin,
+            cgm: String(weightGrams),
+            pt: paymentMode
+          });
+          if (env.DELHIVERY_PICKUP_LOCATION) params.set('cl', env.DELHIVERY_PICKUP_LOCATION);
+          let dJson;
+          try {
+            const dResp = await fetch(base + '/api/kinko/v1/invoice/charges/.json?' + params.toString(), {
+              headers: { 'Authorization': 'Token ' + env.DELHIVERY_API_TOKEN }
+            });
+            const dText = await dResp.text();
+            try { dJson = JSON.parse(dText); } catch (e) { dJson = { raw: dText }; }
+            if (!dResp.ok) return json({ ok: false, error: 'Delhivery estimate lookup returned ' + dResp.status, response: dJson }, 502);
+          } catch (e) {
+            return json({ ok: false, error: 'Delhivery estimate lookup failed: ' + e.message }, 502);
+          }
+          // Response shape isn't formally documented beyond "an array with
+          // a total_amount field" — handle both a bare object and an array
+          // of one, and surface the raw response either way so the
+          // frontend/log can show something useful even if parsing misses.
+          const entry = Array.isArray(dJson) ? dJson[0] : dJson;
+          const totalAmount = entry && (entry.total_amount != null ? entry.total_amount : entry.charge_amount);
+          return json({ ok: true, estimated: totalAmount != null, totalAmount: totalAmount, response: dJson });
         }
 
         return json({ ok: false, error: 'Unknown action' }, 400);
