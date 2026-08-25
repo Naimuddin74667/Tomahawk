@@ -259,14 +259,17 @@ async function resolveSession(request, DB) {
   }
   if (!token) return null;
   const row = await DB.prepare(`
-    SELECT s.expires_at, u.id as user_id, u.username, u.role, u.display_name, u.active
+    SELECT s.expires_at, u.id as user_id, u.username, u.role, u.display_name, u.active, u.allowed_apps
     FROM tm_sessions s JOIN tm_users u ON u.id = s.user_id
     WHERE s.token = ?
   `).bind(token).first();
   if (!row) return null;
   if (!row.active) return null;
   if (new Date(row.expires_at) < new Date()) return null;
-  return { id: row.user_id, username: row.username, role: row.role, display_name: row.display_name };
+  return {
+    id: row.user_id, username: row.username, role: row.role, display_name: row.display_name,
+    allowedApps: row.allowed_apps ? JSON.parse(row.allowed_apps) : null
+  };
 }
 
 async function checkAuth(request, DB, method, act) {
@@ -320,6 +323,7 @@ async function ensureAuthTables(DB) {
       role          TEXT NOT NULL DEFAULT 'viewer',
       display_name  TEXT DEFAULT '',
       active        INTEGER DEFAULT 1,
+      allowed_apps  TEXT DEFAULT NULL,
       created_at    TEXT DEFAULT (datetime('now'))
     )`),
     DB.prepare(`CREATE TABLE IF NOT EXISTS tm_sessions (
@@ -334,6 +338,11 @@ async function ensureAuthTables(DB) {
       value TEXT DEFAULT ''
     )`)
   ]);
+  // Migration for tables created before allowed_apps existed. NULL means
+  // "no restriction — use role as before"; a JSON array of app slugs
+  // (e.g. ["Delhivery-Orders","Scanner"]) restricts a "Custom" user to
+  // exactly those apps regardless of what their underlying role permits.
+  try { await DB.prepare(`ALTER TABLE tm_users ADD COLUMN allowed_apps TEXT DEFAULT NULL`).run(); } catch (e) { /* column already exists */ }
   const adminExists = await DB.prepare("SELECT id FROM tm_users WHERE username = 'admin'").first();
   if (!adminExists) {
     const salt = genSalt();
@@ -510,7 +519,7 @@ export default {
         const expires = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
         await env.DB.prepare('INSERT INTO tm_sessions (token, user_id, role, expires_at) VALUES (?, ?, ?, ?)')
           .bind(token, u.id, u.role, expires).run();
-        return json({ ok: true, token, user: { username: u.username, role: u.role, display_name: u.display_name } });
+        return json({ ok: true, token, user: { username: u.username, role: u.role, display_name: u.display_name, allowedApps: u.allowed_apps ? JSON.parse(u.allowed_apps) : null } });
       }
 
       if (request.method === 'POST' && act === 'logout') {
@@ -560,36 +569,73 @@ export default {
       // ── ADMIN — user management (always gated, see checkAuth) ────
       if (request.method === 'POST' && act === 'adminListUsers') {
         const rows = await env.DB.prepare(
-          'SELECT id, username, role, display_name, active, created_at FROM tm_users ORDER BY username ASC'
+          'SELECT id, username, role, display_name, active, allowed_apps, created_at FROM tm_users ORDER BY username ASC'
         ).all();
-        return json({ ok: true, users: rows.results || [] });
+        const users = (rows.results || []).map(u => ({
+          ...u,
+          // Surface "Custom" as the displayed role whenever an app
+          // allow-list is set, regardless of the underlying stored role
+          // (always 'manager' for custom users — see adminCreateUser).
+          displayRole: u.allowed_apps ? 'custom' : u.role,
+          allowedApps: u.allowed_apps ? JSON.parse(u.allowed_apps) : null
+        }));
+        return json({ ok: true, users });
       }
       if (request.method === 'POST' && act === 'adminCreateUser') {
-        const { username, password, role, display_name } = body;
+        const { username, password, role, display_name, allowed_apps } = body;
         if (!username || !password || !role) return json({ ok: false, error: 'username, password, role required' });
-        if (!['admin', 'manager', 'viewer', 'picker_packer'].includes(role)) return json({ ok: false, error: 'Invalid role' });
+        const validRoles = ['admin', 'manager', 'viewer', 'picker_packer', 'custom'];
+        if (!validRoles.includes(role)) return json({ ok: false, error: 'Invalid role' });
+        // "Custom" isn't a real permission tier — it's a Manager-level
+        // account (full use of whatever apps it's allowed into) with an
+        // app allow-list layered on top. Everywhere else in this file
+        // (ACTION_TIERS, roleAllowed) only ever sees 'manager'.
+        const actualRole = role === 'custom' ? 'manager' : role;
+        const appsJson = role === 'custom' ? JSON.stringify(Array.isArray(allowed_apps) ? allowed_apps : []) : null;
         const salt = genSalt();
         const hash = await hashPassword(password, salt);
         try {
           await env.DB.prepare(
-            'INSERT INTO tm_users (username, password_hash, salt, role, display_name) VALUES (?, ?, ?, ?, ?)'
-          ).bind(String(username).toLowerCase().trim(), hash, salt, role, display_name || '').run();
+            'INSERT INTO tm_users (username, password_hash, salt, role, display_name, allowed_apps) VALUES (?, ?, ?, ?, ?, ?)'
+          ).bind(String(username).toLowerCase().trim(), hash, salt, actualRole, display_name || '', appsJson).run();
           return json({ ok: true });
         } catch (e) {
           return json({ ok: false, error: 'Username already exists' });
         }
       }
       if (request.method === 'POST' && act === 'adminUpdateUser') {
-        const { id, role, display_name, active } = body;
+        const { id, role, display_name, active, allowed_apps } = body;
         if (!id) return json({ ok: false, error: 'id required' });
-        if (role && !['admin', 'manager', 'viewer', 'picker_packer'].includes(role)) return json({ ok: false, error: 'Invalid role' });
+
+        let actualRole = null;
+        let appsJsonToSet; // undefined = leave allowed_apps untouched
+        if (role) {
+          const validRoles = ['admin', 'manager', 'viewer', 'picker_packer', 'custom'];
+          if (!validRoles.includes(role)) return json({ ok: false, error: 'Invalid role' });
+          if (role === 'custom') {
+            actualRole = 'manager';
+            appsJsonToSet = JSON.stringify(Array.isArray(allowed_apps) ? allowed_apps : []);
+          } else {
+            actualRole = role;
+            appsJsonToSet = null; // switching to a standard role clears any app restriction
+          }
+        } else if (allowed_apps !== undefined) {
+          // Editing just the app list for an already-custom user.
+          appsJsonToSet = JSON.stringify(Array.isArray(allowed_apps) ? allowed_apps : []);
+        }
+
         await env.DB.prepare(`
           UPDATE tm_users SET
             role = COALESCE(?, role),
             display_name = COALESCE(?, display_name),
             active = COALESCE(?, active)
           WHERE id = ?
-        `).bind(role || null, display_name != null ? display_name : null, active != null ? (active ? 1 : 0) : null, id).run();
+        `).bind(actualRole, display_name != null ? display_name : null, active != null ? (active ? 1 : 0) : null, id).run();
+
+        if (appsJsonToSet !== undefined) {
+          await env.DB.prepare('UPDATE tm_users SET allowed_apps = ? WHERE id = ?').bind(appsJsonToSet, id).run();
+        }
+
         if (active === false || active === 0) {
           await env.DB.prepare('DELETE FROM tm_sessions WHERE user_id = ?').bind(id).run();
         }
