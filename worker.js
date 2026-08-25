@@ -2327,12 +2327,12 @@ export default {
 
           const sessionUser = await resolveSession(request, env.DB);
           await env.DB.prepare(`
-            INSERT INTO delhivery_orders (order_id, waybill, status, delhivery_ok, payload_json, response_json, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            INSERT INTO delhivery_orders (order_id, waybill, status, delhivery_ok, payload_json, response_json, created_by, job_type, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
           `).bind(
             o.order, result.waybill, result.success ? 'created' : 'failed',
             result.success ? 1 : 0, JSON.stringify(result.payload), JSON.stringify(result.response),
-            (sessionUser && sessionUser.username) || 'unauthenticated'
+            (sessionUser && sessionUser.username) || 'unauthenticated', o.job_type || ''
           ).run();
 
           return json({ ok: result.success, waybill: result.waybill, delhiveryHttpStatus: result.httpStatus, response: result.response }, result.success ? 200 : 502);
@@ -2476,8 +2476,11 @@ async function ensureDelhiveryTable(DB) {
     payload_json  TEXT,
     response_json TEXT,
     created_by    TEXT,
+    job_type      TEXT,
     created_at    TEXT DEFAULT (datetime('now'))
   )`).run();
+  // Migration for tables created before job_type existed.
+  try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN job_type TEXT`).run(); } catch (e) { /* column already exists */ }
 }
 
 // ── DELHIVERY — Forward Order Creation ───────────────────────────────
