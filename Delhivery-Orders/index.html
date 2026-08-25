@@ -265,7 +265,7 @@ table.log-table tr:last-child td { border-bottom: none; }
         Viewer accounts can see the order log on the right, but only Admins and Managers can create a Delhivery order — this creates a real, live shipment on the account.
       </div>
 
-      <form id="order-form" autocomplete="off">
+      <div id="order-form" autocomplete="off">
         <div class="form-row single">
           <div class="field">
             <label>Order ID</label>
@@ -364,8 +364,8 @@ table.log-table tr:last-child td { border-bottom: none; }
           </div>
         </div>
 
-        <button type="submit" class="submit-btn" id="submit-btn">Create Delhivery Order</button>
-      </form>
+        <button type="button" class="submit-btn" id="submit-btn">Create Delhivery Order</button>
+      </div>
 
       <div class="confirm-box" id="confirm-box">
         <div class="confirm-title">Estimated shipping charge</div>
@@ -538,7 +538,6 @@ function fmtWhen(iso) {
 }
 
 function initDelhiveryApp() {
-  var form = document.getElementById('order-form');
   var submitBtn = document.getElementById('submit-btn');
   var resultBox = document.getElementById('result-box');
   var resultTitle = document.getElementById('result-title');
@@ -644,7 +643,7 @@ function initDelhiveryApp() {
           '<div class="details-json" id="details-' + idx + '"></div>' +
         '</td>' +
         '<td class="mono">' + (o.waybill ? escapeHtml(o.waybill) : '&#8212;') + '</td>' +
-        '<td>' + escapeHtml(o.job_type || '&#8212;') + '</td>' +
+        '<td>' + (o.job_type ? escapeHtml(o.job_type) : '&#8212;') + '</td>' +
         '<td><span class="badge ' + statusClass + '">' + (o.delhivery_ok ? 'Created' : 'Failed') + '</span></td>' +
         '<td>' + escapeHtml(o.created_by || '&#8212;') + '</td>' +
         '<td>' + fmtWhen(o.created_at) + '</td>';
@@ -693,12 +692,47 @@ function initDelhiveryApp() {
     };
   }
 
-  // Step 1: form submit fetches an estimate and shows the confirm box —
-  // nothing is created on Delhivery yet at this point.
-  form.addEventListener('submit', async function (e) {
-    e.preventDefault();
+  // Manual equivalent of form.reset() — needed because this is now a
+  // plain <div>, not a <form> (see the click-vs-submit comment below).
+  function resetFormFields() {
+    ['f-name', 'f-phone', 'f-add', 'f-pin', 'f-city', 'f-state', 'f-desc', 'f-amount'].forEach(function (id) {
+      document.getElementById(id).value = '';
+    });
+    document.getElementById('f-type').value = 'Repaired';
+    document.getElementById('f-payment').value = 'Prepaid';
+    document.getElementById('f-qty').value = '1';
+    document.getElementById('f-hsn').value = '8467';
+    document.getElementById('f-weight').value = '1000';
+    document.getElementById('f-length').value = '10';
+    document.getElementById('f-width').value = '10';
+    document.getElementById('f-height').value = '10';
+    orderIdField.value = '';
+  }
+
+  // Step 1: clicking the button fetches an estimate and shows the confirm
+  // box — nothing is created on Delhivery yet at this point. Deliberately
+  // a plain button click, not a <form> submit — Chrome's "Save address?"
+  // prompt hooks into the native submit event itself (even with
+  // preventDefault called), so avoiding a real form submission entirely
+  // is what actually stops it, not just autocomplete="off".
+  // Required-field validation used to come free from the native <form>
+  // submit — now that this is a plain button click (see comment above),
+  // it has to be done by hand. checkValidity()/reportValidity() work on
+  // individual elements regardless of whether they're inside a <form>.
+  var requiredFieldIds = ['f-name', 'f-phone', 'f-add', 'f-pin', 'f-desc', 'f-qty', 'f-amount', 'f-hsn'];
+  function validateRequiredFields() {
+    for (var i = 0; i < requiredFieldIds.length; i++) {
+      var el = document.getElementById(requiredFieldIds[i]);
+      if (!el.checkValidity()) { el.reportValidity(); return false; }
+    }
+    return true;
+  }
+
+  submitBtn.addEventListener('click', async function () {
     resultBox.className = 'result-box';
     confirmBox.className = 'confirm-box';
+
+    if (!validateRequiredFields()) return;
 
     if (!orderIdField.value) {
       resultBox.className = 'result-box show error';
@@ -772,9 +806,7 @@ function initDelhiveryApp() {
         resultTitle.textContent = 'Order created successfully';
         resultBody.innerHTML = 'Waybill: <span class="result-waybill">' + escapeHtml(res.waybill) + '</span>' +
           (attempts ? ' <span style="color:var(--text2)">(order ID auto-adjusted to avoid a duplicate)</span>' : '');
-        form.reset();
-        document.getElementById('f-hsn').value = '8467';
-        orderIdField.value = '';
+        resetFormFields();
         pinStatus.textContent = '';
         pinStatus.className = 'field-hint';
       } else {
