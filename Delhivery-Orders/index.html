@@ -364,10 +364,6 @@ table.log-table tr:last-child td { border-bottom: none; }
           </div>
         </div>
 
-        <div class="form-row single" id="vol-weight-hint" style="display:none;">
-          <div class="field-hint" id="vol-weight-text"></div>
-        </div>
-
         <button type="submit" class="submit-btn" id="submit-btn">Create Delhivery Order</button>
       </form>
 
@@ -576,30 +572,6 @@ function initDelhiveryApp() {
   }
 
   // ── Live volumetric-weight hint — Delhivery Surface uses (L×W×H)/5000
-  // to get chargeable weight in kg, and bills whichever of that or actual
-  // weight is higher. Purely informational, calculated client-side. ──
-  var lengthField = document.getElementById('f-length');
-  var widthField = document.getElementById('f-width');
-  var heightField = document.getElementById('f-height');
-  var weightField = document.getElementById('f-weight');
-  var volHintBox = document.getElementById('vol-weight-hint');
-  var volHintText = document.getElementById('vol-weight-text');
-  function updateVolHint() {
-    var l = parseFloat(lengthField.value), w = parseFloat(widthField.value), h = parseFloat(heightField.value);
-    if (!l || !w || !h) { volHintBox.style.display = 'none'; return; }
-    var volKg = (l * w * h) / 5000;
-    var actualKg = (parseFloat(weightField.value) || 0) / 1000;
-    var chargeable = Math.max(volKg, actualKg);
-    var basis = volKg > actualKg ? 'volumetric' : 'actual';
-    volHintText.textContent = 'Volumetric weight: ' + volKg.toFixed(2) + ' kg. Chargeable weight will be ~' +
-      chargeable.toFixed(2) + ' kg (based on ' + basis + ' weight — Delhivery bills whichever is higher). Exact rounding/slab depends on their rate card.';
-    volHintBox.style.display = '';
-  }
-  [lengthField, widthField, heightField, weightField].forEach(function (f) {
-    f.addEventListener('input', updateVolHint);
-  });
-  updateVolHint(); // show it immediately for the pre-filled defaults
-
   // ── Pincode serviceability pre-check — fires on blur so a bad pincode
   // is caught before submission, not after a failed order attempt. ──
   var pinField = document.getElementById('f-pin');
@@ -803,8 +775,6 @@ function initDelhiveryApp() {
         form.reset();
         document.getElementById('f-hsn').value = '8467';
         orderIdField.value = '';
-        volHintBox.style.display = 'none';
-        updateVolHint(); // re-show for the restored 1000g/10x10x10 defaults
         pinStatus.textContent = '';
         pinStatus.className = 'field-hint';
       } else {
