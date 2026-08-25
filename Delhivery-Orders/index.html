@@ -92,7 +92,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
 .access-denied-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:'DM Sans',sans-serif;color:var(--text);background:var(--bg);text-align:center;padding:20px}
 
 /* ── Page layout ── */
-.page { max-width: 1100px; margin: 0 auto; padding: 28px 24px 60px; }
+.page { max-width: 1600px; margin: 0 auto; padding: 28px 32px 60px; }
 .page-head { margin-bottom: 22px; }
 .page-title { font-family: var(--font-display); font-size: 22px; font-weight: 800; color: var(--text); }
 .page-sub { font-size: 12.5px; color: var(--text2); margin-top: 4px; }
@@ -309,20 +309,30 @@ table.log-table tr:last-child td { border-bottom: none; }
 
         <div class="form-row single">
           <div class="field">
-            <label>Products Description</label>
-            <input type="text" id="f-desc" required placeholder="e.g. TCD-12D Cordless Drill">
-            <div class="field-hint">For multi-item orders, list them together here — this MVP creates one shipment per order (one waybill).</div>
-          </div>
-        </div>
-
-        <div class="form-row single">
-          <div class="field">
             <label>Type</label>
             <select id="f-type">
               <option value="Repaired" selected>Repaired</option>
               <option value="Replacement">Replacement</option>
               <option value="FOC">FOC</option>
             </select>
+          </div>
+        </div>
+
+        <div class="form-row single" id="desc-text-wrap">
+          <div class="field">
+            <label>Products Description</label>
+            <input type="text" id="f-desc" required placeholder="e.g. TCD-12D Cordless Drill">
+            <div class="field-hint">For multi-item orders, list them together here — this MVP creates one shipment per order (one waybill).</div>
+          </div>
+        </div>
+
+        <div class="form-row single" id="desc-sku-wrap" style="display:none;">
+          <div class="field">
+            <label>Replacement SKU</label>
+            <select id="f-replacement-sku">
+              <option value="">Loading SKUs&#8230;</option>
+            </select>
+            <div class="field-hint" id="sku-list-hint"></div>
           </div>
         </div>
 
@@ -553,6 +563,55 @@ function initDelhiveryApp() {
     var phone = phoneField.value.trim();
     orderIdField.value = /^\d{10}$/.test(phone) ? genOrderId(phone) : '';
   }
+
+  // ── Type field — switches Products Description between free text and
+  // a UC Master SKU dropdown when "Replacement" is selected. Reuses the
+  // same enabled-SKU cache the hub's Master Sheet dropdown reads from
+  // (ucsku_getList), so no separate SKU source to maintain here.
+  var typeField = document.getElementById('f-type');
+  var descTextWrap = document.getElementById('desc-text-wrap');
+  var descSkuWrap = document.getElementById('desc-sku-wrap');
+  var descTextField = document.getElementById('f-desc');
+  var skuSelect = document.getElementById('f-replacement-sku');
+  var skuListHint = document.getElementById('sku-list-hint');
+  var skuListLoaded = false;
+
+  async function loadSkuListOnce() {
+    if (skuListLoaded) return;
+    skuListLoaded = true;
+    try {
+      var res = await fetch(window.TM_WORKER + '?action=ucsku_getList').then(function (r) { return r.json(); });
+      var skus = (res && res.skus) || [];
+      if (!skus.length) {
+        skuSelect.innerHTML = '<option value="">No SKUs available</option>';
+        skuListHint.textContent = 'The shared SKU list is empty — an admin can refresh it from the hub, or type the SKU manually by switching Type back temporarily.';
+        return;
+      }
+      skuSelect.innerHTML = '<option value="">Select a SKU&#8230;</option>' +
+        skus.map(function (s) { return '<option value="' + escapeHtml(s) + '">' + escapeHtml(s) + '</option>'; }).join('');
+      skuListHint.textContent = skus.length + ' enabled SKUs, from the same shared list used across the portal.';
+    } catch (e) {
+      skuSelect.innerHTML = '<option value="">Couldn\'t load SKU list</option>';
+      skuListHint.textContent = "Couldn't reach the SKU list — you can switch Type away and back to retry.";
+      skuListLoaded = false;
+    }
+  }
+
+  function updateDescMode() {
+    if (typeField.value === 'Replacement') {
+      descTextWrap.style.display = 'none';
+      descSkuWrap.style.display = '';
+      descTextField.removeAttribute('required');
+      skuSelect.setAttribute('required', 'required');
+      loadSkuListOnce();
+    } else {
+      descTextWrap.style.display = '';
+      descSkuWrap.style.display = 'none';
+      descTextField.setAttribute('required', 'required');
+      skuSelect.removeAttribute('required');
+    }
+  }
+  typeField.addEventListener('change', updateDescMode);
   phoneField.addEventListener('input', bumpOrderIdForPhone);
 
   // Bumps a numeric suffix onto the current order ID: base -> base-2 ->
@@ -671,6 +730,10 @@ function initDelhiveryApp() {
   var pendingOrder = null;
 
   function gatherOrder() {
+    var jobType = document.getElementById('f-type').value;
+    var rawDesc = jobType === 'Replacement'
+      ? skuSelect.value.trim()
+      : document.getElementById('f-desc').value.trim();
     return {
       order: orderIdField.value.trim(),
       name: document.getElementById('f-name').value.trim(),
@@ -679,8 +742,11 @@ function initDelhiveryApp() {
       pin: document.getElementById('f-pin').value.trim(),
       city: document.getElementById('f-city').value.trim(),
       state: document.getElementById('f-state').value.trim(),
-      products_desc: document.getElementById('f-desc').value.trim(),
-      job_type: document.getElementById('f-type').value,
+      // Combined here so the label/Delhivery record reads e.g.
+      // "Replacement - TCV-20 12V" — the raw item name stays clean
+      // in the UI, this is just how it's sent for manifestation.
+      products_desc: jobType + ' - ' + rawDesc,
+      job_type: jobType,
       payment_mode: document.getElementById('f-payment').value,
       quantity: document.getElementById('f-qty').value,
       total_amount: document.getElementById('f-amount').value,
@@ -699,6 +765,8 @@ function initDelhiveryApp() {
       document.getElementById(id).value = '';
     });
     document.getElementById('f-type').value = 'Repaired';
+    updateDescMode();
+    skuSelect.value = '';
     document.getElementById('f-payment').value = 'Prepaid';
     document.getElementById('f-qty').value = '1';
     document.getElementById('f-hsn').value = '8467';
@@ -719,11 +787,17 @@ function initDelhiveryApp() {
   // submit — now that this is a plain button click (see comment above),
   // it has to be done by hand. checkValidity()/reportValidity() work on
   // individual elements regardless of whether they're inside a <form>.
-  var requiredFieldIds = ['f-name', 'f-phone', 'f-add', 'f-pin', 'f-desc', 'f-qty', 'f-amount', 'f-hsn'];
+  var requiredFieldIds = ['f-name', 'f-phone', 'f-add', 'f-pin', 'f-qty', 'f-amount', 'f-hsn'];
   function validateRequiredFields() {
     for (var i = 0; i < requiredFieldIds.length; i++) {
       var el = document.getElementById(requiredFieldIds[i]);
       if (!el.checkValidity()) { el.reportValidity(); return false; }
+    }
+    // Description field differs by Type mode — check whichever is active.
+    var descEl = typeField.value === 'Replacement' ? skuSelect : descTextField;
+    if (!descEl.value.trim()) {
+      if (typeof descEl.reportValidity === 'function') descEl.reportValidity();
+      return false;
     }
     return true;
   }
