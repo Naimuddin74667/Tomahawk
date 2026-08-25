@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600;700&family=Roboto+Slab:wght@700&display=swap" rel="stylesheet">
+<title>Delhivery Orders — Tomahawk</title>
+<style>
+/* ── Design tokens (matches the rest of the Tomahawk suite) ── */
+:root {
+  --bg:       #0c0c14;
+  --surface:  #13131e;
+  --surface2: #1a1a28;
+  --border:   #1f1f2e;
+  --accent:   #F5A800;
+  --text:     #e8e8f0;
+  --text2:    #888899;
+  --green:    #4ade80;
+  --red:      #f87171;
+  --font-display: 'Syne', sans-serif;
+  --font-body:    'DM Sans', sans-serif;
+}
+html[data-theme="light"] {
+  --bg:       #f4f5f7;
+  --surface:  #ffffff;
+  --surface2: #f0f1f4;
+  --border:   #d0d4e0;
+  --accent:   #c98a00;
+  --text:     #111118;
+  --text2:    #555566;
+  --green:    #16a34a;
+  --red:      #dc2626;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-body); background: var(--bg); color: var(--text); font-size: 13px; transition: background .2s, color .2s; }
+
+/* ── Portal header (shared pattern) ── */
+.site-header {
+  position: sticky; top: 0; z-index: 100;
+  height: 62px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center;
+  padding: 0 36px;
+  justify-content: space-between; gap: 20px;
+  transition: background .2s, border-color .2s;
+}
+.header-logo { display: flex; align-items: center; gap: 14px; text-decoration: none; flex-shrink: 0; }
+.logo-svg-wrap { display: flex; align-items: center; color: var(--accent); }
+.logo-divider { width: 2px; height: 36px; background: rgba(255,255,255,0.5); border-radius: 2px; }
+html[data-theme="light"] .logo-divider { background: rgba(0,0,0,0.25); }
+.logo-tagline { font-size: 16px; font-weight: 600; color: var(--text2); letter-spacing: .04em; font-family: var(--font-body); }
+.header-right { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
+.sys-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; flex-shrink: 0; animation: hpulse 2.5s ease-in-out infinite; }
+@keyframes hpulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+.header-theme-toggle {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--surface2); border: 1px solid var(--border);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  color: var(--text2); transition: border-color .15s, color .15s;
+}
+.header-theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+html:not([data-theme="light"]) .icon-sun  { display: none; }
+html[data-theme="light"]       .icon-moon { display: none; }
+.header-user { display: flex; align-items: center; gap: 9px; background: var(--surface2); border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px 6px 6px; }
+.user-avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #111; }
+.user-name { font-size: 13px; color: var(--text2); font-family: var(--font-body); }
+@media (max-width: 640px) {
+  .site-header { padding: 12px 16px; height: auto; flex-wrap: wrap; gap: 10px; }
+  .logo-tagline { font-size: 11px; }
+  .sys-status span { display: none; }
+  .user-name { display: none; }
+  .header-user { padding: 5px; }
+  .header-theme-toggle { width: 32px; height: 32px; }
+}
+
+/* ── Auth gate + role badge (shared pattern) ── */
+.auth-gate{position:fixed;inset:0;z-index:500;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px}
+.auth-gate[hidden]{display:none}
+.auth-card{width:100%;max-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:32px 28px 28px}
+.auth-logo-row{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+.auth-logo-mark{width:34px;height:34px;border-radius:8px;background:var(--accent);color:#111;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;flex-shrink:0}
+.auth-title{font-weight:700;font-size:16px;color:var(--text)}
+.auth-sub{font-size:11px;color:var(--text2);margin-top:1px}
+.header-logout-btn{width:34px;height:34px;border-radius:50%;background:var(--surface2);border:1px solid var(--border);color:var(--text2);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:border-color .15s,color .15s;flex-shrink:0}
+.header-logout-btn:hover{border-color:var(--red);color:var(--red)}
+.header-logout-btn[hidden]{display:none}
+.header-user[hidden]{display:none}
+.role-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:20px;background:var(--surface2);color:var(--accent);border:1px solid var(--border);margin-left:2px}
+.access-denied-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:'DM Sans',sans-serif;color:var(--text);background:var(--bg);text-align:center;padding:20px}
+
+/* ── Page layout ── */
+.page { max-width: 1100px; margin: 0 auto; padding: 28px 24px 60px; }
+.page-head { margin-bottom: 22px; }
+.page-title { font-family: var(--font-display); font-size: 22px; font-weight: 800; color: var(--text); }
+.page-sub { font-size: 12.5px; color: var(--text2); margin-top: 4px; }
+
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: start; }
+@media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 22px; }
+.panel-title {
+  font-family: var(--font-display); font-size: 13px; font-weight: 800; color: var(--accent);
+  letter-spacing: 1px; text-transform: uppercase; margin-bottom: 16px;
+  display: flex; align-items: center; gap: 8px;
+}
+.panel-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+.form-row.single { grid-template-columns: 1fr; }
+.form-row.three { grid-template-columns: 1fr 1fr 1fr; }
+.field label { display: block; font-size: 10.5px; font-weight: 700; color: var(--text2); margin-bottom: 6px; letter-spacing: .04em; text-transform: uppercase; }
+.field label .opt { text-transform: none; font-weight: 500; color: var(--text2); opacity: .7; letter-spacing: 0; }
+.field input, .field select, .field textarea {
+  width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 7px;
+  color: var(--text); font-family: var(--font-body); font-size: 13px; padding: 9px 12px;
+  outline: none; transition: border-color .15s;
+}
+.field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); }
+.field textarea { resize: vertical; min-height: 54px; }
+.field-hint { font-size: 10.5px; color: var(--text2); margin-top: 5px; line-height: 1.5; }
+.id-row { display: flex; gap: 8px; }
+.id-row input { flex: 1; }
+.btn-regen {
+  flex-shrink: 0; width: 36px; border-radius: 7px; background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text2); cursor: pointer; font-size: 14px; transition: border-color .15s, color .15s;
+}
+.btn-regen:hover { border-color: var(--accent); color: var(--accent); }
+
+.submit-btn {
+  width: 100%; margin-top: 6px; padding: 12px; border-radius: 8px; border: none;
+  background: var(--accent); color: #111; font-family: var(--font-body); font-weight: 700; font-size: 13.5px;
+  cursor: pointer; transition: opacity .15s;
+}
+.submit-btn:hover { opacity: .9; }
+.submit-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.viewer-note {
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 14px;
+  font-size: 12.5px; color: var(--text2); line-height: 1.6;
+}
+
+/* Result banner */
+.result-box { margin-top: 16px; border-radius: 8px; padding: 14px; font-size: 12.5px; line-height: 1.6; display: none; }
+.result-box.show { display: block; }
+.result-box.success { background: color-mix(in srgb, var(--green) 12%, transparent); border: 1px solid color-mix(in srgb, var(--green) 40%, transparent); }
+.result-box.error   { background: color-mix(in srgb, var(--red) 12%, transparent); border: 1px solid color-mix(in srgb, var(--red) 40%, transparent); }
+.result-title { font-weight: 700; margin-bottom: 4px; }
+.result-box.success .result-title { color: var(--green); }
+.result-box.error .result-title { color: var(--red); }
+.result-waybill { font-family: monospace; font-size: 13px; background: var(--surface2); padding: 2px 8px; border-radius: 5px; }
+
+/* Log table */
+.log-table-wrap { overflow-x: auto; }
+table.log-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.log-table th {
+  text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--text2); padding: 8px 10px; border-bottom: 1px solid var(--border);
+}
+table.log-table td { padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.log-table tr:last-child td { border-bottom: none; }
+.badge { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px; text-transform: uppercase; letter-spacing: .03em; }
+.badge.created { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
+.badge.failed  { background: color-mix(in srgb, var(--red) 15%, transparent); color: var(--red); }
+.mono { font-family: monospace; font-size: 11.5px; }
+.details-toggle { cursor: pointer; color: var(--accent); font-size: 11px; user-select: none; }
+.details-json {
+  display: none; margin-top: 6px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px; font-family: monospace; font-size: 10.5px; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto;
+}
+.details-json.show { display: block; }
+.log-empty { color: var(--text2); font-size: 12.5px; padding: 20px 0; text-align: center; }
+.log-refresh { font-size: 11px; color: var(--text2); cursor: pointer; }
+.log-refresh:hover { color: var(--accent); }
+.panel-head-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.panel-head-row .panel-title { margin-bottom: 0; }
+</style>
+</head>
+<body>
+
+<div class="auth-gate" id="auth-gate">
+  <div class="auth-card">
+    <div class="auth-logo-row">
+      <div class="auth-logo-mark">T</div>
+      <div>
+        <div class="auth-title">Tomahawk Operations</div>
+        <div class="auth-sub">Sign in to continue</div>
+      </div>
+    </div>
+    <div style="font-size:11.5px;color:var(--text2);margin-bottom:14px;">
+      Login now happens once on the <a href="../index.html" style="color:var(--accent)">Tomahawk hub</a>. Redirecting you there&#8230;
+    </div>
+  </div>
+</div>
+
+<header class="site-header">
+  <div class="header-logo">
+    <a href="/Tomahawk/" class="logo-svg-wrap" style="text-decoration:none">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="474 509 6803 1270" style="height:54px;width:auto;display:block;fill:currentColor;">
+        <path d="M796.6 803.57l625.42 0c4.17,0.55 6.71,2.65 7.48,6.14l-84.8 151.21 -181.47 0c-16.1,25.18 -100.16,178.13 -252.2,458.77l-203.52 0 -0.67 -3.08c109.72,-202.64 190.86,-354.55 243.59,-455.69l-240.46 0 -0.77 -3.7c47.6,-91.52 76.61,-142.78 87.4,-153.65zm-14.19 821.74l-287.36 153.05 187.35 -278.86 1362.49 0 -8.53 5.99 -1253.95 119.82zm6102.31 -1005.2l131.69 -113.42 0 215.51 -960.53 0 8.48 -6 820.36 -96.09zm-574.92 183.46l298.9 0 1.32 6.14c-45.66,84.33 -70.46,131.58 -74.1,141.4 160.29,-96.44 243.35,-144.55 249.31,-144.55l224.51 0 1.32 6.11c-3.09,0.39 -163.87,96.95 -482.4,289.8l215.31 314.14 -5.44 3.08 -212.81 0c-5.17,-3.62 -50.38,-70.48 -135.48,-200.49l-3.14 0c-57.01,115.32 -92.82,182.15 -107.4,200.49l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.77,-24.7l-1.96 -9.09c-2.91,-13.47 -17.46,-33.95 -43.92,-61.58l5.47 -2.99zm-900.24 0.38l295.21 0 0.67 3.13 -177.4 332.67 0.7 3.15 3.15 0 281.78 -191.3c5.47,6.84 8.72,12.09 9.42,15.42l50.56 191.26 2.97 0c-0.06,-5.07 62.84,-123.21 188.62,-354.33l199.85 0 7 3.13c-2.97,8.9 -110.79,213.14 -323.65,612.64l-212.28 0c-4.01,0 -6.55,-2.09 -7.43,-6.09l-8.67 -40.1c-6.4,-29.71 -17.38,-75.75 -32.99,-138.44l-289.68 184.63 -221.52 0 -0.69 -3.12 276.81 -529.56 -3.98 -18.37c-2.88,-13.46 -17.46,-33.93 -43.89,-61.59l5.44 -3.13zm-792.78 -0.38l758.24 0 0.66 2.99c-195.43,377.28 -303.39,581.65 -323.9,613.13l-197.37 0c-4.22,0 -6.58,-2.06 -7.45,-6.06 5.76,-4.89 46.12,-79.83 121.01,-225.06l-249.55 0c-5.54,7.52 -48.45,84.55 -128.62,231.12l-203.51 0 -0.67 -3.08c178.19,-329 269.43,-500.66 273.89,-514.68 2.75,-6.83 3.49,-17.15 2.64,-30.81 -2.41,-11.19 -17.16,-31.67 -44.05,-61.41l-1.32 -6.14zm185.18 228.04l249.02 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.73 0c-2.8,0 -16.07,23.62 -40.03,70.69zm-991.54 -228.04l298.86 0 1.32 6.14 -118.16 221.9 0.69 3.15 249.5 0c81.88,-151.73 124.55,-228.88 128.62,-231.19l191.28 0c4.13,0.55 6.7,2.65 7.45,6.14 -213.25,402.5 -322.44,606 -327.72,609.98l-196.86 0 -0.67 -3.08 112.7 -218.93 -252.85 0c-6.07,5.96 -41.47,70.68 -105.58,194.4 -11.11,18.37 -17.29,27.61 -18.72,27.61l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.79,-24.7l-1.98 -9.09c-2.9,-13.47 -17.45,-33.95 -43.92,-61.58l5.51 -2.99zm-792.75 0l758.27 0 0.64 2.99c-195.44,377.28 -303.38,581.65 -323.89,613.13l-197.37 0c-4.24,0 -6.6,-2.06 -7.45,-6.06 5.75,-4.89 46.12,-79.83 120.97,-225.06l-249.51 0c-5.56,7.52 -48.47,84.55 -128.62,231.12l-203.49 0 -0.69 -3.08c178.16,-329 269.38,-500.66 273.91,-514.68 2.71,-6.83 3.45,-17.15 2.6,-30.81 -2.39,-11.19 -17.15,-31.67 -44.05,-61.41l-1.32 -6.14zm185.2 228.04l249 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.72 0c-2.81,0 -16.06,23.62 -40.02,70.69zm-1103.91 -228.04l298.89 0c4.16,0.55 6.74,2.81 7.57,6.66l9.27 43.04c6.44,29.76 17.44,75.82 32.88,138.45 190.96,-123.03 291.13,-185.84 300.97,-188.15l206.5 0c4.3,0.55 6.73,2.81 7.55,6.66 -212.8,402.15 -321.84,605.48 -327.27,609.46l-203.52 0 -0.69 -3.08 175.45 -329.54 -0.68 -3.15 -2.97 0 -282.28 191.28c-5.52,-6.84 -8.76,-12.07 -9.47,-15.4l-50.55 -191.26 -2.98 0c-112.09,216.6 -175.21,333.7 -189.29,351.15l-202.99 0 -0.71 -3.08 274.04 -514.16c2.58,-7.52 2.71,-15.74 0.78,-24.65l-1.95 -9.11c-2.91,-13.47 -17.46,-33.95 -43.93,-61.59l5.38 -3.53zm-496.95 0l400.37 0c23.26,0 40.99,20.47 53.34,61.46 5.96,27.63 -9.61,69.81 -46.53,126.69 -44.77,80.33 -115.53,214.7 -211.82,403.33 -9.73,16.45 -24.43,24.64 -43.84,24.64l-517.82 0c-14.01,-8.19 -22.34,-17.45 -24.49,-27.61 -6.2,-28.7 27.81,-103.76 102.25,-225.02 91.52,-179.21 152.8,-290.15 184.01,-332.87 24.3,-20.48 59.21,-30.62 104.53,-30.62zm-137.63 461.82l203.51 0c1.89,-7.52 54.92,-107.99 159.41,-301.53l-0.63 -2.94 -196.86 0c-5.24,4 -60.32,105.51 -165.43,304.47z"/>
+        <path d="M7160.73 529.99c52.95,0 95.89,42.94 95.89,95.95 0,52.95 -42.94,95.89 -95.89,95.89 -53,0 -95.97,-42.94 -95.97,-95.89 0,-53.01 42.97,-95.95 95.97,-95.95zm-42.35 149.95l0 -110.28 46.91 0c11.77,0 20.35,1.01 25.65,3.01 5.34,1.97 9.65,5.52 12.86,10.57 3.22,5.05 4.8,10.81 4.8,17.39 0,8.2 -2.44,15.09 -7.3,20.45 -4.85,5.38 -12.16,8.8 -21.83,10.2 4.84,2.81 8.84,5.9 11.95,9.27 3.13,3.36 7.34,9.3 12.66,17.89l13.46 21.5 -26.6 0 -16.09 -23.99c-5.74,-8.56 -9.67,-13.99 -11.76,-16.2 -2.1,-2.26 -4.33,-3.73 -6.7,-4.58 -2.37,-0.83 -6.08,-1.25 -11.2,-1.25l-4.5 0 0 46.02 -22.31 0zm22.31 -63.65l16.45 0c10.69,0 17.35,-0.44 20.02,-1.32 2.65,-0.87 4.74,-2.48 6.23,-4.68 1.53,-2.18 2.3,-4.96 2.3,-8.25 0,-3.76 -1.01,-6.69 -3,-8.99 -1.97,-2.32 -4.75,-3.73 -8.39,-4.34 -1.8,-0.25 -7.21,-0.37 -16.25,-0.37l-17.36 0 0 27.95zm20.04 -72.89c45.53,0 82.45,36.94 82.45,82.54 0,45.52 -36.92,82.49 -82.45,82.49 -45.59,0 -82.53,-36.97 -82.53,-82.49 0,-45.6 36.94,-82.54 82.53,-82.54z"/>
+      </svg>
+    </a>
+    <div class="logo-divider"></div>
+    <span class="logo-tagline">Delhivery Orders</span>
+  </div>
+  <div class="header-right">
+    <div class="sys-status">
+      <div class="status-dot"></div>
+      <span>All systems live</span>
+    </div>
+    <button class="header-theme-toggle" onclick="toggleTheme()" id="theme-btn" aria-label="Toggle theme">
+      <svg class="icon-moon" width="18" height="18" viewBox="0 0 18 18" fill="none">
+        <path d="M15.5 10.5A7 7 0 017.5 2.5a7 7 0 000 13 7 7 0 008-5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+      </svg>
+      <svg class="icon-sun" width="18" height="18" viewBox="0 0 18 18" fill="none">
+        <circle cx="9" cy="9" r="3.5" stroke="currentColor" stroke-width="1.4"/>
+        <path d="M9 1v2M9 15v2M1 9h2M15 9h2M3.22 3.22l1.42 1.42M13.36 13.36l1.42 1.42M3.22 14.78l1.42-1.42M13.36 4.64l1.42-1.42" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <div class="header-user" id="header-user" hidden>
+      <div class="user-avatar" id="user-avatar">--</div>
+      <span class="user-name" id="user-name-display">&#8212;</span>
+      <span class="role-badge" id="user-role-badge">&#8212;</span>
+    </div>
+    <button class="header-logout-btn" id="header-logout-btn" hidden title="Log out">
+      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M8 17H4.5a1.5 1.5 0 01-1.5-1.5v-11A1.5 1.5 0 014.5 3H8M13.5 14l3.5-4-3.5-4M17 10H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+</header>
+
+<div class="page">
+  <div class="page-head">
+    <div class="page-title">Delhivery Forward Orders</div>
+    <div class="page-sub">Create a live forward shipment on your production Delhivery account · manual entry for now</div>
+  </div>
+
+  <div class="grid">
+
+    <!-- ── Create Order panel ── -->
+    <div class="panel">
+      <div class="panel-title">New forward order</div>
+
+      <div id="viewer-note" class="viewer-note" hidden>
+        Viewer accounts can see the order log on the right, but only Admins and Managers can create a Delhivery order — this creates a real, live shipment on the account.
+      </div>
+
+      <form id="order-form">
+        <div class="form-row single">
+          <div class="field">
+            <label>Order ID</label>
+            <div class="id-row">
+              <input type="text" id="f-order" required>
+              <button type="button" class="btn-regen" id="regen-id-btn" title="Generate a new unique order ID">&#8635;</button>
+            </div>
+            <div class="field-hint">Must be unique in Delhivery's system. Auto-generated — regenerate if you get a "Duplicate order id" error.</div>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="field">
+            <label>Consignee Name</label>
+            <input type="text" id="f-name" required placeholder="Customer's full name">
+          </div>
+          <div class="field">
+            <label>Phone</label>
+            <input type="tel" id="f-phone" required placeholder="10-digit mobile" maxlength="10" pattern="[0-9]{10}">
+          </div>
+        </div>
+
+        <div class="form-row single">
+          <div class="field">
+            <label>Delivery Address</label>
+            <textarea id="f-add" required placeholder="Full address, house/flat no., street, area"></textarea>
+          </div>
+        </div>
+
+        <div class="form-row three">
+          <div class="field">
+            <label>Pincode</label>
+            <input type="text" id="f-pin" required maxlength="6" pattern="[0-9]{6}">
+          </div>
+          <div class="field">
+            <label>City</label>
+            <input type="text" id="f-city">
+          </div>
+          <div class="field">
+            <label>State</label>
+            <input type="text" id="f-state">
+          </div>
+        </div>
+
+        <div class="form-row single">
+          <div class="field">
+            <label>Products Description</label>
+            <input type="text" id="f-desc" required placeholder="e.g. TCD-12D Cordless Drill">
+            <div class="field-hint">For multi-item orders, list them together here — this MVP creates one shipment per order (one waybill).</div>
+          </div>
+        </div>
+
+        <div class="form-row three">
+          <div class="field">
+            <label>Payment Mode</label>
+            <select id="f-payment">
+              <option value="Prepaid" selected>Prepaid</option>
+              <option value="COD">COD</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Quantity</label>
+            <input type="number" id="f-qty" required min="1" value="1">
+          </div>
+          <div class="field">
+            <label>Total Amount (&#8377;)</label>
+            <input type="number" id="f-amount" required min="0" step="0.01">
+          </div>
+        </div>
+
+        <div class="form-row three">
+          <div class="field">
+            <label>HSN Code</label>
+            <input type="text" id="f-hsn" required value="8467">
+          </div>
+          <div class="field">
+            <label>Weight (kg) <span class="opt">optional</span></label>
+            <input type="number" id="f-weight" min="0" step="0.01">
+          </div>
+          <div class="field">
+            <label>Dimensions (cm) <span class="opt">optional</span></label>
+            <div style="display:flex;gap:6px;">
+              <input type="number" id="f-width" placeholder="W" min="0">
+              <input type="number" id="f-height" placeholder="H" min="0">
+            </div>
+          </div>
+        </div>
+
+        <button type="submit" class="submit-btn" id="submit-btn">Create Delhivery Order</button>
+      </form>
+
+      <div class="result-box" id="result-box">
+        <div class="result-title" id="result-title"></div>
+        <div id="result-body"></div>
+      </div>
+    </div>
+
+    <!-- ── Order log panel ── -->
+    <div class="panel">
+      <div class="panel-head-row">
+        <div class="panel-title">Recent orders</div>
+        <span class="log-refresh" id="log-refresh-btn">&#8635; Refresh</span>
+      </div>
+      <div class="log-table-wrap">
+        <table class="log-table" id="log-table">
+          <thead>
+            <tr>
+              <th>Order ID</th>
+              <th>Waybill</th>
+              <th>Status</th>
+              <th>By</th>
+              <th>When</th>
+            </tr>
+          </thead>
+          <tbody id="log-tbody"></tbody>
+        </table>
+        <div class="log-empty" id="log-empty" hidden>No orders logged yet.</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+// AUTH — session comes from the Tomahawk hub, same pattern as every
+// other sub-app. picker_packer has no access here at all.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var TM_SESSION_KEY = 'tm_session_v1';
+  var TM_WORKER = 'https://tomahawk-returns.naimuddin.workers.dev';
+
+  function getSession() { try { return JSON.parse(localStorage.getItem(TM_SESSION_KEY) || 'null'); } catch (e) { return null; } }
+  function clearSession() { localStorage.removeItem(TM_SESSION_KEY); }
+  function goToHub() { window.location.href = '../index.html'; }
+
+  window.TM_ROLE = null;
+  window.TM_WORKER = TM_WORKER;
+  window.TM_getSession = getSession;
+
+  function applyRoleGating(role) {
+    var canCreate = role === 'admin' || role === 'manager';
+    document.getElementById('order-form').style.display = canCreate ? '' : 'none';
+    document.getElementById('viewer-note').hidden = canCreate;
+  }
+
+  function showApp(user) {
+    document.getElementById('auth-gate').hidden = true;
+    document.getElementById('header-user').hidden = false;
+    document.getElementById('header-logout-btn').hidden = false;
+    var label = user.display_name || user.username;
+    document.getElementById('user-avatar').textContent = label.slice(0, 2).toUpperCase();
+    document.getElementById('user-name-display').textContent = label;
+    var roleLabels = { admin: 'Admin', manager: 'Manager', viewer: 'Viewer', picker_packer: 'Picker & Packer' };
+    document.getElementById('user-role-badge').textContent = roleLabels[user.role] || user.role;
+    window.TM_ROLE = user.role;
+    applyRoleGating(user.role);
+  }
+
+  function showAccessDenied() {
+    document.body.innerHTML =
+      '<div class="access-denied-screen">' +
+      '<div style="font-size:15px;font-weight:700;">You don\'t have access to this app</div>' +
+      '<div style="font-size:13px;color:var(--text2);max-width:320px;">Picker &amp; Packer accounts only have access to the Scanner App.</div>' +
+      '<a href="../index.html" style="margin-top:8px;color:var(--accent);font-size:13px;text-decoration:none;">&#8592; Back to Tomahawk Operations</a>' +
+      '</div>';
+  }
+
+  document.getElementById('header-logout-btn').addEventListener('click', async function () {
+    var session = getSession();
+    if (session && session.token) {
+      try {
+        await fetch(TM_WORKER + '?action=logout', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tomahawk-Session': session.token },
+          body: JSON.stringify({ action: 'logout' })
+        });
+      } catch (e) {}
+    }
+    clearSession();
+    goToHub();
+  });
+
+  (async function initAuth() {
+    var session = getSession();
+    if (!session || !session.token) { goToHub(); return; }
+    if (session.role !== 'admin' && session.role !== 'manager' && session.role !== 'viewer') {
+      showAccessDenied(); return;
+    }
+
+    showApp(session);
+
+    try {
+      var res = await fetch(TM_WORKER + '?action=validateSession', { headers: { 'X-Tomahawk-Session': session.token } }).then(function (r) { return r.json(); });
+      if (!res.ok || !res.user) { clearSession(); goToHub(); return; }
+      if (res.user.role !== 'admin' && res.user.role !== 'manager' && res.user.role !== 'viewer') { showAccessDenied(); return; }
+      localStorage.setItem(TM_SESSION_KEY, JSON.stringify({ token: session.token, username: res.user.username, role: res.user.role, display_name: res.user.display_name }));
+      showApp(res.user);
+    } catch (e) { /* network hiccup — keep the optimistic render */ }
+
+    initDelhiveryApp();
+  })();
+
+  // ── Theme ──
+  if (localStorage.getItem('tm_theme') === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+  }
+  window.toggleTheme = function () {
+    var isLight = document.documentElement.getAttribute('data-theme') === 'light';
+    document.documentElement.setAttribute('data-theme', isLight ? 'dark' : 'light');
+    localStorage.setItem('tm_theme', isLight ? 'dark' : 'light');
+  };
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// DELHIVERY ORDER FORM + LOG
+// ══════════════════════════════════════════════════════════════════
+function genOrderId() {
+  var d = new Date();
+  var pad = function (n) { return String(n).padStart(2, '0'); };
+  var datePart = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate());
+  var timePart = pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+  var rand = Math.floor(Math.random() * 900 + 100); // 3-digit random tail
+  return 'TH-' + datePart + '-' + timePart + '-' + rand;
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+function fmtWhen(iso) {
+  if (!iso) return '';
+  try {
+    var d = new Date(iso.replace(' ', 'T') + 'Z');
+    return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  } catch (e) { return iso; }
+}
+
+function initDelhiveryApp() {
+  var form = document.getElementById('order-form');
+  var submitBtn = document.getElementById('submit-btn');
+  var resultBox = document.getElementById('result-box');
+  var resultTitle = document.getElementById('result-title');
+  var resultBody = document.getElementById('result-body');
+
+  document.getElementById('f-order').value = genOrderId();
+  document.getElementById('regen-id-btn').addEventListener('click', function () {
+    document.getElementById('f-order').value = genOrderId();
+  });
+
+  async function callWorker(action, body) {
+    var session = window.TM_getSession();
+    var headers = { 'Content-Type': 'application/json' };
+    if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
+    var res = await fetch(window.TM_WORKER + '?action=' + encodeURIComponent(action), {
+      method: 'POST', headers: headers, body: JSON.stringify(Object.assign({ action: action }, body || {}))
+    });
+    return res.json();
+  }
+
+  async function fetchLog() {
+    var session = window.TM_getSession();
+    var headers = {};
+    if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
+    try {
+      var res = await fetch(window.TM_WORKER + '?action=delhiveryListOrders', { headers: headers }).then(function (r) { return r.json(); });
+      renderLog((res && res.orders) || []);
+    } catch (e) {
+      renderLog([]);
+    }
+  }
+
+  function renderLog(orders) {
+    var tbody = document.getElementById('log-tbody');
+    var empty = document.getElementById('log-empty');
+    tbody.innerHTML = '';
+    if (!orders.length) { empty.hidden = false; return; }
+    empty.hidden = true;
+    orders.forEach(function (o, idx) {
+      var tr = document.createElement('tr');
+      var statusClass = o.delhivery_ok ? 'created' : 'failed';
+      tr.innerHTML =
+        '<td class="mono">' + escapeHtml(o.order_id) +
+          '<div class="details-toggle" data-idx="' + idx + '">view details</div>' +
+          '<div class="details-json" id="details-' + idx + '"></div>' +
+        '</td>' +
+        '<td class="mono">' + (o.waybill ? escapeHtml(o.waybill) : '&#8212;') + '</td>' +
+        '<td><span class="badge ' + statusClass + '">' + (o.delhivery_ok ? 'Created' : 'Failed') + '</span></td>' +
+        '<td>' + escapeHtml(o.created_by || '&#8212;') + '</td>' +
+        '<td>' + fmtWhen(o.created_at) + '</td>';
+      tbody.appendChild(tr);
+
+      var toggle = tr.querySelector('.details-toggle');
+      var jsonBox = tr.querySelector('.details-json');
+      toggle.addEventListener('click', function () {
+        if (jsonBox.classList.contains('show')) { jsonBox.classList.remove('show'); return; }
+        var pretty = '';
+        try { pretty = JSON.stringify(JSON.parse(o.response_json || '{}'), null, 2); } catch (e) { pretty = o.response_json || ''; }
+        jsonBox.textContent = pretty;
+        jsonBox.classList.add('show');
+      });
+    });
+  }
+
+  document.getElementById('log-refresh-btn').addEventListener('click', fetchLog);
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    resultBox.className = 'result-box';
+
+    var order = {
+      order: document.getElementById('f-order').value.trim(),
+      name: document.getElementById('f-name').value.trim(),
+      phone: document.getElementById('f-phone').value.trim(),
+      add: document.getElementById('f-add').value.trim(),
+      pin: document.getElementById('f-pin').value.trim(),
+      city: document.getElementById('f-city').value.trim(),
+      state: document.getElementById('f-state').value.trim(),
+      products_desc: document.getElementById('f-desc').value.trim(),
+      payment_mode: document.getElementById('f-payment').value,
+      quantity: document.getElementById('f-qty').value,
+      total_amount: document.getElementById('f-amount').value,
+      hsn_code: document.getElementById('f-hsn').value.trim(),
+      weight: document.getElementById('f-weight').value || undefined,
+      width: document.getElementById('f-width').value || undefined,
+      height: document.getElementById('f-height').value || undefined
+    };
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Creating order…';
+
+    try {
+      var res = await callWorker('delhiveryCreateOrder', { order: order });
+      if (res.ok) {
+        resultBox.className = 'result-box show success';
+        resultTitle.textContent = 'Order created successfully';
+        resultBody.innerHTML = 'Waybill: <span class="result-waybill">' + escapeHtml(res.waybill) + '</span>';
+        document.getElementById('f-order').value = genOrderId();
+      } else {
+        resultBox.className = 'result-box show error';
+        resultTitle.textContent = 'Order failed';
+        var remarks = '';
+        try {
+          var pkg = res.response && res.response.packages && res.response.packages[0];
+          if (pkg && pkg.remarks) remarks = [].concat(pkg.remarks).join('; ');
+        } catch (e) {}
+        resultBody.textContent = remarks || (res.response && res.response.rmk) || res.error || 'Unknown error — check the log details below.';
+      }
+    } catch (err) {
+      resultBox.className = 'result-box show error';
+      resultTitle.textContent = 'Request failed';
+      resultBody.textContent = err.message;
+    }
+
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Create Delhivery Order';
+    fetchLog();
+  });
+
+  fetchLog();
+}
+</script>
+
+</body>
+</html>
