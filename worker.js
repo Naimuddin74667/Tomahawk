@@ -228,7 +228,8 @@ const ACTION_TIERS = {
   //   real shipment is a write against an external courier, so
   //   manager_up; listing what's been created is viewer_read like
   //   everything else read-only in this file. —
-  delhiveryCreateOrder: 'manager_up', delhiveryListOrders: 'viewer_read'
+  delhiveryCreateOrder: 'manager_up', delhiveryListOrders: 'viewer_read',
+  delhiveryCheckPincode: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -1218,6 +1219,39 @@ export default {
             'SELECT * FROM delhivery_orders ORDER BY created_at DESC LIMIT 100'
           ).all();
           return json({ ok: true, orders: rows.results || [] });
+        }
+
+        // ── DELHIVERY — pincode serviceability pre-check, called from
+        //   the order form before submission so a bad/non-serviceable
+        //   pincode is caught immediately instead of after a failed
+        //   order-creation attempt. Delhivery's own FAQ recommends this
+        //   check before every order: a non-serviceable pin gets
+        //   created as NSZ (non-serviceable zone) and bounced back
+        //   anyway, so there's no upside to skipping it.
+        if (action === 'delhiveryCheckPincode') {
+          const pin = url.searchParams.get('pin');
+          if (!pin || !/^\d{6}$/.test(pin)) return json({ ok: false, error: 'Valid 6-digit pincode required' }, 400);
+          if (!env.DELHIVERY_API_TOKEN) return json({ ok: false, error: 'DELHIVERY_API_TOKEN is not set in Worker secrets' }, 500);
+          const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
+          let dJson;
+          try {
+            const dResp = await fetch(base + '/c/api/pin-codes/json/?filter_codes=' + pin, {
+              headers: { 'Authorization': 'Token ' + env.DELHIVERY_API_TOKEN }
+            });
+            dJson = await dResp.json();
+          } catch (e) {
+            return json({ ok: false, error: 'Delhivery pincode lookup failed: ' + e.message }, 502);
+          }
+          const codes = dJson && dJson.delivery_codes;
+          if (!codes || !codes.length) return json({ ok: true, serviceable: false });
+          const pc = codes[0].postal_code || {};
+          return json({
+            ok: true, serviceable: true,
+            cod: pc.cash === 'Y', prepaid: pc.pre_paid === 'Y', pickupAvailable: pc.pickup === 'Y',
+            // Some tenants' responses also include city/state — pass through
+            // if present, but the frontend must not assume they always are.
+            city: pc.city || '', state: pc.state_code || pc.state || ''
+          });
         }
 
         return json({ ok: false, error: 'Unknown action' }, 400);
@@ -2224,7 +2258,7 @@ export default {
         // ── DELHIVERY — create a forward order ──────────────────
         // Body: { order: { name, add, pin, city, state, phone, order,
         //   payment_mode: 'Prepaid'|'COD', products_desc, hsn_code,
-        //   quantity, total_amount, weight?, width?, height? } }
+        //   quantity, total_amount, weight? (grams), width?, height?, length? (all cm) } }
         // Requires DELHIVERY_API_TOKEN, DELHIVERY_PICKUP_LOCATION, and
         // DELHIVERY_SELLER_GST to be set as Worker secrets/vars — see
         // createDelhiveryOrder() above for exactly what each does.
@@ -2418,6 +2452,13 @@ async function ensureDelhiveryTable(DB) {
 //                                (https://track.delhivery.com). Set to
 //                                https://staging-express.delhivery.com
 //                                if a staging token is ever issued.
+//
+// Units, confirmed against Delhivery's own Weight Mismatch docs
+// (help.delhivery.com/docs/weight-dispute — "Mention package weight in
+// grams and package dimensions in cm"):
+//   weight                  — GRAMS (not kg — the form collects grams
+//                              directly from the person, no conversion here)
+//   shipment_width/height/length — CENTIMETRES
 async function createDelhiveryOrder(env, o) {
   const shipment = {
     name: o.name,
@@ -2438,7 +2479,8 @@ async function createDelhiveryOrder(env, o) {
     seller_name: o.seller_name || env.DELHIVERY_PICKUP_LOCATION || '',
     shipment_width: o.width ? String(o.width) : '',
     shipment_height: o.height ? String(o.height) : '',
-    weight: o.weight ? String(o.weight) : ''
+    shipment_length: o.length ? String(o.length) : '',
+    weight: o.weight ? String(o.weight) : '' // grams
   };
 
   const payload = {
