@@ -221,7 +221,14 @@ const ACTION_TIERS = {
   //   resolving issues stays admin_only, session-gated like everything
   //   else in this file. —
   healthHeartbeat: 'public', healthReportIssue: 'public',
-  healthGetStatus: 'admin_only', healthResolveIssue: 'admin_only'
+  healthGetStatus: 'admin_only', healthResolveIssue: 'admin_only',
+
+  // — Delhivery forward-order creation: manual entry for now, being
+  //   tested Worker-side before any frontend form exists. Creating a
+  //   real shipment is a write against an external courier, so
+  //   manager_up; listing what's been created is viewer_read like
+  //   everything else read-only in this file. —
+  delhiveryCreateOrder: 'manager_up', delhiveryListOrders: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -1201,6 +1208,16 @@ export default {
             'SELECT * FROM health_issues ORDER BY resolved ASC, created_at DESC LIMIT 200'
           ).all();
           return json({ ok: true, bridges: bridges.results || [], issues: issues.results || [] });
+        }
+
+        // ── DELHIVERY — list logged order-creation attempts (for
+        //   Worker-side testing before any frontend exists) ──────
+        if (action === 'delhiveryListOrders') {
+          await ensureDelhiveryTable(env.DB);
+          const rows = await env.DB.prepare(
+            'SELECT * FROM delhivery_orders ORDER BY created_at DESC LIMIT 100'
+          ).all();
+          return json({ ok: true, orders: rows.results || [] });
         }
 
         return json({ ok: false, error: 'Unknown action' }, 400);
@@ -2204,6 +2221,42 @@ export default {
           return json({ ok: true });
         }
 
+        // ── DELHIVERY — create a forward order ──────────────────
+        // Body: { order: { name, add, pin, city, state, phone, order,
+        //   payment_mode: 'Prepaid'|'COD', products_desc, hsn_code,
+        //   quantity, total_amount, weight?, width?, height? } }
+        // Requires DELHIVERY_API_TOKEN, DELHIVERY_PICKUP_LOCATION, and
+        // DELHIVERY_SELLER_GST to be set as Worker secrets/vars — see
+        // createDelhiveryOrder() above for exactly what each does.
+        if (act === 'delhiveryCreateOrder') {
+          await ensureDelhiveryTable(env.DB);
+          const o = body.order || {};
+          const required = ['name', 'add', 'pin', 'phone', 'order', 'payment_mode', 'products_desc', 'hsn_code', 'quantity', 'total_amount'];
+          const missing = required.filter(f => o[f] === undefined || o[f] === null || o[f] === '');
+          if (missing.length) return json({ ok: false, error: 'Missing required field(s): ' + missing.join(', ') }, 400);
+          if (!env.DELHIVERY_API_TOKEN) return json({ ok: false, error: 'DELHIVERY_API_TOKEN is not set in Worker secrets' }, 500);
+          if (!env.DELHIVERY_PICKUP_LOCATION) return json({ ok: false, error: 'DELHIVERY_PICKUP_LOCATION is not set in Worker secrets' }, 500);
+
+          let result;
+          try {
+            result = await createDelhiveryOrder(env, o);
+          } catch (e) {
+            return json({ ok: false, error: 'Delhivery request failed: ' + e.message }, 502);
+          }
+
+          const sessionUser = await resolveSession(request, env.DB);
+          await env.DB.prepare(`
+            INSERT INTO delhivery_orders (order_id, waybill, status, delhivery_ok, payload_json, response_json, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+          `).bind(
+            o.order, result.waybill, result.success ? 'created' : 'failed',
+            result.success ? 1 : 0, JSON.stringify(result.payload), JSON.stringify(result.response),
+            (sessionUser && sessionUser.username) || 'unauthenticated'
+          ).run();
+
+          return json({ ok: result.success, waybill: result.waybill, delhiveryHttpStatus: result.httpStatus, response: result.response }, result.success ? 200 : 502);
+        }
+
         return json({ ok: false, error: 'Unknown action' }, 400);
       }
 
@@ -2330,6 +2383,93 @@ async function ensureBlinkitRoTable(DB) {
   for (const sql of migrations) {
     try { await DB.prepare(sql).run(); } catch(e) { /* column already exists — safe to ignore */ }
   }
+}
+
+async function ensureDelhiveryTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS delhivery_orders (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id      TEXT,
+    waybill       TEXT,
+    status        TEXT,
+    delhivery_ok  INTEGER DEFAULT 0,
+    payload_json  TEXT,
+    response_json TEXT,
+    created_by    TEXT,
+    created_at    TEXT DEFAULT (datetime('now'))
+  )`).run();
+}
+
+// ── DELHIVERY — Forward Order Creation ───────────────────────────────
+// Proxies Delhivery's "Package Order Creation/Manifestation" API
+// (https://delhivery-express-api-doc.readme.io/reference/order-creation-api).
+// This has to live server-side: Delhivery's API sends no CORS headers,
+// so a browser calling it directly is refused before the request even
+// reaches them — same reason the UC API and Gmail both go through this
+// Worker instead of being called from the frontend.
+//
+// Required Cloudflare secrets/vars (Dashboard → tomahawk-returns →
+// Settings → Variables and Secrets), never stored in this repo:
+//   DELHIVERY_API_TOKEN       — from Delhivery One → Settings → API Setup
+//   DELHIVERY_PICKUP_LOCATION — exact registered pickup location name,
+//                                case-sensitive, must match Delhivery's
+//                                records exactly or every order is rejected
+//   DELHIVERY_SELLER_GST      — seller GST TIN, mandatory on every order
+//   DELHIVERY_BASE_URL        — optional override; defaults to production
+//                                (https://track.delhivery.com). Set to
+//                                https://staging-express.delhivery.com
+//                                if a staging token is ever issued.
+async function createDelhiveryOrder(env, o) {
+  const shipment = {
+    name: o.name,
+    add: o.add,
+    pin: String(o.pin),
+    city: o.city || '',
+    state: o.state || '',
+    country: 'India',
+    phone: String(o.phone),
+    order: o.order,
+    payment_mode: o.payment_mode, // 'Prepaid' or 'COD'
+    products_desc: o.products_desc,
+    hsn_code: String(o.hsn_code),
+    cod_amount: o.payment_mode === 'COD' ? String(o.total_amount) : '0',
+    total_amount: String(o.total_amount),
+    quantity: String(o.quantity),
+    seller_gst_tin: env.DELHIVERY_SELLER_GST || '',
+    seller_name: o.seller_name || env.DELHIVERY_PICKUP_LOCATION || '',
+    shipment_width: o.width ? String(o.width) : '',
+    shipment_height: o.height ? String(o.height) : '',
+    weight: o.weight ? String(o.weight) : ''
+  };
+
+  const payload = {
+    shipments: [shipment],
+    pickup_location: { name: env.DELHIVERY_PICKUP_LOCATION }
+  };
+
+  const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
+  const formBody = 'format=json&data=' + encodeURIComponent(JSON.stringify(payload));
+
+  const dResp = await fetch(base + '/api/cmu/create.json', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Token ' + env.DELHIVERY_API_TOKEN,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: formBody
+  });
+  const dText = await dResp.text();
+  let dJson;
+  try { dJson = JSON.parse(dText); } catch (e) { dJson = { raw: dText }; }
+
+  // Delhivery's success shape varies by error type — a rejected order
+  // still returns HTTP 200 with success:false or a packages[] entry
+  // whose status isn't "Success", so check both rather than trusting
+  // the HTTP status code alone.
+  const pkg = dJson && Array.isArray(dJson.packages) ? dJson.packages[0] : null;
+  const success = !!(dResp.ok && (dJson.success === true || (pkg && pkg.status === 'Success')));
+  const waybill = (pkg && pkg.waybill) || '';
+
+  return { success, httpStatus: dResp.status, waybill, payload, response: dJson };
 }
 
 // Exchanges the long-lived refresh token for a short-lived access token.
