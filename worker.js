@@ -360,6 +360,65 @@ async function ensureHealthTables(DB) {
       created_at    TEXT DEFAULT (datetime('now'))
     )`)
   ]);
+  // Column added after the original CREATE TABLE — try/catch handles the
+  // "already exists" case on every subsequent call cheaply.
+  try { await DB.prepare('ALTER TABLE health_bridges ADD COLUMN alert_sent_at TEXT').run(); } catch (e) { /* already exists */ }
+}
+
+// Fires an email via Resend when a bridge goes silent or self-reports an
+// error, and logs it into health_issues so it shows on the dashboard too.
+// Guarded by alert_sent_at so it fires once per outage, not every check —
+// it resets automatically the next time that bridge sends a healthy
+// heartbeat (see healthHeartbeat below).
+async function maybeAlert(env, bridgeId, displayName, reasonText) {
+  const row = await env.DB.prepare('SELECT alert_sent_at FROM health_bridges WHERE id = ?').bind(bridgeId).first();
+  if (row && row.alert_sent_at) return; // already alerted for this outage
+
+  await env.DB.prepare(
+    `UPDATE health_bridges SET alert_sent_at = datetime('now') WHERE id = ?`
+  ).bind(bridgeId).run();
+
+  await env.DB.prepare(`
+    INSERT INTO health_issues (source, severity, title, description, reported_by, created_at)
+    VALUES (?, 'critical', ?, ?, 'auto-watchdog', datetime('now'))
+  `).bind(bridgeId, displayName + ' has gone silent or errored', reasonText).run();
+
+  const apiKey = env.RESEND_API_KEY;
+  if (!apiKey) { console.error('RESEND_API_KEY not set — skipping email alert for ' + bridgeId); return; }
+  try {
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: env.HEALTH_ALERT_FROM || 'Tomahawk Health <onboarding@resend.dev>',
+        to: env.HEALTH_ALERT_TO || 'naimuddin@bullet.co.in',
+        subject: '\u26A0\uFE0F Tomahawk sync alert: ' + displayName,
+        text: reasonText + '\n\nCheck: https://naimuddin74667.github.io/Tomahawk/System-Health/'
+      })
+    });
+  } catch (e) {
+    console.error('Failed to send alert email for ' + bridgeId + ':', e.message);
+  }
+}
+
+// Runs on every scheduled cron tick (independent of any single bridge's
+// own script — this keeps running even if a bridge's server/VPS is
+// completely down, which is the whole point of a watchdog). Checks every
+// known bridge's last heartbeat against 2x its expected interval.
+async function checkStaleBridgesAndAlert(env) {
+  await ensureHealthTables(env.DB);
+  const rows = (await env.DB.prepare('SELECT * FROM health_bridges').all()).results || [];
+  for (const b of rows) {
+    if (!b.last_heartbeat_at) continue;
+    const then = new Date(b.last_heartbeat_at.replace(' ', 'T') + 'Z').getTime();
+    const interval = (b.expected_interval_seconds || 3600) * 1000;
+    const age = Date.now() - then;
+    if (age > interval * 2) {
+      const minutesAgo = Math.round(age / 60000);
+      await maybeAlert(env, b.id, b.display_name,
+        'Last heartbeat was ' + minutesAgo + ' minutes ago (expected roughly every ' + Math.round(interval / 60000) + ' min).');
+    }
+  }
 }
 
 // Shared-secret auth for automated bridges/scripts (cron jobs, GAS bridges,
@@ -2081,20 +2140,30 @@ export default {
           await ensureHealthTables(env.DB);
           const { bridge_id, display_name, status, detail, expected_interval_seconds } = body || {};
           if (!bridge_id) return json({ ok: false, error: 'bridge_id required' }, 400);
+          const incomingStatus = status || 'ok';
           await env.DB.prepare(`
-            INSERT INTO health_bridges (id, display_name, status, detail, expected_interval_seconds, last_heartbeat_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            INSERT INTO health_bridges (id, display_name, status, detail, expected_interval_seconds, last_heartbeat_at, updated_at, alert_sent_at)
+            VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), NULL)
             ON CONFLICT(id) DO UPDATE SET
               display_name = excluded.display_name,
               status = excluded.status,
               detail = excluded.detail,
               expected_interval_seconds = excluded.expected_interval_seconds,
               last_heartbeat_at = datetime('now'),
-              updated_at = datetime('now')
+              updated_at = datetime('now'),
+              alert_sent_at = CASE WHEN excluded.status = 'ok' THEN NULL ELSE health_bridges.alert_sent_at END
           `).bind(
-            bridge_id, display_name || bridge_id, status || 'ok', detail || '',
+            bridge_id, display_name || bridge_id, incomingStatus, detail || '',
             expected_interval_seconds || 3600
           ).run();
+
+          // A script can self-report a failure ('status: error') rather
+          // than just going silent — alert on that immediately too,
+          // don't wait for the next cron tick to notice via staleness.
+          if (incomingStatus === 'error') {
+            await maybeAlert(env, bridge_id, display_name || bridge_id,
+              (detail || 'Bridge self-reported an error.') + ' (self-reported, not a staleness timeout)');
+          }
           return json({ ok: true });
         }
 
@@ -2147,6 +2216,14 @@ export default {
     ctx.waitUntil(
       checkNewRoEmails(env).catch(err => {
         console.error('scheduled RO email check failed:', err.message);
+      })
+    );
+    // Independent watchdog — runs on Cloudflare's own cron, decoupled from
+    // every bridge's script/server. This is what still fires an alert even
+    // if a bridge's VPS is completely dead, not just its script erroring.
+    ctx.waitUntil(
+      checkStaleBridgesAndAlert(env).catch(err => {
+        console.error('scheduled health staleness check failed:', err.message);
       })
     );
   }
