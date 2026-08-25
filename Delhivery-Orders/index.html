@@ -119,6 +119,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
   outline: none; transition: border-color .15s;
 }
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); }
+.field input[readonly] { color: var(--text2); cursor: not-allowed; background: var(--surface); }
 .field textarea { resize: vertical; min-height: 54px; }
 .field-hint { font-size: 10.5px; color: var(--text2); margin-top: 5px; line-height: 1.5; }
 .id-row { display: flex; gap: 8px; }
@@ -286,12 +287,12 @@ table.log-table tr:last-child td { border-bottom: none; }
             <div class="field-hint" id="pin-status"></div>
           </div>
           <div class="field">
-            <label>City</label>
-            <input type="text" id="f-city">
+            <label>City <span class="opt">auto-filled</span></label>
+            <input type="text" id="f-city" readonly placeholder="From pincode">
           </div>
           <div class="field">
-            <label>State</label>
-            <input type="text" id="f-state">
+            <label>State <span class="opt">auto-filled</span></label>
+            <input type="text" id="f-state" readonly placeholder="From pincode">
           </div>
         </div>
 
@@ -560,8 +561,9 @@ function initDelhiveryApp() {
   pinField.addEventListener('blur', async function () {
     var pin = pinField.value.trim();
     pinStatus.className = 'field-hint';
-    if (!/^\d{6}$/.test(pin)) { pinStatus.textContent = ''; return; }
+    if (!/^\d{6}$/.test(pin)) { pinStatus.textContent = ''; cityField.value = ''; stateField.value = ''; return; }
     pinStatus.textContent = 'Checking serviceability…';
+    cityField.value = ''; stateField.value = '';
     try {
       var res = await fetch(window.TM_WORKER + '?action=delhiveryCheckPincode&pin=' + pin).then(function (r) { return r.json(); });
       if (!res.ok) { pinStatus.textContent = ''; return; }
@@ -575,8 +577,11 @@ function initDelhiveryApp() {
       if (res.cod) modes.push('COD');
       pinStatus.className = 'field-hint ok';
       pinStatus.textContent = '✓ Serviceable' + (modes.length ? ' (' + modes.join(' & ') + ')' : '');
-      if (res.city && !cityField.value) cityField.value = res.city;
-      if (res.state && !stateField.value) stateField.value = res.state;
+      // City/State are read-only, filled entirely from this lookup —
+      // always set (not just when empty), so switching to a different
+      // pincode replaces any previous value rather than leaving it stale.
+      cityField.value = res.city || '';
+      stateField.value = res.state || '';
     } catch (e) {
       pinStatus.textContent = '';
     }
