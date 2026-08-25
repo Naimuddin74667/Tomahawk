@@ -135,6 +135,24 @@ html[data-theme="light"]       .icon-moon { display: none; }
 .submit-btn:hover { opacity: .9; }
 .submit-btn:disabled { opacity: .5; cursor: not-allowed; }
 
+.confirm-box {
+  margin-top: 14px; padding: 16px; border-radius: 8px;
+  background: var(--surface2); border: 1px solid var(--accent);
+  display: none;
+}
+.confirm-box.show { display: block; }
+.confirm-box .confirm-title { font-weight: 700; font-size: 13px; margin-bottom: 6px; }
+.confirm-box .confirm-amount { font-family: monospace; font-size: 20px; font-weight: 700; color: var(--accent); }
+.confirm-box .confirm-note { font-size: 11px; color: var(--text2); margin: 6px 0 12px; line-height: 1.5; }
+.confirm-actions { display: flex; gap: 10px; }
+.confirm-actions button {
+  flex: 1; padding: 10px; border-radius: 7px; font-family: var(--font-body); font-weight: 700; font-size: 13px; cursor: pointer;
+}
+.btn-confirm-yes { background: var(--accent); color: #111; border: none; }
+.btn-confirm-yes:hover { opacity: .9; }
+.btn-confirm-no { background: transparent; color: var(--text2); border: 1px solid var(--border); }
+.btn-confirm-no:hover { border-color: var(--red); color: var(--red); }
+
 .viewer-note {
   background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 14px;
   font-size: 12.5px; color: var(--text2); line-height: 1.6;
@@ -342,6 +360,16 @@ table.log-table tr:last-child td { border-bottom: none; }
 
         <button type="submit" class="submit-btn" id="submit-btn">Create Delhivery Order</button>
       </form>
+
+      <div class="confirm-box" id="confirm-box">
+        <div class="confirm-title">Estimated shipping charge</div>
+        <div class="confirm-amount" id="confirm-amount">&#8377;&#8212;</div>
+        <div class="confirm-note" id="confirm-note">This is Delhivery's own estimate — their docs note the actual billed amount can differ slightly. Nothing is created yet.</div>
+        <div class="confirm-actions">
+          <button type="button" class="btn-confirm-no" id="confirm-no-btn">Cancel</button>
+          <button type="button" class="btn-confirm-yes" id="confirm-yes-btn">Confirm &amp; Create Order</button>
+        </div>
+      </div>
 
       <div class="result-box" id="result-box">
         <div class="result-title" id="result-title"></div>
@@ -652,19 +680,16 @@ function initDelhiveryApp() {
 
   document.getElementById('log-refresh-btn').addEventListener('click', fetchLog);
 
-  form.addEventListener('submit', async function (e) {
-    e.preventDefault();
-    resultBox.className = 'result-box';
+  var confirmBox = document.getElementById('confirm-box');
+  var confirmAmount = document.getElementById('confirm-amount');
+  var confirmNote = document.getElementById('confirm-note');
+  var confirmYesBtn = document.getElementById('confirm-yes-btn');
+  var confirmNoBtn = document.getElementById('confirm-no-btn');
+  var pendingOrder = null;
 
-    if (!orderIdField.value) {
-      resultBox.className = 'result-box show error';
-      resultTitle.textContent = 'Order ID not ready';
-      resultBody.textContent = 'Enter a valid 10-digit phone number above — the Order ID fills in automatically from it.';
-      return;
-    }
-
-    var order = {
-      order: document.getElementById('f-order').value.trim(),
+  function gatherOrder() {
+    return {
+      order: orderIdField.value.trim(),
       name: document.getElementById('f-name').value.trim(),
       phone: document.getElementById('f-phone').value.trim(),
       add: document.getElementById('f-add').value.trim(),
@@ -681,9 +706,63 @@ function initDelhiveryApp() {
       height: document.getElementById('f-height').value || undefined,
       length: document.getElementById('f-length').value || undefined
     };
+  }
+
+  // Step 1: form submit fetches an estimate and shows the confirm box —
+  // nothing is created on Delhivery yet at this point.
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    resultBox.className = 'result-box';
+    confirmBox.className = 'confirm-box';
+
+    if (!orderIdField.value) {
+      resultBox.className = 'result-box show error';
+      resultTitle.textContent = 'Order ID not ready';
+      resultBody.textContent = 'Enter a valid 10-digit phone number above — the Order ID fills in automatically from it.';
+      return;
+    }
+
+    pendingOrder = gatherOrder();
 
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Creating order…';
+    submitBtn.textContent = 'Getting estimate…';
+
+    try {
+      var qs = new URLSearchParams({
+        pin: pendingOrder.pin,
+        weight: pendingOrder.weight || '1000',
+        payment_mode: pendingOrder.payment_mode
+      });
+      var est = await fetch(window.TM_WORKER + '?action=delhiveryEstimateCharge&' + qs.toString()).then(function (r) { return r.json(); });
+      if (est.ok && est.estimated && est.totalAmount != null) {
+        confirmAmount.textContent = '₹' + est.totalAmount;
+        confirmNote.textContent = "This is Delhivery's own estimate — their docs note the actual billed amount can differ slightly. Nothing is created yet.";
+      } else {
+        confirmAmount.textContent = 'Unavailable';
+        confirmNote.textContent = "Couldn't fetch an estimate right now, but you can still proceed — nothing is created yet.";
+      }
+    } catch (err) {
+      confirmAmount.textContent = 'Unavailable';
+      confirmNote.textContent = "Couldn't fetch an estimate right now, but you can still proceed — nothing is created yet.";
+    }
+
+    confirmBox.className = 'confirm-box show';
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Create Delhivery Order';
+  });
+
+  confirmNoBtn.addEventListener('click', function () {
+    confirmBox.className = 'confirm-box';
+    pendingOrder = null;
+  });
+
+  // Step 2: only on explicit confirmation does the order actually get created.
+  confirmYesBtn.addEventListener('click', async function () {
+    if (!pendingOrder) return;
+    var order = pendingOrder;
+    confirmYesBtn.disabled = true;
+    confirmNoBtn.disabled = true;
+    confirmYesBtn.textContent = 'Creating order…';
 
     try {
       var res, attempts = 0;
@@ -696,9 +775,12 @@ function initDelhiveryApp() {
         var isDuplicate = remarksArr.some(function (r) { return /duplicate order/i.test(String(r)); });
         attempts++;
         if (!isDuplicate || attempts >= 5) break;
-        submitBtn.textContent = 'Duplicate ID — retrying…';
+        confirmYesBtn.textContent = 'Duplicate ID — retrying…';
         bumpOrderIdSuffix();
       }
+
+      confirmBox.className = 'confirm-box';
+      pendingOrder = null;
 
       if (res.ok) {
         resultBox.className = 'result-box show success';
@@ -723,13 +805,16 @@ function initDelhiveryApp() {
         resultBody.textContent = remarks || (res.response && res.response.rmk) || res.error || 'Unknown error — check the log details below.';
       }
     } catch (err) {
+      confirmBox.className = 'confirm-box';
+      pendingOrder = null;
       resultBox.className = 'result-box show error';
       resultTitle.textContent = 'Request failed';
       resultBody.textContent = err.message;
     }
 
-    submitBtn.disabled = false;
-    submitBtn.textContent = 'Create Delhivery Order';
+    confirmYesBtn.disabled = false;
+    confirmNoBtn.disabled = false;
+    confirmYesBtn.textContent = 'Confirm & Create Order';
     fetchLog();
   });
 
