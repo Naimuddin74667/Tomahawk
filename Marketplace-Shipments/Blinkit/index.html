@@ -155,7 +155,8 @@
   .modal-title{font-size:13px;font-weight:700;color:var(--accent);margin-bottom:1rem;letter-spacing:.04em;text-transform:uppercase}
   .field{margin-bottom:.85rem}
   label.field-lbl{display:block;font-size:11px;color:var(--muted);margin-bottom:4px;font-weight:500;letter-spacing:.03em}
-  input[type=text],input[type=number],textarea,select{width:100%;background:#111;border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--text);font-family:'DM Sans',sans-serif;transition:border-color .15s}
+  input[type=text],input[type=number],input[type=date],textarea,select{width:100%;background:#111;border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--text);font-family:'DM Sans',sans-serif;transition:border-color .15s}
+  input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1) brightness(1.3);cursor:pointer}
   input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
   select option{background:#111}
   .warn-box{background:rgba(232,197,71,0.08);border:1px solid rgba(232,197,71,0.3);border-radius:6px;padding:.6rem .8rem;font-size:11px;color:var(--accent);margin-bottom:.8rem;line-height:1.5;margin-top:4px}
@@ -900,6 +901,28 @@
       <button class="btn btn-secondary btn-sm" id="roDetailCancelBtn" style="width:auto;color:var(--rd);border-color:var(--rd)" onclick="roLedgerDeleteEntry()">&#128683; Mark as Cancelled</button>
       <button class="btn btn-secondary btn-sm" id="roDetailDnBtn" style="width:auto" onclick="roLedgerDnUploadClick()">&#128196; Upload Discrepancy Note</button>
       <input type="file" id="roDetailDnFile" accept=".pdf" style="display:none" onchange="roLedgerDnFileSelected(this)">
+    </div>
+  </div>
+</div>
+
+<!-- MANUAL APPOINTMENT MODAL — small calendar-date picker used when Blinkit
+     never sent (or only sent a reschedule of) the scheduling email for an
+     RO. Time isn't asked for — defaults to 10:00 AM, see
+     roLedgerSetManualAppointment. -->
+<div class="modal-bg" id="manualApptModal">
+  <div class="modal" style="width:360px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem">
+      <div class="modal-title" style="margin-bottom:0">&#128197; Set Appointment</div>
+      <button onclick="closeManualApptModal()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:.9rem">RO <span id="manualApptRoNumber" style="color:var(--text);font-weight:600"></span> &mdash; time is set to 10:00 AM by default.</div>
+    <div class="field">
+      <label class="field-lbl">Appointment Date <span style="color:#e05555">*</span></label>
+      <input type="date" id="manualApptDate">
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="closeManualApptModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveManualAppointment()">&#10003; Save</button>
     </div>
   </div>
 </div>
@@ -4470,44 +4493,46 @@ function roLedgerTogglePickedUp() {
 // Reuses the same blinkitBulkSetAppointments action the one-time backfill
 // tool used (see NOTE above roLedgerLoad) — it's keyed by a deterministic
 // 'manual-appt-<ro_number>' gmail_msg_id, so running this again for the same
-// RO (e.g. to correct a typo) updates that one row in place instead of
+// RO (e.g. to correct a mistake) updates that one row in place instead of
 // creating a duplicate. The row it creates is indistinguishable in the UI
 // from a real detected appointment (same 'sto_scheduled' email_type), so it
 // slots into Appointment History, the Appointment column, and the Overdue/
 // Out for Delivery status logic exactly the same way a real email would.
+// Time isn't collected from the user — Blinkit appointment windows are a
+// full day in practice, so this just defaults to 10:00 AM as a placeholder
+// that's close enough for the History display and the "day-level" Overdue
+// check (which only compares dates, not times, anyway).
+var MANUAL_APPT_DEFAULT_TIME = '10:00:00';
+
 function roLedgerSetManualAppointment() {
   var g = _roDetailCurrent;
   if (!g) return;
 
   var existingSto = g.stoRows.length ? g.stoRows[g.stoRows.length - 1] : null;
-  var existingDateDisplay = existingSto ? formatDateSimple(existingSto.scheduled_date) : '';
+  document.getElementById('manualApptRoNumber').textContent = g.ro_number;
+  // <input type="date"> wants YYYY-MM-DD, which is exactly how
+  // scheduled_date is already stored — no reformatting needed.
+  document.getElementById('manualApptDate').value = existingSto ? (existingSto.scheduled_date || '').slice(0, 10) : '';
+  document.getElementById('manualApptModal').classList.add('show');
+}
 
-  var dateInput = prompt(
-    'Appointment date for RO ' + g.ro_number + ' (DD-MM-YYYY)'
-      + (existingDateDisplay ? ', currently ' + existingDateDisplay : '') + ':',
-    existingDateDisplay || ''
-  );
-  if (dateInput === null) return; // cancelled
-  dateInput = dateInput.trim();
-  var m = dateInput.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-  if (!m) { toast('Enter the date as DD-MM-YYYY, e.g. 15-08-2026', 'err'); return; }
-  var isoDate = m[3] + '-' + m[2] + '-' + m[1];
+function closeManualApptModal() {
+  document.getElementById('manualApptModal').classList.remove('show');
+}
 
-  var existingTimeDisplay = existingSto ? formatTimeSimple(existingSto.scheduled_time) : '';
-  var timeInput = prompt('Appointment time (HH:MM, 24hr) \u2014 leave blank if unknown:', existingTimeDisplay || '');
-  if (timeInput === null) return; // cancelled
-  timeInput = timeInput.trim();
-  if (timeInput && !/^\d{1,2}:\d{2}$/.test(timeInput)) {
-    toast('Enter time as HH:MM, e.g. 14:30 \u2014 or leave it blank', 'err');
-    return;
-  }
+function saveManualAppointment() {
+  var g = _roDetailCurrent;
+  if (!g) return;
+  var isoDate = document.getElementById('manualApptDate').value; // already YYYY-MM-DD from the date picker
+  if (!isoDate) { toast('Pick a date first', 'err'); return; }
 
   fetch(WORKER_URL + '?action=blinkitBulkSetAppointments', {
     method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ appointments: [{ ro_number: g.ro_number, scheduled_date: isoDate, scheduled_time: timeInput || null }] })
+    body: JSON.stringify({ appointments: [{ ro_number: g.ro_number, scheduled_date: isoDate, scheduled_time: MANUAL_APPT_DEFAULT_TIME }] })
   }).then(function(r){ return r.json(); }).then(function(data){
     if (!data.ok) throw new Error(data.error || 'Failed to save appointment');
     toast('Appointment set for RO ' + g.ro_number, 'ok');
+    closeManualApptModal();
     closeRoDetailModal();
     roLedgerLoad();
   }).catch(function(err){ toast('Failed: ' + err.message, 'err'); });
