@@ -325,7 +325,7 @@
   var ACTION_ROLE_MIN = {
     bk_libSave: 'manager', blinkitSaveInv: 'manager', blinkitSaveReceivedQty: 'manager',
     blinkitSaveCreditNote: 'manager', blinkitSaveStatusNote: 'manager', blinkitDeleteInvoiceByRO: 'manager',
-    blinkitSaveDN: 'manager'
+    blinkitSaveDN: 'manager', blinkitBulkSetAppointments: 'manager'
   };
   function actionAllowed(action, role) {
     var min = ACTION_ROLE_MIN[action];
@@ -362,7 +362,7 @@
     window.TM_CAN_EDIT = (role === 'admin' || role === 'manager');
     var isAdmin = role === 'admin';
 
-    ['invGenerateLabelsBtn', 'invPreviewBtn', 'cnGenerateBtn', 'saveLibInlineEditBtn', 'deleteModelBtn', 'clearLibraryBtn', 'lib-mode-edit-btn'].forEach(function (id) {
+    ['invGenerateLabelsBtn', 'invPreviewBtn', 'cnGenerateBtn', 'saveLibInlineEditBtn', 'deleteModelBtn', 'clearLibraryBtn', 'lib-mode-edit-btn', 'roDetailApptBtn'].forEach(function (id) {
       var el = document.getElementById(id);
       if (el) el.style.display = window.TM_CAN_EDIT ? '' : 'none';
     });
@@ -883,7 +883,10 @@
 
     <div id="roDetailSummary" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;background:#111;border:1px solid var(--border);border-radius:6px;padding:.7rem .9rem;margin-bottom:1rem;font-size:12px"></div>
 
-    <div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:1rem 0 .5rem;font-family:'DM Mono',monospace">Appointment History</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:1rem 0 .5rem">
+      <div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace">Appointment History</div>
+      <button class="btn btn-secondary btn-sm" id="roDetailApptBtn" style="width:auto" onclick="roLedgerSetManualAppointment()">&#128197; Set/Correct Appointment</button>
+    </div>
     <div id="roDetailHistory" style="font-size:12px;color:var(--text);margin-bottom:1rem"></div>
 
     <div style="display:flex;align-items:center;justify-content:space-between;margin:1rem 0 .5rem">
@@ -4356,7 +4359,7 @@ function roLedgerOpenDetail(roNumber) {
 
   var historyHtml;
   if (!g.stoRows.length) {
-    historyHtml = '<div style="color:var(--muted)">No appointment scheduled yet.</div>';
+    historyHtml = '<div style="color:var(--muted)">No appointment scheduled yet &mdash; if Blinkit hasn\'t sent the scheduling email, use "Set/Correct Appointment" above to enter it by hand.</div>';
   } else {
     historyHtml = g.stoRows.map(function(r, i){
       var isLatest = i === g.stoRows.length - 1;
@@ -4456,6 +4459,55 @@ function roLedgerTogglePickedUp() {
   }).then(function(r){ return r.json(); }).then(function(data){
     if (!data.ok) throw new Error(data.error || 'Failed to update status');
     toast(newStatus ? 'Marked as picked up' : 'Pickup flag cleared', 'ok');
+    closeRoDetailModal();
+    roLedgerLoad();
+  }).catch(function(err){ toast('Failed: ' + err.message, 'err'); });
+}
+
+// Manual appointment entry — for ROs where Blinkit's scheduling email never
+// arrived at all (only reschedule emails came through, or nothing came
+// through yet) so there's no email for the Gmail watcher to have parsed.
+// Reuses the same blinkitBulkSetAppointments action the one-time backfill
+// tool used (see NOTE above roLedgerLoad) — it's keyed by a deterministic
+// 'manual-appt-<ro_number>' gmail_msg_id, so running this again for the same
+// RO (e.g. to correct a typo) updates that one row in place instead of
+// creating a duplicate. The row it creates is indistinguishable in the UI
+// from a real detected appointment (same 'sto_scheduled' email_type), so it
+// slots into Appointment History, the Appointment column, and the Overdue/
+// Out for Delivery status logic exactly the same way a real email would.
+function roLedgerSetManualAppointment() {
+  var g = _roDetailCurrent;
+  if (!g) return;
+
+  var existingSto = g.stoRows.length ? g.stoRows[g.stoRows.length - 1] : null;
+  var existingDateDisplay = existingSto ? formatDateSimple(existingSto.scheduled_date) : '';
+
+  var dateInput = prompt(
+    'Appointment date for RO ' + g.ro_number + ' (DD-MM-YYYY)'
+      + (existingDateDisplay ? ', currently ' + existingDateDisplay : '') + ':',
+    existingDateDisplay || ''
+  );
+  if (dateInput === null) return; // cancelled
+  dateInput = dateInput.trim();
+  var m = dateInput.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (!m) { toast('Enter the date as DD-MM-YYYY, e.g. 15-08-2026', 'err'); return; }
+  var isoDate = m[3] + '-' + m[2] + '-' + m[1];
+
+  var existingTimeDisplay = existingSto ? formatTimeSimple(existingSto.scheduled_time) : '';
+  var timeInput = prompt('Appointment time (HH:MM, 24hr) \u2014 leave blank if unknown:', existingTimeDisplay || '');
+  if (timeInput === null) return; // cancelled
+  timeInput = timeInput.trim();
+  if (timeInput && !/^\d{1,2}:\d{2}$/.test(timeInput)) {
+    toast('Enter time as HH:MM, e.g. 14:30 \u2014 or leave it blank', 'err');
+    return;
+  }
+
+  fetch(WORKER_URL + '?action=blinkitBulkSetAppointments', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ appointments: [{ ro_number: g.ro_number, scheduled_date: isoDate, scheduled_time: timeInput || null }] })
+  }).then(function(r){ return r.json(); }).then(function(data){
+    if (!data.ok) throw new Error(data.error || 'Failed to save appointment');
+    toast('Appointment set for RO ' + g.ro_number, 'ok');
     closeRoDetailModal();
     roLedgerLoad();
   }).catch(function(err){ toast('Failed: ' + err.message, 'err'); });
