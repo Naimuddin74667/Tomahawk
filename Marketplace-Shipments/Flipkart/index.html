@@ -390,8 +390,8 @@
 </script>
 
 <div class="tabs">
-  <button class="tab-btn" onclick="switchTab('ledger',this)">&#128203; CN Ledger</button>
-  <button class="tab-btn active" onclick="switchTab('bulk',this)">Label Print</button>
+  <button class="tab-btn active" onclick="switchTab('ledger',this)">&#128203; CN Ledger</button>
+  <button class="tab-btn" onclick="switchTab('bulk',this)">Label Print</button>
   <button class="tab-btn" onclick="switchTab('boxlabel',this)">Box Label</button>
   <button class="tab-btn" onclick="switchTab('library',this)">SKU Library</button>
 </div>
@@ -401,7 +401,7 @@
   <!-- LEFT PANEL: upload controls only -->
   <div class="left-panel">
 
-    <div id="tab-bulk" class="tab-content active" style="display:flex">
+    <div id="tab-bulk" class="tab-content active" style="display:none">
       <div class="left-inner" style="display:flex;flex-direction:column;gap:.8rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
           <div style="font-size:11px;color:var(--muted);line-height:1.6">Upload PDF or CSV &rarr; auto-matches to library &rarr; prints labels.</div>
@@ -555,7 +555,7 @@
       </div>
     </div>
 
-    <div id="tab-ledger" class="tab-content" style="display:none;flex:1;flex-direction:column;min-height:0">
+    <div id="tab-ledger" class="tab-content" style="display:flex;flex:1;flex-direction:column;min-height:0">
       <div style="flex-shrink:0;padding:.7rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.8rem;background:var(--surface)">
         <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128203; Consignment Ledger</div>
         <input type="text" id="ledgerSearch" placeholder="Search Consignment No..." oninput="_ledgerPage=1;ledgerRender()" style="width:220px;font-size:11px;padding:5px 10px">
@@ -1061,6 +1061,15 @@ function syncLibFromD1() {
     .catch(function(){ /* offline — keep using whatever's in localStorage */ });
 }
 syncLibFromD1();
+// CN Ledger is now the default landing tab. switchTab('ledger') is only ever
+// invoked on a button click, never automatically on page load, so its
+// single-column layout tweaks (full-width left panel, hidden preview panel)
+// and its initial data fetch are replicated here once at startup.
+document.querySelector('.left-panel').style.width = '100%';
+document.querySelector('.left-panel').style.maxWidth = '100%';
+document.querySelector('.left-panel').style.borderRight = 'none';
+document.getElementById('previewPanel').style.display = 'none';
+ledgerLoad();
 function loadSettings() { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {mfgdate:'01/01/2026'}; } catch(e) { return {mfgdate:'01/01/2026'}; } }
 
 function saveSettings() {
