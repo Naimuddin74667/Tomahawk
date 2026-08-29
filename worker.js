@@ -189,6 +189,11 @@ const ACTION_TIERS = {
   // — Flipkart "Now Live on Flipkart" QC-pass email watcher: sibling of
   //   the above, fills in qc_pass_qty the same way. —
   fkCheckQcEmails: 'manager_up',
+  // — Flipkart GP Number backfill/update: one-time (or repeatable)
+  //   write of gp_number values sourced from UC_Gatepass (matched by
+  //   Consignment No. via the reference field), not a live sync — no
+  //   Apps Script route exists yet for an ongoing feed. —
+  fkSetGatepassBulk: 'manager_up',
 
   // — Inward Label Generator (Gate Pass): admin + manager ONLY, no viewer
   //   access at all, not even read —
@@ -1184,6 +1189,36 @@ export default {
           try {
             const result = await checkFkQcEmails(env);
             return json({ ok: true, ...result });
+          } catch (err) {
+            return json({ ok: false, error: err.message }, 500);
+          }
+        }
+
+        // ── FLIPKART GP NUMBER — bulk backfill/update from UC_Gatepass ──
+        // Body: { mapping: { "<consignment_no>": "<gp_number>", ... } }
+        // Only updates rows that already exist in fk_ledger (same
+        // "never create a bare row" rule as the email watchers above) —
+        // unmatched consignment numbers are reported back, not inserted.
+        if (action === 'fkSetGatepassBulk') {
+          try {
+            await ensureFkLedgerTable(env.DB);
+            const body = await request.json();
+            const mapping = (body && body.mapping) || {};
+            let updated = 0, unmatched = 0;
+            for (const [cn, gpNumber] of Object.entries(mapping)) {
+              const existingCn = await env.DB.prepare(
+                'SELECT consignment_no FROM fk_ledger WHERE consignment_no = ?'
+              ).bind(cn).first();
+              if (existingCn) {
+                await env.DB.prepare(
+                  `UPDATE fk_ledger SET gp_number = ?, updated_at = datetime('now') WHERE consignment_no = ?`
+                ).bind(gpNumber, cn).run();
+                updated++;
+              } else {
+                unmatched++;
+              }
+            }
+            return json({ ok: true, updated, unmatched });
           } catch (err) {
             return json({ ok: false, error: err.message }, 500);
           }
@@ -3227,7 +3262,8 @@ async function ensureFkLedgerTable(DB) {
     `ALTER TABLE fk_ledger ADD COLUMN items_json    TEXT DEFAULT '[]'`,
     `ALTER TABLE fk_ledger ADD COLUMN shortage_json TEXT DEFAULT '[]'`,
     `ALTER TABLE fk_ledger ADD COLUMN receipt_shortage_json TEXT DEFAULT '[]'`,
-    `ALTER TABLE fk_ledger ADD COLUMN qc_pass_qty INTEGER DEFAULT NULL`
+    `ALTER TABLE fk_ledger ADD COLUMN qc_pass_qty INTEGER DEFAULT NULL`,
+    `ALTER TABLE fk_ledger ADD COLUMN gp_number TEXT DEFAULT NULL`
   ];
   for (const sql of migrations) {
     try { await DB.prepare(sql).run(); } catch(e) { /* column already exists — safe to ignore */ }
