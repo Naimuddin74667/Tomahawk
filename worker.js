@@ -186,6 +186,9 @@ const ACTION_TIERS = {
   //   (touches D1 + calls Gmail). No separate read action — the existing
   //   fkLedgerLoad already surfaces whatever this watcher fills in. —
   fkCheckReceivedEmails: 'manager_up',
+  // — Flipkart "Now Live on Flipkart" QC-pass email watcher: sibling of
+  //   the above, fills in qc_pass_qty the same way. —
+  fkCheckQcEmails: 'manager_up',
 
   // — Inward Label Generator (Gate Pass): admin + manager ONLY, no viewer
   //   access at all, not even read —
@@ -1170,6 +1173,16 @@ export default {
         if (action === 'fkCheckReceivedEmails') {
           try {
             const result = await checkFkReceivedEmails(env);
+            return json({ ok: true, ...result });
+          } catch (err) {
+            return json({ ok: false, error: err.message }, 500);
+          }
+        }
+
+        // Sibling of the above — Flipkart's other consignment email.
+        if (action === 'fkCheckQcEmails') {
+          try {
+            const result = await checkFkQcEmails(env);
             return json({ ok: true, ...result });
           } catch (err) {
             return json({ ok: false, error: err.message }, 500);
@@ -2448,6 +2461,21 @@ export default {
           ).catch(e2 => console.error('failed to record fk_received_watcher error heartbeat:', e2.message));
         })
     );
+    ctx.waitUntil(
+      checkFkQcEmails(env)
+        .then(result => recordHeartbeat(
+          env, 'fk_qc_watcher', 'Flipkart QC-Pass Email Watcher (Worker cron)', 'ok',
+          `Checked ${result.checked} email(s), updated ${result.updated} consignment(s)` +
+            (result.unmatched ? `, ${result.unmatched} unmatched.` : '.'), 900
+        ))
+        .catch(err => {
+          console.error('scheduled Flipkart QC-pass email check failed:', err.message);
+          return recordHeartbeat(
+            env, 'fk_qc_watcher', 'Flipkart QC-Pass Email Watcher (Worker cron)', 'error',
+            err.message, 900
+          ).catch(e2 => console.error('failed to record fk_qc_watcher error heartbeat:', e2.message));
+        })
+    );
     // Self-heartbeat: reaching this line at all means the cron trigger fired
     // and D1 is reachable (the write below would throw otherwise). This is
     // the simplest possible proof the Worker + D1 backend is alive — it
@@ -3034,6 +3062,131 @@ async function checkFkReceivedEmails(env) {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// FLIPKART QC-PASS EMAIL WATCHER — Gmail API integration (sibling of the
+// received-qty watcher above)
+// ══════════════════════════════════════════════════════════════════
+// Reads Flipkart's "Great News! Your Consignments Are Now Live on
+// Flipkart" email — same mailbox/credentials, table layout:
+//   Consignment ID | Warehouse Name | Promised Qty | Received Qty | QC Pass Qty
+//
+// Only stores qc_pass_qty on the matching fk_ledger row (also refreshes
+// received_qty while we're at it, since this email reports it too, kept
+// in sync regardless of which of the two emails arrives first/last).
+// Deliberately does NOT touch receipt_shortage_json (the manual per-SKU QC
+// review data) — this email only gives one aggregate number for the whole
+// consignment, not a line-item breakdown, so it can't correctly say WHICH
+// SKU(s) accounted for any shortfall. Synthesizing fake per-item entries
+// to force a "reviewed" state would be guessing at data we don't have.
+// Instead, the frontend reads qc_pass_qty directly:
+//   qc_pass_qty >= received_qty → clean pass, safe to auto-show as
+//     resolved (no ambiguity — there's only one way to have zero
+//     rejected)
+//   qc_pass_qty <  received_qty → a real rejection exists somewhere in
+//     this consignment, but which SKU is unknown — frontend flags it as
+//     needing manual review rather than guessing
+// A manual review already on file (receipt_shortage_json non-empty)
+// always takes precedence over this — see ledgerRender's badge logic.
+// ══════════════════════════════════════════════════════════════════
+
+async function ensureFkQcLogTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS fk_qc_log (
+    gmail_msg_id   TEXT NOT NULL,
+    consignment_no TEXT NOT NULL,
+    received_qty   INTEGER,
+    qc_pass_qty    INTEGER,
+    matched        INTEGER DEFAULT 0,
+    email_date     TEXT,
+    detected_at    TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (gmail_msg_id, consignment_no)
+  )`).run();
+}
+
+// Same table-walking technique as parseFkReceivedEmailBody, just reading
+// a 5th column (QC Pass Qty) instead of the "Pick up date" one.
+function parseFkQcLiveEmailBody(html) {
+  const rows = [];
+  const trMatches = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
+  for (const tr of trMatches) {
+    const cells = (tr.match(/<td[^>]*>[\s\S]*?<\/td>/gi) || []).map(td =>
+      td.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/\s+/g, ' ').trim()
+    );
+    // Consignment ID | Warehouse Name | Promised Qty | Received Qty | QC Pass Qty
+    if (cells.length < 5) continue;
+    const consignmentNo = cells[0];
+    const receivedQty = cells[3];
+    const qcPassQty = cells[4];
+    if (/^\d+$/.test(consignmentNo) && /^\d+$/.test(receivedQty) && /^\d+$/.test(qcPassQty)) {
+      rows.push({ consignment_no: consignmentNo, received_qty: parseInt(receivedQty, 10), qc_pass_qty: parseInt(qcPassQty, 10) });
+    }
+  }
+  return rows;
+}
+
+async function checkFkQcEmails(env) {
+  await ensureFkQcLogTable(env.DB);
+  await ensureFkLedgerTable(env.DB);
+  const accessToken = await getGmailAccessToken(env);
+
+  const query = encodeURIComponent('label:Flipkart subject:"Now Live on Flipkart"');
+  let messages = [];
+  let pageToken = '';
+  for (let page = 0; page < 10; page++) {
+    const pageParam = pageToken ? `&pageToken=${pageToken}` : '';
+    const listRes = await fetch(`${GMAIL_API_BASE}/messages?q=${query}&maxResults=100${pageParam}`, {
+      headers: { Authorization: 'Bearer ' + accessToken }
+    });
+    if (!listRes.ok) throw new Error('Gmail list failed: ' + listRes.status);
+    const listData = await listRes.json();
+    messages = messages.concat(listData.messages || []);
+    if (!listData.nextPageToken) break;
+    pageToken = listData.nextPageToken;
+  }
+
+  let newEmails = 0, updated = 0, unmatched = 0;
+  for (const m of messages) {
+    const exists = await env.DB.prepare(
+      'SELECT 1 FROM fk_qc_log WHERE gmail_msg_id = ? LIMIT 1'
+    ).bind(m.id).first();
+    if (exists) continue;
+
+    const msgRes = await fetch(`${GMAIL_API_BASE}/messages/${m.id}?format=full`, {
+      headers: { Authorization: 'Bearer ' + accessToken }
+    });
+    if (!msgRes.ok) continue;
+    const msg = await msgRes.json();
+    const emailDate = msg.internalDate ? new Date(parseInt(msg.internalDate)).toISOString() : null;
+
+    const html = extractGmailHtmlBody(msg.payload);
+    const rows = parseFkQcLiveEmailBody(html);
+
+    for (const row of rows) {
+      const existingCn = await env.DB.prepare(
+        'SELECT consignment_no FROM fk_ledger WHERE consignment_no = ?'
+      ).bind(row.consignment_no).first();
+
+      if (existingCn) {
+        await env.DB.prepare(
+          `UPDATE fk_ledger SET received_qty = ?, qc_pass_qty = ?, updated_at = datetime('now') WHERE consignment_no = ?`
+        ).bind(row.received_qty, row.qc_pass_qty, row.consignment_no).run();
+        updated++;
+      } else {
+        unmatched++;
+      }
+
+      await env.DB.prepare(`
+        INSERT INTO fk_qc_log (gmail_msg_id, consignment_no, received_qty, qc_pass_qty, matched, email_date, detected_at)
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(gmail_msg_id, consignment_no) DO NOTHING
+      `).bind(m.id, row.consignment_no, row.received_qty, row.qc_pass_qty, existingCn ? 1 : 0, emailDate).run();
+    }
+
+    newEmails++;
+  }
+
+  return { checked: messages.length, newEmails, updated, unmatched };
+}
+
+// ══════════════════════════════════════════════════════════════════
 // LABEL GENERATOR — Table Bootstrap
 // ══════════════════════════════════════════════════════════════════
 async function ensureLibTable(DB) {
@@ -3073,7 +3226,8 @@ async function ensureFkLedgerTable(DB) {
   const migrations = [
     `ALTER TABLE fk_ledger ADD COLUMN items_json    TEXT DEFAULT '[]'`,
     `ALTER TABLE fk_ledger ADD COLUMN shortage_json TEXT DEFAULT '[]'`,
-    `ALTER TABLE fk_ledger ADD COLUMN receipt_shortage_json TEXT DEFAULT '[]'`
+    `ALTER TABLE fk_ledger ADD COLUMN receipt_shortage_json TEXT DEFAULT '[]'`,
+    `ALTER TABLE fk_ledger ADD COLUMN qc_pass_qty INTEGER DEFAULT NULL`
   ];
   for (const sql of migrations) {
     try { await DB.prepare(sql).run(); } catch(e) { /* column already exists — safe to ignore */ }
