@@ -74,7 +74,10 @@
   .btn-row .btn{flex:1}
   /* Ledger stat cards — matches Blinkit RO Ledger's stat strip exactly */
   .ro-stats-row{flex-shrink:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;padding:.85rem 1.4rem;border-bottom:1px solid var(--border);background:var(--bg-surface)}
-  .ro-stat-card{background:var(--bg-raised);border:1px solid var(--border-subtle);border-radius:9px;padding:1.325rem .9rem;min-width:0}
+  .ro-stat-card{background:var(--bg-raised);border:1px solid var(--border-subtle);border-radius:9px;padding:1.325rem .9rem;min-width:0;cursor:pointer;transition:border-color .15s,background .15s,box-shadow .15s}
+  .ro-stat-card:hover{border-color:var(--accent);background:var(--bg-hover)}
+  .ro-stat-card:active{transform:scale(.99)}
+  .ro-stat-card.is-active-view{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
   .ro-stat-label{font-size:9.5px;color:var(--text-secondary);letter-spacing:.07em;text-transform:uppercase;font-family:'DM Mono',monospace;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .ro-stat-value{font-size:21px;font-weight:800;color:var(--text);font-family:'DM Mono',monospace;line-height:1.35;margin-top:2px}
   .ro-stat-value.accent{color:var(--accent)}
@@ -563,19 +566,20 @@
         <button class="btn btn-secondary btn-sm" onclick="openLedgerSettings()" title="Ledger settings" style="width:auto;padding:6px 10px">&#9881;</button>
       </div>
 
-      <!-- Stats strip — same card style/sizing as Blinkit RO Ledger -->
+      <!-- Stats strip — same card style/sizing as Blinkit RO Ledger, and
+           now clickable filters the same way too (click again to clear). -->
       <div class="ro-stats-row">
-        <div class="ro-stat-card">
+        <div class="ro-stat-card is-active-view" id="ledgerCardTotal" onclick="ledgerSetCardFilter('all')" title="Show all consignments">
           <div class="ro-stat-label">Total Consignments</div>
           <div class="ro-stat-value" id="ledgerStatTotal">&mdash;</div>
           <div class="ro-stat-sub">all tracked consignments</div>
         </div>
-        <div class="ro-stat-card">
+        <div class="ro-stat-card" id="ledgerCardActive" onclick="ledgerSetCardFilter('active')" title="Filter: not yet Inwarded or Short Received">
           <div class="ro-stat-label">Active Consignments</div>
           <div class="ro-stat-value accent" id="ledgerStatActive">&mdash;</div>
           <div class="ro-stat-sub">not yet Inwarded or Short Received</div>
         </div>
-        <div class="ro-stat-card">
+        <div class="ro-stat-card" id="ledgerCardPendingPickup" onclick="ledgerSetCardFilter('pendingPickup')" title="Filter: not yet picked up from our warehouse">
           <div class="ro-stat-label">Pending For Pickup</div>
           <div class="ro-stat-value accent" id="ledgerStatPendingPickup">&mdash;</div>
           <div class="ro-stat-sub">not yet picked up from our warehouse</div>
@@ -1133,6 +1137,16 @@ var _ledgerRows = [];
 var _ledgerPage = 1;
 var LEDGER_PAGE_SIZE = 10;
 var LEDGER_KEY = 'fk_ledger_v1';
+var _ledgerCardFilter = 'all'; // 'all' | 'active' | 'pendingPickup' — driven by clicking the stat cards
+
+// Click a stat card to filter the table to that subset; click the same
+// card again (or Total) to go back to showing everything. Mirrors
+// Blinkit's roLedgerSetCardFilter exactly.
+function ledgerSetCardFilter(view) {
+  _ledgerCardFilter = (_ledgerCardFilter === view || view === 'all') ? 'all' : view;
+  _ledgerPage = 1;
+  ledgerRender();
+}
 
 function getWorkerBase() {
   var isLive = location.hostname === 'naimuddin74667.github.io';
@@ -1216,23 +1230,35 @@ function ledgerRender() {
   });
   if(q) rows = rows.filter(function(r){ return (r.consignment_no||'').toLowerCase().indexOf(q) !== -1; });
 
-  // Stats (always computed on the full, unfiltered set)
-  document.getElementById('ledgerStatTotal').textContent = _ledgerRows.length;
   // "Closed" = fully done, nothing left to track — Inwarded (clean) or
   // Short Received (goods definitively didn't fully arrive). Every other
   // status (Created, Ready To Dispatch, Intransit, Nothing Received,
   // Inwarded — QC Issues) still needs eyes on it, so counts as active.
   var CLOSED_STATUSES = ['Inwarded', 'Short Received'];
-  var activeCount = _ledgerRows.filter(function(r){
-    return CLOSED_STATUSES.indexOf(computeLedgerStatus(r).label) === -1;
-  }).length;
-  document.getElementById('ledgerStatActive').textContent = activeCount;
+  function ledgerIsActive(r) { return CLOSED_STATUSES.indexOf(computeLedgerStatus(r).label) === -1; }
   // "Pending For Pickup" = never left our warehouse yet — computeLedgerStatus
   // only returns 'Created' when both Pickup Date and Received Qty are empty.
-  var pendingPickupCount = _ledgerRows.filter(function(r){
-    return computeLedgerStatus(r).label === 'Created';
-  }).length;
-  document.getElementById('ledgerStatPendingPickup').textContent = pendingPickupCount;
+  function ledgerIsPendingPickup(r) { return computeLedgerStatus(r).label === 'Created'; }
+
+  // Card filter — narrows the search results further to whichever stat
+  // card is currently selected.
+  if (_ledgerCardFilter === 'active') {
+    rows = rows.filter(ledgerIsActive);
+  } else if (_ledgerCardFilter === 'pendingPickup') {
+    rows = rows.filter(ledgerIsPendingPickup);
+  }
+
+  // Stats (always computed on the full, unfiltered set)
+  document.getElementById('ledgerStatTotal').textContent = _ledgerRows.length;
+  document.getElementById('ledgerStatActive').textContent = _ledgerRows.filter(ledgerIsActive).length;
+  document.getElementById('ledgerStatPendingPickup').textContent = _ledgerRows.filter(ledgerIsPendingPickup).length;
+
+  var cardTotal = document.getElementById('ledgerCardTotal');
+  var cardActive = document.getElementById('ledgerCardActive');
+  var cardPendingPickup = document.getElementById('ledgerCardPendingPickup');
+  if (cardTotal) cardTotal.classList.toggle('is-active-view', _ledgerCardFilter === 'all');
+  if (cardActive) cardActive.classList.toggle('is-active-view', _ledgerCardFilter === 'active');
+  if (cardPendingPickup) cardPendingPickup.classList.toggle('is-active-view', _ledgerCardFilter === 'pendingPickup');
 
   var totalPages = Math.max(1, Math.ceil(rows.length / LEDGER_PAGE_SIZE));
   if(_ledgerPage > totalPages) _ledgerPage = totalPages;
