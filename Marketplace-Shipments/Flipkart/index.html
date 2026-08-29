@@ -1494,18 +1494,27 @@ function renderItemsModalSummary(row) {
   }
   var inputStyle = 'width:100%;font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:4px 7px;color:var(--text)';
   var html = '';
-  html += field('DC Date', row.dc_date);
-  html += editing
-    ? editField('Pickup Date', '<input type="date" id="li-edit-appt" value="'+esc(toDateInputValue(row.appointment_date))+'" style="'+inputStyle+';color-scheme:dark">')
-    : field('Pickup Date', row.appointment_date);
+  html += field('CN Number', row.consignment_no);
   html += field('Warehouse', row.warehouse);
+  html += field('DC Date', row.dc_date);
+
   html += field('No. of SKU', row.no_of_sku);
-  html += field('Total Qty', row.total_qty);
-  html += field('Send Qty', row.send_qty, 'li-sendqty-value'); // always read-only — driven by per-item sum
+  // Total Qty / Send Qty combined into one cell — Total Qty (the printed
+  // invoice figure) shown lighter/muted since Send Qty (what actually
+  // shipped, editable per-item above) is the more actionable number here.
+  html += '<div><div style="font-size:9px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase">Total / Send Qty</div>'
+    +'<div style="font-size:12px;font-weight:600;margin-top:2px"><span style="color:var(--muted);font-weight:500">'+esc(row.total_qty!=null?row.total_qty:'\u2014')+'</span> / <span id="li-sendqty-value" style="color:var(--text)">'+esc(row.send_qty!=null?row.send_qty:'\u2014')+'</span></div></div>';
   html += editing
     ? editField('Received Qty', '<input type="number" min="0" id="li-edit-recv" placeholder="\u2014" value="'+esc(row.received_qty!=null?row.received_qty:'')+'" style="'+inputStyle+'">')
     : field('Received Qty', row.received_qty, 'li-recvqty-value'); // manual entry — no longer auto-summed from items
-  html += fieldHtml('Status', statusBadge(row)); // fully automatic — never an input, even while editing
+
+  // GP Number (Gatepass) — placeholder until Flipkart consignments get the
+  // same UC_Gatepass matching Blinkit's RO Ledger already has. That match
+  // happens inside a Google Apps Script bridge outside this codebase (no
+  // editing access from here) — someone with access to that script needs
+  // to add a Flipkart-filtered route mirroring the existing Blinkit one
+  // before this can show a real value.
+  html += field('GP Number', null);
 
   // Has QC Rejections? — a straight Yes/No, defaulting to No. Selecting Yes
   // reveals a Qty Rejected column in the Items list below for per-SKU entry.
@@ -1526,8 +1535,17 @@ function renderItemsModalSummary(row) {
     qcDisplayValue = !qcReviewed ? '\u2014' : (totalQcReject>0 ? ('Yes ('+totalQcReject+' rejected)') : 'No');
   }
   html += editing
-    ? editField('Has QC Rejections?', '<select id="li-edit-qc" onchange="itemsModalQcChanged()" style="'+inputStyle+'"><option value="no"'+(qcHasRejections?'':' selected')+'>No</option><option value="yes"'+(qcHasRejections?' selected':'')+'>Yes</option></select>')
-    : field('Has QC Rejections?', qcDisplayValue);
+    ? editField('QC Rejection', '<select id="li-edit-qc" onchange="itemsModalQcChanged()" style="'+inputStyle+'"><option value="no"'+(qcHasRejections?'':' selected')+'>No</option><option value="yes"'+(qcHasRejections?' selected':'')+'>Yes</option></select>')
+    : field('QC Rejection', qcDisplayValue);
+  html += fieldHtml('Status', statusBadge(row)); // fully automatic — never an input, even while editing
+
+  // Pickup Date isn't part of the normal 3x3 view grid above (by design —
+  // see the layout request this followed), but its only input anywhere in
+  // the app lives here, so it still needs to appear somewhere while
+  // editing or there'd be no way to ever set/change it again.
+  if(editing){
+    html += editField('Pickup Date', '<input type="date" id="li-edit-appt" value="'+esc(toDateInputValue(row.appointment_date))+'" style="'+inputStyle+';color-scheme:dark">');
+  }
 
   document.getElementById('li-summary').innerHTML = html;
 }
