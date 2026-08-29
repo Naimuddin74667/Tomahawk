@@ -870,6 +870,7 @@
           <div id="li-header-qcreject" style="display:none;font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Qty Rejected</div>
           <div id="li-header-qcreason" style="display:none;font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:120px;text-align:center;margin-left:6px">Reason</div>
           <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center;white-space:nowrap">Received Qty</div>
+          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center;white-space:nowrap">QC Pass/Fail</div>
         </div>
       </div>
       <div id="li-body"></div>
@@ -1621,12 +1622,24 @@ function renderItemsModalBody(row) {
     var recvCell = row.received_qty!=null
       ? '<span style="font-weight:600;color:var(--text)">'+Math.max(0, sendVal-(existingRejectMap[it.sku]||0))+'</span>'
       : '<span style="color:var(--muted)">\u2014</span>';
+    // QC Pass/Fail per item — only known once someone's actually done the
+    // manual per-SKU QC review (ledgerModalSaveEdit records every item on
+    // save, even at 0 rejected, so hasOwnProperty reliably means "this SKU
+    // was reviewed"). Before that, there's no per-SKU truth to show —
+    // the aggregate qc_pass_qty from Flipkart's email can't say which SKU.
+    var reviewedThisItem = existingRejectMap.hasOwnProperty(it.sku);
+    var qcPassFailCell = reviewedThisItem
+      ? (existingRejectMap[it.sku]>0
+          ? '<span style="color:#ff8080;font-weight:700">Fail</span>'
+          : '<span style="color:#6dc87a;font-weight:700">Pass</span>')
+      : '<span style="color:var(--muted)">\u2014</span>';
     return '<div style="display:flex;justify-content:space-between;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:12px">'
       +'<span style="flex:1">'+esc(it.model||it.sku)+' <span style="color:var(--muted);font-size:10px">('+esc(it.sku)+')</span></span>'
       +'<span style="min-width:90px;text-align:center"><span style="color:var(--muted);font-weight:500">'+it.qty+'</span> / '+sendCell+'</span>'
       +rejectCell
       +reasonCell
       +'<span style="min-width:70px;text-align:center">'+recvCell+'</span>'
+      +'<span style="min-width:70px;text-align:center">'+qcPassFailCell+'</span>'
       +'</div>';
   }).join('') : '<div style="color:var(--muted);font-size:11px;padding:1rem;text-align:center">No item breakdown stored for this consignment.</div>';
 }
