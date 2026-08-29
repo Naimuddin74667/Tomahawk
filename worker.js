@@ -180,6 +180,13 @@ const ACTION_TIERS = {
   blinkitSetRoStatus: 'manager_up',
   blinkitBulkSetAppointments: 'manager_up',
 
+  // — Flipkart "Successfully Received" email watcher (Gmail integration):
+  //   auto-fills fk_ledger.received_qty by matching Consignment No. Same
+  //   manager_up gating as the Blinkit watcher above, for the same reason
+  //   (touches D1 + calls Gmail). No separate read action — the existing
+  //   fkLedgerLoad already surfaces whatever this watcher fills in. —
+  fkCheckReceivedEmails: 'manager_up',
+
   // — Inward Label Generator (Gate Pass): admin + manager ONLY, no viewer
   //   access at all, not even read —
   getGpImages: 'manager_up', getSkuMap: 'manager_up', getBwImages: 'manager_up',
@@ -1152,6 +1159,17 @@ export default {
         if (action === 'blinkitCheckRoEmails') {
           try {
             const result = await checkNewRoEmails(env);
+            return json({ ok: true, ...result });
+          } catch (err) {
+            return json({ ok: false, error: err.message }, 500);
+          }
+        }
+
+        // Same on-demand-testable pattern as blinkitCheckRoEmails above —
+        // normally only ever run by the scheduled() cron, exposed here too.
+        if (action === 'fkCheckReceivedEmails') {
+          try {
+            const result = await checkFkReceivedEmails(env);
             return json({ ok: true, ...result });
           } catch (err) {
             return json({ ok: false, error: err.message }, 500);
@@ -2415,6 +2433,21 @@ export default {
           ).catch(e2 => console.error('failed to record blinkit_ro_watcher error heartbeat:', e2.message));
         })
     );
+    ctx.waitUntil(
+      checkFkReceivedEmails(env)
+        .then(result => recordHeartbeat(
+          env, 'fk_received_watcher', 'Flipkart Received-Qty Email Watcher (Worker cron)', 'ok',
+          `Checked ${result.checked} email(s), updated ${result.updated} consignment(s)` +
+            (result.unmatched ? `, ${result.unmatched} unmatched.` : '.'), 900
+        ))
+        .catch(err => {
+          console.error('scheduled Flipkart received-qty email check failed:', err.message);
+          return recordHeartbeat(
+            env, 'fk_received_watcher', 'Flipkart Received-Qty Email Watcher (Worker cron)', 'error',
+            err.message, 900
+          ).catch(e2 => console.error('failed to record fk_received_watcher error heartbeat:', e2.message));
+        })
+    );
     // Self-heartbeat: reaching this line at all means the cron trigger fired
     // and D1 is reachable (the write below would throw otherwise). This is
     // the simplest possible proof the Worker + D1 backend is alive — it
@@ -2840,6 +2873,164 @@ async function checkNewRoEmails(env) {
   }
 
   return { checked: messages.length, newLogged: newCount };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// FLIPKART RECEIVED-QTY EMAIL WATCHER — Gmail API integration
+// ══════════════════════════════════════════════════════════════════
+// Reads naimuddin@bullet.co.in (same mailbox + OAuth creds as the Blinkit
+// watcher above — gmail.readonly isn't label-restricted, so no separate
+// credentials are needed) looking for Flipkart's
+// "[Update] Your Consignments Have Been Successfully Received" email.
+//
+// Scope is deliberately narrow for now: this ONLY auto-fills
+// fk_ledger.received_qty by matching Consignment ID. It does NOT touch
+// fk_ledger.appointment_date (the Ledger's "Pickup Date" column) — the
+// "Pick up date" field in this email is actually the date Flipkart's
+// warehouse received the goods, a different thing entirely from the
+// existing Pickup Date field, so it's parsed out of the email body but
+// intentionally left unused rather than risk overwriting the wrong data.
+// CN *creation* is also untouched — this only updates a consignment that
+// already exists in fk_ledger (created via the existing manual PDF
+// upload); if the email references a consignment not yet in the Ledger,
+// it's logged as unmatched rather than creating an incomplete row.
+//
+// Table layout as seen in the actual email (columns, in order):
+//   Consignment ID | Warehouse Name | Promised Qty | Received Qty | Pick up date
+//
+// A second Flipkart email exists too ("Your Consignments Are Now Live on
+// Flipkart", with a QC Pass Qty column instead of Pick up date) — not
+// handled here, left for a later pass once there's a clearer plan for the
+// QC-shortfall side of things.
+// ══════════════════════════════════════════════════════════════════
+
+async function ensureFkReceivedLogTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS fk_received_log (
+    gmail_msg_id   TEXT NOT NULL,
+    consignment_no TEXT NOT NULL,
+    received_qty   INTEGER,
+    matched        INTEGER DEFAULT 0,
+    email_date     TEXT,
+    detected_at    TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (gmail_msg_id, consignment_no)
+  )`).run();
+}
+
+// Gmail messages are a tree of MIME parts, same as extractGmailBody above,
+// but this one keeps the raw HTML (rather than stripping tags) so the
+// <table> structure survives for parseFkReceivedEmailBody to walk.
+function extractGmailHtmlBody(payload) {
+  if (!payload) return '';
+  if (payload.mimeType === 'text/html' && payload.body && payload.body.data) {
+    return base64UrlDecode(payload.body.data);
+  }
+  if (payload.parts && payload.parts.length) {
+    for (const part of payload.parts) {
+      if (part.mimeType === 'text/html' && part.body && part.body.data) {
+        return base64UrlDecode(part.body.data);
+      }
+    }
+    for (const part of payload.parts) {
+      const nested = extractGmailHtmlBody(part);
+      if (nested) return nested;
+    }
+  }
+  return '';
+}
+
+// Walks every <tr> in the email's HTML table, pulling plain text out of
+// each <td>. The header row ("Consignment ID", "Warehouse Name", ...) is
+// naturally skipped by the numeric-only check below rather than needing
+// to specifically detect/exclude it — works whether the header uses <th>
+// (never matched by the <td> regex at all) or <td> with bold styling
+// (matched, but filtered out because "Consignment ID" isn't all-digits).
+// Handles multiple consignment rows in a single email, in case Flipkart
+// ever batches more than one per notification.
+function parseFkReceivedEmailBody(html) {
+  const rows = [];
+  const trMatches = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
+  for (const tr of trMatches) {
+    const cells = (tr.match(/<td[^>]*>[\s\S]*?<\/td>/gi) || []).map(td =>
+      td.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/\s+/g, ' ').trim()
+    );
+    // Consignment ID | Warehouse Name | Promised Qty | Received Qty | Pick up date
+    if (cells.length < 4) continue;
+    const consignmentNo = cells[0];
+    const receivedQty = cells[3];
+    if (/^\d+$/.test(consignmentNo) && /^\d+$/.test(receivedQty)) {
+      rows.push({ consignment_no: consignmentNo, received_qty: parseInt(receivedQty, 10) });
+    }
+  }
+  return rows;
+}
+
+// Main check — mirrors checkNewRoEmails's structure: page through Gmail
+// search results, skip messages already in the log, parse + apply the
+// rest. Safe to call repeatedly (and does, every 15 min via cron) — each
+// (gmail_msg_id, consignment_no) pair is only ever applied once, and
+// re-running never re-triggers an already-processed email.
+async function checkFkReceivedEmails(env) {
+  await ensureFkReceivedLogTable(env.DB);
+  await ensureFkLedgerTable(env.DB);
+  const accessToken = await getGmailAccessToken(env);
+
+  const query = encodeURIComponent('label:Flipkart subject:"Successfully Received"');
+  let messages = [];
+  let pageToken = '';
+  for (let page = 0; page < 10; page++) {
+    const pageParam = pageToken ? `&pageToken=${pageToken}` : '';
+    const listRes = await fetch(`${GMAIL_API_BASE}/messages?q=${query}&maxResults=100${pageParam}`, {
+      headers: { Authorization: 'Bearer ' + accessToken }
+    });
+    if (!listRes.ok) throw new Error('Gmail list failed: ' + listRes.status);
+    const listData = await listRes.json();
+    messages = messages.concat(listData.messages || []);
+    if (!listData.nextPageToken) break;
+    pageToken = listData.nextPageToken;
+  }
+
+  let newEmails = 0, updated = 0, unmatched = 0;
+  for (const m of messages) {
+    const exists = await env.DB.prepare(
+      'SELECT 1 FROM fk_received_log WHERE gmail_msg_id = ? LIMIT 1'
+    ).bind(m.id).first();
+    if (exists) continue;
+
+    const msgRes = await fetch(`${GMAIL_API_BASE}/messages/${m.id}?format=full`, {
+      headers: { Authorization: 'Bearer ' + accessToken }
+    });
+    if (!msgRes.ok) continue; // skip a single bad message rather than failing the whole batch
+    const msg = await msgRes.json();
+    const emailDate = msg.internalDate ? new Date(parseInt(msg.internalDate)).toISOString() : null;
+
+    const html = extractGmailHtmlBody(msg.payload);
+    const rows = parseFkReceivedEmailBody(html);
+
+    for (const row of rows) {
+      const existingCn = await env.DB.prepare(
+        'SELECT consignment_no FROM fk_ledger WHERE consignment_no = ?'
+      ).bind(row.consignment_no).first();
+
+      if (existingCn) {
+        await env.DB.prepare(
+          `UPDATE fk_ledger SET received_qty = ?, updated_at = datetime('now') WHERE consignment_no = ?`
+        ).bind(row.received_qty, row.consignment_no).run();
+        updated++;
+      } else {
+        unmatched++;
+      }
+
+      await env.DB.prepare(`
+        INSERT INTO fk_received_log (gmail_msg_id, consignment_no, received_qty, matched, email_date, detected_at)
+        VALUES (?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(gmail_msg_id, consignment_no) DO NOTHING
+      `).bind(m.id, row.consignment_no, row.received_qty, existingCn ? 1 : 0, emailDate).run();
+    }
+
+    newEmails++;
+  }
+
+  return { checked: messages.length, newEmails, updated, unmatched };
 }
 
 // ══════════════════════════════════════════════════════════════════
