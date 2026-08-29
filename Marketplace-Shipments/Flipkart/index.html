@@ -1437,12 +1437,14 @@ function closeLedgerSettings(){ document.getElementById('ledgerSettingsModal').c
 var _itemsModalCN = null;
 var _itemsModalEditing = false;
 var _itemsModalItemsCache = [];
+var _itemsModalQcPanelOpen = false; // QC Rejections panel starts collapsed; toggled via the QC Rejection summary field
 
 function ledgerViewItems(cn, hideItems) {
   var row = _ledgerRows.find(function(r){ return r.consignment_no===cn; });
   if(!row) return;
   _itemsModalCN = cn;
   _itemsModalEditing = false;
+  _itemsModalQcPanelOpen = false; // always start collapsed on a fresh open
   document.getElementById('li-cn').textContent = cn;
   renderItemsModalSummary(row);
   renderItemsModalBody(row);
@@ -1472,7 +1474,6 @@ function ledgerViewItems(cn, hideItems) {
   var receiptShortage = receiptShortageAll.filter(function(s){ return (s.rejectQty>0); });
   var rsEl = document.getElementById('li-transit-shortage');
   if(receiptShortage.length){
-    rsEl.style.display = 'block';
     rsEl.innerHTML = '<div style="font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;margin-bottom:.5rem">&#9888; QC Rejections</div>'
       + '<table style="width:100%;border-collapse:collapse;font-size:12px">'
       + '<thead><tr style="color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.05em">'
@@ -1494,9 +1495,10 @@ function ledgerViewItems(cn, hideItems) {
             +'</tr>';
         }).join('')
       + '</tbody></table>';
+    rsEl.style.display = _itemsModalQcPanelOpen ? 'block' : 'none';
   } else if(receiptShortageAll.length){
-    rsEl.style.display = 'block';
     rsEl.innerHTML = '<div style="font-size:11px;color:#6dc87a;font-weight:600">&#10003; QC reviewed \u2014 no rejections</div>';
+    rsEl.style.display = _itemsModalQcPanelOpen ? 'block' : 'none';
   } else { rsEl.style.display = 'none'; rsEl.innerHTML = ''; }
 
   document.getElementById('ledgerItemsModal').classList.add('show');
@@ -1572,9 +1574,12 @@ function renderItemsModalSummary(row) {
   } else {
     qcDisplayValue = !qcReviewed ? '\u2014' : (totalQcReject>0 ? ('Yes ('+totalQcReject+' rejected)') : 'No');
   }
+  var qcValueHtml = qcReviewed
+    ? '<span onclick="toggleQcRejectionsPanel()" style="cursor:pointer;text-decoration:underline;text-decoration-style:dotted" title="Click to show/hide QC rejection detail">'+esc(qcDisplayValue)+'</span>'
+    : esc(qcDisplayValue);
   html += editing
     ? editField('QC Rejection', '<select id="li-edit-qc" onchange="itemsModalQcChanged()" style="'+inputStyle+'"><option value="no"'+(qcHasRejections?'':' selected')+'>No</option><option value="yes"'+(qcHasRejections?' selected':'')+'>Yes</option></select>')
-    : field('QC Rejection', qcDisplayValue);
+    : fieldHtml('QC Rejection', qcValueHtml);
   html += fieldHtml('Status', statusBadge(row)); // fully automatic — never an input, even while editing
 
   // Pickup Date isn't part of the normal 3x3 view grid above (by design —
@@ -1673,6 +1678,16 @@ function renderItemsModalBody(row) {
 function itemsModalQcChanged() {
   var row = _ledgerRows.find(function(r){ return r.consignment_no===_itemsModalCN; });
   if(row) renderItemsModalBody(row);
+}
+
+// Fires on clicking the QC Rejection value in the summary — shows/hides
+// the QC Rejections detail panel (li-transit-shortage), which stays
+// collapsed by default now rather than always showing.
+function toggleQcRejectionsPanel() {
+  var el = document.getElementById('li-transit-shortage');
+  if(!el || !el.innerHTML) return; // nothing to show
+  _itemsModalQcPanelOpen = !_itemsModalQcPanelOpen;
+  el.style.display = _itemsModalQcPanelOpen ? 'block' : 'none';
 }
 
 // Shared parser for the dd-mm-yyyy strings appointment_date is stored as.
