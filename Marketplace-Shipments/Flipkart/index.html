@@ -1646,15 +1646,21 @@ function renderItemsModalBody(row) {
     // save, even at 0 rejected, so hasOwnProperty reliably means "this SKU
     // was reviewed"). Before that, there's no per-SKU truth to show —
     // the aggregate qc_pass_qty from Flipkart's email can't say which SKU.
-    // Shown as Pass Qty (green) / Reject Qty (light grey if 0, red if not),
-    // matching the Total/Send Qty combined-cell style used elsewhere here.
+    // Shown all-green (no "/0") when everything passed, all-red when
+    // everything failed, and "pass / reject" only for a genuine partial
+    // split — the "/0" or "0/" suffix adds nothing in the clean-cut cases.
     var reviewedThisItem = existingRejectMap.hasOwnProperty(it.sku);
     var qcPassFailCell;
     if (reviewedThisItem) {
       var itemRejectQty = existingRejectMap[it.sku] || 0;
       var itemPassQty = Math.max(0, sendVal - itemRejectQty);
-      var rejectColor = itemRejectQty > 0 ? '#ff8080' : 'var(--muted)';
-      qcPassFailCell = '<span style="color:#6dc87a;font-weight:700">'+itemPassQty+'</span> / <span style="color:'+rejectColor+';font-weight:700">'+itemRejectQty+'</span>';
+      if (itemRejectQty === 0) {
+        qcPassFailCell = '<span style="color:#6dc87a;font-weight:700">'+itemPassQty+'</span>';
+      } else if (itemPassQty === 0) {
+        qcPassFailCell = '<span style="color:#ff8080;font-weight:700">'+itemRejectQty+'</span>';
+      } else {
+        qcPassFailCell = '<span style="color:#6dc87a;font-weight:700">'+itemPassQty+'</span> / <span style="color:#ff8080;font-weight:700">'+itemRejectQty+'</span>';
+      }
     } else {
       qcPassFailCell = '<span style="color:var(--muted)">\u2014</span>';
     }
