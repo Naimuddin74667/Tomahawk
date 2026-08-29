@@ -1636,14 +1636,16 @@ function renderItemsModalBody(row) {
     var reasonCell = showQc
       ? '<span style="min-width:120px;text-align:center;margin-left:6px"><input type="text" id="li-item-reason-'+i+'" value="'+esc(existingReasonMap[it.sku]||'')+'" placeholder="reason" style="width:110px;font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)"></span>'
       : '';
-    // Received Qty per item isn't a separately-entered figure — it's
-    // derived the same way the QC Rejections panel already computes
-    // "Inwarded Qty" (send minus whatever's logged as rejected for that
-    // SKU). Only shown once the consignment actually has a Received Qty
-    // at all; before that, nothing's arrived yet so there's nothing to
-    // compute a per-item figure from.
+    // Received Qty per item = what physically arrived, i.e. Send Qty for
+    // that SKU. QC pass/fail (next column) is a split of what's already
+    // received, not a reduction of it — a rejected unit still arrived,
+    // it just failed inspection afterward. There's no separate per-item
+    // transit-loss tracking (that's a different, aggregate-only concern
+    // — see the consignment-level Received Qty vs Send Qty gap), so this
+    // simply mirrors Send Qty once the consignment has been received at
+    // all; before that, nothing's arrived yet.
     var recvCell = row.received_qty!=null
-      ? '<span style="font-weight:600;color:var(--text)">'+Math.max(0, sendVal-(existingRejectMap[it.sku]||0))+'</span>'
+      ? '<span style="font-weight:600;color:var(--text)">'+sendVal+'</span>'
       : '<span style="color:var(--muted)">\u2014</span>';
     // QC Pass/Fail per item — only known once someone's actually done the
     // manual per-SKU QC review (ledgerModalSaveEdit records every item on
