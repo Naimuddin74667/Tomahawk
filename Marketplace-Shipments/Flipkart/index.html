@@ -598,11 +598,12 @@
               <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Total Qty</th>
               <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Send Qty</th>
               <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Received Qty</th>
+              <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Inwarded Qty</th>
               <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Status</th>
             </tr>
           </thead>
           <tbody id="ledgerTbody">
-            <tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+            <tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
           </tbody>
         </table>
       </div>
@@ -1204,7 +1205,7 @@ function flushPendingLedgerSyncs() {
 
 function ledgerLoad() {
   var tbody = document.getElementById('ledgerTbody');
-  if(tbody) tbody.innerHTML = '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+  if(tbody) tbody.innerHTML = '<tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
   fetch(getWorkerBase() + '?action=fkLedgerLoad')
     .then(function(r){ return r.json(); })
     .then(function(data){
@@ -1267,7 +1268,7 @@ function ledgerRender() {
 
   var tbody = document.getElementById('ledgerTbody');
   if(!pageRows.length){
-    tbody.innerHTML = '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No consignments yet.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No consignments yet.</td></tr>';
   } else {
     tbody.innerHTML = pageRows.map(function(r){
       var cn = r.consignment_no;
@@ -1319,6 +1320,19 @@ function ledgerRender() {
         receivedCell += ' <span title="'+rLabel+'" style="display:inline-block;background:none;border:1px solid '+rBorder+';border-radius:4px;color:'+rColor+';font-size:10px;padding:1px 5px;margin-left:3px">'+rIcon+'</span>';
       }
 
+      // Inwarded Qty = Received Qty minus whatever's logged as QC-rejected
+      // across all items. Green when nothing was rejected (Inwarded ===
+      // Received), red when everything was rejected (Inwarded === 0),
+      // amber for a genuine partial split.
+      var inwardedCell;
+      if(r.received_qty!=null){
+        var inwardedQty = Math.max(0, r.received_qty - totalQcReject);
+        var inwardedColor = inwardedQty === r.received_qty ? '#6dc87a' : (inwardedQty === 0 ? '#ff8080' : '#ffb84d');
+        inwardedCell = '<span style="color:'+inwardedColor+';font-weight:700">'+inwardedQty+'</span>';
+      } else {
+        inwardedCell = '<span style="color:var(--muted)">\u2014</span>';
+      }
+
       return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="ledgerViewItems(\''+esc(cn)+'\')" title="View consignment details">'
         +'<td style="padding:1.13rem 1rem;font-weight:600;color:var(--accent)">'+esc(cn)+' <span title="Copy Consignment No." style="cursor:pointer;color:var(--muted);text-decoration:none" onclick="event.stopPropagation();ledgerCopyConsignmentNo(\''+esc(cn)+'\')">&#128203;</span></td>'
         +'<td style="padding:1.13rem 1rem">'+esc(r.dc_date||'\u2014')+'</td>'
@@ -1328,6 +1342,7 @@ function ledgerRender() {
         +'<td style="padding:1.13rem 1rem;text-align:center">'+(r.total_qty!=null?r.total_qty:'\u2014')+'</td>'
         +'<td style="padding:1.13rem 1rem;text-align:center;white-space:nowrap">'+sendCell+'</td>'
         +'<td style="padding:1.13rem 1rem;text-align:center;white-space:nowrap">'+receivedCell+'</td>'
+        +'<td style="padding:1.13rem 1rem;text-align:center">'+inwardedCell+'</td>'
         +'<td style="padding:1.13rem 1rem;text-align:center">'+statusBadge(r)+'</td>'
         +'</tr>';
     }).join('');
