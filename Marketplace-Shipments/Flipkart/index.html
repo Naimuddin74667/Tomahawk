@@ -1253,13 +1253,9 @@ function ledgerRender() {
 
       // Received Qty vs Send Qty IS a real issue when it falls short — that's
       // already surfaced prominently via the Status column ("Short Received").
-      // This button is purely about QC: ledgerModalSaveEdit() always records
-      // every item on save (even at 0 rejected), so entries.length>0 reliably
-      // means "someone has reviewed QC for this" — distinct from whether an
-      // actual rejection was found:
-      //   reviewed + rejection found → red, shows the reject count
-      //   reviewed + nothing wrong   → green check
-      //   not yet reviewed           → neutral grey, prompts a check
+      // This span is purely a visual QC status indicator now — no longer
+      // independently clickable (the whole row's click already opens the
+      // full detail view, including QC rejections in li-transit-shortage).
       var totalQcReject = receiptShortageEntries.reduce(function(s,e){ return s+(e.rejectQty||0); }, 0);
       var reviewed = receiptShortageEntries.length>0;
       var receivedCell = (r.received_qty!=null?r.received_qty:'\u2014');
@@ -1268,27 +1264,27 @@ function ledgerRender() {
         if(reviewed && totalQcReject>0){
           rColor = '#ff8080'; rBorder = '#6b2020';
           rIcon = '&#9888; '+totalQcReject+' QC rejected';
-          rLabel = 'QC rejections recorded \u2014 click to edit';
+          rLabel = 'QC rejections recorded';
         } else if(reviewed){
           rColor = '#6dc87a'; rBorder = '#3a6b3a'; rIcon = '&#10003;';
-          rLabel = 'Reviewed \u2014 no QC issues \u2014 click to edit';
+          rLabel = 'Reviewed \u2014 no QC issues';
         } else {
           rColor = 'var(--muted)'; rBorder = 'var(--border)'; rIcon = '&#9675;';
-          rLabel = 'Not yet reviewed \u2014 click to log QC rejections';
+          rLabel = 'Not yet reviewed';
         }
-        receivedCell += ' <button onclick="ledgerOpenReceiptShortage(\''+esc(cn)+'\')" title="'+rLabel+'" style="background:none;border:1px solid '+rBorder+';border-radius:4px;color:'+rColor+';cursor:pointer;font-size:10px;padding:1px 5px;margin-left:3px">'+rIcon+'</button>';
+        receivedCell += ' <span title="'+rLabel+'" style="display:inline-block;background:none;border:1px solid '+rBorder+';border-radius:4px;color:'+rColor+';font-size:10px;padding:1px 5px;margin-left:3px">'+rIcon+'</span>';
       }
 
-      return '<tr>'
-        +'<td style="padding:1.13rem 1rem;border-bottom:1px solid var(--border);font-weight:600;color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-color:transparent;transition:text-decoration-color .15s" onmouseover="this.style.textDecorationColor=\'var(--accent)\'" onmouseout="this.style.textDecorationColor=\'transparent\'" onclick="ledgerViewItems(\''+esc(cn)+'\')" title="View consignment details">'+esc(cn)+'</td>'
-        +'<td style="padding:1.13rem 1rem;border-bottom:1px solid var(--border)">'+esc(r.dc_date||'\u2014')+'</td>'
-        +'<td style="padding:1.13rem 1rem;border-bottom:1px solid var(--border)">'+esc(r.appointment_date||'\u2014')+'</td>'
-        +'<td style="padding:1.13rem 1rem;border-bottom:1px solid var(--border)">'+esc(r.warehouse||'\u2014')+'</td>'
-        +'<td style="padding:1.13rem 1rem;border-bottom:1px solid var(--border);text-align:center;white-space:nowrap">'+noSkuCell+'</td>'
-        +'<td style="padding:1.13rem 1rem;border-bottom:1px solid var(--border);text-align:center">'+(r.total_qty!=null?r.total_qty:'\u2014')+'</td>'
-        +'<td style="padding:1.13rem 1rem;border-bottom:1px solid var(--border);text-align:center;white-space:nowrap">'+sendCell+'</td>'
-        +'<td style="padding:1.13rem 1rem;border-bottom:1px solid var(--border);text-align:center;white-space:nowrap">'+receivedCell+'</td>'
-        +'<td style="padding:1.13rem 1rem;border-bottom:1px solid var(--border);text-align:center">'+statusBadge(r)+'</td>'
+      return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="ledgerViewItems(\''+esc(cn)+'\')" title="View consignment details">'
+        +'<td style="padding:1.13rem 1rem;font-weight:600;color:var(--accent);text-decoration:underline;text-decoration-color:transparent;transition:text-decoration-color .15s" onmouseover="this.style.textDecorationColor=\'var(--accent)\'" onmouseout="this.style.textDecorationColor=\'transparent\'">'+esc(cn)+'</td>'
+        +'<td style="padding:1.13rem 1rem">'+esc(r.dc_date||'\u2014')+'</td>'
+        +'<td style="padding:1.13rem 1rem">'+esc(r.appointment_date||'\u2014')+'</td>'
+        +'<td style="padding:1.13rem 1rem">'+esc(r.warehouse||'\u2014')+'</td>'
+        +'<td style="padding:1.13rem 1rem;text-align:center;white-space:nowrap">'+noSkuCell+'</td>'
+        +'<td style="padding:1.13rem 1rem;text-align:center">'+(r.total_qty!=null?r.total_qty:'\u2014')+'</td>'
+        +'<td style="padding:1.13rem 1rem;text-align:center;white-space:nowrap">'+sendCell+'</td>'
+        +'<td style="padding:1.13rem 1rem;text-align:center;white-space:nowrap">'+receivedCell+'</td>'
+        +'<td style="padding:1.13rem 1rem;text-align:center">'+statusBadge(r)+'</td>'
         +'</tr>';
     }).join('');
   }
