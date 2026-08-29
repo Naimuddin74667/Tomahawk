@@ -862,10 +862,10 @@
           <button onclick="document.getElementById('li-pdf-input').click()" title="Upload PDF to re-match &amp; refresh this consignment's items" style="width:16px;height:16px;padding:0;display:flex;align-items:center;justify-content:center;background:none;border:1px solid var(--border);border-radius:3px;color:var(--muted);cursor:pointer;font-size:9px;line-height:1">&#128196;</button>
         </div>
         <div style="display:flex;gap:0">
-          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center">Total Qty</div>
-          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Send Qty</div>
+          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:90px;text-align:center">Total / Send Qty</div>
           <div id="li-header-qcreject" style="display:none;font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Qty Rejected</div>
           <div id="li-header-qcreason" style="display:none;font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:120px;text-align:center;margin-left:6px">Reason</div>
+          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center">Received Qty</div>
         </div>
       </div>
       <div id="li-body"></div>
@@ -1586,12 +1586,21 @@ function renderItemsModalBody(row) {
     var reasonCell = showQc
       ? '<span style="min-width:120px;text-align:center;margin-left:6px"><input type="text" id="li-item-reason-'+i+'" value="'+esc(existingReasonMap[it.sku]||'')+'" placeholder="reason" style="width:110px;font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)"></span>'
       : '';
+    // Received Qty per item isn't a separately-entered figure — it's
+    // derived the same way the QC Rejections panel already computes
+    // "Inwarded Qty" (send minus whatever's logged as rejected for that
+    // SKU). Only shown once the consignment actually has a Received Qty
+    // at all; before that, nothing's arrived yet so there's nothing to
+    // compute a per-item figure from.
+    var recvCell = row.received_qty!=null
+      ? '<span style="font-weight:600;color:var(--text)">'+Math.max(0, sendVal-(existingRejectMap[it.sku]||0))+'</span>'
+      : '<span style="color:var(--muted)">\u2014</span>';
     return '<div style="display:flex;justify-content:space-between;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:12px">'
       +'<span style="flex:1">'+esc(it.model||it.sku)+' <span style="color:var(--muted);font-size:10px">('+esc(it.sku)+')</span></span>'
-      +'<span style="min-width:70px;text-align:center;color:var(--text);font-weight:600">'+it.qty+'</span>'
-      +'<span style="min-width:64px;text-align:center">'+sendCell+'</span>'
+      +'<span style="min-width:90px;text-align:center"><span style="color:var(--muted);font-weight:500">'+it.qty+'</span> / '+sendCell+'</span>'
       +rejectCell
       +reasonCell
+      +'<span style="min-width:70px;text-align:center">'+recvCell+'</span>'
       +'</div>';
   }).join('') : '<div style="color:var(--muted);font-size:11px;padding:1rem;text-align:center">No item breakdown stored for this consignment.</div>';
 }
