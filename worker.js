@@ -189,11 +189,14 @@ const ACTION_TIERS = {
   // — Flipkart "Now Live on Flipkart" QC-pass email watcher: sibling of
   //   the above, fills in qc_pass_qty the same way. —
   fkCheckQcEmails: 'manager_up',
-  // — Flipkart GP Number backfill/update: one-time (or repeatable)
-  //   write of gp_number values sourced from UC_Gatepass (matched by
-  //   Consignment No. via the reference field), not a live sync — no
-  //   Apps Script route exists yet for an ongoing feed. —
+  // — Flipkart GP Number backfill/update: manual one-off write of
+  //   gp_number values, kept alongside the automatic scheduled sync
+  //   below for ad-hoc corrections/backfills. —
   fkSetGatepassBulk: 'manager_up',
+  // — Flipkart gatepass lookup (GP Number), same tier as its Blinkit
+  //   sibling below. —
+  fkGetGatepass: 'viewer_read',
+  fkSyncGatepasses: 'manager_up',
 
   // — Inward Label Generator (Gate Pass): admin + manager ONLY, no viewer
   //   access at all, not even read —
@@ -1194,6 +1197,17 @@ export default {
           }
         }
 
+        // Same on-demand-testable pattern as the email watchers above —
+        // normally only ever run by the scheduled() cron, exposed here too.
+        if (action === 'fkSyncGatepasses') {
+          try {
+            const result = await syncFkGatepasses(env);
+            return json({ ok: true, ...result });
+          } catch (err) {
+            return json({ ok: false, error: err.message }, 500);
+          }
+        }
+
         // ── FLIPKART GP NUMBER — bulk backfill/update from UC_Gatepass ──
         // Body: { mapping: { "<consignment_no>": "<gp_number>", ... } }
         // Only updates rows that already exist in fk_ledger (same
@@ -1278,6 +1292,31 @@ export default {
           }
 
           const response = new Response(text2, {
+            headers: { ...CORS, 'Cache-Control': 'public, max-age=300', 'X-Cache': 'MISS' }
+          });
+          await cache.put(cacheKey, response.clone());
+          return response;
+        }
+
+        // ── FLIPKART — gatepass lookup (GP Number) ──────
+        // Sibling of blinkitGetGatepass above. No backfill-regex block
+        // needed here — getFlipkartGatepassPayload() on the GAS side
+        // already guarantees every record has a clean consignment_no
+        // (rows without one are simply skipped there, since Flipkart's
+        // reference column doesn't have Blinkit's messy "RO "-prefix /
+        // decimal-suffix formatting to begin with).
+        if (action === 'fkGetGatepass') {
+          const cache = caches.default;
+          const cacheKey = new Request('https://cache.internal/fk-gatepass-v1');
+          const cached = await cache.match(cacheKey);
+          if (cached) {
+            return new Response(await cached.text(), { headers: { ...CORS, 'X-Cache': 'HIT' } });
+          }
+          const res = await fetch(SA_UC_GAS_URL + '?type=flipkartGatepass');
+          if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
+          const text = await res.text();
+
+          const response = new Response(text, {
             headers: { ...CORS, 'Cache-Control': 'public, max-age=300', 'X-Cache': 'MISS' }
           });
           await cache.put(cacheKey, response.clone());
@@ -2511,6 +2550,21 @@ export default {
           ).catch(e2 => console.error('failed to record fk_qc_watcher error heartbeat:', e2.message));
         })
     );
+    ctx.waitUntil(
+      syncFkGatepasses(env)
+        .then(result => recordHeartbeat(
+          env, 'fk_gatepass_sync', 'Flipkart Gatepass Sync (Worker cron)', 'ok',
+          `Checked ${result.checked} record(s), updated ${result.updated} consignment(s)` +
+            (result.unmatched ? `, ${result.unmatched} unmatched.` : '.'), 900
+        ))
+        .catch(err => {
+          console.error('scheduled Flipkart gatepass sync failed:', err.message);
+          return recordHeartbeat(
+            env, 'fk_gatepass_sync', 'Flipkart Gatepass Sync (Worker cron)', 'error',
+            err.message, 900
+          ).catch(e2 => console.error('failed to record fk_gatepass_sync error heartbeat:', e2.message));
+        })
+    );
     // Self-heartbeat: reaching this line at all means the cron trigger fired
     // and D1 is reachable (the write below would throw otherwise). This is
     // the simplest possible proof the Worker + D1 backend is alive — it
@@ -3219,6 +3273,46 @@ async function checkFkQcEmails(env) {
   }
 
   return { checked: messages.length, newEmails, updated, unmatched };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// FLIPKART GATEPASS SYNC — GAS bridge (UC_Gatepass), scheduled
+// ══════════════════════════════════════════════════════════════════
+// Calls the flipkartGatepass GAS route directly (bypassing the
+// fkGetGatepass edge cache, since this runs on its own cron schedule
+// rather than in response to a page load) and writes gp_number into any
+// matching fk_ledger row. Deliberately CLOSED-only — an open/pending
+// gatepass can still change, so only a closed one is treated as final
+// enough to record. Never creates a new fk_ledger row (same rule as the
+// email watchers) — a consignment not yet in the Ledger is skipped, not
+// backfilled with a bare row.
+async function syncFkGatepasses(env) {
+  await ensureFkLedgerTable(env.DB);
+  const res = await fetch(SA_UC_GAS_URL + '?type=flipkartGatepass');
+  if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
+  const data = await res.json();
+  if (!data || !Array.isArray(data.records)) throw new Error('Unexpected GAS response shape');
+
+  let updated = 0, unmatched = 0, skippedNotClosed = 0;
+  for (const rec of data.records) {
+    if (rec.status !== 'CLOSED') { skippedNotClosed++; continue; }
+    if (!rec.consignment_no || !rec.gatepass_code) continue;
+
+    const existingCn = await env.DB.prepare(
+      'SELECT consignment_no FROM fk_ledger WHERE consignment_no = ?'
+    ).bind(rec.consignment_no).first();
+
+    if (existingCn) {
+      await env.DB.prepare(
+        `UPDATE fk_ledger SET gp_number = ?, updated_at = datetime('now') WHERE consignment_no = ?`
+      ).bind(rec.gatepass_code, rec.consignment_no).run();
+      updated++;
+    } else {
+      unmatched++;
+    }
+  }
+
+  return { checked: data.records.length, updated, unmatched, skippedNotClosed };
 }
 
 // ══════════════════════════════════════════════════════════════════
