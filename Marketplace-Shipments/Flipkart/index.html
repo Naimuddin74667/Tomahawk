@@ -587,7 +587,7 @@
       </div>
 
       <div class="ro-table-scroll" style="flex:1;overflow-y:auto;overflow-x:auto;min-height:0">
-        <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <table style="width:100%;border-collapse:collapse;font-size:13.5px">
           <thead style="position:sticky;top:0;z-index:2;background:var(--surface)">
             <tr>
               <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Consignment No.</th>
@@ -1287,7 +1287,20 @@ function ledgerRender() {
       // full detail view, including QC rejections in li-transit-shortage).
       var totalQcReject = receiptShortageEntries.reduce(function(s,e){ return s+(e.rejectQty||0); }, 0);
       var reviewed = receiptShortageEntries.length>0;
-      var receivedCell = (r.received_qty!=null?r.received_qty:'\u2014');
+      // Same visual pattern as Blinkit's RO Ledger: green check when
+      // Received matches Send exactly, amber with a (Δ) delta otherwise.
+      var receivedCell;
+      if(r.received_qty==null){
+        receivedCell = '<span style="color:var(--muted)">\u2014</span>';
+      } else if(r.send_qty!=null && r.received_qty===r.send_qty){
+        receivedCell = '<span style="color:#6dc87a;font-weight:700">&#10003; '+r.received_qty+'</span>';
+      } else if(r.send_qty!=null){
+        var recvDiff = r.received_qty - r.send_qty;
+        receivedCell = '<span style="color:#ffb74d;font-weight:700">'+r.received_qty+'</span>'
+          + ' <span style="color:#ffb74d;font-size:10px;font-family:\'DM Mono\',monospace">(&Delta;'+(recvDiff>0?'+':'')+recvDiff+')</span>';
+      } else {
+        receivedCell = '<span style="font-weight:700;color:var(--text)">'+r.received_qty+'</span>';
+      }
       if(r.received_qty!=null){
         var rColor, rBorder, rIcon, rLabel;
         if(reviewed && totalQcReject>0){
