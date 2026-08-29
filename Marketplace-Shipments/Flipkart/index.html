@@ -574,10 +574,10 @@
           <div class="ro-stat-value" id="ledgerStatTotal">&mdash;</div>
           <div class="ro-stat-sub">all tracked consignments</div>
         </div>
-        <div class="ro-stat-card" id="ledgerCardActive" onclick="ledgerSetCardFilter('active')" title="Filter: not yet Inwarded or Short Received">
+        <div class="ro-stat-card" id="ledgerCardActive" onclick="ledgerSetCardFilter('active')" title="Filter: not yet Inwarded or Short Recv. Qty">
           <div class="ro-stat-label">Active Consignments</div>
           <div class="ro-stat-value accent" id="ledgerStatActive">&mdash;</div>
-          <div class="ro-stat-sub">not yet Inwarded or Short Received</div>
+          <div class="ro-stat-sub">not yet Inwarded or Short Recv. Qty</div>
         </div>
         <div class="ro-stat-card" id="ledgerCardPendingPickup" onclick="ledgerSetCardFilter('pendingPickup')" title="Filter: not yet picked up from our warehouse">
           <div class="ro-stat-label">Pending For Pickup</div>
@@ -1231,10 +1231,10 @@ function ledgerRender() {
   if(q) rows = rows.filter(function(r){ return (r.consignment_no||'').toLowerCase().indexOf(q) !== -1; });
 
   // "Closed" = fully done, nothing left to track — Inwarded (clean) or
-  // Short Received (goods definitively didn't fully arrive). Every other
+  // Short Recv. Qty (goods definitively didn't fully arrive). Every other
   // status (Created, Ready To Dispatch, Intransit, Nothing Received,
   // Inwarded — QC Issues) still needs eyes on it, so counts as active.
-  var CLOSED_STATUSES = ['Inwarded', 'Short Received'];
+  var CLOSED_STATUSES = ['Inwarded', 'Short Recv. Qty'];
   function ledgerIsActive(r) { return CLOSED_STATUSES.indexOf(computeLedgerStatus(r).label) === -1; }
   // "Pending For Pickup" = never left our warehouse yet — computeLedgerStatus
   // only returns 'Created' when both Pickup Date and Received Qty are empty.
@@ -1280,7 +1280,7 @@ function ledgerRender() {
       var sendCell = '<span style="font-weight:700;color:var(--text)">'+(r.send_qty!=null?r.send_qty:'\u2014')+'</span>';
 
       // Received Qty vs Send Qty IS a real issue when it falls short — that's
-      // already surfaced prominently via the Status column ("Short Received").
+      // already surfaced prominently via the Status column ("Short Recv. Qty").
       // This span is purely a visual QC status indicator now — no longer
       // independently clickable (the whole row's click already opens the
       // full detail view, including QC rejections in li-transit-shortage).
@@ -1650,7 +1650,7 @@ function parseDdMmYyyy(str) {
 
 // Status is now fully automatic — no manual entry anywhere. Derived purely
 // from Received Qty, QC reject entries, and Pickup Date, in this priority order:
-//   Received Qty entered → Nothing Received (0) / Short Received (< Send) /
+//   Received Qty entered → Nothing Received (0) / Short Recv. Qty (< Send) /
 //     Inwarded — QC Issues (full qty back, but QC rejects logged) / Inwarded (clean)
 //   else Pickup Date set → Intransit (date has passed) / Ready To Dispatch (upcoming)
 //   else → Created
@@ -1660,7 +1660,7 @@ function parseDdMmYyyy(str) {
 function computeLedgerStatus(row) {
   if(row.received_qty != null){
     if(row.received_qty <= 0) return { label:'Nothing Received', color:'#ff8080' };
-    if(row.send_qty != null && row.received_qty < row.send_qty) return { label:'Short Received', color:'var(--accent)' };
+    if(row.send_qty != null && row.received_qty < row.send_qty) return { label:'Short Recv. Qty', color:'var(--accent)' };
     var totalQcReject = 0;
     try{ (JSON.parse(row.receipt_shortage_json||'[]')).forEach(function(s){ totalQcReject += (s.rejectQty||0); }); }catch(e){}
     if(totalQcReject > 0) return { label:'Inwarded — QC Issues', color:'var(--accent)' };
