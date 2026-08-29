@@ -1264,6 +1264,21 @@ function ledgerRender() {
         } else if(reviewed){
           rColor = '#6dc87a'; rBorder = '#3a6b3a'; rIcon = '&#10003;';
           rLabel = 'Reviewed \u2014 no QC issues';
+        } else if(r.qc_pass_qty!=null && r.qc_pass_qty < r.received_qty){
+          // No manual review yet, but Flipkart's own "Now Live" email
+          // reports fewer QC-passed units than received — a rejection
+          // happened somewhere in this consignment. The email only gives
+          // one aggregate number, not which SKU, so this flags it for a
+          // manual per-SKU review rather than guessing.
+          var emailShort = r.received_qty - r.qc_pass_qty;
+          rColor = '#ffb84d'; rBorder = '#7a5a1e';
+          rIcon = '&#9888; '+emailShort+' short (Flipkart) \u2014 review';
+          rLabel = 'Flipkart reports '+emailShort+' unit(s) failed QC \u2014 which SKU is unknown, needs manual review';
+        } else if(r.qc_pass_qty!=null && r.qc_pass_qty >= r.received_qty){
+          // Flipkart's own email confirms zero rejected — unambiguous, safe
+          // to show as resolved without a manual click-through.
+          rColor = '#6dc87a'; rBorder = '#3a6b3a'; rIcon = '&#10003;';
+          rLabel = 'Flipkart reports no QC issues (auto-detected from email)';
         } else {
           rColor = 'var(--muted)'; rBorder = 'var(--border)'; rIcon = '&#9675;';
           rLabel = 'Not yet reviewed';
@@ -1494,14 +1509,25 @@ function renderItemsModalSummary(row) {
 
   // Has QC Rejections? — a straight Yes/No, defaulting to No. Selecting Yes
   // reveals a Qty Rejected column in the Items list below for per-SKU entry.
+  // When nobody's done that manual review yet, fall back to what Flipkart's
+  // own "Now Live" email reported (qc_pass_qty) rather than showing a bare
+  // dash — same priority order as the Received Qty column's badge.
   var qcEntries = [];
   try{ qcEntries = JSON.parse(row.receipt_shortage_json||'[]'); }catch(e){}
   var qcReviewed = qcEntries.length>0;
   var totalQcReject = qcEntries.reduce(function(s,e){ return s+(e.rejectQty||0); }, 0);
   var qcHasRejections = totalQcReject>0; // default selection when opening Edit
+  var qcDisplayValue;
+  if(!qcReviewed && row.qc_pass_qty!=null && row.received_qty!=null){
+    qcDisplayValue = (row.qc_pass_qty < row.received_qty)
+      ? 'Unknown \u2014 Flipkart reports '+(row.received_qty-row.qc_pass_qty)+' short, needs review'
+      : 'No (auto \u2014 Flipkart email)';
+  } else {
+    qcDisplayValue = !qcReviewed ? '\u2014' : (totalQcReject>0 ? ('Yes ('+totalQcReject+' rejected)') : 'No');
+  }
   html += editing
     ? editField('Has QC Rejections?', '<select id="li-edit-qc" onchange="itemsModalQcChanged()" style="'+inputStyle+'"><option value="no"'+(qcHasRejections?'':' selected')+'>No</option><option value="yes"'+(qcHasRejections?' selected':'')+'>Yes</option></select>')
-    : field('Has QC Rejections?', !qcReviewed ? '\u2014' : (totalQcReject>0 ? ('Yes ('+totalQcReject+' rejected)') : 'No'));
+    : field('Has QC Rejections?', qcDisplayValue);
 
   document.getElementById('li-summary').innerHTML = html;
 }
