@@ -1276,7 +1276,7 @@ function ledgerRender() {
       }
 
       return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="ledgerViewItems(\''+esc(cn)+'\')" title="View consignment details">'
-        +'<td style="padding:1.13rem 1rem;font-weight:600;color:var(--accent);text-decoration:underline;text-decoration-color:transparent;transition:text-decoration-color .15s" onmouseover="this.style.textDecorationColor=\'var(--accent)\'" onmouseout="this.style.textDecorationColor=\'transparent\'">'+esc(cn)+'</td>'
+        +'<td style="padding:1.13rem 1rem;font-weight:600;color:var(--accent);text-decoration:underline;text-decoration-color:transparent;transition:text-decoration-color .15s" onmouseover="this.style.textDecorationColor=\'var(--accent)\'" onmouseout="this.style.textDecorationColor=\'transparent\'">'+esc(cn)+' <span title="Copy Consignment No." style="cursor:pointer;color:var(--muted);text-decoration:none" onclick="event.stopPropagation();ledgerCopyConsignmentNo(\''+esc(cn)+'\')">&#128203;</span></td>'
         +'<td style="padding:1.13rem 1rem">'+esc(r.dc_date||'\u2014')+'</td>'
         +'<td style="padding:1.13rem 1rem">'+esc(r.appointment_date||'\u2014')+'</td>'
         +'<td style="padding:1.13rem 1rem">'+esc(r.warehouse||'\u2014')+'</td>'
@@ -1292,6 +1292,34 @@ function ledgerRender() {
 }
 
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// One-click copy of the Consignment No. — clipboard API with a manual
+// textarea+execCommand fallback for older/non-HTTPS contexts. Mirrors
+// Blinkit's roLedgerCopyRoNumber exactly.
+function ledgerCopyConsignmentNo(cn) {
+  function ok() { toast('Consignment No. copied: ' + cn, 'ok'); }
+  function fail() {
+    var ta = document.createElement('textarea');
+    ta.value = cn;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try {
+      document.execCommand('copy');
+      ok();
+    } catch (e) {
+      toast('Could not copy \u2014 select manually: ' + cn, 'err');
+    }
+    document.body.removeChild(ta);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(cn).then(ok).catch(fail);
+  } else {
+    fail();
+  }
+}
 
 // Appointment date is stored as dd-mm-yyyy (to match DC Date's display format)
 // but <input type="date"> needs yyyy-mm-dd — convert for display only.
