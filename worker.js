@@ -189,6 +189,10 @@ const ACTION_TIERS = {
   // — Flipkart "Now Live on Flipkart" QC-pass email watcher: sibling of
   //   the above, fills in qc_pass_qty the same way. —
   fkCheckQcEmails: 'manager_up',
+  // — Flipkart QC ticket email watcher: fills in per-SKU
+  //   receipt_shortage_json (the real per-SKU rejection detail the
+  //   other two Flipkart emails can't provide). —
+  fkCheckQcTicketEmails: 'manager_up',
   // — Flipkart GP Number backfill/update: manual one-off write of
   //   gp_number values, kept alongside the automatic scheduled sync
   //   below for ad-hoc corrections/backfills. —
@@ -1191,6 +1195,16 @@ export default {
         if (action === 'fkCheckQcEmails') {
           try {
             const result = await checkFkQcEmails(env);
+            return json({ ok: true, ...result });
+          } catch (err) {
+            return json({ ok: false, error: err.message }, 500);
+          }
+        }
+
+        // Per-SKU QC ticket watcher — the real detail source.
+        if (action === 'fkCheckQcTicketEmails') {
+          try {
+            const result = await checkFkQcTicketEmails(env);
             return json({ ok: true, ...result });
           } catch (err) {
             return json({ ok: false, error: err.message }, 500);
@@ -2551,6 +2565,21 @@ export default {
         })
     );
     ctx.waitUntil(
+      checkFkQcTicketEmails(env)
+        .then(result => recordHeartbeat(
+          env, 'fk_qc_ticket_watcher', 'Flipkart QC Ticket Email Watcher (Worker cron)', 'ok',
+          `Checked ${result.checked} email(s), updated ${result.updated} SKU(s)` +
+            (result.unmatched ? `, ${result.unmatched} unmatched.` : '.'), 900
+        ))
+        .catch(err => {
+          console.error('scheduled Flipkart QC ticket email check failed:', err.message);
+          return recordHeartbeat(
+            env, 'fk_qc_ticket_watcher', 'Flipkart QC Ticket Email Watcher (Worker cron)', 'error',
+            err.message, 900
+          ).catch(e2 => console.error('failed to record fk_qc_ticket_watcher error heartbeat:', e2.message));
+        })
+    );
+    ctx.waitUntil(
       syncFkGatepasses(env)
         .then(result => recordHeartbeat(
           env, 'fk_gatepass_sync', 'Flipkart Gatepass Sync (Worker cron)', 'ok',
@@ -3267,6 +3296,182 @@ async function checkFkQcEmails(env) {
         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(gmail_msg_id, consignment_no) DO NOTHING
       `).bind(m.id, row.consignment_no, row.received_qty, row.qc_pass_qty, existingCn ? 1 : 0, emailDate).run();
+    }
+
+    newEmails++;
+  }
+
+  return { checked: messages.length, newEmails, updated, unmatched };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// FLIPKART QC TICKET EMAIL WATCHER — Gmail API integration
+// ══════════════════════════════════════════════════════════════════
+// Reads Flipkart's "FBF//Qc_ticket//..." emails — unlike the two
+// aggregate-only emails above, THIS one finally gives a real per-SKU
+// answer: which SKU was rejected, how many units, and why. Subject looks
+// like:
+//   FBF//Qc_ticket//bhi_vas_wh_nl_01nl//fk_mp_204815908//Wrong Product
+//   Received//TomahawkTools//17-AUG-2026 [Incident: IN26081720234171119440]
+// Body is an HTML table with a header row (Tickets, fsn, wid, sku,
+// ticket_warehouse_id, document_id, vertical, price, product_title,
+// qc_reason, executive_note, status, created_at, quantity, Seller ID)
+// and one or more data rows. document_id is "fk_mp_<consignment_no>" —
+// strip the prefix to get the Consignment No. sku matches items_json's
+// sku field directly (confirmed against a real example: email sku
+// "TGSC3" === items_json sku "TGSC3" for consignment 204815908).
+//
+// This writes directly into fk_ledger.receipt_shortage_json — the same
+// field the manual QC review UI reads/writes — as an UPSERT per SKU:
+// any item not mentioned by a ticket keeps whatever's already on file
+// (or defaults to 0-rejected if this is the first entry ever recorded
+// for the consignment, matching ledgerModalSaveEdit's "every item gets
+// an entry" convention so the "reviewed" state is set correctly).
+// ══════════════════════════════════════════════════════════════════
+
+async function ensureFkQcTicketLogTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS fk_qc_ticket_log (
+    gmail_msg_id   TEXT NOT NULL,
+    consignment_no TEXT NOT NULL,
+    sku            TEXT NOT NULL,
+    reject_qty     INTEGER,
+    reason         TEXT,
+    matched        INTEGER DEFAULT 0,
+    email_date     TEXT,
+    detected_at    TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (gmail_msg_id, consignment_no, sku)
+  )`).run();
+}
+
+// Header-based column lookup (rather than fixed positions) since this
+// table has many more columns than the simpler Received/QC-pass emails,
+// and is more robust to Flipkart reordering columns later.
+function parseFkQcTicketEmailBody(html) {
+  const results = [];
+  const trMatches = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
+  if (trMatches.length < 2) return results; // need at least header + 1 data row
+
+  function cellsOf(tr) {
+    return (tr.match(/<t[dh][^>]*>[\s\S]*?<\/t[dh]>/gi) || []).map(c =>
+      c.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/\s+/g, ' ').trim()
+    );
+  }
+
+  const headerCells = cellsOf(trMatches[0]).map(h => h.toLowerCase());
+  const idx = {};
+  headerCells.forEach((h, i) => { idx[h] = i; });
+  if (idx['document_id'] === undefined || idx['sku'] === undefined || idx['quantity'] === undefined) {
+    return results; // unexpected table shape — bail rather than guess
+  }
+
+  for (let r = 1; r < trMatches.length; r++) {
+    const cells = cellsOf(trMatches[r]);
+    if (!cells.length) continue;
+
+    const documentId = cells[idx['document_id']] || '';
+    const cnMatch = documentId.match(/(\d{6,})/);
+    if (!cnMatch) continue;
+
+    const sku = (cells[idx['sku']] || '').trim();
+    if (!sku) continue;
+
+    const qtyRaw = cells[idx['quantity']] || '';
+    const rejectQty = parseInt(qtyRaw, 10);
+    if (!Number.isFinite(rejectQty)) continue;
+
+    const reasonParts = [];
+    if (idx['qc_reason'] !== undefined && cells[idx['qc_reason']]) reasonParts.push(cells[idx['qc_reason']]);
+    if (idx['executive_note'] !== undefined && cells[idx['executive_note']] && cells[idx['executive_note']] !== cells[idx['qc_reason']]) {
+      reasonParts.push(cells[idx['executive_note']]);
+    }
+
+    results.push({
+      consignment_no: cnMatch[1],
+      sku: sku,
+      reject_qty: rejectQty,
+      reason: reasonParts.join(' \u2014 ')
+    });
+  }
+
+  return results;
+}
+
+async function checkFkQcTicketEmails(env) {
+  await ensureFkQcTicketLogTable(env.DB);
+  await ensureFkLedgerTable(env.DB);
+  const accessToken = await getGmailAccessToken(env);
+
+  const query = encodeURIComponent('label:Flipkart subject:"Qc_ticket"');
+  let messages = [];
+  let pageToken = '';
+  for (let page = 0; page < 10; page++) {
+    const pageParam = pageToken ? `&pageToken=${pageToken}` : '';
+    const listRes = await fetch(`${GMAIL_API_BASE}/messages?q=${query}&maxResults=100${pageParam}`, {
+      headers: { Authorization: 'Bearer ' + accessToken }
+    });
+    if (!listRes.ok) throw new Error('Gmail list failed: ' + listRes.status);
+    const listData = await listRes.json();
+    messages = messages.concat(listData.messages || []);
+    if (!listData.nextPageToken) break;
+    pageToken = listData.nextPageToken;
+  }
+
+  let newEmails = 0, updated = 0, unmatched = 0;
+  for (const m of messages) {
+    const exists = await env.DB.prepare(
+      'SELECT 1 FROM fk_qc_ticket_log WHERE gmail_msg_id = ? LIMIT 1'
+    ).bind(m.id).first();
+    if (exists) continue;
+
+    const msgRes = await fetch(`${GMAIL_API_BASE}/messages/${m.id}?format=full`, {
+      headers: { Authorization: 'Bearer ' + accessToken }
+    });
+    if (!msgRes.ok) continue;
+    const msg = await msgRes.json();
+    const emailDate = msg.internalDate ? new Date(parseInt(msg.internalDate)).toISOString() : null;
+
+    const html = extractGmailHtmlBody(msg.payload);
+    const tickets = parseFkQcTicketEmailBody(html);
+
+    for (const t of tickets) {
+      const existingRow = await env.DB.prepare(
+        'SELECT items_json, receipt_shortage_json FROM fk_ledger WHERE consignment_no = ?'
+      ).bind(t.consignment_no).first();
+
+      if (existingRow) {
+        let items = [];
+        try { items = JSON.parse(existingRow.items_json || '[]'); } catch (e) {}
+        let shortage = [];
+        try { shortage = JSON.parse(existingRow.receipt_shortage_json || '[]'); } catch (e) {}
+
+        // Build a full per-item array (every item gets an entry, same
+        // convention the manual QC review UI uses) — start from whatever's
+        // already on file, then upsert just this ticket's SKU on top.
+        const bySku = {};
+        shortage.forEach(s => { bySku[s.sku] = s; });
+        items.forEach(it => {
+          if (!bySku[it.sku]) bySku[it.sku] = { sku: it.sku, model: it.model, rejectQty: 0, reason: '' };
+        });
+        bySku[t.sku] = {
+          sku: t.sku,
+          model: (bySku[t.sku] && bySku[t.sku].model) || t.sku,
+          rejectQty: t.reject_qty,
+          reason: t.reason
+        };
+
+        await env.DB.prepare(
+          `UPDATE fk_ledger SET receipt_shortage_json = ?, updated_at = datetime('now') WHERE consignment_no = ?`
+        ).bind(JSON.stringify(Object.values(bySku)), t.consignment_no).run();
+        updated++;
+      } else {
+        unmatched++;
+      }
+
+      await env.DB.prepare(`
+        INSERT INTO fk_qc_ticket_log (gmail_msg_id, consignment_no, sku, reject_qty, reason, matched, email_date, detected_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(gmail_msg_id, consignment_no, sku) DO NOTHING
+      `).bind(m.id, t.consignment_no, t.sku, t.reject_qty, t.reason, existingRow ? 1 : 0, emailDate).run();
     }
 
     newEmails++;
