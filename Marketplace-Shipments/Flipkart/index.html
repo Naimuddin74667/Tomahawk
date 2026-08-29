@@ -574,10 +574,10 @@
           <div class="ro-stat-value" id="ledgerStatTotal">&mdash;</div>
           <div class="ro-stat-sub">all tracked consignments</div>
         </div>
-        <div class="ro-stat-card" id="ledgerCardActive" onclick="ledgerSetCardFilter('active')" title="Filter: not yet Inwarded or Short Recv. Qty">
+        <div class="ro-stat-card" id="ledgerCardActive" onclick="ledgerSetCardFilter('active')" title="Filter: not yet Inwarded or Short Received">
           <div class="ro-stat-label">Active Consignments</div>
           <div class="ro-stat-value accent" id="ledgerStatActive">&mdash;</div>
-          <div class="ro-stat-sub">not yet Inwarded or Short Recv. Qty</div>
+          <div class="ro-stat-sub">not yet Inwarded or Short Received</div>
         </div>
         <div class="ro-stat-card" id="ledgerCardPendingPickup" onclick="ledgerSetCardFilter('pendingPickup')" title="Filter: not yet picked up from our warehouse">
           <div class="ro-stat-label">Pending For Pickup</div>
@@ -865,11 +865,11 @@
           <input type="file" id="li-pdf-input" accept="application/pdf" style="display:none" onchange="ledgerModalPdfSelected(this)">
           <button onclick="document.getElementById('li-pdf-input').click()" title="Upload PDF to re-match &amp; refresh this consignment's items" style="width:16px;height:16px;padding:0;display:flex;align-items:center;justify-content:center;background:none;border:1px solid var(--border);border-radius:3px;color:var(--muted);cursor:pointer;font-size:9px;line-height:1">&#128196;</button>
         </div>
-        <div style="display:flex;gap:0">
-          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:90px;text-align:center">Total / Send Qty</div>
+        <div style="display:flex;gap:14px">
+          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:90px;text-align:center;white-space:nowrap">Total / Send Qty</div>
           <div id="li-header-qcreject" style="display:none;font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Qty Rejected</div>
           <div id="li-header-qcreason" style="display:none;font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:120px;text-align:center;margin-left:6px">Reason</div>
-          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center">Received Qty</div>
+          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center;white-space:nowrap">Received Qty</div>
         </div>
       </div>
       <div id="li-body"></div>
@@ -1231,10 +1231,10 @@ function ledgerRender() {
   if(q) rows = rows.filter(function(r){ return (r.consignment_no||'').toLowerCase().indexOf(q) !== -1; });
 
   // "Closed" = fully done, nothing left to track — Inwarded (clean) or
-  // Short Recv. Qty (goods definitively didn't fully arrive). Every other
+  // Short Received (goods definitively didn't fully arrive). Every other
   // status (Created, Ready To Dispatch, Intransit, Nothing Received,
   // Inwarded — QC Issues) still needs eyes on it, so counts as active.
-  var CLOSED_STATUSES = ['Inwarded', 'Short Recv. Qty'];
+  var CLOSED_STATUSES = ['Inwarded', 'Short Received'];
   function ledgerIsActive(r) { return CLOSED_STATUSES.indexOf(computeLedgerStatus(r).label) === -1; }
   // "Pending For Pickup" = never left our warehouse yet — computeLedgerStatus
   // only returns 'Created' when both Pickup Date and Received Qty are empty.
@@ -1280,7 +1280,7 @@ function ledgerRender() {
       var sendCell = '<span style="font-weight:700;color:var(--text)">'+(r.send_qty!=null?r.send_qty:'\u2014')+'</span>';
 
       // Received Qty vs Send Qty IS a real issue when it falls short — that's
-      // already surfaced prominently via the Status column ("Short Recv. Qty").
+      // already surfaced prominently via the Status column ("Short Received").
       // This span is purely a visual QC status indicator now — no longer
       // independently clickable (the whole row's click already opens the
       // full detail view, including QC rejections in li-transit-shortage).
@@ -1650,7 +1650,7 @@ function parseDdMmYyyy(str) {
 
 // Status is now fully automatic — no manual entry anywhere. Derived purely
 // from Received Qty, QC reject entries, and Pickup Date, in this priority order:
-//   Received Qty entered → Nothing Received (0) / Short Recv. Qty (< Send) /
+//   Received Qty entered → Nothing Received (0) / Short Received (< Send) /
 //     Inwarded — QC Issues (full qty back, but QC rejects logged) / Inwarded (clean)
 //   else Pickup Date set → Intransit (date has passed) / Ready To Dispatch (upcoming)
 //   else → Created
@@ -1660,7 +1660,7 @@ function parseDdMmYyyy(str) {
 function computeLedgerStatus(row) {
   if(row.received_qty != null){
     if(row.received_qty <= 0) return { label:'Nothing Received', color:'#ff8080' };
-    if(row.send_qty != null && row.received_qty < row.send_qty) return { label:'Short Recv. Qty', color:'var(--accent)' };
+    if(row.send_qty != null && row.received_qty < row.send_qty) return { label:'Short Received', color:'var(--accent)' };
     var totalQcReject = 0;
     try{ (JSON.parse(row.receipt_shortage_json||'[]')).forEach(function(s){ totalQcReject += (s.rejectQty||0); }); }catch(e){}
     if(totalQcReject > 0) return { label:'Inwarded — QC Issues', color:'var(--accent)' };
