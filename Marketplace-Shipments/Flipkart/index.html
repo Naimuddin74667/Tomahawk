@@ -856,8 +856,8 @@
       <div class="modal-title" style="margin-bottom:0">&#128203; Consignment Detail &mdash; <span id="li-cn" style="color:var(--accent)"></span></div>
       <button onclick="closeLedgerItemsModal()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
     </div>
-    <div id="li-summary" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;background:#111;border:1px solid var(--border);border-radius:6px;padding:.7rem .9rem;margin-bottom:1rem;font-size:12px"></div>
-    <div id="li-transit-shortage" style="display:none;margin-bottom:1rem"></div>
+    <div id="li-summary" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;background:var(--bg-raised);border:1px solid var(--border);border-radius:6px;padding:.7rem .9rem;margin-bottom:1rem;font-size:12px"></div>
+    <div id="li-transit-shortage" style="display:none;margin-bottom:1rem;border:1px solid var(--accent);border-radius:7px;padding:.7rem .9rem"></div>
     <div id="li-items-section">
       <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:.4rem;border-bottom:1px solid var(--border);margin-bottom:.2rem">
         <div style="display:flex;align-items:center;gap:6px">
@@ -871,7 +871,6 @@
           <div id="li-header-qcreason" style="display:none;font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:120px;text-align:center;margin-left:6px">Reason</div>
           <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center;white-space:nowrap">Recv. Qty</div>
           <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center;white-space:nowrap">QC Pass/Fail</div>
-          <div id="li-header-dispute" style="display:none;font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center;white-space:nowrap">Dispute Qty</div>
         </div>
       </div>
       <div id="li-body"></div>
@@ -1575,7 +1574,7 @@ function renderItemsModalSummary(row) {
     qcDisplayValue = !qcReviewed ? '\u2014' : (totalQcReject>0 ? ('Yes ('+totalQcReject+' rejected)') : 'No');
   }
   var qcValueHtml = qcReviewed
-    ? '<span onclick="toggleQcRejectionsPanel()" style="cursor:pointer;text-decoration:underline;text-decoration-style:dotted" title="Click to show/hide QC rejection detail">'+esc(qcDisplayValue)+'</span>'
+    ? '<span onclick="toggleQcRejectionsPanel()" style="cursor:pointer;text-decoration:underline;text-decoration-style:dotted" title="Click to show/hide QC rejection detail">'+esc(qcDisplayValue)+' <span id="li-qc-chevron" style="color:var(--accent);font-size:9px">&#9654;</span></span>'
     : esc(qcDisplayValue);
   html += editing
     ? editField('QC Rejection', '<select id="li-edit-qc" onchange="itemsModalQcChanged()" style="'+inputStyle+'"><option value="no"'+(qcHasRejections?'':' selected')+'>No</option><option value="yes"'+(qcHasRejections?' selected':'')+'>Yes</option></select>')
@@ -1612,15 +1611,6 @@ function renderItemsModalBody(row) {
   if(qcReasonHeader) qcReasonHeader.style.display = showQc ? '' : 'none';
   var existingRejectMap = {}, existingReasonMap = {};
   try{ (JSON.parse(row.receipt_shortage_json||'[]')).forEach(function(s){ existingRejectMap[s.sku] = s.rejectQty||0; existingReasonMap[s.sku] = s.reason||''; }); }catch(e){}
-  // Dispute Qty = Send - the same computed Received figure used above —
-  // in practice this just restates Reject Qty (there's no independent
-  // per-item receiving record yet), but it's still useful as an explicit
-  // "this SKU wasn't fully received" flag. Column only appears at all
-  // when at least one item actually has a nonzero dispute — otherwise
-  // it'd just be a row of zeroes.
-  var hasAnyDispute = items.some(function(it){ return (existingRejectMap[it.sku]||0) > 0; });
-  var disputeHeader = document.getElementById('li-header-dispute');
-  if(disputeHeader) disputeHeader.style.display = hasAnyDispute ? '' : 'none';
   document.getElementById('li-body').innerHTML = items.length ? items.map(function(it,i){
     var sendVal = (it.sendQty!=null ? it.sendQty : it.qty);
     var sendCell = editing
@@ -1664,10 +1654,6 @@ function renderItemsModalBody(row) {
     } else {
       qcPassFailCell = '<span style="color:var(--muted)">\u2014</span>';
     }
-    // Dispute Qty — see hasAnyDispute note above; same underlying number
-    // as the reject qty, framed as "units in dispute for this SKU".
-    var disputeQty = existingRejectMap[it.sku] || 0;
-    var disputeCell = '<span style="display:'+(hasAnyDispute?'inline':'none')+';min-width:70px;text-align:center;color:#ff8080;font-weight:700">'+disputeQty+'</span>';
     return '<div style="display:flex;justify-content:space-between;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:12px">'
       +'<span style="flex:1">'+esc(it.model||it.sku)+' <span style="color:var(--muted);font-size:10px">('+esc(it.sku)+')</span></span>'
       +'<span style="min-width:90px;text-align:center"><span style="color:var(--muted);font-weight:500">'+it.qty+'</span> / '+sendCell+'</span>'
@@ -1675,7 +1661,6 @@ function renderItemsModalBody(row) {
       +reasonCell
       +'<span style="min-width:70px;text-align:center">'+recvCell+'</span>'
       +'<span style="min-width:70px;text-align:center">'+qcPassFailCell+'</span>'
-      +disputeCell
       +'</div>';
   }).join('') : '<div style="color:var(--muted);font-size:11px;padding:1rem;text-align:center">No item breakdown stored for this consignment.</div>';
 }
@@ -1694,6 +1679,8 @@ function toggleQcRejectionsPanel() {
   if(!el || !el.innerHTML) return; // nothing to show
   _itemsModalQcPanelOpen = !_itemsModalQcPanelOpen;
   el.style.display = _itemsModalQcPanelOpen ? 'block' : 'none';
+  var chevron = document.getElementById('li-qc-chevron');
+  if(chevron) chevron.innerHTML = _itemsModalQcPanelOpen ? '&#9660;' : '&#9654;';
 }
 
 // Shared parser for the dd-mm-yyyy strings appointment_date is stored as.
