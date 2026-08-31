@@ -2903,13 +2903,23 @@ function extractGmailBody(payload) {
 //     Appointment ID: 709997295775
 //     Warehouse Contact Name: Naveen Awasthi
 //     Warehouse Contact Number: 9309559192
+//
+//   ro_cancelled (sent by "seller via Online Sales" — same thread as the
+//   original RO-created email, no "R.O. Number:" label on this specific
+//   message, just an inline order number):
+//     Dear Supply Partner
+//     We kindly request you to cancel the order no 50033210048749 and
+//     delivery of the items mentioned in the said document.
 function parseRoEmailBody(text) {
   const isSto = /S\.?T\.?O\.?\s*Number\s*:/i.test(text);
-  const email_type = isSto ? 'sto_scheduled' : 'ro_created';
+  const isCancel = /cancel the order no\.?\s*:?\s*[A-Za-z0-9]+/i.test(text);
+  const email_type = isCancel ? 'ro_cancelled' : (isSto ? 'sto_scheduled' : 'ro_created');
 
-  const numberMatch = isSto
-    ? text.match(/S\.?T\.?O\.?\s*Number\s*:\s*([A-Za-z0-9]+)/i)
-    : text.match(/R\.?O\.?\s*Number\s*:\s*([A-Za-z0-9]+)/i);
+  const numberMatch = isCancel
+    ? text.match(/cancel the order no\.?\s*:?\s*([A-Za-z0-9]+)/i)
+    : isSto
+      ? text.match(/S\.?T\.?O\.?\s*Number\s*:\s*([A-Za-z0-9]+)/i)
+      : text.match(/R\.?O\.?\s*Number\s*:\s*([A-Za-z0-9]+)/i);
 
   const result = {
     email_type,
@@ -2919,7 +2929,11 @@ function parseRoEmailBody(text) {
     warehouse_contact_name: null, warehouse_contact_number: null
   };
 
-  if (!isSto) {
+  // Cancellation emails carry no other fields — just the order number
+  // above, already captured. Everything else stays null.
+  if (isCancel) {
+    // no-op
+  } else if (!isSto) {
     const creationMatch  = text.match(/Creation Date\s*:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/i);
     const expiryMatch    = text.match(/Expiration Date\s*:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}[^\n\r]*)/i);
     const warehouseMatch = text.match(/Bill To\s*:\s*([^\n\r]+)/i);
@@ -2959,7 +2973,7 @@ async function checkNewRoEmails(env) {
   await ensureBlinkitRoTable(env.DB);
   const accessToken = await getGmailAccessToken(env);
 
-  const query = encodeURIComponent('label:Blinkit ("R.O. Number" OR "S.T.O. Number")');
+  const query = encodeURIComponent('label:Blinkit ("R.O. Number" OR "S.T.O. Number" OR "kindly request you to cancel the order")');
   let messages = [];
   let pageToken = '';
   for (let page = 0; page < 10; page++) {
@@ -3014,6 +3028,16 @@ async function checkNewRoEmails(env) {
       parsed.appointment_id, parsed.scheduled_date, parsed.scheduled_time, parsed.warehouse_contact_name, parsed.warehouse_contact_number,
       JSON.stringify(attachments), subject, gmailLink, emailDate
     ).run();
+
+    // A "kindly cancel the order" email needs no manual click from the
+    // Ledger — apply the same effect blinkitSetRoStatus's Cancel button
+    // does, immediately, to every row for this RO number (creation +
+    // any reschedules), so the Ledger shows Cancelled on its own.
+    if (parsed.email_type === 'ro_cancelled' && parsed.ro_number) {
+      await env.DB.prepare(
+        'UPDATE blinkit_ro_log SET manual_status = ? WHERE ro_number = ?'
+      ).bind('cancelled', parsed.ro_number).run();
+    }
 
     newCount++;
   }
