@@ -72,6 +72,24 @@
   .btn:disabled{opacity:.4;cursor:not-allowed}
   .btn-row{display:flex;gap:.5rem;margin-top:.5rem}
   .btn-row .btn{flex:1}
+  /* Ledger stat cards — matches Blinkit RO Ledger's stat strip exactly */
+  .ro-stats-row{flex-shrink:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;padding:.85rem 1.4rem;border-bottom:1px solid var(--border);background:var(--bg-surface)}
+  .ro-stat-card{background:var(--bg-raised);border:1px solid var(--border-subtle);border-radius:9px;padding:1.325rem .9rem;min-width:0;cursor:pointer;transition:border-color .15s,background .15s,box-shadow .15s}
+  .ro-stat-card:hover{border-color:var(--accent);background:var(--bg-hover)}
+  .ro-stat-card:active{transform:scale(.99)}
+  .ro-stat-card.is-active-view{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+  .ro-stat-label{font-size:9.5px;color:var(--text-secondary);letter-spacing:.07em;text-transform:uppercase;font-family:'DM Mono',monospace;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ro-stat-value{font-size:21px;font-weight:800;color:var(--text);font-family:'DM Mono',monospace;line-height:1.35;margin-top:2px}
+  .ro-stat-value.accent{color:var(--accent)}
+  .ro-stat-sub{font-size:9.5px;color:var(--text-secondary);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  @media (max-width:900px){
+    .ro-stats-row{padding:.7rem 1rem;gap:8px}
+    .ro-stat-card{padding:1.1rem .9rem}
+    .ro-stat-value{font-size:18px}
+  }
+  @media (max-width:600px){
+    .ro-stats-row{grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}
+  }
   .btn-sm{padding:5px 10px;font-size:11px;width:auto;border-radius:5px}
   .mt{margin-top:.5rem}
   .file-drop{border:2px dashed var(--border);border-radius:8px;padding:1.5rem 1rem;text-align:center;cursor:pointer;transition:border-color .15s;position:relative}
@@ -181,9 +199,41 @@
 <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<style>
+/* — Auth gate + header auth controls — shared pattern across all Tomahawk apps — */
+.auth-gate{position:fixed;inset:0;z-index:500;background:var(--bg-base);display:flex;align-items:center;justify-content:center;padding:20px}
+.auth-gate[hidden]{display:none}
+.auth-card{width:100%;max-width:340px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:var(--radius-lg);padding:32px 28px 28px}
+.auth-logo-row{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+.auth-logo-mark{width:34px;height:34px;border-radius:var(--radius-sm);background:var(--accent);color:#111;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;flex-shrink:0}
+.auth-title{font-weight:700;font-size:16px;color:var(--text-primary)}
+.auth-sub{font-size:11px;color:var(--text-muted);margin-top:1px}
+.header-logout-btn{width:34px;height:34px;border-radius:50%;background:var(--bg-raised);border:1px solid var(--border-default);color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:border-color .15s,color .15s;flex-shrink:0}
+.header-logout-btn:hover{border-color:#f87171;color:#f87171}
+.header-logout-btn[hidden]{display:none}
+.header-user[hidden]{display:none}
+.role-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:var(--radius-xl);background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent-border);margin-left:2px}
+.access-denied-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:'DM Sans',sans-serif;color:var(--text-primary,#e8e8f0);background:var(--bg-base,#0c0c14);text-align:center;padding:20px}
+</style>
 </head>
 <body>
 <script>(function(){var t=localStorage.getItem('tm_theme');if(t==='light'){document.documentElement.setAttribute('data-theme','light');}})();</script>
+
+<div class="auth-gate" id="auth-gate">
+  <div class="auth-card">
+    <div class="auth-logo-row">
+      <div class="auth-logo-mark">T</div>
+      <div>
+        <div class="auth-title">Tomahawk Operations</div>
+        <div class="auth-sub">Sign in to continue</div>
+      </div>
+    </div>
+    <div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:14px;">
+      Login now happens once on the <a href="../../index.html" style="color:var(--accent)">Tomahawk hub</a>. Redirecting you there&#8230;
+    </div>
+  </div>
+</div>
+
 <header class="site-header">
 
   <div class="header-logo">
@@ -194,7 +244,7 @@
       </svg>
     </a>
     <div class="logo-divider"></div>
-    <span class="logo-tagline">Amazon Label Generator</span>
+    <span class="logo-tagline">Flipkart Label Generator</span>
   </div>
 
   <div class="header-right">
@@ -207,18 +257,145 @@
         <path d="M9 1v2M9 15v2M1 9h2M15 9h2M3.22 3.22l1.42 1.42M13.36 13.36l1.42 1.42M3.22 14.78l1.42-1.42M13.36 4.64l1.42-1.42" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
       </svg>
     </button>
-    <div class="header-user">
-      <div class="user-avatar">IT</div>
-      <span class="user-name">ITH Team</span>
+    <div class="header-user" id="header-user" hidden>
+      <div class="user-avatar" id="user-avatar">--</div>
+      <span class="user-name" id="user-name-display">&#8212;</span>
+      <span class="role-badge" id="user-role-badge">&#8212;</span>
     </div>
+    <button class="header-logout-btn" id="header-logout-btn" hidden title="Log out">
+      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M8 17H4.5a1.5 1.5 0 01-1.5-1.5v-11A1.5 1.5 0 014.5 3H8M13.5 14l3.5-4-3.5-4M17 10H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
   </div>
 
 </header>
 
+<script>
+// ══════════════════════════════════════════════════════════════════
+// AUTH — session comes from the Tomahawk hub. This app is admin/
+// manager (full access) + viewer (view only, all writes blocked
+// below) — see the tier map in worker.js under ACTION_TIERS.
+// picker_packer has no access here at all.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var TM_SESSION_KEY = 'tm_session_v1';
+  var TM_WORKER = 'https://tomahawk-returns.naimuddin.workers.dev';
+
+  function getSession() { try { return JSON.parse(localStorage.getItem(TM_SESSION_KEY) || 'null'); } catch (e) { return null; } }
+  function clearSession() { localStorage.removeItem(TM_SESSION_KEY); }
+  function goToHub() { window.location.href = '../../index.html'; }
+
+  window.TM_ROLE = null;
+  window.TM_CAN_EDIT = false;
+
+  var ACTION_ROLE_MIN = {
+    fkLedgerSave: 'manager', fkLibSave: 'manager',
+    fkWarehouseMapSave: 'manager', fkWarehouseMapDelete: 'manager',
+    fkLedgerDeleteAll: 'admin'
+  };
+  function actionAllowed(action, role) {
+    var min = ACTION_ROLE_MIN[action];
+    if (!min) return true;
+    if (min === 'admin') return role === 'admin';
+    return role === 'admin' || role === 'manager';
+  }
+
+  var _origFetch = window.fetch.bind(window);
+  window.fetch = function (url, opts) {
+    try {
+      var urlStr = typeof url === 'string' ? url : (url && url.url) || '';
+      if (urlStr.indexOf('tomahawk-returns.naimuddin.workers.dev') !== -1) {
+        var m = urlStr.match(/[?&]action=([a-zA-Z_]+)/);
+        var action = m ? m[1] : null;
+        if (!action && opts && opts.body) { try { action = JSON.parse(opts.body).action; } catch (e) {} }
+        if (action && !actionAllowed(action, window.TM_ROLE)) {
+          if (typeof toast === 'function') toast("View only \u2014 you don't have edit access", 'err');
+          return Promise.resolve(new Response(JSON.stringify({ ok: false, error: 'View-only access' }), { status: 403, headers: { 'Content-Type': 'application/json' } }));
+        }
+        var session = getSession();
+        opts = opts || {};
+        opts.headers = Object.assign({}, opts.headers || {}, (session && session.token) ? { 'X-Tomahawk-Session': session.token } : {});
+      }
+    } catch (e) {}
+    return _origFetch(url, opts);
+  };
+
+  function applyRoleUI(role) {
+    window.TM_ROLE = role;
+    window.TM_CAN_EDIT = (role === 'admin' || role === 'manager');
+    var isAdmin = role === 'admin';
+
+    ['ledgerDeleteAllBtn'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.style.display = isAdmin ? '' : 'none';
+    });
+    ['saveLibInlineEditBtn', 'deleteModelBtn', 'saveModelBtn', 'ledgerModalSaveBtn', 'ledgerModalEditBtn', 'saveNotFoundBtn', 'lib-mode-edit-btn'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.style.display = window.TM_CAN_EDIT ? '' : 'none';
+    });
+
+    if (typeof ledgerRender === 'function') { try { ledgerRender(); } catch (e) {} }
+    if (typeof renderLibrary === 'function') { try { renderLibrary(); } catch (e) {} }
+  }
+
+  function showApp(user) {
+    document.getElementById('auth-gate').hidden = true;
+    document.getElementById('header-user').hidden = false;
+    document.getElementById('header-logout-btn').hidden = false;
+    var label = user.display_name || user.username;
+    document.getElementById('user-avatar').textContent = label.slice(0, 2).toUpperCase();
+    document.getElementById('user-name-display').textContent = label;
+    var roleLabels = { admin: 'Admin', manager: 'Manager', viewer: 'Viewer', picker_packer: 'Picker & Packer' };
+    document.getElementById('user-role-badge').textContent = roleLabels[user.role] || user.role;
+    applyRoleUI(user.role);
+  }
+
+  function showAccessDenied() {
+    document.body.innerHTML =
+      '<div class="access-denied-screen">' +
+      '<div style="font-size:15px;font-weight:700;">You don\'t have access to this app</div>' +
+      '<div style="font-size:13px;color:var(--text-muted,#888899);max-width:320px;">Picker &amp; Packer accounts only have access to the Scanner App.</div>' +
+      '<a href="../../index.html" style="margin-top:8px;color:var(--accent,#F5A800);font-size:13px;text-decoration:none;">&#8592; Back to Tomahawk Operations</a>' +
+      '</div>';
+  }
+
+  document.getElementById('header-logout-btn').addEventListener('click', async function () {
+    var session = getSession();
+    if (session && session.token) {
+      try {
+        await _origFetch(TM_WORKER + '?action=logout', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tomahawk-Session': session.token },
+          body: JSON.stringify({ action: 'logout' })
+        });
+      } catch (e) {}
+    }
+    clearSession();
+    goToHub();
+  });
+
+  (async function initAuth() {
+    var session = getSession();
+    if (!session || !session.token) { goToHub(); return; }
+    if (session.role !== 'admin' && session.role !== 'manager' && session.role !== 'viewer') {
+      showAccessDenied(); return;
+    }
+
+    showApp(session);
+
+    try {
+      var res = await _origFetch(TM_WORKER + '?action=validateSession', { headers: { 'X-Tomahawk-Session': session.token } }).then(function (r) { return r.json(); });
+      if (!res.ok || !res.user) { clearSession(); goToHub(); return; }
+      if (res.user.role !== 'admin' && res.user.role !== 'manager' && res.user.role !== 'viewer') { showAccessDenied(); return; }
+      localStorage.setItem(TM_SESSION_KEY, JSON.stringify({ token: session.token, username: res.user.username, role: res.user.role, display_name: res.user.display_name }));
+      showApp(res.user);
+    } catch (e) { /* network hiccup — keep the optimistic render */ }
+  })();
+})();
+</script>
+
 <div class="tabs">
-  <button class="tab-btn active" onclick="switchTab('bulk',this)">Label Print</button>
+  <button class="tab-btn active" onclick="switchTab('ledger',this)">&#128203; CN Ledger</button>
+  <button class="tab-btn" onclick="switchTab('bulk',this)">Label Print</button>
   <button class="tab-btn" onclick="switchTab('boxlabel',this)">Box Label</button>
-  <button class="tab-btn" onclick="switchTab('ledger',this)">&#128203; Ledger</button>
   <button class="tab-btn" onclick="switchTab('library',this)">SKU Library</button>
 </div>
 
@@ -227,11 +404,14 @@
   <!-- LEFT PANEL: upload controls only -->
   <div class="left-panel">
 
-    <div id="tab-bulk" class="tab-content active" style="display:flex">
+    <div id="tab-bulk" class="tab-content active" style="display:none">
       <div class="left-inner" style="display:flex;flex-direction:column;gap:.8rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
           <div style="font-size:11px;color:var(--muted);line-height:1.6">Upload PDF or CSV &rarr; auto-matches to library &rarr; prints labels.</div>
-          <div id="gsheet-status" style="font-size:9px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap;margin-left:.5rem">Loading...</div>
+          <div style="display:flex;align-items:center;gap:.4rem;margin-left:.5rem;flex-shrink:0">
+            <div id="gsheet-status" style="font-size:9px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap">Loading...</div>
+            <button id="gsheet-refresh-btn" onclick="loadGSheetLookup(true)" title="Bypass the 24h cache and re-fetch SKU data from Flipkart Listings" style="font-size:9px;padding:2px 6px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;white-space:nowrap">&#8635; Refresh</button>
+          </div>
         </div>
         <div style="display:flex;gap:.5rem">
           <div class="file-drop" id="pdfDrop" style="flex:1" ondragover="bulkDragOver(event,'pdfDrop')" ondragleave="bulkDragLeave('pdfDrop')" ondrop="bulkDropFile(event,'pdf')">
@@ -378,7 +558,7 @@
       </div>
     </div>
 
-    <div id="tab-ledger" class="tab-content" style="display:none;flex-direction:column;min-height:0">
+    <div id="tab-ledger" class="tab-content" style="display:flex;flex:1;flex-direction:column;min-height:0">
       <div style="flex-shrink:0;padding:.7rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.8rem;background:var(--surface)">
         <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128203; Consignment Ledger</div>
         <input type="text" id="ledgerSearch" placeholder="Search Consignment No..." oninput="_ledgerPage=1;ledgerRender()" style="width:220px;font-size:11px;padding:5px 10px">
@@ -386,43 +566,49 @@
         <button class="btn btn-secondary btn-sm" onclick="openLedgerSettings()" title="Ledger settings" style="width:auto;padding:6px 10px">&#9881;</button>
       </div>
 
-      <div style="flex-shrink:0;display:flex;gap:0;border-bottom:1px solid var(--border);background:#111">
-        <div style="padding:.6rem 1.4rem;border-right:1px solid var(--border)">
-          <div style="font-size:9px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-family:'DM Mono',monospace">Total Consignments</div>
-          <div id="ledgerStatTotal" style="font-size:20px;font-weight:700;color:var(--text);font-family:'DM Mono',monospace">&mdash;</div>
+      <!-- Stats strip — same card style/sizing as Blinkit RO Ledger, and
+           now clickable filters the same way too (click again to clear). -->
+      <div class="ro-stats-row">
+        <div class="ro-stat-card is-active-view" id="ledgerCardTotal" onclick="ledgerSetCardFilter('all')" title="Show all consignments">
+          <div class="ro-stat-label">Total Consignments</div>
+          <div class="ro-stat-value" id="ledgerStatTotal">&mdash;</div>
+          <div class="ro-stat-sub">all tracked consignments</div>
         </div>
-        <div style="padding:.6rem 1.4rem;border-right:1px solid var(--border)">
-          <div style="font-size:9px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-family:'DM Mono',monospace">This Month</div>
-          <div id="ledgerStatMonth" style="font-size:20px;font-weight:700;color:var(--accent);font-family:'DM Mono',monospace">&mdash;</div>
+        <div class="ro-stat-card" id="ledgerCardActive" onclick="ledgerSetCardFilter('active')" title="Filter: not yet Inwarded or Short Received">
+          <div class="ro-stat-label">Active Consignments</div>
+          <div class="ro-stat-value accent" id="ledgerStatActive">&mdash;</div>
+          <div class="ro-stat-sub">not yet Inwarded or Short Received</div>
         </div>
-        <div style="padding:.6rem 1.4rem">
-          <div style="font-size:9px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-family:'DM Mono',monospace">Last Consignment</div>
-          <div id="ledgerStatLast" style="font-size:13px;font-weight:700;color:var(--text);font-family:'DM Mono',monospace;margin-top:4px">&mdash;</div>
+        <div class="ro-stat-card" id="ledgerCardPendingPickup" onclick="ledgerSetCardFilter('pendingPickup')" title="Filter: not yet picked up from our warehouse">
+          <div class="ro-stat-label">Pending For Pickup</div>
+          <div class="ro-stat-value accent" id="ledgerStatPendingPickup">&mdash;</div>
+          <div class="ro-stat-sub">not yet picked up from our warehouse</div>
         </div>
       </div>
 
-      <div style="flex:1;overflow-y:auto;min-height:0">
-        <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <div class="ro-table-scroll" style="flex:1;overflow-y:auto;overflow-x:auto;min-height:0">
+        <table style="width:100%;border-collapse:collapse;font-size:13.5px">
           <thead style="position:sticky;top:0;z-index:2;background:var(--surface)">
             <tr>
-              <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Consignment No.</th>
-              <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">DC Date</th>
-              <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Pickup Date</th>
-              <th style="padding:.6rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Warehouse</th>
-              <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">No. of SKU</th>
-              <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Total Qty</th>
-              <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Send Qty</th>
-              <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Received Qty</th>
-              <th style="padding:.6rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Status</th>
+              <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Consignment No.</th>
+              <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">DC Date</th>
+              <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Pickup Date</th>
+              <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Warehouse</th>
+              <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">No. of SKU</th>
+              <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Total Qty</th>
+              <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Send Qty</th>
+              <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Received Qty</th>
+              <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Inwarded Qty</th>
+              <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Status</th>
             </tr>
           </thead>
           <tbody id="ledgerTbody">
-            <tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+            <tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
           </tbody>
         </table>
       </div>
 
-      <div id="ledgerPagerControls" style="display:none;flex-shrink:0;align-items:center;justify-content:center;gap:1rem;padding:.6rem 1.4rem;border-top:1px solid var(--border);background:var(--surface)">
+      <div id="ledgerPagerControls" style="display:none;flex-shrink:0;align-items:center;justify-content:center;gap:1rem;padding:.45rem 1.4rem;border-top:1px solid var(--border);background:var(--surface)">
         <button class="btn btn-secondary btn-sm" id="ledgerPrevBtn" style="width:auto" onclick="ledgerGoToPage(_ledgerPage-1)">&#8592; Prev</button>
         <span id="ledgerPageIndicator" style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap"></span>
         <button class="btn btn-secondary btn-sm" id="ledgerNextBtn" style="width:auto" onclick="ledgerGoToPage(_ledgerPage+1)">Next &#8594;</button>
@@ -516,8 +702,8 @@
         <!-- EDIT MODE -->
         <div id="lib-edit-section" style="display:none;flex:1;flex-direction:column;min-height:0;overflow-y:auto;padding:1.2rem 1.5rem;gap:.7rem">
           <div style="display:flex;gap:.5rem;flex-shrink:0">
-            <button class="btn btn-primary" style="flex:1" onclick="saveLibInlineEdit()">&#10003; Save Changes</button>
-            <button class="btn btn-red btn-sm" style="width:auto;padding:8px 16px" onclick="deleteModelFromDetail()">&#10005; Delete</button>
+            <button class="btn btn-primary" id="saveLibInlineEditBtn" style="flex:1" onclick="saveLibInlineEdit()">&#10003; Save Changes</button>
+            <button class="btn btn-red btn-sm" id="deleteModelBtn" style="width:auto;padding:8px 16px" onclick="deleteModelFromDetail()">&#10005; Delete</button>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem">
             <div class="field" style="margin:0"><label class="field-lbl">Category</label><input type="text" id="lib-category" oninput="updateLibPreview()"></div>
@@ -635,7 +821,7 @@
     </div>
     <div class="btn-row">
       <button class="btn btn-secondary" onclick="closeModelModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveModel()">Save Model</button>
+      <button class="btn btn-primary" id="saveModelBtn" onclick="saveModel()">Save Model</button>
     </div>
   </div>
 </div>
@@ -666,17 +852,13 @@
 
 <!-- LEDGER ITEMS MODAL (read-only drill-in) -->
 <div class="modal-bg" id="ledgerItemsModal">
-  <div class="modal" style="width:540px;max-height:85vh;overflow-y:auto;padding-top:0">
-    <div style="position:relative;background:linear-gradient(135deg,#131A22 0%,#232F3E 100%);margin:0 -1.5rem 1rem;padding:20px 20px 16px;border-radius:10px 10px 0 0;text-align:center">
-      <button onclick="closeLedgerItemsModal()" style="position:absolute;top:10px;right:14px;background:none;border:none;color:rgba(255,255,255,0.85);font-size:20px;cursor:pointer;line-height:1">&times;</button>
-      <div style="display:flex;align-items:center;justify-content:center;gap:9px">
-        <img src="data:image/png;base64,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jpa36/ZAns4nH+rM/KPHf7GQLDKlFCQUAIAIo2gBYDIu9eMHnA+pCIeDAAhECIFAaLgEkkDZwitukw0/2mi2qy3OTAU1GkAYrAAQMJvK4sOKr5yGLGRcQyoeDkEQ4ii1lRCSrewWjtHUDzsD9UYu+VhR/6s78e9czeJQWbae0iklVAnIdmxgOBEOhiASFSgCFgzyNl2CQFlTSzAlFc7KBnMzhVnZYGaCxyYgrQIAAkZAC1DZ+1QqoWhr0Dv2Z1+KlldBZXtA0oAMonsDvSzkV0v0bF/65V7/5aL3ulElk1TAvhZNRLj6O7s7Pog4EQ5mIL6aEZAsERlEMeAxS1kkYABhTdCoebJXnpY0U1J2esJMSRXHJG2zxjpl0mhBRXkB7Ur/PUAl6ma4YTKabDJYhiJTT6A7AvWuoUVl/50+erOsXw/85YGXCyEADYqSKElUHhhBCCMjrpvybeA4EVZF+iPQKr9itC4pChcTCQEDhpDBAGgwCZQUcp2WBrKNPjRpU6O4xrP1mmsIPAUeAg3E5QhYwcBCyUKf6F4DvSH1GOww1Gp1r9G9BsqgrEVGUYieQg9BR+tAQARQRFbGgle6XtcNbsA4Ea4NlUDPyI0GyEAWkFkMgBWxkUsOIMregsAIK403AsKIAkiAKAKgABWBVSSEoFAUAKEgCgoJVIJJXWe3EbOBpTz8gFAJu5bKKkES4wEKUgKilYRRYtMo2hsYFcBAEPZA8Ha0wzsJMKCVyIApEjlEgLUhJBktQ4djo8GJ8H0Rzccs6ChjIAMJVgaJ0R4plWzV/Ut7IbJ/AvQvtRCupJ7i6G8oiAKAIQFsWKmZHWuNE+E6gCq7O2ioDDv7/1ch+nXotG0gMUZ/Aov+v0cbPbgB6IcG19auQ5xuHGuDE6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMSME6HDETNOhA5HzDgROhwx40TocMTM/wcikd6CVJ03MgAAAABJRU5ErkJggg==" alt="Amazon" style="width:30px;height:30px;border-radius:6px;display:block">
-        <span style="font-size:22px;font-weight:800;color:#fff;letter-spacing:.01em">Amazon <span style="color:#FF9900">Shipment</span></span>
-      </div>
-      <div class="modal-title" style="margin:8px 0 0;color:rgba(255,255,255,0.92);font-size:12px;font-weight:600;letter-spacing:.04em">&#128203; Consignment No. &mdash; <span id="li-cn" style="color:#FF9900;font-weight:800"></span></div>
+  <div class="modal" style="width:680px;max-height:90vh;overflow-y:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem">
+      <div class="modal-title" style="margin-bottom:0">&#128203; Consignment Detail &mdash; <span id="li-cn" style="color:var(--accent)"></span></div>
+      <button onclick="closeLedgerItemsModal()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
     </div>
-    <div id="li-summary" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;margin-bottom:1rem;padding:.7rem;background:var(--surface2);border-radius:7px;border:1px solid var(--border)"></div>
-    <div id="li-transit-shortage" style="display:none;margin-bottom:1rem"></div>
+    <div id="li-summary" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;background:var(--bg-raised);border:1px solid var(--border);border-radius:6px;padding:.7rem .9rem;margin-bottom:1rem;font-size:12px"></div>
+    <div id="li-transit-shortage" style="display:none;margin-bottom:1rem;border:1px solid var(--accent);border-radius:7px;padding:.7rem .9rem"></div>
     <div id="li-items-section">
       <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:.4rem;border-bottom:1px solid var(--border);margin-bottom:.2rem">
         <div style="display:flex;align-items:center;gap:6px">
@@ -684,22 +866,22 @@
           <input type="file" id="li-pdf-input" accept="application/pdf" style="display:none" onchange="ledgerModalPdfSelected(this)">
           <button onclick="document.getElementById('li-pdf-input').click()" title="Upload PDF to re-match &amp; refresh this consignment's items" style="width:16px;height:16px;padding:0;display:flex;align-items:center;justify-content:center;background:none;border:1px solid var(--border);border-radius:3px;color:var(--muted);cursor:pointer;font-size:9px;line-height:1">&#128196;</button>
         </div>
-        <div style="display:flex;gap:0">
-          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center">Total Qty</div>
-          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Send Qty</div>
+        <div style="display:flex;gap:14px">
+          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:90px;text-align:center;white-space:nowrap">Total / Send Qty</div>
           <div id="li-header-qcreject" style="display:none;font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:64px;text-align:center">Qty Rejected</div>
           <div id="li-header-qcreason" style="display:none;font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:120px;text-align:center;margin-left:6px">Reason</div>
+          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center;white-space:nowrap">Recv. Qty</div>
+          <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;min-width:70px;text-align:center;white-space:nowrap">QC Pass/Fail</div>
         </div>
       </div>
       <div id="li-body"></div>
     </div>
     <div class="btn-row" id="li-footer-view">
-      <button class="btn btn-secondary" onclick="ledgerModalEnterEdit()">Edit</button>
       <button class="btn btn-primary" onclick="closeLedgerItemsModal()">Close</button>
     </div>
     <div class="btn-row" id="li-footer-edit" style="display:none">
       <button class="btn btn-secondary" onclick="ledgerModalCancelEdit()">Cancel</button>
-      <button class="btn btn-primary" onclick="ledgerModalSaveEdit()">Save</button>
+      <button class="btn btn-primary" id="ledgerModalSaveBtn" onclick="ledgerModalSaveEdit()">Save</button>
     </div>
   </div>
 </div>
@@ -713,7 +895,7 @@
       <button onclick="closeLedgerSettings()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
     </div>
     <!-- TEMP — dev/testing only. Remove this button (and ledgerDeleteAllPrompt() below) once app is out of active development. -->
-    <button class="btn btn-red" style="width:100%;font-size:11px" onclick="ledgerDeleteAllPrompt()">&#128465; Delete All Ledger Rows (Temp)</button>
+    <button class="btn btn-red" id="ledgerDeleteAllBtn" style="width:100%;font-size:11px" onclick="ledgerDeleteAllPrompt()">&#128465; Delete All Ledger Rows (Temp)</button>
   </div>
 </div>
 <script>document.getElementById('ledgerSettingsModal').addEventListener('click',function(e){if(e.target===this)closeLedgerSettings();});</script>
@@ -785,7 +967,7 @@
 
     <div class="btn-row" style="margin-top:1rem">
       <button class="btn btn-secondary" onclick="closeNotFoundModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveNotFoundModal()">&#10003; Save &amp; Map</button>
+      <button class="btn btn-primary" id="saveNotFoundBtn" onclick="saveNotFoundModal()">&#10003; Save &amp; Map</button>
     </div>
   </div>
 </div>
@@ -801,23 +983,27 @@ var OXFORD_B64 = "iVBORw0KGgoAAAANSUhEUgAAAdIAAABoCAIAAADKJObGAAApeklEQVR4nO2ddV
 var GSHEET_LOOKUP = {}; // populated at runtime from Cloudflare Worker
 var _gsheetLoaded = false;
 
-function loadGSheetLookup() {
+function loadGSheetLookup(forceRefresh) {
   var IS_LIVE = location.hostname === 'naimuddin74667.github.io';
   var workerBase = IS_LIVE
     ? 'https://tomahawk-returns.naimuddin.workers.dev'
     : 'http://localhost:8787';
 
   var statusEl = document.getElementById('gsheet-status');
-  if(statusEl) statusEl.textContent = 'Syncing SKU data...';
+  var btnEl = document.getElementById('gsheet-refresh-btn');
+  if(statusEl) statusEl.textContent = forceRefresh ? 'Force-refreshing SKU data...' : 'Syncing SKU data...';
+  if(btnEl) btnEl.disabled = true;
 
-  fetch(workerBase + '?action=gsheetLookup')
+  var url = workerBase + '?action=gsheetLookup' + (forceRefresh ? '&refresh=1' : '');
+
+  fetch(url)
     .then(function(r){ return r.json(); })
     .then(function(data){
       if(data.ok && data.data){
         GSHEET_LOOKUP = data.data;
         _gsheetLoaded = true;
         var count = Object.keys(GSHEET_LOOKUP).length;
-        if(statusEl){ statusEl.textContent = count + ' SKUs loaded'; statusEl.style.color='#6dc87a'; }
+        if(statusEl){ statusEl.textContent = count + ' SKUs loaded' + (forceRefresh ? ' (fresh)' : ''); statusEl.style.color='#6dc87a'; }
         console.log('[GSheet] Loaded ' + count + ' SKUs. Cache: ' + (data.fetched||'live'));
       } else {
         throw new Error(data.error || 'Unknown error');
@@ -827,11 +1013,14 @@ function loadGSheetLookup() {
       console.warn('[GSheet] Fetch failed, using embedded fallback:', err.message);
       if(statusEl){ statusEl.textContent = 'Offline — using cached data'; statusEl.style.color='#e05555'; }
       // Keep whatever is in GSHEET_LOOKUP (could be empty or prefilled by fallback)
+    })
+    .finally(function(){
+      if(btnEl) btnEl.disabled = false;
     });
 }
 
-var LIB_KEY = 'amazon_sku_lib_v1';
-var SETTINGS_KEY = 'amazon_settings_v1';
+var LIB_KEY = 'tomahawk_sku_lib_v5';
+var SETTINGS_KEY = 'tomahawk_settings_v5';
 
 function loadLib() { try { return JSON.parse(localStorage.getItem(LIB_KEY)) || {}; } catch(e) { return {}; } }
 // localStorage stays as the instant local cache (so the UI never blocks on
@@ -840,7 +1029,7 @@ function loadLib() { try { return JSON.parse(localStorage.getItem(LIB_KEY)) || {
 // (bk_libSave/bk_libLoad), just under an fk_ prefix here.
 function saveLib(lib) {
   localStorage.setItem(LIB_KEY, JSON.stringify(lib));
-  fetch(getWorkerBase() + '?action=azLibSave', {
+  fetch(getWorkerBase() + '?action=fkLibSave', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({data: JSON.stringify(lib)})
   }).then(function(r){ return r.json(); }).then(function(data){
     if(!data || !data.ok) toast('SKU Library saved locally only \u2014 server sync failed (check worker deployment)', 'err');
@@ -852,7 +1041,7 @@ function saveLib(lib) {
 // an empty library even though other devices had data. If D1 is empty but
 // this browser already has local data, push it up once to seed D1.
 function syncLibFromD1() {
-  fetch(getWorkerBase() + '?action=azLibLoad')
+  fetch(getWorkerBase() + '?action=fkLibLoad')
     .then(function(r){ return r.json(); })
     .then(function(data){
       if(data && data.ok && data.data && data.data !== '{}'){
@@ -864,7 +1053,7 @@ function syncLibFromD1() {
       } else {
         var local = loadLib();
         if(Object.keys(local).length){
-          fetch(getWorkerBase() + '?action=azLibSave', {
+          fetch(getWorkerBase() + '?action=fkLibSave', {
             method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({data: JSON.stringify(local)})
           }).catch(function(){});
         }
@@ -873,6 +1062,15 @@ function syncLibFromD1() {
     .catch(function(){ /* offline — keep using whatever's in localStorage */ });
 }
 syncLibFromD1();
+// CN Ledger is now the default landing tab. switchTab('ledger') is only ever
+// invoked on a button click, never automatically on page load, so its
+// single-column layout tweaks (full-width left panel, hidden preview panel)
+// and its initial data fetch are replicated here once at startup.
+document.querySelector('.left-panel').style.width = '100%';
+document.querySelector('.left-panel').style.maxWidth = '100%';
+document.querySelector('.left-panel').style.borderRight = 'none';
+document.getElementById('previewPanel').style.display = 'none';
+ledgerLoad();
 function loadSettings() { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {mfgdate:'01/01/2026'}; } catch(e) { return {mfgdate:'01/01/2026'}; } }
 
 function saveSettings() {
@@ -939,17 +1137,75 @@ function switchTab(name, btn) {
 var _ledgerRows = [];
 var _ledgerPage = 1;
 var LEDGER_PAGE_SIZE = 10;
-var LEDGER_KEY = 'az_ledger_v1';
+var LEDGER_KEY = 'fk_ledger_v1';
+var _ledgerCardFilter = 'all'; // 'all' | 'active' | 'pendingPickup' — driven by clicking the stat cards
+
+// Click a stat card to filter the table to that subset; click the same
+// card again (or Total) to go back to showing everything. Mirrors
+// Blinkit's roLedgerSetCardFilter exactly.
+function ledgerSetCardFilter(view) {
+  _ledgerCardFilter = (_ledgerCardFilter === view || view === 'all') ? 'all' : view;
+  _ledgerPage = 1;
+  ledgerRender();
+}
 
 function getWorkerBase() {
   var isLive = location.hostname === 'naimuddin74667.github.io';
   return isLive ? 'https://tomahawk-returns.naimuddin.workers.dev' : 'http://localhost:8787';
 }
 
+// ── Reliable D1 save for ledger rows (mirrors Blinkit's invoice-sync pattern) ──
+// A plain fetch here used to fire-and-forget — one network hiccup and a ledger
+// edit could silently never reach D1, with only a passive toast and no actual
+// retry. This retries with backoff, and if it still fails after 3 tries,
+// queues the row so it auto-resyncs the next time this browser opens the app —
+// same safety net Blinkit invoices already have.
+var LEDGER_SYNC_QUEUE_KEY = 'fk_pending_ledger_sync';
+function fkLedgerSaveWithRetry(row, attempt, onDone) {
+  fetch(getWorkerBase() + '?action=fkLedgerSave', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(row)
+  }).then(function(r){ return r.json(); }).then(function(data){
+    if (!data || !data.ok) throw new Error((data && data.error) || 'Save rejected');
+    removeFromLedgerSyncQueue(row.consignment_no);
+    if (onDone) onDone(true);
+  }).catch(function(err){
+    console.error('fkLedgerSave attempt ' + (attempt+1) + ' failed:', err && err.message);
+    if (attempt < 2) {
+      var delay = [3000, 8000][attempt] || 8000;
+      setTimeout(function(){ fkLedgerSaveWithRetry(row, attempt + 1, onDone); }, delay);
+    } else {
+      queueFailedLedgerSync(row);
+      if (onDone) onDone(false);
+    }
+  });
+}
+function queueFailedLedgerSync(row) {
+  var q = [];
+  try { q = JSON.parse(localStorage.getItem(LEDGER_SYNC_QUEUE_KEY) || '[]'); } catch(e) {}
+  q = q.filter(function(p){ return p.consignment_no !== row.consignment_no; });
+  q.push(row);
+  try { localStorage.setItem(LEDGER_SYNC_QUEUE_KEY, JSON.stringify(q)); } catch(e) {}
+}
+function removeFromLedgerSyncQueue(cn) {
+  var q = [];
+  try { q = JSON.parse(localStorage.getItem(LEDGER_SYNC_QUEUE_KEY) || '[]'); } catch(e) {}
+  var next = q.filter(function(p){ return p.consignment_no !== cn; });
+  try { localStorage.setItem(LEDGER_SYNC_QUEUE_KEY, JSON.stringify(next)); } catch(e) {}
+}
+function flushPendingLedgerSyncs() {
+  var isLive = location.hostname === 'naimuddin74667.github.io';
+  if (!isLive) return;
+  var q = [];
+  try { q = JSON.parse(localStorage.getItem(LEDGER_SYNC_QUEUE_KEY) || '[]'); } catch(e) {}
+  if (!q.length) return;
+  toast('Resyncing ' + q.length + ' ledger row(s) that failed to save earlier\u2026', 'info');
+  q.forEach(function(row){ fkLedgerSaveWithRetry(row, 0); });
+}
+
 function ledgerLoad() {
   var tbody = document.getElementById('ledgerTbody');
-  if(tbody) tbody.innerHTML = '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
-  fetch(getWorkerBase() + '?action=azLedgerLoad')
+  if(tbody) tbody.innerHTML = '<tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+  fetch(getWorkerBase() + '?action=fkLedgerLoad')
     .then(function(r){ return r.json(); })
     .then(function(data){
       if(data && data.ok && Array.isArray(data.rows)){
@@ -975,17 +1231,35 @@ function ledgerRender() {
   });
   if(q) rows = rows.filter(function(r){ return (r.consignment_no||'').toLowerCase().indexOf(q) !== -1; });
 
+  // "Closed" = fully done, nothing left to track — Inwarded (clean) or
+  // Short Received (goods definitively didn't fully arrive). Every other
+  // status (Created, Ready To Dispatch, Intransit, Nothing Received,
+  // Inwarded — QC Issues) still needs eyes on it, so counts as active.
+  var CLOSED_STATUSES = ['Inwarded', 'Short Received'];
+  function ledgerIsActive(r) { return CLOSED_STATUSES.indexOf(computeLedgerStatus(r).label) === -1; }
+  // "Pending For Pickup" = never left our warehouse yet — computeLedgerStatus
+  // only returns 'Created' when both Pickup Date and Received Qty are empty.
+  function ledgerIsPendingPickup(r) { return computeLedgerStatus(r).label === 'Created'; }
+
+  // Card filter — narrows the search results further to whichever stat
+  // card is currently selected.
+  if (_ledgerCardFilter === 'active') {
+    rows = rows.filter(ledgerIsActive);
+  } else if (_ledgerCardFilter === 'pendingPickup') {
+    rows = rows.filter(ledgerIsPendingPickup);
+  }
+
   // Stats (always computed on the full, unfiltered set)
   document.getElementById('ledgerStatTotal').textContent = _ledgerRows.length;
-  var now = new Date();
-  var thisMonth = _ledgerRows.filter(function(r){
-    if(!r.created_at) return false;
-    var d = new Date(r.created_at);
-    return d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth();
-  }).length;
-  document.getElementById('ledgerStatMonth').textContent = thisMonth;
-  var last = _ledgerRows.slice().sort(function(a,b){ return (b.created_at||'').localeCompare(a.created_at||''); })[0];
-  document.getElementById('ledgerStatLast').textContent = last ? last.consignment_no : '\u2014';
+  document.getElementById('ledgerStatActive').textContent = _ledgerRows.filter(ledgerIsActive).length;
+  document.getElementById('ledgerStatPendingPickup').textContent = _ledgerRows.filter(ledgerIsPendingPickup).length;
+
+  var cardTotal = document.getElementById('ledgerCardTotal');
+  var cardActive = document.getElementById('ledgerCardActive');
+  var cardPendingPickup = document.getElementById('ledgerCardPendingPickup');
+  if (cardTotal) cardTotal.classList.toggle('is-active-view', _ledgerCardFilter === 'all');
+  if (cardActive) cardActive.classList.toggle('is-active-view', _ledgerCardFilter === 'active');
+  if (cardPendingPickup) cardPendingPickup.classList.toggle('is-active-view', _ledgerCardFilter === 'pendingPickup');
 
   var totalPages = Math.max(1, Math.ceil(rows.length / LEDGER_PAGE_SIZE));
   if(_ledgerPage > totalPages) _ledgerPage = totalPages;
@@ -993,7 +1267,7 @@ function ledgerRender() {
 
   var tbody = document.getElementById('ledgerTbody');
   if(!pageRows.length){
-    tbody.innerHTML = '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No consignments yet.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No consignments yet.</td></tr>';
   } else {
     tbody.innerHTML = pageRows.map(function(r){
       var cn = r.consignment_no;
@@ -1008,42 +1282,81 @@ function ledgerRender() {
 
       // Received Qty vs Send Qty IS a real issue when it falls short — that's
       // already surfaced prominently via the Status column ("Short Received").
-      // This button is purely about QC: ledgerModalSaveEdit() always records
-      // every item on save (even at 0 rejected), so entries.length>0 reliably
-      // means "someone has reviewed QC for this" — distinct from whether an
-      // actual rejection was found:
-      //   reviewed + rejection found → red, shows the reject count
-      //   reviewed + nothing wrong   → green check
-      //   not yet reviewed           → neutral grey, prompts a check
+      // This span is purely a visual QC status indicator now — no longer
+      // independently clickable (the whole row's click already opens the
+      // full detail view, including QC rejections in li-transit-shortage).
       var totalQcReject = receiptShortageEntries.reduce(function(s,e){ return s+(e.rejectQty||0); }, 0);
       var reviewed = receiptShortageEntries.length>0;
-      var receivedCell = (r.received_qty!=null?r.received_qty:'\u2014');
+      // Same visual pattern as Blinkit's RO Ledger: green check when
+      // Received matches Send exactly, amber with a (Δ) delta otherwise.
+      var receivedCell;
+      if(r.received_qty==null){
+        receivedCell = '<span style="color:var(--muted)">\u2014</span>';
+      } else if(r.send_qty!=null && r.received_qty===r.send_qty){
+        receivedCell = '<span style="color:#6dc87a;font-weight:700">&#10003; '+r.received_qty+'</span>';
+      } else if(r.send_qty!=null){
+        var recvDiff = r.received_qty - r.send_qty;
+        receivedCell = '<span style="color:#ffb74d;font-weight:700">'+r.received_qty+'</span>'
+          + ' <span style="color:#ffb74d;font-size:10px;font-family:\'DM Mono\',monospace">(&Delta;'+(recvDiff>0?'+':'')+recvDiff+')</span>';
+      } else {
+        receivedCell = '<span style="font-weight:700;color:var(--text)">'+r.received_qty+'</span>';
+      }
+      // Inwarded Qty = Received Qty minus whatever's logged as QC-rejected
+      // across all items. Green when nothing was rejected (Inwarded ===
+      // Received), red when everything was rejected (Inwarded === 0),
+      // amber for a genuine partial split. The QC status badge (moved
+      // here from Received Qty, since Inwarded is the column this
+      // actually explains) shows the same reviewed/rejected/pending
+      // signal as before.
+      var inwardedCell;
       if(r.received_qty!=null){
+        var inwardedQty = Math.max(0, r.received_qty - totalQcReject);
+        var inwardedColor = inwardedQty === r.received_qty ? '#6dc87a' : (inwardedQty === 0 ? '#ff8080' : '#ffb84d');
+        inwardedCell = '<span style="color:'+inwardedColor+';font-weight:700">'+inwardedQty+'</span>';
+
         var rColor, rBorder, rIcon, rLabel;
         if(reviewed && totalQcReject>0){
           rColor = '#ff8080'; rBorder = '#6b2020';
           rIcon = '&#9888; '+totalQcReject+' QC rejected';
-          rLabel = 'QC rejections recorded \u2014 click to edit';
+          rLabel = 'QC rejections recorded';
         } else if(reviewed){
           rColor = '#6dc87a'; rBorder = '#3a6b3a'; rIcon = '&#10003;';
-          rLabel = 'Reviewed \u2014 no QC issues \u2014 click to edit';
+          rLabel = 'Reviewed \u2014 no QC issues';
+        } else if(r.qc_pass_qty!=null && r.qc_pass_qty < r.received_qty){
+          // No manual review yet, but Flipkart's own "Now Live" email
+          // reports fewer QC-passed units than received — a rejection
+          // happened somewhere in this consignment. The email only gives
+          // one aggregate number, not which SKU, so this flags it for a
+          // manual per-SKU review rather than guessing.
+          var emailQcReject = r.received_qty - r.qc_pass_qty;
+          rColor = '#ffb84d'; rBorder = '#7a5a1e';
+          rIcon = '&#9888; '+emailQcReject+' QC rejected (Flipkart) \u2014 review';
+          rLabel = 'Flipkart reports '+emailQcReject+' unit(s) rejected on QC (to be sent back) \u2014 which SKU is unknown, needs manual review';
+        } else if(r.qc_pass_qty!=null && r.qc_pass_qty >= r.received_qty){
+          // Flipkart's own email confirms zero rejected — unambiguous, safe
+          // to show as resolved without a manual click-through.
+          rColor = '#6dc87a'; rBorder = '#3a6b3a'; rIcon = '&#10003;';
+          rLabel = 'Flipkart reports no QC issues (auto-detected from email)';
         } else {
           rColor = 'var(--muted)'; rBorder = 'var(--border)'; rIcon = '&#9675;';
-          rLabel = 'Not yet reviewed \u2014 click to log QC rejections';
+          rLabel = 'Not yet reviewed';
         }
-        receivedCell += ' <button onclick="ledgerOpenReceiptShortage(\''+esc(cn)+'\')" title="'+rLabel+'" style="background:none;border:1px solid '+rBorder+';border-radius:4px;color:'+rColor+';cursor:pointer;font-size:10px;padding:1px 5px;margin-left:3px">'+rIcon+'</button>';
+        inwardedCell += ' <span title="'+rLabel+'" style="display:inline-block;background:none;border:1px solid '+rBorder+';border-radius:4px;color:'+rColor+';font-size:10px;padding:1px 5px;margin-left:3px">'+rIcon+'</span>';
+      } else {
+        inwardedCell = '<span style="color:var(--muted)">\u2014</span>';
       }
 
-      return '<tr>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);font-weight:600;color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-color:transparent;transition:text-decoration-color .15s" onmouseover="this.style.textDecorationColor=\'var(--accent)\'" onmouseout="this.style.textDecorationColor=\'transparent\'" onclick="ledgerViewItems(\''+esc(cn)+'\')" title="View consignment details">'+esc(cn)+'</td>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border)">'+esc(r.dc_date||'\u2014')+'</td>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border)">'+esc(r.appointment_date||'\u2014')+'</td>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border)">'+esc(r.warehouse||'\u2014')+'</td>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center;white-space:nowrap">'+noSkuCell+'</td>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center">'+(r.total_qty!=null?r.total_qty:'\u2014')+'</td>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center;white-space:nowrap">'+sendCell+'</td>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center;white-space:nowrap">'+receivedCell+'</td>'
-        +'<td style="padding:.55rem 1rem;border-bottom:1px solid var(--border);text-align:center">'+statusBadge(r)+'</td>'
+      return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="ledgerViewItems(\''+esc(cn)+'\')" title="View consignment details">'
+        +'<td style="padding:1.11rem 1rem;font-weight:600;color:var(--accent)">'+esc(cn)+' <span title="Copy Consignment No." style="cursor:pointer;color:var(--muted);text-decoration:none" onclick="event.stopPropagation();ledgerCopyConsignmentNo(\''+esc(cn)+'\')">&#128203;</span></td>'
+        +'<td style="padding:1.11rem 1rem">'+esc(r.dc_date||'\u2014')+'</td>'
+        +'<td style="padding:1.11rem 1rem">'+esc(r.appointment_date||'\u2014')+'</td>'
+        +'<td style="padding:1.11rem 1rem">'+esc(r.warehouse||'\u2014')+'</td>'
+        +'<td style="padding:1.11rem 1rem;text-align:center;white-space:nowrap">'+noSkuCell+'</td>'
+        +'<td style="padding:1.11rem 1rem;text-align:center">'+(r.total_qty!=null?r.total_qty:'\u2014')+'</td>'
+        +'<td style="padding:1.11rem 1rem;text-align:center;white-space:nowrap">'+sendCell+'</td>'
+        +'<td style="padding:1.11rem 1rem;text-align:center;white-space:nowrap">'+receivedCell+'</td>'
+        +'<td style="padding:1.11rem 1rem;text-align:center">'+inwardedCell+'</td>'
+        +'<td style="padding:1.11rem 1rem;text-align:center">'+statusBadge(r)+'</td>'
         +'</tr>';
     }).join('');
   }
@@ -1051,6 +1364,34 @@ function ledgerRender() {
 }
 
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// One-click copy of the Consignment No. — clipboard API with a manual
+// textarea+execCommand fallback for older/non-HTTPS contexts. Mirrors
+// Blinkit's roLedgerCopyRoNumber exactly.
+function ledgerCopyConsignmentNo(cn) {
+  function ok() { toast('Consignment No. copied: ' + cn, 'ok'); }
+  function fail() {
+    var ta = document.createElement('textarea');
+    ta.value = cn;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try {
+      document.execCommand('copy');
+      ok();
+    } catch (e) {
+      toast('Could not copy \u2014 select manually: ' + cn, 'err');
+    }
+    document.body.removeChild(ta);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(cn).then(ok).catch(fail);
+  } else {
+    fail();
+  }
+}
 
 // Appointment date is stored as dd-mm-yyyy (to match DC Date's display format)
 // but <input type="date"> needs yyyy-mm-dd — convert for display only.
@@ -1093,14 +1434,14 @@ function ledgerDeleteAllPrompt() {
   if(pwd === null) return;
   if(pwd !== 'Admin@8411'){ toast('Incorrect password','err'); return; }
   if(!confirm('Delete ALL ledger rows? This cannot be undone.')) return;
-  fetch(getWorkerBase() + '?action=azLedgerDeleteAll', {
+  fetch(getWorkerBase() + '?action=fkLedgerDeleteAll', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})
   })
     .then(function(r){
       return r.json().then(function(data){ return { status:r.status, data:data }; });
     })
     .then(function(res){
-      console.log('azLedgerDeleteAll response:', res.status, res.data);
+      console.log('fkLedgerDeleteAll response:', res.status, res.data);
       if(!res.data || !res.data.ok){
         var detail = (res.data && res.data.error) ? res.data.error : ('HTTP '+res.status);
         toast('Delete failed on server: '+detail,'err');
@@ -1109,7 +1450,7 @@ function ledgerDeleteAllPrompt() {
       _ledgerRows=[]; try{ localStorage.removeItem(LEDGER_KEY); }catch(e){}
       ledgerRender(); closeLedgerSettings(); toast('All ledger rows deleted','ok');
     })
-    .catch(function(err){ console.error('azLedgerDeleteAll network error:', err); toast('Delete failed (network/offline): '+err.message,'err'); });
+    .catch(function(err){ console.error('fkLedgerDeleteAll network error:', err); toast('Delete failed (network/offline): '+err.message,'err'); });
 }
 
 // ── Ledger Settings — Delete All entry point (pincode mapping retired — warehouse
@@ -1123,12 +1464,14 @@ function closeLedgerSettings(){ document.getElementById('ledgerSettingsModal').c
 var _itemsModalCN = null;
 var _itemsModalEditing = false;
 var _itemsModalItemsCache = [];
+var _itemsModalQcPanelOpen = false; // QC Rejections panel starts collapsed; toggled via the QC Rejection summary field
 
 function ledgerViewItems(cn, hideItems) {
   var row = _ledgerRows.find(function(r){ return r.consignment_no===cn; });
   if(!row) return;
   _itemsModalCN = cn;
   _itemsModalEditing = false;
+  _itemsModalQcPanelOpen = false; // always start collapsed on a fresh open
   document.getElementById('li-cn').textContent = cn;
   renderItemsModalSummary(row);
   renderItemsModalBody(row);
@@ -1158,7 +1501,6 @@ function ledgerViewItems(cn, hideItems) {
   var receiptShortage = receiptShortageAll.filter(function(s){ return (s.rejectQty>0); });
   var rsEl = document.getElementById('li-transit-shortage');
   if(receiptShortage.length){
-    rsEl.style.display = 'block';
     rsEl.innerHTML = '<div style="font-size:10px;color:#ff8080;letter-spacing:.06em;text-transform:uppercase;font-weight:600;margin-bottom:.5rem">&#9888; QC Rejections</div>'
       + '<table style="width:100%;border-collapse:collapse;font-size:12px">'
       + '<thead><tr style="color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.05em">'
@@ -1180,9 +1522,10 @@ function ledgerViewItems(cn, hideItems) {
             +'</tr>';
         }).join('')
       + '</tbody></table>';
+    rsEl.style.display = _itemsModalQcPanelOpen ? 'block' : 'none';
   } else if(receiptShortageAll.length){
-    rsEl.style.display = 'block';
     rsEl.innerHTML = '<div style="font-size:11px;color:#6dc87a;font-weight:600">&#10003; QC reviewed \u2014 no rejections</div>';
+    rsEl.style.display = _itemsModalQcPanelOpen ? 'block' : 'none';
   } else { rsEl.style.display = 'none'; rsEl.innerHTML = ''; }
 
   document.getElementById('ledgerItemsModal').classList.add('show');
@@ -1214,29 +1557,65 @@ function renderItemsModalSummary(row) {
   }
   var inputStyle = 'width:100%;font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:4px 7px;color:var(--text)';
   var html = '';
-  html += field('DC Date', row.dc_date);
-  html += editing
-    ? editField('Pickup Date', '<input type="date" id="li-edit-appt" value="'+esc(toDateInputValue(row.appointment_date))+'" style="'+inputStyle+';color-scheme:dark">')
-    : field('Pickup Date', row.appointment_date);
+  html += field('CN Number', row.consignment_no);
   html += field('Warehouse', row.warehouse);
+  html += field('DC Date', row.dc_date);
+
   html += field('No. of SKU', row.no_of_sku);
-  html += field('Total Qty', row.total_qty);
-  html += field('Send Qty', row.send_qty, 'li-sendqty-value'); // always read-only — driven by per-item sum
+  // Total Qty / Send Qty combined into one cell — Total Qty (the printed
+  // invoice figure) shown lighter/muted since Send Qty (what actually
+  // shipped, editable per-item above) is the more actionable number here.
+  html += '<div><div style="font-size:9px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase">Total / Send Qty</div>'
+    +'<div style="font-size:12px;font-weight:600;margin-top:2px"><span style="color:var(--muted);font-weight:500">'+esc(row.total_qty!=null?row.total_qty:'\u2014')+'</span> / <span id="li-sendqty-value" style="color:var(--text)">'+esc(row.send_qty!=null?row.send_qty:'\u2014')+'</span></div></div>';
   html += editing
     ? editField('Received Qty', '<input type="number" min="0" id="li-edit-recv" placeholder="\u2014" value="'+esc(row.received_qty!=null?row.received_qty:'')+'" style="'+inputStyle+'">')
     : field('Received Qty', row.received_qty, 'li-recvqty-value'); // manual entry — no longer auto-summed from items
-  html += fieldHtml('Status', statusBadge(row)); // fully automatic — never an input, even while editing
+
+  // GP Number (Gatepass) — placeholder until Flipkart consignments get the
+  // same UC_Gatepass matching Blinkit's RO Ledger already has. That match
+  // happens inside a Google Apps Script bridge outside this codebase (no
+  // editing access from here) — someone with access to that script needs
+  // to add a Flipkart-filtered route mirroring the existing Blinkit one
+  // before this can show a real value.
+  // GP Number (Gatepass) — sourced from UC_Gatepass (matched by
+  // Consignment No. via the reference field), backfilled via
+  // fkSetGatepassBulk. Not a live sync yet (no Apps Script route exists
+  // for one) — this reflects whatever was last pushed in.
+  html += field('GP Number', row.gp_number);
 
   // Has QC Rejections? — a straight Yes/No, defaulting to No. Selecting Yes
   // reveals a Qty Rejected column in the Items list below for per-SKU entry.
+  // When nobody's done that manual review yet, fall back to what Flipkart's
+  // own "Now Live" email reported (qc_pass_qty) rather than showing a bare
+  // dash — same priority order as the Received Qty column's badge.
   var qcEntries = [];
   try{ qcEntries = JSON.parse(row.receipt_shortage_json||'[]'); }catch(e){}
   var qcReviewed = qcEntries.length>0;
   var totalQcReject = qcEntries.reduce(function(s,e){ return s+(e.rejectQty||0); }, 0);
   var qcHasRejections = totalQcReject>0; // default selection when opening Edit
+  var qcDisplayValue;
+  if(!qcReviewed && row.qc_pass_qty!=null && row.received_qty!=null){
+    qcDisplayValue = (row.qc_pass_qty < row.received_qty)
+      ? 'Unknown \u2014 Flipkart reports '+(row.received_qty-row.qc_pass_qty)+' QC rejected, needs review'
+      : 'No (auto \u2014 Flipkart email)';
+  } else {
+    qcDisplayValue = !qcReviewed ? '\u2014' : (totalQcReject>0 ? ('Yes ('+totalQcReject+' rejected)') : 'No');
+  }
+  var qcValueHtml = qcReviewed
+    ? '<span onclick="toggleQcRejectionsPanel()" style="cursor:pointer;text-decoration:underline;text-decoration-style:dotted" title="Click to show/hide QC rejection detail">'+esc(qcDisplayValue)+' <span id="li-qc-chevron" style="color:var(--accent);font-size:9px">&#9654;</span></span>'
+    : esc(qcDisplayValue);
   html += editing
-    ? editField('Has QC Rejections?', '<select id="li-edit-qc" onchange="itemsModalQcChanged()" style="'+inputStyle+'"><option value="no"'+(qcHasRejections?'':' selected')+'>No</option><option value="yes"'+(qcHasRejections?' selected':'')+'>Yes</option></select>')
-    : field('Has QC Rejections?', !qcReviewed ? '\u2014' : (totalQcReject>0 ? ('Yes ('+totalQcReject+' rejected)') : 'No'));
+    ? editField('QC Rejection', '<select id="li-edit-qc" onchange="itemsModalQcChanged()" style="'+inputStyle+'"><option value="no"'+(qcHasRejections?'':' selected')+'>No</option><option value="yes"'+(qcHasRejections?' selected':'')+'>Yes</option></select>')
+    : fieldHtml('QC Rejection', qcValueHtml);
+  html += fieldHtml('Status', statusBadge(row)); // fully automatic — never an input, even while editing
+
+  // Pickup Date isn't part of the normal 3x3 view grid above (by design —
+  // see the layout request this followed), but its only input anywhere in
+  // the app lives here, so it still needs to appear somewhere while
+  // editing or there'd be no way to ever set/change it again.
+  if(editing){
+    html += editField('Pickup Date', '<input type="date" id="li-edit-appt" value="'+esc(toDateInputValue(row.appointment_date))+'" style="'+inputStyle+';color-scheme:dark">');
+  }
 
   document.getElementById('li-summary').innerHTML = html;
 }
@@ -1271,12 +1650,47 @@ function renderItemsModalBody(row) {
     var reasonCell = showQc
       ? '<span style="min-width:120px;text-align:center;margin-left:6px"><input type="text" id="li-item-reason-'+i+'" value="'+esc(existingReasonMap[it.sku]||'')+'" placeholder="reason" style="width:110px;font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text)"></span>'
       : '';
+    // Received Qty per item = what physically arrived, i.e. Send Qty for
+    // that SKU. QC pass/fail (next column) is a split of what's already
+    // received, not a reduction of it — a rejected unit still arrived,
+    // it just failed inspection afterward. There's no separate per-item
+    // transit-loss tracking (that's a different, aggregate-only concern
+    // — see the consignment-level Received Qty vs Send Qty gap), so this
+    // simply mirrors Send Qty once the consignment has been received at
+    // all; before that, nothing's arrived yet.
+    var recvCell = row.received_qty!=null
+      ? '<span style="font-weight:600;color:var(--text)">'+sendVal+'</span>'
+      : '<span style="color:var(--muted)">\u2014</span>';
+    // QC Pass/Fail per item — only known once someone's actually done the
+    // manual per-SKU QC review (ledgerModalSaveEdit records every item on
+    // save, even at 0 rejected, so hasOwnProperty reliably means "this SKU
+    // was reviewed"). Before that, there's no per-SKU truth to show —
+    // the aggregate qc_pass_qty from Flipkart's email can't say which SKU.
+    // Shown all-green (no "/0") when everything passed, all-red when
+    // everything failed, and "pass / reject" only for a genuine partial
+    // split — the "/0" or "0/" suffix adds nothing in the clean-cut cases.
+    var reviewedThisItem = existingRejectMap.hasOwnProperty(it.sku);
+    var qcPassFailCell;
+    if (reviewedThisItem) {
+      var itemRejectQty = existingRejectMap[it.sku] || 0;
+      var itemPassQty = Math.max(0, sendVal - itemRejectQty);
+      if (itemRejectQty === 0) {
+        qcPassFailCell = '<span style="color:#6dc87a;font-weight:700">'+itemPassQty+'</span>';
+      } else if (itemPassQty === 0) {
+        qcPassFailCell = '<span style="color:#ff8080;font-weight:700">'+itemRejectQty+'</span>';
+      } else {
+        qcPassFailCell = '<span style="color:#6dc87a;font-weight:700">'+itemPassQty+'</span> / <span style="color:#ff8080;font-weight:700">'+itemRejectQty+'</span>';
+      }
+    } else {
+      qcPassFailCell = '<span style="color:var(--muted)">\u2014</span>';
+    }
     return '<div style="display:flex;justify-content:space-between;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:12px">'
       +'<span style="flex:1">'+esc(it.model||it.sku)+' <span style="color:var(--muted);font-size:10px">('+esc(it.sku)+')</span></span>'
-      +'<span style="min-width:70px;text-align:center;color:var(--text);font-weight:600">'+it.qty+'</span>'
-      +'<span style="min-width:64px;text-align:center">'+sendCell+'</span>'
+      +'<span style="min-width:90px;text-align:center"><span style="color:var(--muted);font-weight:500">'+it.qty+'</span> / '+sendCell+'</span>'
       +rejectCell
       +reasonCell
+      +'<span style="min-width:70px;text-align:center">'+recvCell+'</span>'
+      +'<span style="min-width:70px;text-align:center">'+qcPassFailCell+'</span>'
       +'</div>';
   }).join('') : '<div style="color:var(--muted);font-size:11px;padding:1rem;text-align:center">No item breakdown stored for this consignment.</div>';
 }
@@ -1285,6 +1699,18 @@ function renderItemsModalBody(row) {
 function itemsModalQcChanged() {
   var row = _ledgerRows.find(function(r){ return r.consignment_no===_itemsModalCN; });
   if(row) renderItemsModalBody(row);
+}
+
+// Fires on clicking the QC Rejection value in the summary — shows/hides
+// the QC Rejections detail panel (li-transit-shortage), which stays
+// collapsed by default now rather than always showing.
+function toggleQcRejectionsPanel() {
+  var el = document.getElementById('li-transit-shortage');
+  if(!el || !el.innerHTML) return; // nothing to show
+  _itemsModalQcPanelOpen = !_itemsModalQcPanelOpen;
+  el.style.display = _itemsModalQcPanelOpen ? 'block' : 'none';
+  var chevron = document.getElementById('li-qc-chevron');
+  if(chevron) chevron.innerHTML = _itemsModalQcPanelOpen ? '&#9660;' : '&#9654;';
 }
 
 // Shared parser for the dd-mm-yyyy strings appointment_date is stored as.
@@ -1432,12 +1858,10 @@ function ledgerModalSaveEdit() {
   _itemsModalEditing = false;
   closeLedgerItemsModal();
   ledgerRender(); // keep the table behind the modal in sync
-  fetch(getWorkerBase() + '?action=azLedgerSave', {
-    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
-  }).then(function(r){ return r.json(); }).then(function(data){
-    if(!data || !data.ok) toast('Save failed \u2014 will retry on next edit', 'err');
-    else toast('Saved','ok');
-  }).catch(function(){ toast('Ledger sync error (offline?)', 'err'); });
+  fkLedgerSaveWithRetry(row, 0, function(success){
+    if (success) toast('Saved','ok');
+    else toast('Save failed after retries \u2014 queued, will auto-resync next visit', 'err');
+  });
 }
 
 // "Has QC Rejections?" now lives inline in the Consignment No. popup itself
@@ -1476,12 +1900,10 @@ function updateLedgerRowFromPrint(row, printableRows, queueLength, itemsJson) {
   row.items_json = JSON.stringify(itemsJson || []);
   row.updated_at = new Date().toISOString();
   try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
-  fetch(getWorkerBase() + '?action=azLedgerSave', {
-    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
-  }).then(function(r){ return r.json(); }).then(function(data){
-    if(!data || !data.ok) toast('Consignment '+row.consignment_no+' updated locally only \u2014 server save failed (check worker deployment)', 'err');
-    else toast('Consignment '+row.consignment_no+' ledger updated \u2014 '+printableRows.length+' SKUs \u00b7 '+queueLength+' qty', 'ok');
-  }).catch(function(){ toast('Consignment '+row.consignment_no+' updated locally only \u2014 sync failed (offline?)', 'err'); });
+  fkLedgerSaveWithRetry(row, 0, function(success){
+    if (success) toast('Consignment '+row.consignment_no+' ledger updated \u2014 '+printableRows.length+' SKUs \u00b7 '+queueLength+' qty', 'ok');
+    else toast('Consignment '+row.consignment_no+' updated locally only \u2014 queued, will auto-resync next visit', 'err');
+  });
   if(document.getElementById('tab-ledger').style.display !== 'none') ledgerRender();
 }
 
@@ -1556,11 +1978,9 @@ function applyLedgerModalPdfText(row, text) {
   row.updated_at = new Date().toISOString();
   try { localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); } catch(e){}
 
-  fetch(getWorkerBase() + '?action=azLedgerSave', {
-    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(row)
-  }).then(function(r){ return r.json(); }).then(function(data) {
-    if (!data || !data.ok) toast('Updated locally only \u2014 server save failed', 'err');
-  }).catch(function(){ toast('Updated locally only \u2014 sync failed (offline?)', 'err'); });
+  fkLedgerSaveWithRetry(row, 0, function(success){
+    if (!success) toast('Updated locally only \u2014 queued, will auto-resync next visit', 'err');
+  });
 
   renderItemsModalSummary(row);
   renderItemsModalBody(row);
@@ -1594,11 +2014,9 @@ function ledgerRecordPrint(printableRows, queueLength, itemsJson) {
   };
   _ledgerRows.push(row);
   try{ localStorage.setItem(LEDGER_KEY, JSON.stringify(_ledgerRows)); }catch(e){}
-  fetch(getWorkerBase() + '?action=azLedgerSave', {
-    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(row)
-  }).then(function(r){ return r.json(); }).then(function(data){
-    if(!data || !data.ok) toast('Consignment '+_bulkCN+' saved locally only \u2014 server save failed (check worker deployment)', 'err');
-  }).catch(function(){ toast('Consignment '+_bulkCN+' saved locally only \u2014 sync failed (offline?)', 'err'); });
+  fkLedgerSaveWithRetry(row, 0, function(success){
+    if (!success) toast('Consignment '+_bulkCN+' saved locally only \u2014 queued, will auto-resync next visit', 'err');
+  });
   if(document.getElementById('tab-ledger').style.display !== 'none') ledgerRender();
 }
 
@@ -3098,13 +3516,14 @@ function saveNotFoundModal() {
 })();
 
 loadGSheetLookup();
+flushPendingLedgerSyncs(); // retry any ledger saves that failed to sync last session
 
 // ── BOX LABEL CROPPER ──
 // Auto-detects each label's border-box on a Flipkart box/shipping-label PDF
 // and outputs a new PDF with each label cropped to its own page.
 // Namespaced with bl_ / bl* to avoid clashing with the rest of the app.
 (function(){
-  var BL_SETTINGS_KEY = 'azg_cropper_v1';
+  var BL_SETTINGS_KEY = 'flg_cropper_v1';
   var BL_DETECT_SCALE = 2.2;
   var BL_EXTRA_PAD_MM = 2.5; // extra breathing room outside the drawn border, all sides
 
