@@ -180,6 +180,13 @@ const ACTION_TIERS = {
   blinkitSetRoStatus: 'manager_up',
   blinkitBulkSetAppointments: 'manager_up',
 
+  // — Amazon FC Appointment Confirmation email watcher (Gmail
+  //   integration) — same mailbox/creds as Blinkit's watcher, filtered
+  //   to the "Amazon" Gmail label instead. Same manager_up/viewer_read
+  //   split as blinkitCheckRoEmails/blinkitListRoLog above. —
+  amazonCheckFcEmails: 'manager_up', amazonListFcLog: 'viewer_read',
+  amazonSetFcStatus: 'manager_up', amazonDeleteFcLog: 'manager_up',
+
   // — Flipkart "Successfully Received" email watcher (Gmail integration):
   //   auto-fills fk_ledger.received_qty by matching Consignment No. Same
   //   manager_up gating as the Blinkit watcher above, for the same reason
@@ -1180,6 +1187,19 @@ export default {
           }
         }
 
+        // ── AMAZON FC APPOINTMENT WATCHER — manually trigger a Gmail
+        //    check ── same on-demand-testable pattern as
+        //    blinkitCheckRoEmails above; normally only run by the
+        //    scheduled() cron.
+        if (action === 'amazonCheckFcEmails') {
+          try {
+            const result = await checkNewAmazonFcEmails(env);
+            return json({ ok: true, ...result });
+          } catch (err) {
+            return json({ ok: false, error: err.message }, 500);
+          }
+        }
+
         // Same on-demand-testable pattern as blinkitCheckRoEmails above —
         // normally only ever run by the scheduled() cron, exposed here too.
         if (action === 'fkCheckReceivedEmails') {
@@ -1259,6 +1279,43 @@ export default {
             'SELECT * FROM blinkit_ro_log ORDER BY detected_at DESC LIMIT 200'
           ).all();
           return json({ ok: true, rows: rows.results || [] });
+        }
+
+        // ── AMAZON FC APPOINTMENT WATCHER — list what's been detected ──
+        if (action === 'amazonListFcLog') {
+          await ensureAmazonFcTable(env.DB);
+          const rows = await env.DB.prepare(
+            'SELECT * FROM amazon_fc_log ORDER BY detected_at DESC LIMIT 200'
+          ).all();
+          return json({ ok: true, rows: rows.results || [] });
+        }
+
+        // ── AMAZON FC APPOINTMENT WATCHER — set a manual status (e.g.
+        //    'cancelled') on an appointment ── applied to every row for
+        //    this appointment_id, same pattern as blinkitSetRoStatus.
+        //    Placeholder until we've seen a real cancellation email and
+        //    can auto-detect it the way the Blinkit watcher does.
+        if (act === 'amazonSetFcStatus') {
+          await ensureAmazonFcTable(env.DB);
+          const { appointment_id, status } = body || {};
+          if (!appointment_id) return json({ ok: false, error: 'appointment_id required' }, 400);
+          await env.DB.prepare(
+            'UPDATE amazon_fc_log SET manual_status = ? WHERE appointment_id = ?'
+          ).bind(status || null, appointment_id).run();
+          return json({ ok: true });
+        }
+
+        // ── AMAZON FC APPOINTMENT WATCHER — hard-delete a whole
+        //    appointment's log entries (real cleanup only, mirrors
+        //    blinkitDeleteRoLog).
+        if (act === 'amazonDeleteFcLog') {
+          await ensureAmazonFcTable(env.DB);
+          const { appointment_id } = body || {};
+          if (!appointment_id) return json({ ok: false, error: 'appointment_id required' }, 400);
+          const result = await env.DB.prepare(
+            'DELETE FROM amazon_fc_log WHERE appointment_id = ?'
+          ).bind(appointment_id).run();
+          return json({ ok: true, deleted: result.meta.changes });
         }
 
         // ── BLINKIT — gatepass lookup (Ready to Dispatch signal) ──────
@@ -2550,6 +2607,20 @@ export default {
         })
     );
     ctx.waitUntil(
+      checkNewAmazonFcEmails(env)
+        .then(result => recordHeartbeat(
+          env, 'amazon_fc_watcher', 'Amazon FC Appointment Email Watcher (Worker cron)', 'ok',
+          `Checked ${result.checked} email(s), logged ${result.newLogged} new.`, 900
+        ))
+        .catch(err => {
+          console.error('scheduled Amazon FC appointment email check failed:', err.message);
+          return recordHeartbeat(
+            env, 'amazon_fc_watcher', 'Amazon FC Appointment Email Watcher (Worker cron)', 'error',
+            err.message, 900
+          ).catch(e2 => console.error('failed to record amazon_fc_watcher error heartbeat:', e2.message));
+        })
+    );
+    ctx.waitUntil(
       checkFkQcEmails(env)
         .then(result => recordHeartbeat(
           env, 'fk_qc_watcher', 'Flipkart QC-Pass Email Watcher (Worker cron)', 'ok',
@@ -2689,6 +2760,40 @@ async function ensureBlinkitRoTable(DB) {
   for (const sql of migrations) {
     try { await DB.prepare(sql).run(); } catch(e) { /* column already exists — safe to ignore */ }
   }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// AMAZON FC APPOINTMENT WATCHER — table
+// ══════════════════════════════════════════════════════════════════
+// One row per "FC Appointment Confirmation" email. Amazon resends this
+// exact template both for the original appointment AND every
+// reschedule (it says "which is different from the requested slot"
+// when it's a reschedule) — so, same as Blinkit's sto_scheduled email,
+// every occurrence becomes its own new row keyed by gmail_msg_id,
+// giving a full history per appointment_id for free. Cancellation
+// emails aren't handled yet — Amazon's exact wording for that hasn't
+// been seen; manual_status exists ready for when amazonSetFcStatus (or
+// an auto-detected cancellation, added later) needs to flag one.
+async function ensureAmazonFcTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS amazon_fc_log (
+    gmail_msg_id        TEXT PRIMARY KEY,
+    email_type          TEXT DEFAULT 'fc_appointment_confirmed',
+    appointment_id      TEXT,
+    shipment_ids        TEXT,
+    no_of_shipments     TEXT,
+    no_of_boxes         TEXT,
+    no_of_skus          TEXT,
+    no_of_units         TEXT,
+    destination_fc      TEXT,
+    appointment_status  TEXT,
+    confirmed_slot      TEXT,
+    reporting_time      TEXT,
+    subject             TEXT,
+    gmail_link          TEXT,
+    email_date          TEXT,
+    manual_status       TEXT,
+    detected_at         TEXT DEFAULT (datetime('now'))
+  )`).run();
 }
 
 async function ensureDelhiveryTable(DB) {
@@ -3038,6 +3143,128 @@ async function checkNewRoEmails(env) {
         'UPDATE blinkit_ro_log SET manual_status = ? WHERE ro_number = ?'
       ).bind('cancelled', parsed.ro_number).run();
     }
+
+    newCount++;
+  }
+
+  return { checked: messages.length, newLogged: newCount };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// AMAZON FC APPOINTMENT WATCHER — Gmail API integration
+// ══════════════════════════════════════════════════════════════════
+// Reads naimuddin@bullet.co.in (same mailbox + OAuth creds as the
+// Blinkit watcher above) for Amazon's "FC Appointment Confirmation"
+// email, sent by "Amazon Seller Central Notifications (Do Not Reply)"
+// under the Gmail label "Amazon". Example wording seen:
+//
+//   FC Appointment Confirmation
+//   Appointment ID: 167975016983
+//   Your FC appointment at PNQ3 for the below mentioned shipment(s)
+//   is now Confirmed for the time slot 02:15 PM 21 Aug 2026 IST -
+//   02:45 PM 21 Aug 2026 IST, which is different from the requested
+//   slot.
+//   Appointment ID: 167975016983
+//   Shipment ID(s): FBA15M51MCZ1
+//   No. of shipments: 1
+//   No. of Boxes: 46
+//   No. of SKUs: 3
+//   No. of Units: 380
+//   Destination Fulfilment Centre: PNQ3
+//   Appointment Status: Confirmed*
+//   Confirmed Appointment Slot: 02:15 PM 21 Aug 2026 IST - 02:45 PM
+//     21 Aug 2026 IST
+//   Reporting Time at FC: 01:45 PM 21 Aug 2026 IST
+//
+// Only this one email type is parsed for now. Cancellation emails
+// aren't auto-detected yet (Amazon's exact wording for those hasn't
+// been seen) — once we have a sample, this can grow a second branch
+// the same way parseRoEmailBody grew 'ro_cancelled', with the same
+// auto-apply-manual_status behavior wired into the loop below.
+function parseFcAppointmentEmailBody(text) {
+  const idMatch = text.match(/Appointment ID\s*:\s*([A-Za-z0-9]+)/i);
+  const shipMatch = text.match(/Shipment ID\(s\)\s*:\s*([A-Za-z0-9, ]+?)(?=\s*No\.\s*of\s*shipments)/i);
+  const shipmentsMatch = text.match(/No\.\s*of\s*shipments\s*:\s*(\d+)/i);
+  const boxesMatch = text.match(/No\.\s*of\s*Boxes\s*:\s*(\d+)/i);
+  const skusMatch = text.match(/No\.\s*of\s*SKUs\s*:\s*(\d+)/i);
+  const unitsMatch = text.match(/No\.\s*of\s*Units\s*:\s*(\d+)/i);
+  const fcMatch = text.match(/Destination\s+Fulfil+ment\s+Centre\s*:\s*([A-Za-z0-9]+)/i);
+  const statusMatch = text.match(/Appointment Status\s*:\s*([A-Za-z]+)/i);
+  const slotMatch = text.match(/Confirmed Appointment Slot\s*:\s*(.+?)(?=Reporting Time at FC)/i);
+  const reportMatch = text.match(/Reporting Time at FC\s*:\s*(.+?)(?=Reschedule Appointment|Cancel Appointment|$)/i);
+
+  return {
+    email_type: 'fc_appointment_confirmed',
+    appointment_id: idMatch ? idMatch[1].trim() : null,
+    shipment_ids: shipMatch ? shipMatch[1].trim() : null,
+    no_of_shipments: shipmentsMatch ? shipmentsMatch[1].trim() : null,
+    no_of_boxes: boxesMatch ? boxesMatch[1].trim() : null,
+    no_of_skus: skusMatch ? skusMatch[1].trim() : null,
+    no_of_units: unitsMatch ? unitsMatch[1].trim() : null,
+    destination_fc: fcMatch ? fcMatch[1].trim() : null,
+    appointment_status: statusMatch ? statusMatch[1].trim() : null,
+    confirmed_slot: slotMatch ? slotMatch[1].trim().replace(/\s+/g, ' ') : null,
+    reporting_time: reportMatch ? reportMatch[1].trim().replace(/\s+/g, ' ') : null
+  };
+}
+
+// Same paging/dedup pattern as checkNewRoEmails — pages through ALL
+// matching results (capped at 10 pages / ~300 messages), skips
+// gmail_msg_ids already logged, parses + inserts the rest.
+async function checkNewAmazonFcEmails(env) {
+  await ensureAmazonFcTable(env.DB);
+  const accessToken = await getGmailAccessToken(env);
+
+  const query = encodeURIComponent('label:Amazon "FC Appointment Confirmation"');
+  let messages = [];
+  let pageToken = '';
+  for (let page = 0; page < 10; page++) {
+    const pageParam = pageToken ? `&pageToken=${pageToken}` : '';
+    const listRes = await fetch(`${GMAIL_API_BASE}/messages?q=${query}&maxResults=100${pageParam}`, {
+      headers: { Authorization: 'Bearer ' + accessToken }
+    });
+    if (!listRes.ok) throw new Error('Gmail list failed: ' + listRes.status);
+    const listData = await listRes.json();
+    messages = messages.concat(listData.messages || []);
+    if (!listData.nextPageToken) break;
+    pageToken = listData.nextPageToken;
+  }
+
+  let newCount = 0;
+  for (const m of messages) {
+    const exists = await env.DB.prepare(
+      'SELECT 1 FROM amazon_fc_log WHERE gmail_msg_id = ?'
+    ).bind(m.id).first();
+    if (exists) continue;
+
+    const msgRes = await fetch(`${GMAIL_API_BASE}/messages/${m.id}?format=full`, {
+      headers: { Authorization: 'Bearer ' + accessToken }
+    });
+    if (!msgRes.ok) continue; // skip a single bad message rather than failing the whole batch
+    const msg = await msgRes.json();
+
+    const headers = (msg.payload && msg.payload.headers) || [];
+    const subjectHeader = headers.find(h => h.name === 'Subject');
+    const subject = subjectHeader ? subjectHeader.value : '';
+    const emailDate = msg.internalDate ? new Date(parseInt(msg.internalDate)).toISOString() : null;
+
+    const bodyText = extractGmailBody(msg.payload);
+    const parsed = parseFcAppointmentEmailBody(bodyText);
+    const gmailLink = `https://mail.google.com/mail/u/0/#all/${m.id}`;
+
+    await env.DB.prepare(`
+      INSERT INTO amazon_fc_log (
+        gmail_msg_id, email_type, appointment_id, shipment_ids, no_of_shipments,
+        no_of_boxes, no_of_skus, no_of_units, destination_fc, appointment_status,
+        confirmed_slot, reporting_time, subject, gmail_link, email_date, detected_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(gmail_msg_id) DO NOTHING
+    `).bind(
+      m.id, parsed.email_type, parsed.appointment_id, parsed.shipment_ids, parsed.no_of_shipments,
+      parsed.no_of_boxes, parsed.no_of_skus, parsed.no_of_units, parsed.destination_fc, parsed.appointment_status,
+      parsed.confirmed_slot, parsed.reporting_time, subject, gmailLink, emailDate
+    ).run();
 
     newCount++;
   }
