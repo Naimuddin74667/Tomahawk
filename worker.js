@@ -170,6 +170,15 @@ const ACTION_TIERS = {
   fkLedgerSave: 'manager_up', fkLibSave: 'manager_up',
   fkWarehouseMapSave: 'manager_up', fkWarehouseMapDelete: 'manager_up',
 
+  // — Amazon Label Generator: started as a copy of the Flipkart Label
+  //   Generator's UI template, but reads/writes its OWN D1 tables
+  //   (az_ledger / az_meta), never fk_ledger/fk_meta — otherwise both
+  //   apps would silently share (and corrupt) the same live data. —
+  azLedgerLoad: 'viewer_read', azLibLoad: 'viewer_read',
+  azLedgerSave: 'manager_up', azLibSave: 'manager_up',
+  azWarehouseMapSave: 'manager_up', azWarehouseMapDelete: 'manager_up',
+  azLedgerDeleteAll: 'admin_only',
+
   // — Blinkit RO email watcher (Gmail integration) — logging is read-only
   //   in effect, but touches D1 + calls Gmail, so gate it manager_up like
   //   every other Blinkit write. List is viewer_read to match the rest
@@ -1071,6 +1080,23 @@ export default {
           await ensureFkMetaTable(env.DB);
           const row = await env.DB.prepare(
             "SELECT value FROM fk_meta WHERE key = 'sku_lib' LIMIT 1"
+          ).first();
+          return json({ ok: true, data: row ? (row.value || '{}') : '{}' });
+        }
+
+        // ── AMAZON LABEL GENERATOR — load consignment ledger ──────
+        // Own table (az_ledger), NOT fk_ledger — see ACTION_TIERS note.
+        if (action === 'azLedgerLoad') {
+          await ensureAzLedgerTable(env.DB);
+          const rows = await env.DB.prepare('SELECT * FROM az_ledger ORDER BY created_at DESC').all();
+          return json({ ok: true, rows: rows.results || [] });
+        }
+
+        // ── AMAZON LABEL GENERATOR — load SKU library ─────────────
+        if (action === 'azLibLoad') {
+          await ensureAzMetaTable(env.DB);
+          const row = await env.DB.prepare(
+            "SELECT value FROM az_meta WHERE key = 'sku_lib' LIMIT 1"
           ).first();
           return json({ ok: true, data: row ? (row.value || '{}') : '{}' });
         }
@@ -2349,6 +2375,56 @@ export default {
         if (act === 'fkLedgerDeleteAll') {
           await ensureFkLedgerTable(env.DB);
           await env.DB.prepare('DELETE FROM fk_ledger').run();
+          return json({ ok: true });
+        }
+
+        // ── AMAZON LABEL GENERATOR — upsert one consignment ledger row ──
+        // Own table (az_ledger), NOT fk_ledger — see ACTION_TIERS note.
+        if (act === 'azLedgerSave') {
+          await ensureAzLedgerTable(env.DB);
+          const {
+            consignment_no, dc_date, appointment_date, warehouse,
+            no_of_sku, total_qty, send_qty, received_qty, status,
+            items_json, shortage_json, receipt_shortage_json, created_at, updated_at
+          } = body;
+          if (!consignment_no) return json({ ok: false, error: 'consignment_no required' }, 400);
+          await env.DB.prepare(`
+            INSERT INTO az_ledger (consignment_no, dc_date, appointment_date, warehouse, no_of_sku, total_qty, send_qty, received_qty, status, items_json, shortage_json, receipt_shortage_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(consignment_no) DO UPDATE SET
+              dc_date=excluded.dc_date, appointment_date=excluded.appointment_date,
+              warehouse=excluded.warehouse, no_of_sku=excluded.no_of_sku,
+              total_qty=excluded.total_qty, send_qty=excluded.send_qty,
+              received_qty=excluded.received_qty, status=excluded.status,
+              items_json=excluded.items_json, shortage_json=excluded.shortage_json,
+              receipt_shortage_json=excluded.receipt_shortage_json,
+              updated_at=excluded.updated_at
+          `).bind(
+            consignment_no, dc_date || '', appointment_date || '', warehouse || '',
+            no_of_sku || 0, total_qty || 0, send_qty || 0,
+            (received_qty === '' || received_qty == null) ? null : received_qty,
+            status || '', items_json || '[]', shortage_json || '[]', receipt_shortage_json || '[]',
+            created_at || new Date().toISOString(), updated_at || new Date().toISOString()
+          ).run();
+          return json({ ok: true });
+        }
+
+        // ── AMAZON LABEL GENERATOR — save SKU library ─────────────
+        if (act === 'azLibSave') {
+          await ensureAzMetaTable(env.DB);
+          const { data } = body;
+          if (typeof data !== 'string') return json({ ok: false, error: 'data must be a JSON string' }, 400);
+          await env.DB.prepare(`
+            INSERT INTO az_meta (key, value) VALUES ('sku_lib', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+          `).bind(data).run();
+          return json({ ok: true });
+        }
+
+        // ── AMAZON LABEL GENERATOR — [TEMP] delete ALL ledger rows ────
+        if (act === 'azLedgerDeleteAll') {
+          await ensureAzLedgerTable(env.DB);
+          await env.DB.prepare('DELETE FROM az_ledger').run();
           return json({ ok: true });
         }
 
@@ -3830,6 +3906,43 @@ async function ensureFkWarehouseMapTable(DB) {
 
 async function ensureFkMetaTable(DB) {
   await DB.prepare(`CREATE TABLE IF NOT EXISTS fk_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT DEFAULT ''
+  )`).run();
+}
+
+// ══════════════════════════════════════════════════════════════════
+// AMAZON LABEL GENERATOR — own tables, isolated from fk_ledger/fk_meta
+// ══════════════════════════════════════════════════════════════════
+// The Amazon app started life as a straight copy of the Flipkart Label
+// Generator's HTML/CSS/JS for its visual template — but it must NOT
+// share Flipkart's backend tables, or the two apps would silently read
+// and overwrite each other's live data. Schema is identical to
+// fk_ledger for now (same field names like "consignment_no") since
+// this is still just the template stage; expect these to get
+// Amazon-specific field names (e.g. shipment/appointment IDs) once the
+// actual FBA workflow is built out.
+async function ensureAzLedgerTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS az_ledger (
+    consignment_no    TEXT PRIMARY KEY,
+    dc_date           TEXT DEFAULT '',
+    appointment_date  TEXT DEFAULT '',
+    warehouse         TEXT DEFAULT '',
+    no_of_sku         INTEGER DEFAULT 0,
+    total_qty         INTEGER DEFAULT 0,
+    send_qty          INTEGER DEFAULT 0,
+    received_qty      INTEGER DEFAULT NULL,
+    status            TEXT DEFAULT '',
+    items_json        TEXT DEFAULT '[]',
+    shortage_json     TEXT DEFAULT '[]',
+    receipt_shortage_json TEXT DEFAULT '[]',
+    created_at        TEXT DEFAULT (datetime('now')),
+    updated_at        TEXT DEFAULT (datetime('now'))
+  )`).run();
+}
+
+async function ensureAzMetaTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS az_meta (
     key   TEXT PRIMARY KEY,
     value TEXT DEFAULT ''
   )`).run();
