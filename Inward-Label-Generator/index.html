@@ -3307,9 +3307,11 @@ function whUpdateSummary() {
 }
 
 // ── UC SKU searchable combo ───────────────────────────────────────
-// Builds the full UC SKU list: ucCache keys + UC_IMAGE_MAP keys, deduped, sorted
+// Builds the full UC SKU list: skuMap (live sku_master — primary source) +
+// ucCache keys + UC_IMAGE_MAP keys (static fallback), deduped, sorted
 function whGetAllUcSkus() {
   const all = new Set();
+  skuMap.forEach(function(m) { if (m.ucSku) all.add(m.ucSku); });
   Object.keys(ucCache).forEach(function(k) { if (k) all.add(k); });
   Object.keys(UC_IMAGE_MAP).forEach(function(k) { if (k) all.add(k); });
   return Array.from(all).sort();
@@ -3326,8 +3328,9 @@ function whFilterUcSkuList(query) {
   const matches = all.filter(function(s) { return s.toLowerCase().includes(q); }).slice(0, 20);
   if (!matches.length) { list.style.display = 'none'; hint.style.display = 'none'; return; }
   list.innerHTML = matches.map(function(s) {
-    const data = ucCache[s] || {};
-    const cat  = data.categoryName && data.categoryName !== 'Default' ? '  ·  ' + data.categoryName : '';
+    const smEntry = skuMap.find(function(m) { return m.ucSku === s; });
+    const catRaw  = (smEntry && smEntry.category) || (ucCache[s] || {}).categoryName || '';
+    const cat     = catRaw && catRaw !== 'Default' ? '  ·  ' + catRaw : '';
     return '<option value="' + s + '">' + s + cat + '</option>';
   }).join('');
   list.style.display = 'block';
@@ -3343,11 +3346,16 @@ function whUcSkuPicked(val) {
   document.getElementById('wh-ucsku-list').style.display = 'none';
   document.getElementById('wh-ucsku-hint').style.display = 'none';
 
-  // Auto-fill from ucCache first, then UC_IMAGE_MAP fallback
+  // Auto-fill from skuMap (live sku_master) first, then ucCache, then UC_IMAGE_MAP fallback
+  const smEntry = skuMap.find(function(m) { return m.ucSku === val; }) || {};
   const data = ucCache[val] || {};
-  const img  = (data.imageUrl && data.imageUrl.length > 5) ? data.imageUrl : (UC_IMAGE_MAP[val] || '');
-  const cat  = (data.categoryName && data.categoryName !== 'Default') ? data.categoryName : '';
-  const ppc  = data.pcsPerCarton || null;
+  const img  = (smEntry.imageUrl && smEntry.imageUrl.length > 5) ? smEntry.imageUrl
+             : (data.imageUrl && data.imageUrl.length > 5) ? data.imageUrl
+             : (UC_IMAGE_MAP[val] || '');
+  const cat  = (smEntry.category && smEntry.category !== 'Default') ? smEntry.category
+             : (data.categoryName && data.categoryName !== 'Default') ? data.categoryName
+             : '';
+  const ppc  = smEntry.pcsPerCarton || data.pcsPerCarton || null;
 
   if (img) {
     document.getElementById('wh-manual-img').value = img;
