@@ -1687,6 +1687,8 @@ let importItems  = [];
 let factoryItems = [];
 let generatedLabels = [];
 let ucCache      = {}; // legacy external-source lookup cache — vestigial fallback only, never populated or persisted
+let ucItemMasterSkus   = []; // full list of enabled UC SKUs from UC_ItemMaster, via shared uc_sku_cache (Hub "Refresh SKU List")
+let ucItemMasterSyncedAt = null;
 let categories   = []; // derived from sku_master on load; new ones appended in-memory as entered
 let boxCounters  = {}; // in-memory snapshot of D1 box_counters — loaded once via loadBoxCountersFromD1()
 let gpImageCache = {}; // in-memory imageUrl lookup, populated from sku_master load — no localStorage
@@ -1746,6 +1748,22 @@ async function loadBoxCountersFromD1() {
   }
 }
 
+// Loads the shared UC Item Master SKU snapshot (uc_sku_cache, D1) — the full
+// list of currently-enabled SKUs pulled from UC_ItemMaster via the Hub's
+// "Refresh SKU List" button. This is the authoritative UC SKU list used for
+// the Warehouse Label "UC SKU" search, not just SKUs already mapped here.
+async function loadUcItemMasterFromD1() {
+  try {
+    const res = await fetch(`${WORKER}?action=ucsku_getList`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Load failed');
+    ucItemMasterSkus = data.skus || [];
+    ucItemMasterSyncedAt = data.updatedAt || null;
+  } catch(e) {
+    showToast('⚠ Could not load UC Item Master SKU list — ' + e.message, true);
+  }
+}
+
 // ── INIT ───────────────────────────────────────────────────────────────
 window.onload = async () => {
   document.getElementById('gp-date').value = new Date().toISOString().slice(0,10);
@@ -1754,6 +1772,7 @@ window.onload = async () => {
     try {
       await loadSkuMasterFromD1();
       await loadBoxCountersFromD1();
+      await loadUcItemMasterFromD1();
     } finally {
       document.getElementById('app-loading-overlay').style.display = 'none';
     }
@@ -3307,10 +3326,12 @@ function whUpdateSummary() {
 }
 
 // ── UC SKU searchable combo ───────────────────────────────────────
-// Builds the full UC SKU list: skuMap (live sku_master — primary source) +
-// ucCache keys + UC_IMAGE_MAP keys (static fallback), deduped, sorted
+// Builds the full UC SKU list: UC Item Master snapshot (authoritative,
+// live from UC_ItemMaster) + skuMap (already-mapped, sku_master) + ucCache
+// keys + UC_IMAGE_MAP keys (static fallback), deduped, sorted
 function whGetAllUcSkus() {
   const all = new Set();
+  ucItemMasterSkus.forEach(function(s) { if (s) all.add(s); });
   skuMap.forEach(function(m) { if (m.ucSku) all.add(m.ucSku); });
   Object.keys(ucCache).forEach(function(k) { if (k) all.add(k); });
   Object.keys(UC_IMAGE_MAP).forEach(function(k) { if (k) all.add(k); });
@@ -3331,7 +3352,8 @@ function whFilterUcSkuList(query) {
     const smEntry = skuMap.find(function(m) { return m.ucSku === s; });
     const catRaw  = (smEntry && smEntry.category) || (ucCache[s] || {}).categoryName || '';
     const cat     = catRaw && catRaw !== 'Default' ? '  ·  ' + catRaw : '';
-    return '<option value="' + s + '">' + s + cat + '</option>';
+    const notMapped = !smEntry ? '  (not mapped yet)' : '';
+    return '<option value="' + s + '">' + s + cat + notMapped + '</option>';
   }).join('');
   list.style.display = 'block';
   hint.style.display = 'block';
