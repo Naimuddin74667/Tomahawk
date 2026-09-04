@@ -2818,6 +2818,16 @@ async function processBwQueue() {
         showToast('Gemini key missing or invalid — enter a valid key in the Gemini Key field', true);
         return;
       }
+      if (msg.startsWith('QUOTA_EXHAUSTED')) {
+        // Credits/quota exhausted — every remaining queued SKU would fail
+        // identically. Stop the whole batch here instead of burning
+        // requests retrying the rest one by one.
+        bwQueue.clear();
+        bwProcessing = false;
+        renderMapTable();
+        showToast('Gemini quota/credits exhausted — stopped batch. Top up billing, then retry.', true);
+        return;
+      }
       console.warn('Gemini B&W failed for ' + ucSku + ':', msg);
     }
     if (bwQueue.size > 0) await new Promise(function(r) { setTimeout(r, 800); });
@@ -2840,13 +2850,7 @@ async function callGeminiForBw(imageUrl) {
       resp = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(imageUrl));
     }
     const blob = await resp.blob();
-    mime = blob.type || 'image/jpeg';
-    base64 = await new Promise(function(resolve, reject) {
-      const reader = new FileReader();
-      reader.onload  = function(e) { resolve(e.target.result.split(',')[1]); };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
+    ({ base64, mime } = await downscaleImageForGemini(blob));
   } catch(e) {
     throw new Error('Image fetch failed: ' + e.message);
   }
@@ -2871,6 +2875,11 @@ async function callGeminiForBw(imageUrl) {
         const msg = (err.error && err.error.message) || ('HTTP ' + res.status);
         // API key errors — no point retrying other models
         if (res.status === 400 || res.status === 403) throw new Error('API_KEY_INVALID: ' + msg);
+        // Quota / billing exhausted (429) — every remaining call this
+        // session will fail identically. Retrying the second model, or
+        // moving on to the next queued SKU, just burns more requests
+        // against a dead key for nothing. Stop here immediately.
+        if (res.status === 429) throw new Error('QUOTA_EXHAUSTED: ' + msg);
         throw new Error(msg);
       }
       const data = await res.json();
@@ -2881,11 +2890,43 @@ async function callGeminiForBw(imageUrl) {
       return 'data:'+(id.mimeType||id.mime_type)+';base64,'+id.data;
     } catch(e) {
       lastErr = e;
-      // Stop trying other models on key errors
-      if (e.message && e.message.startsWith('API_KEY_INVALID')) break;
+      // Stop trying other models on key errors or quota exhaustion
+      if (e.message && (e.message.startsWith('API_KEY_INVALID') || e.message.startsWith('QUOTA_EXHAUSTED'))) break;
     }
   }
   throw lastErr || new Error('All Gemini models failed');
+}
+
+// Downscales an image to a max dimension before sending to Gemini. Gemini
+// bills input images by resolution (tiled tokenization) — the source photo
+// from Amazon/UC can be 1000–2000px+, while the prompt only ever asks for a
+// 500x500 output. Capping the input to 1024px on its longest side keeps
+// plenty of detail for line-art conversion while cutting input tokens
+// (and therefore cost) substantially for typical product photography.
+const GEMINI_MAX_DIM = 1024;
+function downscaleImageForGemini(blob) {
+  return new Promise(function(resolve, reject) {
+    const img = new Image();
+    const url = URL.createObjectURL(blob);
+    img.onload = function() {
+      URL.revokeObjectURL(url);
+      let { width, height } = img;
+      const longest = Math.max(width, height);
+      if (longest > GEMINI_MAX_DIM) {
+        const scale = GEMINI_MAX_DIM / longest;
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+      resolve({ base64: dataUrl.split(',')[1], mime: 'image/jpeg' });
+    };
+    img.onerror = function() { URL.revokeObjectURL(url); reject(new Error('Could not decode image for resizing')); };
+    img.src = url;
+  });
 }
 
 function triggerBwForEntry(tableIdx) {
