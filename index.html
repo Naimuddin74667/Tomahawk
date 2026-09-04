@@ -1449,9 +1449,13 @@ html[data-theme="light"]       .icon-moon { display: none; }
   // ── Refresh SKU List (admin only) — fetches enabled SKUs live from
   // UC_ItemMaster (via Google Sheets' gviz CSV export) and saves the
   // snapshot to D1 so every app/session reads the same current list.
+  // Also pulls each SKU's "Pieces Per Carton" custom field from UC_Catalog
+  // (UC only fills this in for SKUs that have moved through G4 — the
+  // stocking warehouse — so it's sparse but reliable where present).
   // Requires the primary UC sheet to be shared as "Anyone with the link —
   // Viewer"; fails with a clear message if it's still private.
   const UC_ITEMMASTER_URL = 'https://docs.google.com/spreadsheets/d/17gMjH2tqTRKyyRXf8pvMtZXaj0MfyUFRWtFKODGHIlw/gviz/tq?tqx=out:csv&sheet=UC_ItemMaster';
+  const UC_CATALOG_URL    = 'https://docs.google.com/spreadsheets/d/17gMjH2tqTRKyyRXf8pvMtZXaj0MfyUFRWtFKODGHIlw/gviz/tq?tqx=out:csv&sheet=UC_Catalog';
 
   function hubToast(msg, isError) {
     const t = document.getElementById('hub-toast');
@@ -1508,11 +1512,45 @@ html[data-theme="light"]       .icon-moon { display: none; }
         skus.sort();
         if (!skus.length) throw new Error('Parsed 0 SKUs — check UC_ItemMaster has data');
 
+        // Second pass — pull "Pieces Per Carton" from UC_Catalog's per-SKU
+        // custom fields. This is best-effort: if UC_Catalog can't be read
+        // for any reason, we still save the enabled-SKU list from above
+        // rather than failing the whole refresh.
+        let piecesPerCarton = {};
+        let ppcCount = 0;
+        try {
+          if (label) label.textContent = 'Fetching carton sizes…';
+          const catRes = await fetch(UC_CATALOG_URL);
+          if (!catRes.ok) throw new Error('HTTP ' + catRes.status);
+          const catText = await catRes.text();
+          if (catText.trim().startsWith('<')) throw new Error('not publicly viewable');
+          const catLines = catText.split(/\r?\n/).filter(l => l.trim());
+          const catHeader = parseGvizCsvLine(catLines[0]).map(h => h.trim());
+          const catSkuIdx = catHeader.indexOf('skuCode');
+          const cfvIdx    = catHeader.indexOf('customFieldValues');
+          if (catSkuIdx !== -1 && cfvIdx !== -1) {
+            for (let i = 1; i < catLines.length; i++) {
+              const cols = parseGvizCsvLine(catLines[i]);
+              const sku  = (cols[catSkuIdx] || '').trim();
+              const raw  = cols[cfvIdx];
+              if (!sku || !raw) continue;
+              let fields;
+              try { fields = JSON.parse(raw); } catch { continue; }
+              if (!Array.isArray(fields)) continue;
+              const f = fields.find(x => x && x.fieldName === 'PiecesPerCarton');
+              const val = f && f.fieldValue != null ? String(f.fieldValue).trim() : '';
+              if (val && /^\d+$/.test(val)) { piecesPerCarton[sku] = parseInt(val); ppcCount++; }
+            }
+          }
+        } catch (e) {
+          console.warn('Pieces Per Carton fetch skipped:', e.message);
+        }
+
         if (label) label.textContent = 'Saving…';
-        const saveRes = await api('ucsku_saveList', { method: 'POST', body: { skus } });
+        const saveRes = await api('ucsku_saveList', { method: 'POST', body: { skus, piecesPerCarton } });
         if (!saveRes.ok) throw new Error(saveRes.error || 'Save failed');
 
-        hubToast(`✓ Refreshed — ${skus.length} enabled SKUs saved for the whole team`);
+        hubToast(`✓ Refreshed — ${skus.length} enabled SKUs, ${ppcCount} with carton size, saved for the whole team`);
       } catch (e) {
         hubToast('⚠ Refresh failed — ' + e.message, true);
       }
