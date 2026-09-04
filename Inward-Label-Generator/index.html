@@ -1689,6 +1689,7 @@ let generatedLabels = [];
 let ucCache      = {}; // legacy external-source lookup cache — vestigial fallback only, never populated or persisted
 let ucItemMasterSkus   = []; // full list of enabled UC SKUs from UC_ItemMaster, via shared uc_sku_cache (Hub "Refresh SKU List")
 let ucItemMasterSyncedAt = null;
+let ucPiecesPerCarton = {}; // { skuCode: qty } — live "Pieces Per Carton" from UC_Catalog custom fields, via same refresh
 let categories   = []; // derived from sku_master on load; new ones appended in-memory as entered
 let boxCounters  = {}; // in-memory snapshot of D1 box_counters — loaded once via loadBoxCountersFromD1()
 let gpImageCache = {}; // in-memory imageUrl lookup, populated from sku_master load — no localStorage
@@ -1758,6 +1759,7 @@ async function loadUcItemMasterFromD1() {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'Load failed');
     ucItemMasterSkus = data.skus || [];
+    ucPiecesPerCarton = data.piecesPerCarton || {};
     ucItemMasterSyncedAt = data.updatedAt || null;
   } catch(e) {
     showToast('⚠ Could not load UC Item Master SKU list — ' + e.message, true);
@@ -2013,14 +2015,18 @@ function parseDeliveryChallan(text, posItems) {
 function enrichItem(raw) {
   const map    = skuMap.find(m=>m.ucSku===raw.ucSku);
   const ucData = ucCache[raw.ucSku]||null;
-  const ppc    = map?.pcsPerCarton||ucData?.pcsPerCarton||null;
+  // Priority: live UC Item Master carton size (from UC_Catalog custom
+  // fields, refreshed via Hub) > manually-mapped sku_master value > legacy
+  // ucCache fallback. UC only fills this in for SKUs that have moved
+  // through G4, so it's sparse but authoritative where present.
+  const ppc    = ucPiecesPerCarton[raw.ucSku] || map?.pcsPerCarton || ucData?.pcsPerCarton || null;
   const category = map?.category||(ucData?.categoryName!=='Default'?ucData?.categoryName:'')||'';
   if (category) addCategoryIfNew(category);
   return {
     ucSku: raw.ucSku, internalSku: map?.internalSku||'', qty: raw.qty,
     pcsPerCarton: ppc,
-    boxes:    map ? Math.ceil(raw.qty/(ppc||1)) : 0,
-    qtyPerBox: map ? (ppc||1) : 0,
+    boxes:    ppc ? Math.ceil(raw.qty/ppc) : 0,
+    qtyPerBox: ppc || 0,
     imageUrl: (map?.imageUrl && map.imageUrl.length > 5) ? map.imageUrl : (ucData?.imageUrl || gpImageCache[raw.ucSku] || UC_IMAGE_MAP[raw.ucSku] || ''),
     category, mapped: !!map
   };
@@ -3358,8 +3364,10 @@ function whFilterUcSkuList(query) {
     const smEntry = skuMap.find(function(m) { return m.ucSku === s; });
     const catRaw  = (smEntry && smEntry.category) || (ucCache[s] || {}).categoryName || '';
     const cat     = catRaw && catRaw !== 'Default' ? '  ·  ' + catRaw : '';
+    const ppcVal  = ucPiecesPerCarton[s] || (smEntry && smEntry.pcsPerCarton) || null;
+    const ppcTag  = ppcVal ? '  ·  ' + ppcVal + '/box' : '';
     const notMapped = !smEntry ? '  (not mapped yet)' : '';
-    return '<option value="' + s + '">' + s + cat + notMapped + '</option>';
+    return '<option value="' + s + '">' + s + cat + ppcTag + notMapped + '</option>';
   }).join('');
   list.style.display = 'block';
   hint.style.display = 'block';
@@ -3374,7 +3382,8 @@ function whUcSkuPicked(val) {
   document.getElementById('wh-ucsku-list').style.display = 'none';
   document.getElementById('wh-ucsku-hint').style.display = 'none';
 
-  // Auto-fill from skuMap (live sku_master) first, then ucCache, then UC_IMAGE_MAP fallback
+  // Auto-fill from live UC Item Master (UC_Catalog) first, then skuMap
+  // (live sku_master), then ucCache, then UC_IMAGE_MAP fallback
   const smEntry = skuMap.find(function(m) { return m.ucSku === val; }) || {};
   const data = ucCache[val] || {};
   const img  = (smEntry.imageUrl && smEntry.imageUrl.length > 5) ? smEntry.imageUrl
@@ -3383,7 +3392,7 @@ function whUcSkuPicked(val) {
   const cat  = (smEntry.category && smEntry.category !== 'Default') ? smEntry.category
              : (data.categoryName && data.categoryName !== 'Default') ? data.categoryName
              : '';
-  const ppc  = smEntry.pcsPerCarton || data.pcsPerCarton || null;
+  const ppc  = ucPiecesPerCarton[val] || smEntry.pcsPerCarton || data.pcsPerCarton || null;
 
   if (img) {
     document.getElementById('wh-manual-img').value = img;
