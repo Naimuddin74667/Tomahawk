@@ -903,8 +903,14 @@ export default {
         // ── UC SKU LIST CACHE — shared snapshot for Add SKU dropdown ────
         if (action === 'ucsku_getList') {
           await ensureUcSkuCacheTable(env.DB);
-          const row = await env.DB.prepare("SELECT value, updated_at FROM uc_sku_cache WHERE key = 'enabled_skus'").first();
-          return json({ ok: true, skus: row ? JSON.parse(row.value || '[]') : [], updatedAt: row ? row.updated_at : null });
+          const row  = await env.DB.prepare("SELECT value, updated_at FROM uc_sku_cache WHERE key = 'enabled_skus'").first();
+          const ppcRow = await env.DB.prepare("SELECT value FROM uc_sku_cache WHERE key = 'pieces_per_carton'").first();
+          return json({
+            ok: true,
+            skus: row ? JSON.parse(row.value || '[]') : [],
+            piecesPerCarton: ppcRow ? JSON.parse(ppcRow.value || '{}') : {},
+            updatedAt: row ? row.updated_at : null
+          });
         }
 
         // ── GATE PASS — box counter snapshot ──────────────────
@@ -1950,13 +1956,21 @@ export default {
         // ── UC SKU LIST CACHE — save freshly-fetched snapshot (admin only) ──
         if (act === 'ucsku_saveList') {
           await ensureUcSkuCacheTable(env.DB);
-          const { skus } = body;
+          const { skus, piecesPerCarton } = body;
           if (!Array.isArray(skus)) return json({ ok: false, error: 'skus array required' }, 400);
           await env.DB.prepare(`
             INSERT INTO uc_sku_cache (key, value, updated_at) VALUES ('enabled_skus', ?, datetime('now'))
             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
           `).bind(JSON.stringify(skus)).run();
-          return json({ ok: true, count: skus.length });
+          let ppcCount = 0;
+          if (piecesPerCarton && typeof piecesPerCarton === 'object') {
+            ppcCount = Object.keys(piecesPerCarton).length;
+            await env.DB.prepare(`
+              INSERT INTO uc_sku_cache (key, value, updated_at) VALUES ('pieces_per_carton', ?, datetime('now'))
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            `).bind(JSON.stringify(piecesPerCarton)).run();
+          }
+          return json({ ok: true, count: skus.length, ppcCount });
         }
 
         // ── OPS CHATBOT — natural-language stock lookup ───────────────────
