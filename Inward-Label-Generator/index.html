@@ -1987,6 +1987,12 @@ function parseDeliveryChallan(text, posItems) {
       const t = tokens[i];
       if (/^100\.00$/.test(t)) break;
       if (/^\d{1,3}$/.test(t) && parseInt(t)===expectedSerial+1) break; // hit next row's serial
+      // Skip the product code repeating inside the Description cell (common
+      // formatting: "TEPS-B600 600W Electric Paint Sprayer"). Codes like
+      // this can themselves end in a letter+digits pattern (e.g. "B600")
+      // and must never be mistaken for a qty glued onto the description —
+      // that was silently grabbing the SKU's own trailing digits as qty.
+      if (t === ucSku || skuParts.includes(t)) continue;
       if (/^\d{1,4}$/.test(t)) { const n=parseInt(t); if (n>=1&&n<=9999) { qty=n; break; } }
       const glue = t.match(/^.+[A-Za-z](\d{1,4})$/);
       if (glue && !t.match(/^\d/)) { qty=parseInt(glue[1]); break; }
