@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Tomahawk Label Generator</title>
+<title>Amazon Shipments — Tomahawk</title>
 <style>
 
   @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600;700&family=Roboto+Slab:wght@400;600&display=swap');
@@ -244,7 +244,7 @@
       </svg>
     </a>
     <div class="logo-divider"></div>
-    <span class="logo-tagline">Amazon Label Generator</span>
+    <span class="logo-tagline">Amazon FBA Shipments</span>
   </div>
 
   <div class="header-right">
@@ -290,7 +290,8 @@
   var ACTION_ROLE_MIN = {
     azLedgerSave: 'manager', azLibSave: 'manager',
     azWarehouseMapSave: 'manager', azWarehouseMapDelete: 'manager',
-    azLedgerDeleteAll: 'admin'
+    azLedgerDeleteAll: 'admin',
+    amazonCheckFcEmails: 'manager', amazonSetFcStatus: 'manager', amazonDeleteFcLog: 'admin'
   };
   function actionAllowed(action, role) {
     var min = ACTION_ROLE_MIN[action];
@@ -328,13 +329,14 @@
       var el = document.getElementById(id);
       if (el) el.style.display = isAdmin ? '' : 'none';
     });
-    ['saveLibInlineEditBtn', 'deleteModelBtn', 'saveModelBtn', 'ledgerModalSaveBtn', 'ledgerModalEditBtn', 'saveNotFoundBtn', 'lib-mode-edit-btn'].forEach(function (id) {
+    ['saveLibInlineEditBtn', 'deleteModelBtn', 'saveModelBtn', 'ledgerModalSaveBtn', 'ledgerModalEditBtn', 'saveNotFoundBtn', 'lib-mode-edit-btn', 'fcCheckEmailsBtn'].forEach(function (id) {
       var el = document.getElementById(id);
       if (el) el.style.display = window.TM_CAN_EDIT ? '' : 'none';
     });
 
     if (typeof ledgerRender === 'function') { try { ledgerRender(); } catch (e) {} }
     if (typeof renderLibrary === 'function') { try { renderLibrary(); } catch (e) {} }
+    if (typeof fcRender === 'function') { try { fcRender(); } catch (e) {} }
   }
 
   function showApp(user) {
@@ -393,7 +395,8 @@
 </script>
 
 <div class="tabs">
-  <button class="tab-btn active" onclick="switchTab('ledger',this)">&#128203; CN Ledger</button>
+  <button class="tab-btn active" onclick="switchTab('fc',this)">&#128230; FC Appointments</button>
+  <button class="tab-btn" onclick="switchTab('ledger',this)">&#128203; CN Ledger</button>
   <button class="tab-btn" onclick="switchTab('bulk',this)">Label Print</button>
   <button class="tab-btn" onclick="switchTab('boxlabel',this)">Box Label</button>
   <button class="tab-btn" onclick="switchTab('library',this)">SKU Library</button>
@@ -558,7 +561,65 @@
       </div>
     </div>
 
-    <div id="tab-ledger" class="tab-content" style="display:flex;flex:1;flex-direction:column;min-height:0">
+    <div id="tab-fc" class="tab-content" style="display:flex;flex:1;flex-direction:column;min-height:0">
+      <div style="flex-shrink:0;padding:.7rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.8rem;background:var(--surface)">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128230; FC Appointments</div>
+        <input type="text" id="fcSearch" placeholder="Search Shipment / Appointment / FC..." oninput="_fcPage=1;fcRender()" style="width:260px;font-size:11px;padding:5px 10px">
+        <button class="btn btn-secondary btn-sm" onclick="fcLoad()" style="width:auto">&#8635; Refresh</button>
+        <button class="btn btn-primary btn-sm" id="fcCheckEmailsBtn" onclick="fcCheckEmailsNow()" style="width:auto" title="Manually trigger a Gmail check &#8212; same check the 15-min cron runs automatically">&#128231; Check Gmail Now</button>
+      </div>
+
+      <!-- Stats strip — same card style/sizing as CN Ledger / Blinkit RO Ledger,
+           clickable filters the same way too (click again to clear). -->
+      <div class="ro-stats-row">
+        <div class="ro-stat-card is-active-view" id="fcCardTotal" onclick="fcSetCardFilter('all')" title="Show all detected FC appointment emails">
+          <div class="ro-stat-label">Total Appointments</div>
+          <div class="ro-stat-value" id="fcStatTotal">&mdash;</div>
+          <div class="ro-stat-sub">all FC appointment emails detected</div>
+        </div>
+        <div class="ro-stat-card" id="fcCardConfirmed" onclick="fcSetCardFilter('confirmed')" title="Filter: Confirmed and not cancelled">
+          <div class="ro-stat-label">Confirmed</div>
+          <div class="ro-stat-value accent" id="fcStatConfirmed">&mdash;</div>
+          <div class="ro-stat-sub">confirmed, not cancelled</div>
+        </div>
+        <div class="ro-stat-card" id="fcCardCancelled" onclick="fcSetCardFilter('cancelled')" title="Filter: manually marked cancelled">
+          <div class="ro-stat-label">Cancelled</div>
+          <div class="ro-stat-value accent" id="fcStatCancelled">&mdash;</div>
+          <div class="ro-stat-sub">manually marked cancelled</div>
+        </div>
+      </div>
+
+      <div class="ro-table-scroll" style="flex:1;overflow-y:auto;overflow-x:auto;min-height:0">
+        <table style="width:100%;border-collapse:collapse;font-size:13.5px">
+          <thead style="position:sticky;top:0;z-index:2;background:var(--surface)">
+            <tr>
+              <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Shipment ID(s)</th>
+              <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Appointment ID</th>
+              <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Dest. FC</th>
+              <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Boxes</th>
+              <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">SKUs</th>
+              <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Units</th>
+              <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Confirmed Slot</th>
+              <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Reporting Time</th>
+              <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Status</th>
+              <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Detected</th>
+              <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">&nbsp;</th>
+            </tr>
+          </thead>
+          <tbody id="fcTbody">
+            <tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div id="fcPagerControls" style="display:none;flex-shrink:0;align-items:center;justify-content:center;gap:1rem;padding:.45rem 1.4rem;border-top:1px solid var(--border);background:var(--surface)">
+        <button class="btn btn-secondary btn-sm" id="fcPrevBtn" style="width:auto" onclick="fcGoToPage(_fcPage-1)">&#8592; Prev</button>
+        <span id="fcPageIndicator" style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap"></span>
+        <button class="btn btn-secondary btn-sm" id="fcNextBtn" style="width:auto" onclick="fcGoToPage(_fcPage+1)">Next &#8594;</button>
+      </div>
+    </div>
+
+    <div id="tab-ledger" class="tab-content" style="display:none;flex:1;flex-direction:column;min-height:0">
       <div style="flex-shrink:0;padding:.7rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.8rem;background:var(--surface)">
         <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128203; Consignment Ledger</div>
         <input type="text" id="ledgerSearch" placeholder="Search Consignment No..." oninput="_ledgerPage=1;ledgerRender()" style="width:220px;font-size:11px;padding:5px 10px">
@@ -1062,15 +1123,17 @@ function syncLibFromD1() {
     .catch(function(){ /* offline — keep using whatever's in localStorage */ });
 }
 syncLibFromD1();
-// CN Ledger is now the default landing tab. switchTab('ledger') is only ever
-// invoked on a button click, never automatically on page load, so its
-// single-column layout tweaks (full-width left panel, hidden preview panel)
-// and its initial data fetch are replicated here once at startup.
+// FC Appointments is now the default landing tab — the real, populated
+// data source (az_ledger / CN Ledger is still an inert template copy with
+// nothing writing to it yet). switchTab('fc') is only ever invoked on a
+// button click, never automatically on page load, so its single-column
+// layout tweaks (full-width left panel, hidden preview panel) and its
+// initial data fetch are replicated here once at startup.
 document.querySelector('.left-panel').style.width = '100%';
 document.querySelector('.left-panel').style.maxWidth = '100%';
 document.querySelector('.left-panel').style.borderRight = 'none';
 document.getElementById('previewPanel').style.display = 'none';
-ledgerLoad();
+fcLoad();
 function loadSettings() { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {mfgdate:'01/01/2026'}; } catch(e) { return {mfgdate:'01/01/2026'}; } }
 
 function saveSettings() {
@@ -1090,13 +1153,14 @@ function switchTab(name, btn) {
   var leftPanel = document.querySelector('.left-panel');
   var previewPanel = document.getElementById('previewPanel');
 
-  if(name==='boxlabel' || name==='ledger'){
+  if(name==='boxlabel' || name==='ledger' || name==='fc'){
     // Single-column tab: no side-by-side preview needed for this workflow
     leftPanel.style.width='100%';
     leftPanel.style.maxWidth='100%';
     leftPanel.style.borderRight='none';
     previewPanel.style.display='none';
     if(name==='ledger') ledgerLoad();
+    if(name==='fc') fcLoad();
     return;
   }
   // Restore the normal two-column layout for every other tab
@@ -1134,6 +1198,193 @@ function switchTab(name, btn) {
 // total_qty, send_qty, received_qty, status, items_json, shortage_json.
 // appointment_date / received_qty / status remain manual. dc_date / warehouse /
 // send_qty / items_json are parsed from the Stock Transfer Invoice PDF.
+// ══════════════════════════════════════════════════════════════════
+// FC APPOINTMENTS TAB — reads amazon_fc_log, populated by the Worker's
+// 15-min Gmail cron (checkNewAmazonFcEmails) and by the "Check Gmail Now"
+// button below (same action, amazonCheckFcEmails, on demand). Stage 1:
+// a flat, read-only-by-default detection log — no grouping/dedup by
+// appointment yet, so a reschedule of the same appointment_id shows as
+// its own row; sorted newest-first by email date so the current state
+// is always on top. Mirrors CN Ledger / Blinkit RO Ledger's card-filter
+// + pagination pattern.
+// ══════════════════════════════════════════════════════════════════
+var _fcRows = [];
+var _fcPage = 1;
+var FC_PAGE_SIZE = 10;
+var _fcCardFilter = 'all'; // 'all' | 'confirmed' | 'cancelled'
+
+function fcEsc(s) { return String(s == null ? '' : s).replace(/'/g, "\\'"); }
+
+// One-click copy — clipboard API with a manual textarea+execCommand
+// fallback for older/non-HTTPS contexts (same pattern used across the
+// other Marketplace-Shipments apps).
+function fcCopyText(text) {
+  function ok() { toast('Copied: ' + text, 'ok'); }
+  function fail() {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand('copy'); ok(); }
+    catch (e) { toast('Could not copy — select manually: ' + text, 'err', 4000); }
+    document.body.removeChild(ta);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(ok).catch(fail);
+  } else { fail(); }
+}
+
+// Click a stat card to filter the table to that subset; click the same
+// card again (or Total) to go back to showing everything.
+function fcSetCardFilter(view) {
+  _fcCardFilter = (_fcCardFilter === view || view === 'all') ? 'all' : view;
+  _fcPage = 1;
+  fcRender();
+}
+
+function fcLoad() {
+  var tbody = document.getElementById('fcTbody');
+  if (tbody) tbody.innerHTML = '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+  fetch(getWorkerBase() + '?action=amazonListFcLog')
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (!data || !data.ok) throw new Error((data && data.error) || 'Load failed');
+      _fcRows = data.rows || [];
+      _fcPage = 1;
+      fcRender();
+    })
+    .catch(function (err) {
+      if (tbody) tbody.innerHTML = '<tr><td colspan="11" style="padding:3rem;text-align:center;color:#e05555;font-size:11px">Failed to load: ' + (err.message || '') + '</td></tr>';
+    });
+}
+
+// Manual trigger — same check the 15-min cron runs automatically, exposed
+// here so a just-arrived email doesn't have to wait for the next tick.
+function fcCheckEmailsNow() {
+  var btn = document.getElementById('fcCheckEmailsBtn');
+  if (btn) { btn.disabled = true; btn.innerHTML = 'Checking\u2026'; }
+  fetch(getWorkerBase() + '?action=amazonCheckFcEmails')
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (!data || !data.ok) throw new Error((data && data.error) || 'Check failed');
+      toast('Checked ' + data.checked + ' email(s), logged ' + data.newLogged + ' new.', 'ok');
+      fcLoad();
+    })
+    .catch(function (err) { toast('Gmail check failed: ' + (err.message || ''), 'err'); })
+    .then(function () { if (btn) { btn.disabled = false; btn.innerHTML = '&#128231; Check Gmail Now'; } });
+}
+
+function fcIsCancelled(r) { return r.manual_status === 'cancelled'; }
+function fcIsConfirmed(r) { return !fcIsCancelled(r) && /confirm/i.test(r.appointment_status || ''); }
+
+function fcStatusBadge(r) {
+  if (fcIsCancelled(r)) return '<span style="color:#ff8080;font-weight:700">Cancelled</span>';
+  if (fcIsConfirmed(r)) return '<span style="color:#6dc87a;font-weight:700">Confirmed</span>';
+  return '<span style="color:var(--muted);font-weight:700">' + (r.appointment_status || '\u2014') + '</span>';
+}
+
+function fcFmtDate(iso) {
+  if (!iso) return '\u2014';
+  try {
+    var d = new Date(iso);
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) + ' ' +
+      d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  } catch (e) { return iso; }
+}
+
+function fcMatchesSearch(r, q) {
+  return (r.shipment_ids || '').toLowerCase().indexOf(q) !== -1 ||
+    (r.appointment_id || '').toLowerCase().indexOf(q) !== -1 ||
+    (r.destination_fc || '').toLowerCase().indexOf(q) !== -1;
+}
+
+function fcRender() {
+  var searchEl = document.getElementById('fcSearch');
+  var q = ((searchEl && searchEl.value) || '').trim().toLowerCase();
+
+  var statsBase = q ? _fcRows.filter(function (r) { return fcMatchesSearch(r, q); }) : _fcRows;
+  document.getElementById('fcStatTotal').textContent = statsBase.length;
+  document.getElementById('fcStatConfirmed').textContent = statsBase.filter(fcIsConfirmed).length;
+  document.getElementById('fcStatCancelled').textContent = statsBase.filter(fcIsCancelled).length;
+
+  var rows = _fcRows.slice().sort(function (a, b) {
+    return (b.email_date || b.detected_at || '').localeCompare(a.email_date || a.detected_at || '');
+  });
+  if (q) rows = rows.filter(function (r) { return fcMatchesSearch(r, q); });
+  if (_fcCardFilter === 'confirmed') rows = rows.filter(fcIsConfirmed);
+  else if (_fcCardFilter === 'cancelled') rows = rows.filter(fcIsCancelled);
+
+  var totalPages = Math.max(1, Math.ceil(rows.length / FC_PAGE_SIZE));
+  if (_fcPage > totalPages) _fcPage = totalPages;
+  var start = (_fcPage - 1) * FC_PAGE_SIZE;
+  var pageRows = rows.slice(start, start + FC_PAGE_SIZE);
+
+  var tbody = document.getElementById('fcTbody');
+  if (!pageRows.length) {
+    tbody.innerHTML = '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No FC appointments detected yet.</td></tr>';
+  } else {
+    tbody.innerHTML = pageRows.map(function (r) {
+      var canEdit = window.TM_CAN_EDIT;
+      var actionsHtml = canEdit
+        ? ('<button class="btn btn-secondary btn-sm" style="width:auto;padding:3px 8px;font-size:10px" onclick="fcToggleCancelled(\'' + fcEsc(r.appointment_id) + '\')">' +
+           (fcIsCancelled(r) ? 'Unmark' : 'Cancel') + '</button>')
+        : '';
+      return '<tr style="border-bottom:1px solid var(--border)">' +
+        '<td style="padding:.7rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="fcCopyText(\'' + fcEsc(r.shipment_ids) + '\')" title="Click to copy">' + (r.shipment_ids || '\u2014') + '</td>' +
+        '<td style="padding:.7rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="fcCopyText(\'' + fcEsc(r.appointment_id) + '\')" title="Click to copy">' + (r.appointment_id || '\u2014') + '</td>' +
+        '<td style="padding:.7rem 1rem;text-align:center;font-weight:700">' + (r.destination_fc || '\u2014') + '</td>' +
+        '<td style="padding:.7rem 1rem;text-align:center">' + (r.no_of_boxes || '\u2014') + '</td>' +
+        '<td style="padding:.7rem 1rem;text-align:center">' + (r.no_of_skus || '\u2014') + '</td>' +
+        '<td style="padding:.7rem 1rem;text-align:center">' + (r.no_of_units || '\u2014') + '</td>' +
+        '<td style="padding:.7rem 1rem;font-size:12px">' + (r.confirmed_slot || '\u2014') + '</td>' +
+        '<td style="padding:.7rem 1rem;font-size:12px">' + (r.reporting_time || '\u2014') + '</td>' +
+        '<td style="padding:.7rem 1rem">' + fcStatusBadge(r) + '</td>' +
+        '<td style="padding:.7rem 1rem;font-size:11px;color:var(--muted)">' + fcFmtDate(r.email_date) + '</td>' +
+        '<td style="padding:.7rem 1rem;text-align:center">' + actionsHtml + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  fcRenderPagination(rows.length, totalPages);
+}
+
+function fcRenderPagination(totalRows, totalPages) {
+  var pager = document.getElementById('fcPagerControls');
+  if (totalRows <= FC_PAGE_SIZE) { pager.style.display = 'none'; return; }
+  pager.style.display = 'flex';
+  document.getElementById('fcPageIndicator').textContent = 'Page ' + _fcPage + ' of ' + totalPages + ' (' + totalRows + ' total)';
+  document.getElementById('fcPrevBtn').disabled = (_fcPage <= 1);
+  document.getElementById('fcNextBtn').disabled = (_fcPage >= totalPages);
+}
+
+function fcGoToPage(p) {
+  var totalPages = Math.max(1, Math.ceil(_fcRows.length / FC_PAGE_SIZE));
+  _fcPage = Math.min(Math.max(1, p), totalPages);
+  fcRender();
+}
+
+// Toggles manual_status between 'cancelled' and cleared — server applies
+// it to every row under this appointment_id (see amazonSetFcStatus in
+// worker.js), same pattern as Blinkit's blinkitSetRoStatus. Admin/manager
+// only (gated both client-side via ACTION_ROLE_MIN and server-side via
+// ACTION_TIERS).
+function fcToggleCancelled(appointmentId) {
+  if (!appointmentId) return;
+  var current = _fcRows.find(function (r) { return r.appointment_id === appointmentId; });
+  var nextStatus = (current && current.manual_status === 'cancelled') ? null : 'cancelled';
+  fetch(getWorkerBase() + '?action=amazonSetFcStatus', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ appointment_id: appointmentId, status: nextStatus })
+  }).then(function (r) { return r.json(); }).then(function (data) {
+    if (!data || !data.ok) throw new Error((data && data.error) || 'Update failed');
+    toast(nextStatus ? 'Marked cancelled' : 'Unmarked cancelled', 'ok');
+    fcLoad();
+  }).catch(function (err) { toast('Failed: ' + (err.message || ''), 'err'); });
+}
+
 var _ledgerRows = [];
 var _ledgerPage = 1;
 var LEDGER_PAGE_SIZE = 10;
