@@ -2724,7 +2724,7 @@ export default {
         }
 
         // ── DELHIVERY — pickup request creation ("Forward Order" tab
-        //   of Create Pickup). Schedules a courier pickup for shipments
+        //   of Create Parcel Pickup). Schedules a courier pickup for shipments
         //   already created at DELHIVERY_PICKUP_LOCATION — separate from
         //   delhiveryCreateOrder above, which only manifests the order.
         // Body: { pickup_date: 'YYYY-MM-DD', pickup_time: 'HH:MM:SS',
