@@ -599,7 +599,7 @@
               <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Boxes</th>
               <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">SKUs</th>
               <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Units</th>
-              <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Confirmed Slot</th>
+              <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Appointment Date</th>
               <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Reporting Time</th>
               <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Status</th>
               <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Detected</th>
@@ -1288,6 +1288,15 @@ function fcStatusBadge(r) {
   return '<span style="color:var(--muted);font-weight:700">' + (r.appointment_status || '\u2014') + '</span>';
 }
 
+// Pulls just the date (e.g. "19 Sep 2026") out of the full slot text
+// Amazon sends ("02:45 PM 19 Sep, 2026 IST - 03:15 PM 19 Sep, 2026 IST")
+// — the person just wants the date, not the repeated time range.
+function fcExtractApptDate(slotText) {
+  if (!slotText) return '\u2014';
+  var m = String(slotText).match(/(\d{1,2}\s+[A-Za-z]{3,9}\.?,?\s+\d{4})/);
+  return m ? m[1].replace(',', '') : slotText;
+}
+
 function fcFmtDate(iso) {
   if (!iso) return '\u2014';
   try {
@@ -1341,7 +1350,7 @@ function fcRender() {
         '<td style="padding:.7rem 1rem;text-align:center">' + (r.no_of_boxes || '\u2014') + '</td>' +
         '<td style="padding:.7rem 1rem;text-align:center">' + (r.no_of_skus || '\u2014') + '</td>' +
         '<td style="padding:.7rem 1rem;text-align:center">' + (r.no_of_units || '\u2014') + '</td>' +
-        '<td style="padding:.7rem 1rem;font-size:12px">' + (r.confirmed_slot || '\u2014') + '</td>' +
+        '<td style="padding:.7rem 1rem;font-size:12px">' + fcExtractApptDate(r.confirmed_slot) + '</td>' +
         '<td style="padding:.7rem 1rem;font-size:12px">' + (r.reporting_time || '\u2014') + '</td>' +
         '<td style="padding:.7rem 1rem">' + fcStatusBadge(r) + '</td>' +
         '<td style="padding:.7rem 1rem;font-size:11px;color:var(--muted)">' + fcFmtDate(r.email_date) + '</td>' +
