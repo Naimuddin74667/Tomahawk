@@ -938,14 +938,21 @@ function initReversePickup() {
       var est = await fetch(window.TM_WORKER + '?action=ekartEstimateCharge&' + qs.toString()).then(function (r) { return r.json(); });
       if (est.ok && est.estimated && est.totalAmount != null) {
         confirmAmount.textContent = '₹' + est.totalAmount;
-        confirmNote.textContent = "This is Ekart's own estimate — the actual billed amount can differ slightly. Nothing is created yet.";
+        confirmNote.innerHTML = "This is Ekart's own estimate — the actual billed amount can differ slightly. Nothing is created yet.";
       } else {
         confirmAmount.textContent = 'Unavailable';
-        confirmNote.textContent = "Couldn't fetch an estimate right now, but you can still proceed — nothing is created yet.";
+        var estErr = (est.response && (est.response.message || est.response.description)) || est.error || 'unknown reason';
+        confirmNote.innerHTML = "Couldn't fetch an estimate right now (" + escapeHtml(estErr) + "), but you can still proceed — nothing is created yet." +
+          '<div class="details-toggle" id="rev-estimate-details-toggle" style="margin-top:6px;">view full response</div>' +
+          '<div class="details-json" id="rev-estimate-details-json">' + escapeHtml(JSON.stringify(est.response, null, 2)) + '</div>';
+        var estToggle = document.getElementById('rev-estimate-details-toggle');
+        if (estToggle) estToggle.addEventListener('click', function () {
+          document.getElementById('rev-estimate-details-json').classList.toggle('show');
+        });
       }
     } catch (err) {
       confirmAmount.textContent = 'Unavailable';
-      confirmNote.textContent = "Couldn't fetch an estimate right now, but you can still proceed — nothing is created yet.";
+      confirmNote.textContent = "Couldn't fetch an estimate right now (" + err.message + "), but you can still proceed — nothing is created yet.";
     }
 
     confirmBox.className = 'confirm-box show';
