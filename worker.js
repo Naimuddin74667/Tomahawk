@@ -1474,7 +1474,29 @@ export default {
           if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
           const text = await res.text();
 
-          const response = new Response(text, {
+          // Clean up `reference`: warehouse staff sometimes append a qty
+          // suffix by hand — e.g. "FBA15M8YWFT5-760qty" instead of the
+          // bare shipment ID — which would silently fail the exact-match
+          // lookup on the FC Appointments tab. FBA shipment IDs never
+          // contain a hyphen themselves, so stripping everything from the
+          // first "-" onward reliably recovers the bare ID either way.
+          let text2 = text;
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed && Array.isArray(parsed.records)) {
+              parsed.records.forEach(rec => {
+                if (rec.reference) {
+                  const clean = String(rec.reference).split('-')[0].trim();
+                  if (clean) rec.reference = clean;
+                }
+              });
+              text2 = JSON.stringify(parsed);
+            }
+          } catch (e) {
+            // GAS response wasn't valid JSON — fall through, cache raw text.
+          }
+
+          const response = new Response(text2, {
             headers: { ...CORS, 'Cache-Control': 'public, max-age=300', 'X-Cache': 'MISS' }
           });
           await cache.put(cacheKey, response.clone());
