@@ -245,6 +245,17 @@ table.log-table tr:last-child td { border-bottom: none; }
 .sub-back a { color: var(--text2); text-decoration: none; }
 .sub-back a:hover { color: var(--accent); }
 
+/* ── Forward Order / Reverse Pickup tabs ── */
+.page-tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--border); margin-bottom: 22px; }
+.page-tab {
+  font-family: var(--font-body); font-size: 13px; font-weight: 600; color: var(--text2);
+  background: none; border: none; border-bottom: 2px solid transparent;
+  padding: 10px 4px; margin-bottom: -1px; cursor: pointer; transition: color .15s, border-color .15s;
+}
+.page-tab:hover { color: var(--text); }
+.page-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-panel[hidden] { display: none; }
+
 .placeholder-panel {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
   text-align: center; padding: 60px 20px; color: var(--text2); font-size: 13px;
@@ -309,17 +320,99 @@ table.log-table tr:last-child td { border-bottom: none; }
     <div class="sub-back"><a href="../index.html">&larr; Customer Care</a></div>
     <div class="page-head">
       <div class="page-title">Create Pickup</div>
-      <div class="page-sub">Schedule a Delhivery pickup request — coming soon</div>
+      <div class="page-sub">Schedule a pickup for created shipments</div>
     </div>
-    <div class="panel">
-      <div class="placeholder-panel">
-        <div class="ph-title">Create Pickup</div>
-        <div>Pickup scheduling isn't wired up yet — coming soon.</div>
+
+    <div class="page-tabs">
+      <button class="page-tab active" id="tab-btn-forward" onclick="switchPickupTab('forward')">Forward Order</button>
+      <button class="page-tab" id="tab-btn-reverse" onclick="switchPickupTab('reverse')">Reverse Pickup</button>
+    </div>
+
+    <div class="tab-panel" id="tab-panel-forward">
+      <div class="grid">
+
+        <!-- ── Schedule pickup panel ── -->
+        <div class="panel">
+          <div class="panel-title">Delhivery pickup request</div>
+
+          <div id="fwd-viewer-note" class="viewer-note" hidden>
+            Viewer accounts can see the pickup log on the right, but only Admins and Managers can schedule a pickup.
+          </div>
+
+          <div id="fwd-pickup-form" autocomplete="off">
+            <div class="form-row single">
+              <div class="field">
+                <label>Pickup date</label>
+                <input type="date" id="fwd-date" required>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="field">
+                <label>Pickup time</label>
+                <input type="time" id="fwd-time" value="14:00" required>
+              </div>
+              <div class="field">
+                <label>Expected package count</label>
+                <input type="number" id="fwd-count" min="1" value="1" required>
+              </div>
+            </div>
+            <button class="submit-btn" id="fwd-submit-btn" type="button">Schedule Pickup</button>
+          </div>
+
+          <div class="result-box" id="fwd-result-box">
+            <div class="result-title" id="fwd-result-title"></div>
+            <div id="fwd-result-body"></div>
+          </div>
+        </div>
+
+        <!-- ── Pickup log panel ── -->
+        <div class="panel">
+          <div class="panel-head-row">
+            <div class="panel-title">Recent pickups</div>
+            <span class="log-refresh" id="fwd-log-refresh-btn">&#8635; Refresh</span>
+          </div>
+          <div class="log-table-wrap">
+            <table class="log-table" id="fwd-log-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Time</th>
+                  <th>Packages</th>
+                  <th>Status</th>
+                  <th>By</th>
+                  <th>When</th>
+                </tr>
+              </thead>
+              <tbody id="fwd-log-tbody"></tbody>
+            </table>
+            <div class="log-empty" id="fwd-log-empty" hidden>No pickups logged yet.</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="tab-panel" id="tab-panel-reverse" hidden>
+      <div class="panel">
+        <div class="placeholder-panel">
+          <div class="ph-title">Reverse Pickup</div>
+          <div>Ekart reverse pickup integration is being wired up &mdash; coming soon.</div>
+        </div>
       </div>
     </div>
 </div>
 
 <script>
+// ══════════════════════════════════════════════════════════════════
+// TABS — Forward Order / Reverse Pickup
+// ══════════════════════════════════════════════════════════════════
+function switchPickupTab(name) {
+  document.getElementById('tab-panel-forward').hidden = name !== 'forward';
+  document.getElementById('tab-panel-reverse').hidden = name !== 'reverse';
+  document.getElementById('tab-btn-forward').classList.toggle('active', name === 'forward');
+  document.getElementById('tab-btn-reverse').classList.toggle('active', name === 'reverse');
+}
+
 // ══════════════════════════════════════════════════════════════════
 // AUTH — session comes from the Tomahawk hub, same pattern as every
 // other sub-app. picker_packer has no access here at all.
@@ -336,6 +429,12 @@ table.log-table tr:last-child td { border-bottom: none; }
   window.TM_WORKER = TM_WORKER;
   window.TM_getSession = getSession;
 
+  function applyRoleGating(role) {
+    var canCreate = role === 'admin' || role === 'manager';
+    document.getElementById('fwd-pickup-form').style.display = canCreate ? '' : 'none';
+    document.getElementById('fwd-viewer-note').hidden = canCreate;
+  }
+
   function showApp(user) {
     document.getElementById('auth-gate').hidden = true;
     document.getElementById('header-user').hidden = false;
@@ -346,6 +445,7 @@ table.log-table tr:last-child td { border-bottom: none; }
     var roleLabels = { admin: 'Admin', manager: 'Manager', viewer: 'Viewer', picker_packer: 'Picker & Packer' };
     document.getElementById('user-role-badge').textContent = roleLabels[user.role] || user.role;
     window.TM_ROLE = user.role;
+    applyRoleGating(user.role);
   }
 
   function showAccessDenied() {
@@ -388,6 +488,7 @@ table.log-table tr:last-child td { border-bottom: none; }
       showApp(res.user);
     } catch (e) { /* network hiccup — keep the optimistic render */ }
 
+    initForwardPickup();
   })();
 
   // ── Theme ──
@@ -400,6 +501,118 @@ table.log-table tr:last-child td { border-bottom: none; }
     localStorage.setItem('tm_theme', isLight ? 'dark' : 'light');
   };
 })();
+
+// ══════════════════════════════════════════════════════════════════
+// FORWARD ORDER — Delhivery pickup request form + log
+// ══════════════════════════════════════════════════════════════════
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+function fmtWhen(iso) {
+  if (!iso) return '';
+  try {
+    var d = new Date(iso.replace(' ', 'T') + 'Z');
+    return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  } catch (e) { return iso; }
+}
+
+function initForwardPickup() {
+  var submitBtn = document.getElementById('fwd-submit-btn');
+  var resultBox = document.getElementById('fwd-result-box');
+  var resultTitle = document.getElementById('fwd-result-title');
+  var resultBody = document.getElementById('fwd-result-body');
+  var dateField = document.getElementById('fwd-date');
+  var timeField = document.getElementById('fwd-time');
+  var countField = document.getElementById('fwd-count');
+
+  // Default the date field to tomorrow — same-day pickups are rarely
+  // bookable this late in the cycle, so tomorrow is the sane default.
+  var d = new Date();
+  d.setDate(d.getDate() + 1);
+  dateField.value = d.toISOString().slice(0, 10);
+
+  async function callWorker(action, payload) {
+    var session = window.TM_getSession();
+    var headers = { 'Content-Type': 'application/json' };
+    if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
+    var res = await fetch(window.TM_WORKER + '?action=' + encodeURIComponent(action), {
+      method: 'POST', headers: headers, body: JSON.stringify(Object.assign({ action: action }, payload || {}))
+    });
+    return res.json();
+  }
+
+  async function fetchLog() {
+    try {
+      var session = window.TM_getSession();
+      var headers = {};
+      if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
+      var res = await fetch(window.TM_WORKER + '?action=delhiveryListPickups', { headers: headers }).then(function (r) { return r.json(); });
+      var tbody = document.getElementById('fwd-log-tbody');
+      var empty = document.getElementById('fwd-log-empty');
+      tbody.innerHTML = '';
+      var rows = (res.ok && res.pickups) || [];
+      empty.hidden = rows.length > 0;
+      rows.forEach(function (p) {
+        var tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>' + escapeHtml(p.pickup_date) + '</td>' +
+          '<td>' + escapeHtml(p.pickup_time) + '</td>' +
+          '<td>' + escapeHtml(p.expected_package_count) + '</td>' +
+          '<td><span class="badge ' + (p.success ? 'created' : 'failed') + '">' + (p.success ? 'Scheduled' : 'Failed') + '</span></td>' +
+          '<td>' + escapeHtml(p.created_by) + '</td>' +
+          '<td>' + fmtWhen(p.created_at) + '</td>';
+        tbody.appendChild(tr);
+      });
+    } catch (e) {}
+  }
+
+  submitBtn.addEventListener('click', async function () {
+    resultBox.className = 'result-box';
+
+    if (!dateField.value || !timeField.value || !countField.value) {
+      resultBox.className = 'result-box show error';
+      resultTitle.textContent = 'Missing fields';
+      resultBody.textContent = 'Fill in date, time, and expected package count.';
+      return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Scheduling…';
+
+    try {
+      var res = await callWorker('delhiveryCreatePickup', {
+        pickup_date: dateField.value,
+        pickup_time: timeField.value + ':00',
+        expected_package_count: Number(countField.value)
+      });
+      if (res.ok) {
+        resultBox.className = 'result-box show success';
+        resultTitle.textContent = 'Pickup scheduled';
+        resultBody.innerHTML = res.pickupId ? 'Pickup request ID: <span class="result-waybill">' + escapeHtml(res.pickupId) + '</span>' : 'Delhivery has logged the pickup request.';
+        countField.value = '1';
+      } else {
+        resultBox.className = 'result-box show error';
+        resultTitle.textContent = 'Pickup request failed';
+        resultBody.textContent = (res.response && (res.response.error || res.response.message)) || res.error || 'Unknown error — check the log details below.';
+      }
+    } catch (err) {
+      resultBox.className = 'result-box show error';
+      resultTitle.textContent = 'Request failed';
+      resultBody.textContent = err.message;
+    }
+
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Schedule Pickup';
+    fetchLog();
+  });
+
+  document.getElementById('fwd-log-refresh-btn').addEventListener('click', fetchLog);
+
+  fetchLog();
+}
 </script>
 
 </body>

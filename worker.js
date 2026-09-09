@@ -267,7 +267,9 @@ const ACTION_TIERS = {
   //   manager_up; listing what's been created is viewer_read like
   //   everything else read-only in this file. —
   delhiveryCreateOrder: 'manager_up', delhiveryListOrders: 'viewer_read',
-  delhiveryCheckPincode: 'viewer_read', delhiveryEstimateCharge: 'viewer_read'
+  delhiveryCheckPincode: 'viewer_read', delhiveryEstimateCharge: 'viewer_read',
+  delhiveryCreatePickup: 'manager_up', delhiveryListPickups: 'viewer_read',
+  ekartCreateReversePickup: 'manager_up', ekartListReversePickups: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -1537,6 +1539,15 @@ export default {
           return json({ ok: true, orders: rows.results || [] });
         }
 
+        // ── DELHIVERY — list logged pickup-request attempts ───────
+        if (action === 'delhiveryListPickups') {
+          await ensureDelhiveryPickupTable(env.DB);
+          const rows = await env.DB.prepare(
+            'SELECT * FROM delhivery_pickups ORDER BY created_at DESC LIMIT 100'
+          ).all();
+          return json({ ok: true, pickups: rows.results || [] });
+        }
+
         // ── DELHIVERY — pincode serviceability pre-check, called from
         //   the order form before submission so a bad/non-serviceable
         //   pincode is caught immediately instead of after a failed
@@ -2712,6 +2723,43 @@ export default {
           return json({ ok: result.success, waybill: result.waybill, delhiveryHttpStatus: result.httpStatus, response: result.response }, result.success ? 200 : 502);
         }
 
+        // ── DELHIVERY — pickup request creation ("Forward Order" tab
+        //   of Create Pickup). Schedules a courier pickup for shipments
+        //   already created at DELHIVERY_PICKUP_LOCATION — separate from
+        //   delhiveryCreateOrder above, which only manifests the order.
+        // Body: { pickup_date: 'YYYY-MM-DD', pickup_time: 'HH:MM:SS',
+        //   expected_package_count: number }
+        // Requires DELHIVERY_API_TOKEN and DELHIVERY_PICKUP_LOCATION —
+        // see createDelhiveryOrder() above for what each does.
+        if (act === 'delhiveryCreatePickup') {
+          await ensureDelhiveryPickupTable(env.DB);
+          const p = body || {};
+          const required = ['pickup_date', 'pickup_time', 'expected_package_count'];
+          const missing = required.filter(f => p[f] === undefined || p[f] === null || p[f] === '');
+          if (missing.length) return json({ ok: false, error: 'Missing required field(s): ' + missing.join(', ') }, 400);
+          if (!env.DELHIVERY_API_TOKEN) return json({ ok: false, error: 'DELHIVERY_API_TOKEN is not set in Worker secrets' }, 500);
+          if (!env.DELHIVERY_PICKUP_LOCATION) return json({ ok: false, error: 'DELHIVERY_PICKUP_LOCATION is not set in Worker secrets' }, 500);
+
+          let result;
+          try {
+            result = await createDelhiveryPickup(env, p);
+          } catch (e) {
+            return json({ ok: false, error: 'Delhivery request failed: ' + e.message }, 502);
+          }
+
+          const sessionUser = await resolveSession(request, env.DB);
+          await env.DB.prepare(`
+            INSERT INTO delhivery_pickups (pickup_date, pickup_time, expected_package_count, pickup_location, success, response_json, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+          `).bind(
+            p.pickup_date, p.pickup_time, Number(p.expected_package_count), env.DELHIVERY_PICKUP_LOCATION,
+            result.success ? 1 : 0, JSON.stringify(result.response),
+            (sessionUser && sessionUser.username) || 'unauthenticated'
+          ).run();
+
+          return json({ ok: result.success, pickupId: result.pickupId, delhiveryHttpStatus: result.httpStatus, response: result.response }, result.success ? 200 : 502);
+        }
+
         return json({ ok: false, error: 'Unknown action' }, 400);
       }
 
@@ -3044,6 +3092,57 @@ async function createDelhiveryOrder(env, o) {
   const waybill = (pkg && pkg.waybill) || '';
 
   return { success, httpStatus: dResp.status, waybill, payload, response: dJson };
+}
+
+async function ensureDelhiveryPickupTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS delhivery_pickups (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    pickup_date             TEXT,
+    pickup_time             TEXT,
+    expected_package_count  INTEGER,
+    pickup_location         TEXT,
+    success                 INTEGER DEFAULT 0,
+    response_json           TEXT,
+    created_by              TEXT,
+    created_at              TEXT DEFAULT (datetime('now'))
+  )`).run();
+}
+
+// ── DELHIVERY — Pickup Request Creation ──────────────────────────────
+// Proxies Delhivery's Pickup Request API (schedules a courier pickup —
+// distinct from createDelhiveryOrder above, which only manifests the
+// shipment). Same CORS reasoning as createDelhiveryOrder: has to be
+// server-side.
+//   URL: {DELHIVERY_BASE_URL}/fm/request/new/
+//   Payload: { pickup_location, pickup_date, pickup_time, expected_package_count }
+async function createDelhiveryPickup(env, p) {
+  const payload = {
+    pickup_location: env.DELHIVERY_PICKUP_LOCATION,
+    pickup_date: p.pickup_date,           // 'YYYY-MM-DD'
+    pickup_time: p.pickup_time,           // 'HH:MM:SS'
+    expected_package_count: Number(p.expected_package_count)
+  };
+
+  const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
+
+  const dResp = await fetch(base + '/fm/request/new/', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Token ' + env.DELHIVERY_API_TOKEN,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+  const dText = await dResp.text();
+  let dJson;
+  try { dJson = JSON.parse(dText); } catch (e) { dJson = { raw: dText }; }
+
+  // Delhivery returns pickup_id on success; a rejected request can still
+  // come back HTTP 200 with an error message in the body, so check both.
+  const success = !!(dResp.ok && !dJson.error && (dJson.pickup_id || dJson.success !== false));
+  const pickupId = dJson.pickup_id || dJson.pr_id || '';
+
+  return { success, httpStatus: dResp.status, pickupId, payload, response: dJson };
 }
 
 // Exchanges the long-lived refresh token for a short-lived access token.
