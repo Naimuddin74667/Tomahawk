@@ -601,13 +601,14 @@
               <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Units</th>
               <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Appointment Date</th>
               <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Reporting Time</th>
+              <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Gatepass</th>
               <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Status</th>
               <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Detected</th>
               <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">&nbsp;</th>
             </tr>
           </thead>
           <tbody id="fcTbody">
-            <tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+            <tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
           </tbody>
         </table>
       </div>
@@ -1247,19 +1248,38 @@ function fcSetCardFilter(view) {
   fcRender();
 }
 
+var _fcGatepassMap = {}; // shipment_id (trimmed) -> {status, type, created} — latest by created wins
+
 function fcLoad() {
   var tbody = document.getElementById('fcTbody');
-  if (tbody) tbody.innerHTML = '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
-  fetch(getWorkerBase() + '?action=amazonListShipments')
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
+  if (tbody) tbody.innerHTML = '<tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+  Promise.all([
+    fetch(getWorkerBase() + '?action=amazonListShipments').then(function (r) { return r.json(); }),
+    fetch(getWorkerBase() + '?action=amazonGetGatepass').then(function (r) { return r.json(); }).catch(function () { return { records: [] }; })
+  ])
+    .then(function (results) {
+      var data = results[0];
       if (!data || !data.ok) throw new Error((data && data.error) || 'Load failed');
       _fcRows = data.rows || [];
+
+      // Gatepass reference is matched by exact shipment ID — take the
+      // latest record per reference if more than one gatepass was ever
+      // raised against the same shipment ID.
+      _fcGatepassMap = {};
+      (results[1].records || []).forEach(function (rec) {
+        var ref = String(rec.reference || '').trim();
+        if (!ref) return;
+        var existing = _fcGatepassMap[ref];
+        if (!existing || (rec.created || '') > (existing.created || '')) {
+          _fcGatepassMap[ref] = rec;
+        }
+      });
+
       _fcPage = 1;
       fcRender();
     })
     .catch(function (err) {
-      if (tbody) tbody.innerHTML = '<tr><td colspan="11" style="padding:3rem;text-align:center;color:#e05555;font-size:11px">Failed to load: ' + (err.message || '') + '</td></tr>';
+      if (tbody) tbody.innerHTML = '<tr><td colspan="12" style="padding:3rem;text-align:center;color:#e05555;font-size:11px">Failed to load: ' + (err.message || '') + '</td></tr>';
     });
 }
 
@@ -1286,6 +1306,22 @@ function fcStatusBadge(r) {
   if (fcIsCancelled(r)) return '<span style="color:#ff8080;font-weight:700">Cancelled</span>';
   if (fcIsConfirmed(r)) return '<span style="color:#6dc87a;font-weight:700">Confirmed</span>';
   return '<span style="color:var(--muted);font-weight:700">' + (r.appointment_status || '\u2014') + '</span>';
+}
+
+// Gatepass column — matches UC_Gatepass's reference field to this
+// shipment ID (exact match, via amazonGetGatepass — see worker.js /
+// getAmazonGatepassPayload). Rules:
+//   no matching gatepass at all                       -> NA (red ✗)
+//   matched, type NON_RETURNABLE and status CLOSED     -> Done (green ✓)
+//   matched, anything else (still CREATED, etc.)       -> Reserved (orange)
+function fcGatepassBadge(shipmentId) {
+  var ref = String(shipmentId || '').trim();
+  var gp = ref ? _fcGatepassMap[ref] : null;
+  if (!gp) return '<span style="color:#ff8080;font-weight:700">&#10007; NA</span>';
+  if (gp.type === 'NON_RETURNABLE' && gp.status === 'CLOSED') {
+    return '<span style="color:#6dc87a;font-weight:700">&#10003; Done</span>';
+  }
+  return '<span style="color:var(--accent);font-weight:700">&#9679; Reserved</span>';
 }
 
 // Pulls just the date (e.g. "19 Sep 2026") out of the full slot text
@@ -1335,7 +1371,7 @@ function fcRender() {
 
   var tbody = document.getElementById('fcTbody');
   if (!pageRows.length) {
-    tbody.innerHTML = '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No FC appointments detected yet.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="12" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No FC appointments detected yet.</td></tr>';
   } else {
     tbody.innerHTML = pageRows.map(function (r) {
       var canEdit = window.TM_CAN_EDIT;
@@ -1352,6 +1388,7 @@ function fcRender() {
         '<td style="padding:.7rem 1rem;text-align:center">' + (r.no_of_units || '\u2014') + '</td>' +
         '<td style="padding:.7rem 1rem;font-size:12px">' + fcExtractApptDate(r.confirmed_slot) + '</td>' +
         '<td style="padding:.7rem 1rem;font-size:12px">' + (r.reporting_time || '\u2014') + '</td>' +
+        '<td style="padding:.7rem 1rem;text-align:center">' + fcGatepassBadge(r.shipment_id) + '</td>' +
         '<td style="padding:.7rem 1rem">' + fcStatusBadge(r) + '</td>' +
         '<td style="padding:.7rem 1rem;font-size:11px;color:var(--muted)">' + fcFmtDate(r.email_date) + '</td>' +
         '<td style="padding:.7rem 1rem;text-align:center">' + actionsHtml + '</td>' +
