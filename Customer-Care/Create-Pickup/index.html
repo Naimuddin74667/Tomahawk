@@ -333,67 +333,170 @@ table.log-table tr:last-child td { border-bottom: none; }
     </div>
 
     <div class="tab-panel" id="tab-panel-forward">
-      <div class="grid">
+  <div class="grid">
 
-        <!-- ── Schedule pickup panel ── -->
-        <div class="panel">
-          <div class="panel-title">Delhivery pickup request</div>
+    <!-- ── Create Order panel ── -->
+    <div class="panel">
+      <div class="panel-title">New forward order</div>
 
-          <div id="fwd-viewer-note" class="viewer-note" hidden>
-            Viewer accounts can see the pickup log on the right, but only Admins and Managers can schedule a pickup.
-          </div>
-
-          <div id="fwd-pickup-form" autocomplete="off">
-            <div class="form-row single">
-              <div class="field">
-                <label>Pickup date</label>
-                <input type="date" id="fwd-date" required>
-              </div>
-            </div>
-            <div class="form-row">
-              <div class="field">
-                <label>Pickup time</label>
-                <input type="time" id="fwd-time" value="14:00" required>
-              </div>
-              <div class="field">
-                <label>Expected package count</label>
-                <input type="number" id="fwd-count" min="1" value="1" required>
-              </div>
-            </div>
-            <button class="submit-btn" id="fwd-submit-btn" type="button">Schedule Pickup</button>
-          </div>
-
-          <div class="result-box" id="fwd-result-box">
-            <div class="result-title" id="fwd-result-title"></div>
-            <div id="fwd-result-body"></div>
-          </div>
-        </div>
-
-        <!-- ── Pickup log panel ── -->
-        <div class="panel">
-          <div class="panel-head-row">
-            <div class="panel-title">Recent pickups</div>
-            <span class="log-refresh" id="fwd-log-refresh-btn">&#8635; Refresh</span>
-          </div>
-          <div class="log-table-wrap">
-            <table class="log-table" id="fwd-log-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Time</th>
-                  <th>Packages</th>
-                  <th>Status</th>
-                  <th>By</th>
-                  <th>When</th>
-                </tr>
-              </thead>
-              <tbody id="fwd-log-tbody"></tbody>
-            </table>
-            <div class="log-empty" id="fwd-log-empty" hidden>No pickups logged yet.</div>
-          </div>
-        </div>
-
+      <div id="viewer-note" class="viewer-note" hidden>
+        Viewer accounts can see the order log on the right, but only Admins and Managers can create a Delhivery order — this creates a real, live shipment on the account.
       </div>
+
+      <div id="order-form" autocomplete="off">
+        <div class="form-row single">
+          <div class="field">
+            <label>Order ID</label>
+            <input type="text" id="f-order" required readonly placeholder="Fills in once you enter the phone number below">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="field">
+            <label>Consignee Name</label>
+            <input type="text" id="f-name" required autocomplete="off" placeholder="Customer's full name">
+          </div>
+          <div class="field">
+            <label>Phone</label>
+            <input type="tel" id="f-phone" required autocomplete="off" placeholder="10-digit mobile" maxlength="10" pattern="[0-9]{10}">
+          </div>
+        </div>
+
+        <div class="form-row single">
+          <div class="field">
+            <label>Delivery Address</label>
+            <textarea id="f-add" required autocomplete="off" placeholder="Full address, house/flat no., street, area"></textarea>
+          </div>
+        </div>
+
+        <div class="form-row three">
+          <div class="field">
+            <label>Pincode</label>
+            <input type="text" id="f-pin" required autocomplete="off" maxlength="6" pattern="[0-9]{6}">
+            <div class="field-hint" id="pin-status"></div>
+          </div>
+          <div class="field">
+            <label>City <span class="opt">auto-filled</span></label>
+            <input type="text" id="f-city" required readonly placeholder="From pincode">
+          </div>
+          <div class="field">
+            <label>State <span class="opt">auto-filled</span></label>
+            <input type="text" id="f-state" required readonly placeholder="From pincode">
+          </div>
+        </div>
+
+        <div class="form-row single">
+          <div class="field">
+            <label>Type</label>
+            <select id="f-type" required>
+              <option value="" selected>&#8212; Select type &#8212;</option>
+              <option value="Repaired">Repaired</option>
+              <option value="Replacement">Replacement</option>
+              <option value="FOC">FOC</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row single" id="desc-text-wrap">
+          <div class="field">
+            <label>Products Description</label>
+            <input type="text" id="f-desc" required placeholder="e.g. TCD-12D Cordless Drill">
+            <div class="field-hint">For multi-item orders, list them together here — this MVP creates one shipment per order (one waybill).</div>
+          </div>
+        </div>
+
+        <div class="form-row single" id="desc-sku-wrap" style="display:none;">
+          <div class="field">
+            <label>Replacement SKU</label>
+            <select id="f-replacement-sku">
+              <option value="">Loading SKUs&#8230;</option>
+            </select>
+            <div class="field-hint" id="sku-list-hint"></div>
+          </div>
+        </div>
+
+        <div class="form-row three">
+          <div class="field">
+            <label>Payment Mode</label>
+            <select id="f-payment">
+              <option value="Prepaid" selected>Prepaid</option>
+              <option value="COD">COD</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Quantity</label>
+            <input type="number" id="f-qty" required min="1" value="1">
+          </div>
+          <div class="field">
+            <label>Declared Value (&#8377;)</label>
+            <input type="number" id="f-amount" required min="0" step="0.01">
+          </div>
+        </div>
+
+        <div class="form-row three">
+          <div class="field">
+            <label>HSN Code</label>
+            <input type="text" id="f-hsn" required value="8467">
+          </div>
+          <div class="field">
+            <label>Weight (grams)</label>
+            <input type="number" id="f-weight" required min="0" step="1" value="1000">
+            <div class="field-hint">Check the weight before booking.</div>
+          </div>
+          <div class="field">
+            <label>Dimensions L×W×H (cm)</label>
+            <div style="display:flex;gap:6px;">
+              <input type="number" id="f-length" required placeholder="L" min="0" value="10">
+              <input type="number" id="f-width" required placeholder="W" min="0" value="10">
+              <input type="number" id="f-height" required placeholder="H" min="0" value="10">
+            </div>
+          </div>
+        </div>
+
+        <button type="button" class="submit-btn" id="submit-btn">Create Delhivery Order</button>
+      </div>
+
+      <div class="confirm-box" id="confirm-box">
+        <div class="confirm-title">Estimated shipping charge</div>
+        <div class="confirm-amount" id="confirm-amount">&#8377;&#8212;</div>
+        <div class="confirm-note" id="confirm-note">This is Delhivery's own estimate — their docs note the actual billed amount can differ slightly. Nothing is created yet.</div>
+        <div class="confirm-actions">
+          <button type="button" class="btn-confirm-no" id="confirm-no-btn">Cancel</button>
+          <button type="button" class="btn-confirm-yes" id="confirm-yes-btn">Confirm &amp; Create Order</button>
+        </div>
+      </div>
+
+      <div class="result-box" id="result-box">
+        <div class="result-title" id="result-title"></div>
+        <div id="result-body"></div>
+      </div>
+    </div>
+
+    <!-- ── Order log panel ── -->
+    <div class="panel">
+      <div class="panel-head-row">
+        <div class="panel-title">Recent orders</div>
+        <span class="log-refresh" id="log-refresh-btn">&#8635; Refresh</span>
+      </div>
+      <div class="log-table-wrap">
+        <table class="log-table" id="log-table">
+          <thead>
+            <tr>
+              <th>Order ID</th>
+              <th>Waybill</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>By</th>
+              <th>When</th>
+            </tr>
+          </thead>
+          <tbody id="log-tbody"></tbody>
+        </table>
+        <div class="log-empty" id="log-empty" hidden>No orders logged yet.</div>
+      </div>
+    </div>
+
+  </div>
     </div>
 
     <div class="tab-panel" id="tab-panel-reverse" hidden>
@@ -589,8 +692,8 @@ function switchPickupTab(name) {
 
   function applyRoleGating(role) {
     var canCreate = role === 'admin' || role === 'manager';
-    document.getElementById('fwd-pickup-form').style.display = canCreate ? '' : 'none';
-    document.getElementById('fwd-viewer-note').hidden = canCreate;
+    document.getElementById('order-form').style.display = canCreate ? '' : 'none';
+    document.getElementById('viewer-note').hidden = canCreate;
     document.getElementById('rev-pickup-form').style.display = canCreate ? '' : 'none';
     document.getElementById('rev-viewer-note').hidden = canCreate;
   }
@@ -648,7 +751,7 @@ function switchPickupTab(name) {
       showApp(res.user);
     } catch (e) { /* network hiccup — keep the optimistic render */ }
 
-    initForwardPickup();
+    initDelhiveryApp();
     initReversePickup();
   })();
 
@@ -664,7 +767,7 @@ function switchPickupTab(name) {
 })();
 
 // ══════════════════════════════════════════════════════════════════
-// FORWARD ORDER — Delhivery pickup request form + log
+// FORWARD ORDER — Delhivery order-creation form + log
 // ══════════════════════════════════════════════════════════════════
 function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -680,97 +783,378 @@ function fmtWhen(iso) {
   } catch (e) { return iso; }
 }
 
-function initForwardPickup() {
-  var submitBtn = document.getElementById('fwd-submit-btn');
-  var resultBox = document.getElementById('fwd-result-box');
-  var resultTitle = document.getElementById('fwd-result-title');
-  var resultBody = document.getElementById('fwd-result-body');
-  var dateField = document.getElementById('fwd-date');
-  var timeField = document.getElementById('fwd-time');
-  var countField = document.getElementById('fwd-count');
-
-  // Default the date field to tomorrow — same-day pickups are rarely
-  // bookable this late in the cycle, so tomorrow is the sane default.
+function genOrderId(phone) {
   var d = new Date();
-  d.setDate(d.getDate() + 1);
-  dateField.value = d.toISOString().slice(0, 10);
+  var pad = function (n) { return String(n).padStart(2, '0'); };
+  var ddmm = pad(d.getDate()) + pad(d.getMonth() + 1);
+  if (phone && /^\d{10}$/.test(phone)) {
+    return 'RPR-' + phone + '-' + ddmm;
+  }
+  var datePart = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate());
+  var timePart = pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+  var rand = Math.floor(Math.random() * 900 + 100); // 3-digit random tail
+  return 'TH-' + datePart + '-' + timePart + '-' + rand;
+}
 
-  async function callWorker(action, payload) {
+function initDelhiveryApp() {
+  var submitBtn = document.getElementById('submit-btn');
+  var resultBox = document.getElementById('result-box');
+  var resultTitle = document.getElementById('result-title');
+  var resultBody = document.getElementById('result-body');
+
+  var orderIdField = document.getElementById('f-order');
+  var phoneField = document.getElementById('f-phone');
+
+  // Order ID is fully automatic and read-only — blank until a valid
+  // 10-digit phone is entered, then RPR-<phone>-DDMM. Updates live as
+  // the phone number is typed/corrected, not just on blur.
+  function bumpOrderIdForPhone() {
+    var phone = phoneField.value.trim();
+    orderIdField.value = /^\d{10}$/.test(phone) ? genOrderId(phone) : '';
+  }
+
+  // ── Type field — switches Products Description between free text and
+  // a UC Master SKU dropdown when "Replacement" is selected. Reuses the
+  // same enabled-SKU cache the hub's Master Sheet dropdown reads from
+  // (ucsku_getList), so no separate SKU source to maintain here.
+  var typeField = document.getElementById('f-type');
+  var descTextWrap = document.getElementById('desc-text-wrap');
+  var descSkuWrap = document.getElementById('desc-sku-wrap');
+  var descTextField = document.getElementById('f-desc');
+  var skuSelect = document.getElementById('f-replacement-sku');
+  var skuListHint = document.getElementById('sku-list-hint');
+  var skuListLoaded = false;
+
+  async function loadSkuListOnce() {
+    if (skuListLoaded) return;
+    skuListLoaded = true;
+    try {
+      var res = await fetch(window.TM_WORKER + '?action=ucsku_getList').then(function (r) { return r.json(); });
+      var skus = (res && res.skus) || [];
+      if (!skus.length) {
+        skuSelect.innerHTML = '<option value="">No SKUs available</option>';
+        skuListHint.textContent = 'The shared SKU list is empty — an admin can refresh it from the hub, or type the SKU manually by switching Type back temporarily.';
+        return;
+      }
+      skuSelect.innerHTML = '<option value="">Select a SKU&#8230;</option>' +
+        skus.map(function (s) { return '<option value="' + escapeHtml(s) + '">' + escapeHtml(s) + '</option>'; }).join('');
+      skuListHint.textContent = skus.length + ' enabled SKUs, from the same shared list used across the portal.';
+    } catch (e) {
+      skuSelect.innerHTML = '<option value="">Couldn\'t load SKU list</option>';
+      skuListHint.textContent = "Couldn't reach the SKU list — you can switch Type away and back to retry.";
+      skuListLoaded = false;
+    }
+  }
+
+  function updateDescMode() {
+    if (typeField.value === 'Replacement') {
+      descTextWrap.style.display = 'none';
+      descSkuWrap.style.display = '';
+      descTextField.removeAttribute('required');
+      skuSelect.setAttribute('required', 'required');
+      loadSkuListOnce();
+    } else {
+      descTextWrap.style.display = '';
+      descSkuWrap.style.display = 'none';
+      descTextField.setAttribute('required', 'required');
+      skuSelect.removeAttribute('required');
+    }
+  }
+  typeField.addEventListener('change', updateDescMode);
+  phoneField.addEventListener('input', bumpOrderIdForPhone);
+
+  // Bumps a numeric suffix onto the current order ID: base -> base-2 ->
+  // base-3 -> ... Used automatically when Delhivery rejects an ID as a
+  // duplicate, so the person never has to manually resolve it.
+  function bumpOrderIdSuffix() {
+    var base = genOrderId(phoneField.value.trim());
+    var current = orderIdField.value.trim();
+    if (current === base) {
+      orderIdField.value = base + '-2';
+    } else if (current.indexOf(base + '-') === 0 && /^\d+$/.test(current.slice(base.length + 1))) {
+      orderIdField.value = base + '-' + (parseInt(current.slice(base.length + 1), 10) + 1);
+    } else {
+      orderIdField.value = base;
+    }
+  }
+
+  // ── Live volumetric-weight hint — Delhivery Surface uses (L×W×H)/5000
+  // ── Pincode serviceability pre-check — fires on blur so a bad pincode
+  // is caught before submission, not after a failed order attempt. ──
+  var pinField = document.getElementById('f-pin');
+  var pinStatus = document.getElementById('pin-status');
+  var cityField = document.getElementById('f-city');
+  var stateField = document.getElementById('f-state');
+  pinField.addEventListener('blur', async function () {
+    var pin = pinField.value.trim();
+    pinStatus.className = 'field-hint';
+    if (!/^\d{6}$/.test(pin)) { pinStatus.textContent = ''; cityField.value = ''; stateField.value = ''; return; }
+    pinStatus.textContent = 'Checking serviceability…';
+    cityField.value = ''; stateField.value = '';
+    try {
+      var res = await fetch(window.TM_WORKER + '?action=delhiveryCheckPincode&pin=' + pin).then(function (r) { return r.json(); });
+      if (!res.ok) { pinStatus.textContent = ''; return; }
+      if (!res.serviceable) {
+        pinStatus.className = 'field-hint bad';
+        pinStatus.textContent = '✗ Not a serviceable Delhivery pincode — double-check it before submitting.';
+        return;
+      }
+      var modes = [];
+      if (res.prepaid) modes.push('Prepaid');
+      if (res.cod) modes.push('COD');
+      pinStatus.className = 'field-hint ok';
+      pinStatus.textContent = '✓ Serviceable' + (modes.length ? ' (' + modes.join(' & ') + ')' : '');
+      // City/State are read-only, filled entirely from this lookup —
+      // always set (not just when empty), so switching to a different
+      // pincode replaces any previous value rather than leaving it stale.
+      cityField.value = res.city || '';
+      stateField.value = res.state || '';
+    } catch (e) {
+      pinStatus.textContent = '';
+    }
+  });
+
+  async function callWorker(action, body) {
     var session = window.TM_getSession();
     var headers = { 'Content-Type': 'application/json' };
     if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
     var res = await fetch(window.TM_WORKER + '?action=' + encodeURIComponent(action), {
-      method: 'POST', headers: headers, body: JSON.stringify(Object.assign({ action: action }, payload || {}))
+      method: 'POST', headers: headers, body: JSON.stringify(Object.assign({ action: action }, body || {}))
     });
     return res.json();
   }
 
   async function fetchLog() {
+    var session = window.TM_getSession();
+    var headers = {};
+    if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
     try {
-      var session = window.TM_getSession();
-      var headers = {};
-      if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
-      var res = await fetch(window.TM_WORKER + '?action=delhiveryListPickups', { headers: headers }).then(function (r) { return r.json(); });
-      var tbody = document.getElementById('fwd-log-tbody');
-      var empty = document.getElementById('fwd-log-empty');
-      tbody.innerHTML = '';
-      var rows = (res.ok && res.pickups) || [];
-      empty.hidden = rows.length > 0;
-      rows.forEach(function (p) {
-        var tr = document.createElement('tr');
-        tr.innerHTML =
-          '<td>' + escapeHtml(p.pickup_date) + '</td>' +
-          '<td>' + escapeHtml(p.pickup_time) + '</td>' +
-          '<td>' + escapeHtml(p.expected_package_count) + '</td>' +
-          '<td><span class="badge ' + (p.success ? 'created' : 'failed') + '">' + (p.success ? 'Scheduled' : 'Failed') + '</span></td>' +
-          '<td>' + escapeHtml(p.created_by) + '</td>' +
-          '<td>' + fmtWhen(p.created_at) + '</td>';
-        tbody.appendChild(tr);
+      var res = await fetch(window.TM_WORKER + '?action=delhiveryListOrders', { headers: headers }).then(function (r) { return r.json(); });
+      renderLog((res && res.orders) || []);
+    } catch (e) {
+      renderLog([]);
+    }
+  }
+
+  function renderLog(orders) {
+    var tbody = document.getElementById('log-tbody');
+    var empty = document.getElementById('log-empty');
+    tbody.innerHTML = '';
+    if (!orders.length) { empty.hidden = false; return; }
+    empty.hidden = true;
+    orders.forEach(function (o, idx) {
+      var tr = document.createElement('tr');
+      var statusClass = o.delhivery_ok ? 'created' : 'failed';
+      tr.innerHTML =
+        '<td class="mono">' + escapeHtml(o.order_id) +
+          '<div class="details-toggle" data-idx="' + idx + '">view details</div>' +
+          '<div class="details-json" id="details-' + idx + '"></div>' +
+        '</td>' +
+        '<td class="mono">' + (o.waybill ? escapeHtml(o.waybill) : '&#8212;') + '</td>' +
+        '<td>' + (o.job_type ? escapeHtml(o.job_type) : '&#8212;') + '</td>' +
+        '<td><span class="badge ' + statusClass + '">' + (o.delhivery_ok ? 'Created' : 'Failed') + '</span></td>' +
+        '<td>' + escapeHtml(o.created_by || '&#8212;') + '</td>' +
+        '<td>' + fmtWhen(o.created_at) + '</td>';
+      tbody.appendChild(tr);
+
+      var toggle = tr.querySelector('.details-toggle');
+      var jsonBox = tr.querySelector('.details-json');
+      toggle.addEventListener('click', function () {
+        if (jsonBox.classList.contains('show')) { jsonBox.classList.remove('show'); return; }
+        var pretty = '';
+        try { pretty = JSON.stringify(JSON.parse(o.response_json || '{}'), null, 2); } catch (e) { pretty = o.response_json || ''; }
+        jsonBox.textContent = pretty;
+        jsonBox.classList.add('show');
       });
-    } catch (e) {}
+    });
+  }
+
+  document.getElementById('log-refresh-btn').addEventListener('click', fetchLog);
+
+  var confirmBox = document.getElementById('confirm-box');
+  var confirmAmount = document.getElementById('confirm-amount');
+  var confirmNote = document.getElementById('confirm-note');
+  var confirmYesBtn = document.getElementById('confirm-yes-btn');
+  var confirmNoBtn = document.getElementById('confirm-no-btn');
+  var pendingOrder = null;
+
+  function gatherOrder() {
+    var jobType = document.getElementById('f-type').value;
+    var rawDesc = jobType === 'Replacement'
+      ? skuSelect.value.trim()
+      : document.getElementById('f-desc').value.trim();
+    return {
+      order: orderIdField.value.trim(),
+      name: document.getElementById('f-name').value.trim(),
+      phone: document.getElementById('f-phone').value.trim(),
+      add: document.getElementById('f-add').value.trim(),
+      pin: document.getElementById('f-pin').value.trim(),
+      city: document.getElementById('f-city').value.trim(),
+      state: document.getElementById('f-state').value.trim(),
+      // Combined here so the label/Delhivery record reads e.g.
+      // "Replacement - TCV-20 12V" — the raw item name stays clean
+      // in the UI, this is just how it's sent for manifestation.
+      products_desc: jobType + ' - ' + rawDesc,
+      job_type: jobType,
+      payment_mode: document.getElementById('f-payment').value,
+      quantity: document.getElementById('f-qty').value,
+      total_amount: document.getElementById('f-amount').value,
+      hsn_code: document.getElementById('f-hsn').value.trim(),
+      weight: document.getElementById('f-weight').value || undefined,
+      width: document.getElementById('f-width').value || undefined,
+      height: document.getElementById('f-height').value || undefined,
+      length: document.getElementById('f-length').value || undefined
+    };
+  }
+
+  // Manual equivalent of form.reset() — needed because this is now a
+  // plain <div>, not a <form> (see the click-vs-submit comment below).
+  function resetFormFields() {
+    ['f-name', 'f-phone', 'f-add', 'f-pin', 'f-city', 'f-state', 'f-desc', 'f-amount'].forEach(function (id) {
+      document.getElementById(id).value = '';
+    });
+    document.getElementById('f-type').value = '';
+    updateDescMode();
+    skuSelect.value = '';
+    document.getElementById('f-payment').value = 'Prepaid';
+    document.getElementById('f-qty').value = '1';
+    document.getElementById('f-hsn').value = '8467';
+    document.getElementById('f-weight').value = '1000';
+    document.getElementById('f-length').value = '10';
+    document.getElementById('f-width').value = '10';
+    document.getElementById('f-height').value = '10';
+    orderIdField.value = '';
+  }
+
+  // Step 1: clicking the button fetches an estimate and shows the confirm
+  // box — nothing is created on Delhivery yet at this point. Deliberately
+  // a plain button click, not a <form> submit — Chrome's "Save address?"
+  // prompt hooks into the native submit event itself (even with
+  // preventDefault called), so avoiding a real form submission entirely
+  // is what actually stops it, not just autocomplete="off".
+  // Required-field validation used to come free from the native <form>
+  // submit — now that this is a plain button click (see comment above),
+  // it has to be done by hand. checkValidity()/reportValidity() work on
+  // individual elements regardless of whether they're inside a <form>.
+  var requiredFieldIds = ['f-name', 'f-phone', 'f-add', 'f-pin', 'f-city', 'f-state', 'f-type', 'f-qty', 'f-amount', 'f-hsn', 'f-weight', 'f-length', 'f-width', 'f-height'];
+  function validateRequiredFields() {
+    for (var i = 0; i < requiredFieldIds.length; i++) {
+      var el = document.getElementById(requiredFieldIds[i]);
+      if (!el.checkValidity()) { el.reportValidity(); return false; }
+    }
+    // Description field differs by Type mode — check whichever is active.
+    var descEl = typeField.value === 'Replacement' ? skuSelect : descTextField;
+    if (!descEl.value.trim()) {
+      if (typeof descEl.reportValidity === 'function') descEl.reportValidity();
+      return false;
+    }
+    return true;
   }
 
   submitBtn.addEventListener('click', async function () {
     resultBox.className = 'result-box';
+    confirmBox.className = 'confirm-box';
 
-    if (!dateField.value || !timeField.value || !countField.value) {
+    if (!validateRequiredFields()) return;
+
+    if (!orderIdField.value) {
       resultBox.className = 'result-box show error';
-      resultTitle.textContent = 'Missing fields';
-      resultBody.textContent = 'Fill in date, time, and expected package count.';
+      resultTitle.textContent = 'Order ID not ready';
+      resultBody.textContent = 'Enter a valid 10-digit phone number above — the Order ID fills in automatically from it.';
       return;
     }
 
+    pendingOrder = gatherOrder();
+
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Scheduling…';
+    submitBtn.textContent = 'Getting estimate…';
 
     try {
-      var res = await callWorker('delhiveryCreatePickup', {
-        pickup_date: dateField.value,
-        pickup_time: timeField.value + ':00',
-        expected_package_count: Number(countField.value)
+      var qs = new URLSearchParams({
+        pin: pendingOrder.pin,
+        weight: pendingOrder.weight || '1000',
+        payment_mode: pendingOrder.payment_mode
       });
-      if (res.ok) {
-        resultBox.className = 'result-box show success';
-        resultTitle.textContent = 'Pickup scheduled';
-        resultBody.innerHTML = res.pickupId ? 'Pickup request ID: <span class="result-waybill">' + escapeHtml(res.pickupId) + '</span>' : 'Delhivery has logged the pickup request.';
-        countField.value = '1';
+      var est = await fetch(window.TM_WORKER + '?action=delhiveryEstimateCharge&' + qs.toString()).then(function (r) { return r.json(); });
+      if (est.ok && est.estimated && est.totalAmount != null) {
+        confirmAmount.textContent = '₹' + est.totalAmount;
+        confirmNote.textContent = "This is Delhivery's own estimate — their docs note the actual billed amount can differ slightly. Nothing is created yet.";
       } else {
-        resultBox.className = 'result-box show error';
-        resultTitle.textContent = 'Pickup request failed';
-        resultBody.textContent = (res.response && (res.response.error || res.response.message)) || res.error || 'Unknown error — check the log details below.';
+        confirmAmount.textContent = 'Unavailable';
+        confirmNote.textContent = "Couldn't fetch an estimate right now, but you can still proceed — nothing is created yet.";
       }
     } catch (err) {
+      confirmAmount.textContent = 'Unavailable';
+      confirmNote.textContent = "Couldn't fetch an estimate right now, but you can still proceed — nothing is created yet.";
+    }
+
+    confirmBox.className = 'confirm-box show';
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Create Delhivery Order';
+  });
+
+  confirmNoBtn.addEventListener('click', function () {
+    confirmBox.className = 'confirm-box';
+    pendingOrder = null;
+  });
+
+  // Step 2: only on explicit confirmation does the order actually get created.
+  confirmYesBtn.addEventListener('click', async function () {
+    if (!pendingOrder) return;
+    var order = pendingOrder;
+    confirmYesBtn.disabled = true;
+    confirmNoBtn.disabled = true;
+    confirmYesBtn.textContent = 'Creating order…';
+
+    try {
+      var res, attempts = 0;
+      while (true) {
+        order.order = orderIdField.value.trim();
+        res = await callWorker('delhiveryCreateOrder', { order: order });
+        if (res.ok) break;
+        var pkg = res.response && res.response.packages && res.response.packages[0];
+        var remarksArr = pkg && pkg.remarks ? [].concat(pkg.remarks) : [];
+        var isDuplicate = remarksArr.some(function (r) { return /duplicate order/i.test(String(r)); });
+        attempts++;
+        if (!isDuplicate || attempts >= 5) break;
+        confirmYesBtn.textContent = 'Duplicate ID — retrying…';
+        bumpOrderIdSuffix();
+      }
+
+      confirmBox.className = 'confirm-box';
+      pendingOrder = null;
+
+      if (res.ok) {
+        resultBox.className = 'result-box show success';
+        resultTitle.textContent = 'Order created successfully';
+        resultBody.innerHTML = 'Waybill: <span class="result-waybill">' + escapeHtml(res.waybill) + '</span>' +
+          (attempts ? ' <span style="color:var(--text2)">(order ID auto-adjusted to avoid a duplicate)</span>' : '');
+        resetFormFields();
+        pinStatus.textContent = '';
+        pinStatus.className = 'field-hint';
+      } else {
+        resultBox.className = 'result-box show error';
+        resultTitle.textContent = 'Order failed';
+        var remarks = '';
+        try {
+          var pkg2 = res.response && res.response.packages && res.response.packages[0];
+          if (pkg2 && pkg2.remarks) remarks = [].concat(pkg2.remarks).join('; ');
+        } catch (e) {}
+        resultBody.textContent = remarks || (res.response && res.response.rmk) || res.error || 'Unknown error — check the log details below.';
+      }
+    } catch (err) {
+      confirmBox.className = 'confirm-box';
+      pendingOrder = null;
       resultBox.className = 'result-box show error';
       resultTitle.textContent = 'Request failed';
       resultBody.textContent = err.message;
     }
 
-    submitBtn.disabled = false;
-    submitBtn.textContent = 'Schedule Pickup';
+    confirmYesBtn.disabled = false;
+    confirmNoBtn.disabled = false;
+    confirmYesBtn.textContent = 'Confirm & Create Order';
     fetchLog();
   });
-
-  document.getElementById('fwd-log-refresh-btn').addEventListener('click', fetchLog);
 
   fetchLog();
 }
