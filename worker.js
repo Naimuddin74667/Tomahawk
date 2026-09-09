@@ -2835,6 +2835,9 @@ export default {
           if (!env.EKART_SELLER_NAME || !env.EKART_SELLER_ADDRESS || !env.SELLER_GST) {
             return json({ ok: false, error: 'EKART_SELLER_NAME / EKART_SELLER_ADDRESS / SELLER_GST are not set in Worker secrets' }, 500);
           }
+          if (!env.EKART_PICKUP_NAME || !env.EKART_PICKUP_ADDRESS || !env.EKART_PICKUP_PHONE || !env.EKART_PICKUP_PIN || !env.EKART_PICKUP_CITY || !env.EKART_PICKUP_STATE) {
+            return json({ ok: false, error: 'EKART_PICKUP_NAME / EKART_PICKUP_ADDRESS / EKART_PICKUP_PHONE / EKART_PICKUP_PIN / EKART_PICKUP_CITY / EKART_PICKUP_STATE are not set in Worker secrets' }, 500);
+          }
 
           let result;
           try {
@@ -3320,10 +3323,12 @@ async function getEkartAccessToken(env) {
 //     customer's address being picked up FROM, per their exact wording:
 //     "the drop_location is the customer address and the pickup_location
 //     is the seller address" for reverse shipments)
-//   - pickup_location (seller warehouse) is omitted entirely when only
-//     one address is registered with Ekart — they auto-fill it. Set
-//     EKART_PICKUP_LOCATION_ALIAS only if multiple addresses are
-//     registered and a specific one needs to be selected.
+//   - pickup_location (seller warehouse) is sent explicitly with full
+//     address details every time — Ekart's docs say it can be omitted
+//     when only one address is registered (auto-filled), but that
+//     didn't hold up in practice ("Pickup Pincode is not serviceable"
+//     even for the correct registered pincode), so this sends the real
+//     warehouse address instead of relying on their auto-fill.
 //   - cod_amount is always 0 here (Pickup mode never collects COD)
 //
 // Required Cloudflare secrets/vars (Dashboard → tomahawk-returns →
@@ -3331,11 +3336,17 @@ async function getEkartAccessToken(env) {
 //   EKART_CLIENT_ID              — Client ID from Elite → API Settings
 //   EKART_USERNAME, EKART_PASSWORD — Elite login credentials (used only
 //                                     to mint access_token server-side)
-//   EKART_SELLER_NAME             — registered seller name
+//   EKART_SELLER_NAME             — registered seller name (billing identity)
 //   EKART_SELLER_ADDRESS          — seller billing address
 //   SELLER_GST                    — seller GST TIN, shared across couriers (same as Delhivery's)
-//   EKART_PICKUP_LOCATION_ALIAS   — optional, only if multiple pickup
-//                                     addresses are registered with Ekart
+//   EKART_PICKUP_NAME, EKART_PICKUP_ADDRESS, EKART_PICKUP_PHONE,
+//   EKART_PICKUP_PIN, EKART_PICKUP_CITY, EKART_PICKUP_STATE
+//                                 — the actual warehouse Ekart picks up
+//                                    reverse shipments from (registered
+//                                    on Elite → Settings → Addresses).
+//                                    Distinct from EKART_SELLER_* above,
+//                                    which is billing info, not the
+//                                    physical pickup point.
 //   EKART_BASE_URL                — optional override; defaults to
 //                                     https://app.elite.ekartlogistics.in
 async function createEkartReversePickup(env, p) {
@@ -3376,11 +3387,17 @@ async function createEkartReversePickup(env, p) {
       country: 'India',
       phone: Number(p.consignee_phone),
       pin: Number(p.drop_pincode)
+    },
+    pickup_location: {
+      name: env.EKART_PICKUP_NAME,
+      address: env.EKART_PICKUP_ADDRESS,
+      city: env.EKART_PICKUP_CITY,
+      state: env.EKART_PICKUP_STATE,
+      country: 'India',
+      phone: Number(env.EKART_PICKUP_PHONE),
+      pin: Number(env.EKART_PICKUP_PIN)
     }
   };
-  if (env.EKART_PICKUP_LOCATION_ALIAS) {
-    payload.pickup_location = { name: env.EKART_PICKUP_LOCATION_ALIAS };
-  }
 
   const base = env.EKART_BASE_URL || 'https://app.elite.ekartlogistics.in';
   const token = await getEkartAccessToken(env);
