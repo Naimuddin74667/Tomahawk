@@ -1678,9 +1678,12 @@ export default {
         //   creation" contract as delhiveryEstimateCharge above.
         //   billingClientType/shippingDirection aren't documented with
         //   example values in Ekart's spec (they're in the schema's
-        //   required list but missing from its properties) — best-guess
-        //   values below; if Ekart rejects them the frontend just shows
-        //   "estimate unavailable" and lets the person continue anyway.
+        //   required list but missing from its properties) — confirmed
+        //   via direct curl testing that billingClientType must be one
+        //   of PROSPECTIVE_CLIENT / EXISTING_CLIENT /
+        //   EXISTING_CLIENT_CUSTOM_RATE_SNAPSHOT (ITH uses EXISTING_CLIENT,
+        //   being an onboarded account) and shippingDirection: REVERSE
+        //   is accepted as-is.
         if (action === 'ekartEstimateCharge') {
           const pin = url.searchParams.get('pin');
           const weightGrams = url.searchParams.get('weight') || '500';
@@ -1700,7 +1703,7 @@ export default {
               method: 'POST',
               headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                billingClientType: 'PREPAID',
+                billingClientType: 'EXISTING_CLIENT',
                 shippingDirection: 'REVERSE',
                 serviceType: 'SURFACE',
                 pickupPincode: Number(env.EKART_PICKUP_PIN),
