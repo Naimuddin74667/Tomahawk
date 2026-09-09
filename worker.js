@@ -196,6 +196,12 @@ const ACTION_TIERS = {
   amazonCheckFcEmails: 'manager_up', amazonListFcLog: 'viewer_read',
   amazonSetFcStatus: 'manager_up', amazonDeleteFcLog: 'manager_up',
 
+  // — amazon_shipments: one row per FBA shipment ID (exploded out of
+  //   amazon_fc_log.shipment_ids, which can list several per appointment).
+  //   Rebuilt from amazon_fc_log on every checkNewAmazonFcEmails run —
+  //   see the note above ensureAmazonShipmentsTable in worker.js.
+  amazonListShipments: 'viewer_read',
+
   // — Flipkart "Successfully Received" email watcher (Gmail integration):
   //   auto-fills fk_ledger.received_qty by matching Consignment No. Same
   //   manager_up gating as the Blinkit watcher above, for the same reason
@@ -267,10 +273,7 @@ const ACTION_TIERS = {
   //   manager_up; listing what's been created is viewer_read like
   //   everything else read-only in this file. —
   delhiveryCreateOrder: 'manager_up', delhiveryListOrders: 'viewer_read',
-  delhiveryCheckPincode: 'viewer_read', delhiveryEstimateCharge: 'viewer_read',
-  delhiveryCreatePickup: 'manager_up', delhiveryListPickups: 'viewer_read',
-  ekartCreateReversePickup: 'manager_up', ekartListReversePickups: 'viewer_read',
-  ekartCheckPincode: 'viewer_read', ekartEstimateCharge: 'viewer_read'
+  delhiveryCheckPincode: 'viewer_read', delhiveryEstimateCharge: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -365,7 +368,6 @@ async function ensureAuthTables(DB) {
       display_name  TEXT DEFAULT '',
       active        INTEGER DEFAULT 1,
       allowed_apps  TEXT DEFAULT NULL,
-      email         TEXT DEFAULT NULL,
       created_at    TEXT DEFAULT (datetime('now'))
     )`),
     DB.prepare(`CREATE TABLE IF NOT EXISTS tm_sessions (
@@ -382,10 +384,9 @@ async function ensureAuthTables(DB) {
   ]);
   // Migration for tables created before allowed_apps existed. NULL means
   // "no restriction — use role as before"; a JSON array of app slugs
-  // (e.g. ["Customer-Care","Scanner"]) restricts a "Custom" user to
+  // (e.g. ["Delhivery-Orders","Scanner"]) restricts a "Custom" user to
   // exactly those apps regardless of what their underlying role permits.
   try { await DB.prepare(`ALTER TABLE tm_users ADD COLUMN allowed_apps TEXT DEFAULT NULL`).run(); } catch (e) { /* column already exists */ }
-  try { await DB.prepare(`ALTER TABLE tm_users ADD COLUMN email TEXT DEFAULT NULL`).run(); } catch (e) { /* column already exists */ }
   const adminExists = await DB.prepare("SELECT id FROM tm_users WHERE username = 'admin'").first();
   if (!adminExists) {
     const salt = genSalt();
@@ -458,44 +459,6 @@ async function maybeAlert(env, bridgeId, displayName, reasonText) {
     });
   } catch (e) {
     console.error('Failed to send alert email for ' + bridgeId + ':', e.message);
-  }
-}
-
-// Sends the "your Tomahawk account was created" email via Resend when an
-// admin adds a new team member with an email address. Best-effort only —
-// a failure here (bad/unverified from-domain, missing key, etc.) is logged
-// and swallowed so it never blocks user creation itself.
-async function sendWelcomeEmail(env, { to, username, password, displayName, role }) {
-  const apiKey = env.RESEND_API_KEY;
-  if (!apiKey || !to) return { sent: false, reason: !apiKey ? 'RESEND_API_KEY not set' : 'no email on file' };
-  try {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        from: env.NEW_USER_EMAIL_FROM || 'Tomahawk <naimuddin@bullet.co.in>',
-        to,
-        subject: 'Your Tomahawk account is ready',
-        text:
-          `Hi ${displayName || username},\n\n` +
-          `An account has been created for you on the Tomahawk internal tools portal.\n\n` +
-          `Login: https://naimuddin74667.github.io/Tomahawk/\n` +
-          `Username: ${username}\n` +
-          `Temporary password: ${password}\n` +
-          `Role: ${role}\n\n` +
-          `Please log in and you'll be prompted to keep or change this password as needed.\n\n` +
-          `— ITH Team`
-      })
-    });
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      console.error('Resend welcome-email failed:', res.status, errText);
-      return { sent: false, reason: 'Resend API error ' + res.status };
-    }
-    return { sent: true };
-  } catch (e) {
-    console.error('Failed to send welcome email to ' + to + ':', e.message);
-    return { sent: false, reason: e.message };
   }
 }
 
@@ -650,7 +613,7 @@ export default {
       // ── ADMIN — user management (always gated, see checkAuth) ────
       if (request.method === 'POST' && act === 'adminListUsers') {
         const rows = await env.DB.prepare(
-          'SELECT id, username, role, display_name, email, active, allowed_apps, created_at FROM tm_users ORDER BY username ASC'
+          'SELECT id, username, role, display_name, active, allowed_apps, created_at FROM tm_users ORDER BY username ASC'
         ).all();
         const users = (rows.results || []).map(u => ({
           ...u,
@@ -663,7 +626,7 @@ export default {
         return json({ ok: true, users });
       }
       if (request.method === 'POST' && act === 'adminCreateUser') {
-        const { username, password, role, display_name, allowed_apps, email } = body;
+        const { username, password, role, display_name, allowed_apps } = body;
         if (!username || !password || !role) return json({ ok: false, error: 'username, password, role required' });
         const validRoles = ['admin', 'manager', 'viewer', 'picker_packer', 'custom'];
         if (!validRoles.includes(role)) return json({ ok: false, error: 'Invalid role' });
@@ -673,25 +636,19 @@ export default {
         // (ACTION_TIERS, roleAllowed) only ever sees 'manager'.
         const actualRole = role === 'custom' ? 'manager' : role;
         const appsJson = role === 'custom' ? JSON.stringify(Array.isArray(allowed_apps) ? allowed_apps : []) : null;
-        const cleanEmail = email ? String(email).trim() : null;
-        const cleanUsername = String(username).toLowerCase().trim();
         const salt = genSalt();
         const hash = await hashPassword(password, salt);
         try {
           await env.DB.prepare(
-            'INSERT INTO tm_users (username, password_hash, salt, role, display_name, allowed_apps, email) VALUES (?, ?, ?, ?, ?, ?, ?)'
-          ).bind(cleanUsername, hash, salt, actualRole, display_name || '', appsJson, cleanEmail).run();
+            'INSERT INTO tm_users (username, password_hash, salt, role, display_name, allowed_apps) VALUES (?, ?, ?, ?, ?, ?)'
+          ).bind(String(username).toLowerCase().trim(), hash, salt, actualRole, display_name || '', appsJson).run();
+          return json({ ok: true });
         } catch (e) {
           return json({ ok: false, error: 'Username already exists' });
         }
-        // Best-effort welcome email — never blocks account creation.
-        const emailResult = await sendWelcomeEmail(env, {
-          to: cleanEmail, username: cleanUsername, password, displayName: display_name, role: actualRole
-        });
-        return json({ ok: true, emailSent: emailResult.sent, emailNote: emailResult.sent ? null : emailResult.reason });
       }
       if (request.method === 'POST' && act === 'adminUpdateUser') {
-        const { id, role, display_name, active, allowed_apps, email, username } = body;
+        const { id, role, display_name, active, allowed_apps } = body;
         if (!id) return json({ ok: false, error: 'id required' });
 
         let actualRole = null;
@@ -711,29 +668,13 @@ export default {
           appsJsonToSet = JSON.stringify(Array.isArray(allowed_apps) ? allowed_apps : []);
         }
 
-        const cleanUsername = username != null ? String(username).toLowerCase().trim() : null;
-        const cleanEmail = email != null ? (String(email).trim() || null) : null;
-
-        try {
-          await env.DB.prepare(`
-            UPDATE tm_users SET
-              role = COALESCE(?, role),
-              display_name = COALESCE(?, display_name),
-              active = COALESCE(?, active),
-              username = COALESCE(?, username),
-              email = CASE WHEN ? THEN ? ELSE email END
-            WHERE id = ?
-          `).bind(
-            actualRole,
-            display_name != null ? display_name : null,
-            active != null ? (active ? 1 : 0) : null,
-            cleanUsername,
-            email !== undefined ? 1 : 0, cleanEmail,
-            id
-          ).run();
-        } catch (e) {
-          return json({ ok: false, error: 'Username already exists' });
-        }
+        await env.DB.prepare(`
+          UPDATE tm_users SET
+            role = COALESCE(?, role),
+            display_name = COALESCE(?, display_name),
+            active = COALESCE(?, active)
+          WHERE id = ?
+        `).bind(actualRole, display_name != null ? display_name : null, active != null ? (active ? 1 : 0) : null, id).run();
 
         if (appsJsonToSet !== undefined) {
           await env.DB.prepare('UPDATE tm_users SET allowed_apps = ? WHERE id = ?').bind(appsJsonToSet, id).run();
@@ -1387,6 +1328,18 @@ export default {
           return json({ ok: true, rows: rows.results || [] });
         }
 
+        // ── AMAZON SHIPMENTS — one row per FBA shipment ID, exploded out
+        //    of amazon_fc_log by rebuildAmazonShipments (runs every
+        //    checkNewAmazonFcEmails). This is the list the FC
+        //    Appointments tab actually renders.
+        if (action === 'amazonListShipments') {
+          await ensureAmazonShipmentsTable(env.DB);
+          const rows = await env.DB.prepare(
+            'SELECT * FROM amazon_shipments ORDER BY updated_at DESC LIMIT 500'
+          ).all();
+          return json({ ok: true, rows: rows.results || [] });
+        }
+
         // ── AMAZON FC APPOINTMENT WATCHER — set a manual status (e.g.
         //    'cancelled') on an appointment ── applied to every row for
         //    this appointment_id, same pattern as blinkitSetRoStatus.
@@ -1394,10 +1347,16 @@ export default {
         //    can auto-detect it the way the Blinkit watcher does.
         if (act === 'amazonSetFcStatus') {
           await ensureAmazonFcTable(env.DB);
+          await ensureAmazonShipmentsTable(env.DB);
           const { appointment_id, status } = body || {};
           if (!appointment_id) return json({ ok: false, error: 'appointment_id required' }, 400);
           await env.DB.prepare(
             'UPDATE amazon_fc_log SET manual_status = ? WHERE appointment_id = ?'
+          ).bind(status || null, appointment_id).run();
+          // Reflect immediately in amazon_shipments too, rather than
+          // waiting for the next rebuildAmazonShipments pass.
+          await env.DB.prepare(
+            'UPDATE amazon_shipments SET manual_status = ?, updated_at = datetime(\'now\') WHERE appointment_id = ?'
           ).bind(status || null, appointment_id).run();
           return json({ ok: true });
         }
@@ -1407,10 +1366,14 @@ export default {
         //    blinkitDeleteRoLog).
         if (act === 'amazonDeleteFcLog') {
           await ensureAmazonFcTable(env.DB);
+          await ensureAmazonShipmentsTable(env.DB);
           const { appointment_id } = body || {};
           if (!appointment_id) return json({ ok: false, error: 'appointment_id required' }, 400);
           const result = await env.DB.prepare(
             'DELETE FROM amazon_fc_log WHERE appointment_id = ?'
+          ).bind(appointment_id).run();
+          await env.DB.prepare(
+            'DELETE FROM amazon_shipments WHERE appointment_id = ?'
           ).bind(appointment_id).run();
           return json({ ok: true, deleted: result.meta.changes });
         }
@@ -1540,24 +1503,6 @@ export default {
           return json({ ok: true, orders: rows.results || [] });
         }
 
-        // ── DELHIVERY — list logged pickup-request attempts ───────
-        if (action === 'delhiveryListPickups') {
-          await ensureDelhiveryPickupTable(env.DB);
-          const rows = await env.DB.prepare(
-            'SELECT * FROM delhivery_pickups ORDER BY created_at DESC LIMIT 100'
-          ).all();
-          return json({ ok: true, pickups: rows.results || [] });
-        }
-
-        // ── EKART — list logged reverse-pickup attempts ───────────
-        if (action === 'ekartListReversePickups') {
-          await ensureEkartReverseTable(env.DB);
-          const rows = await env.DB.prepare(
-            'SELECT * FROM ekart_reverse_pickups ORDER BY created_at DESC LIMIT 100'
-          ).all();
-          return json({ ok: true, pickups: rows.results || [] });
-        }
-
         // ── DELHIVERY — pincode serviceability pre-check, called from
         //   the order form before submission so a bad/non-serviceable
         //   pincode is caught immediately instead of after a failed
@@ -1588,40 +1533,6 @@ export default {
             // Some tenants' responses also include city/state — pass through
             // if present, but the frontend must not assume they always are.
             city: pc.city || '', state: pc.state_code || pc.state || ''
-          });
-        }
-
-        // ── EKART — pincode serviceability pre-check, called from the
-        //   reverse-pickup form on blur. Ekart's response includes city/
-        //   state (autofilled into the form) and a reverse_pickup flag
-        //   specifically for "pickup from customer location" — the exact
-        //   thing a reverse shipment needs, distinct from forward
-        //   pickup/drop serviceability.
-        if (action === 'ekartCheckPincode') {
-          const pin = url.searchParams.get('pin');
-          if (!pin || !/^\d{6}$/.test(pin)) return json({ ok: false, error: 'Valid 6-digit pincode required' }, 400);
-          if (!env.EKART_CLIENT_ID || !env.EKART_USERNAME || !env.EKART_PASSWORD) {
-            return json({ ok: false, error: 'EKART_CLIENT_ID / EKART_USERNAME / EKART_PASSWORD are not set in Worker secrets' }, 500);
-          }
-          const base = env.EKART_BASE_URL || 'https://app.elite.ekartlogistics.in';
-          let eJson;
-          try {
-            const token = await getEkartAccessToken(env);
-            const eResp = await fetch(base + '/api/v2/serviceability/' + pin, {
-              headers: { 'Authorization': 'Bearer ' + token }
-            });
-            eJson = await eResp.json();
-          } catch (e) {
-            return json({ ok: false, error: 'Ekart pincode lookup failed: ' + e.message }, 502);
-          }
-          if (!eJson || eJson.status !== true) {
-            return json({ ok: true, serviceable: false, remark: eJson && eJson.remark });
-          }
-          const d = eJson.details || {};
-          return json({
-            ok: true, serviceable: true,
-            reversePickup: !!d.reverse_pickup, cod: !!d.cod,
-            city: d.city || '', state: d.state || ''
           });
         }
 
@@ -1670,59 +1581,6 @@ export default {
           const entry = Array.isArray(dJson) ? dJson[0] : dJson;
           const totalAmount = entry && (entry.total_amount != null ? entry.total_amount : entry.charge_amount);
           return json({ ok: true, estimated: totalAmount != null, totalAmount: totalAmount, response: dJson });
-        }
-
-        // ── EKART — approximate shipping-charge estimate for a reverse
-        //   pickup, fetched before booking so the person sees a rough
-        //   cost first — same "estimate, never a guarantee, never blocks
-        //   creation" contract as delhiveryEstimateCharge above.
-        //   billingClientType/shippingDirection aren't documented with
-        //   example values in Ekart's spec (they're in the schema's
-        //   required list but missing from its properties) — confirmed
-        //   via direct curl testing that billingClientType must be one
-        //   of PROSPECTIVE_CLIENT / EXISTING_CLIENT /
-        //   EXISTING_CLIENT_CUSTOM_RATE_SNAPSHOT (ITH uses EXISTING_CLIENT,
-        //   being an onboarded account) and shippingDirection: REVERSE
-        //   is accepted as-is.
-        if (action === 'ekartEstimateCharge') {
-          const pin = url.searchParams.get('pin');
-          const weightGrams = url.searchParams.get('weight') || '500';
-          const length = url.searchParams.get('length') || '10';
-          const width = url.searchParams.get('width') || '10';
-          const height = url.searchParams.get('height') || '10';
-          const invoiceAmount = url.searchParams.get('invoice_amount') || '0';
-          if (!pin || !/^\d{6}$/.test(pin)) return json({ ok: false, error: 'Valid 6-digit destination pincode required' }, 400);
-          if (!env.EKART_CLIENT_ID || !env.EKART_USERNAME || !env.EKART_PASSWORD || !env.EKART_PICKUP_PIN) {
-            return json({ ok: false, error: 'Ekart credentials/pickup pincode are not set in Worker secrets' }, 500);
-          }
-          const base = env.EKART_BASE_URL || 'https://app.elite.ekartlogistics.in';
-          let eJson;
-          try {
-            const token = await getEkartAccessToken(env);
-            const eResp = await fetch(base + '/data/pricing/estimate', {
-              method: 'POST',
-              headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                billingClientType: 'EXISTING_CLIENT',
-                shippingDirection: 'REVERSE',
-                serviceType: 'SURFACE',
-                pickupPincode: Number(env.EKART_PICKUP_PIN),
-                dropPincode: Number(pin),
-                weight: Number(weightGrams),
-                length: Number(length),
-                width: Number(width),
-                height: Number(height),
-                invoiceAmount: Number(invoiceAmount)
-              })
-            });
-            const eText = await eResp.text();
-            try { eJson = JSON.parse(eText); } catch (e) { eJson = { raw: eText }; }
-            if (!eResp.ok) return json({ ok: false, error: 'Ekart estimate lookup returned ' + eResp.status, response: eJson }, 502);
-          } catch (e) {
-            return json({ ok: false, error: 'Ekart estimate lookup failed: ' + e.message }, 502);
-          }
-          const totalAmount = eJson && eJson.total;
-          return json({ ok: true, estimated: totalAmount != null, totalAmount: totalAmount, response: eJson });
         }
 
         return json({ ok: false, error: 'Unknown action' }, 400);
@@ -2789,7 +2647,7 @@ export default {
         //   payment_mode: 'Prepaid'|'COD', products_desc, hsn_code,
         //   quantity, total_amount, weight? (grams), width?, height?, length? (all cm) } }
         // Requires DELHIVERY_API_TOKEN, DELHIVERY_PICKUP_LOCATION, and
-        // SELLER_GST to be set as Worker secrets/vars — see
+        // DELHIVERY_SELLER_GST to be set as Worker secrets/vars — see
         // createDelhiveryOrder() above for exactly what each does.
         if (act === 'delhiveryCreateOrder') {
           await ensureDelhiveryTable(env.DB);
@@ -2818,104 +2676,6 @@ export default {
           ).run();
 
           return json({ ok: result.success, waybill: result.waybill, delhiveryHttpStatus: result.httpStatus, response: result.response }, result.success ? 200 : 502);
-        }
-
-        // ── DELHIVERY — pickup request creation ("Forward Order" tab
-        //   of Create Parcel Pickup). Schedules a courier pickup for shipments
-        //   already created at DELHIVERY_PICKUP_LOCATION — separate from
-        //   delhiveryCreateOrder above, which only manifests the order.
-        // Body: { pickup_date: 'YYYY-MM-DD', pickup_time: 'HH:MM:SS',
-        //   expected_package_count: number }
-        // Requires DELHIVERY_API_TOKEN and DELHIVERY_PICKUP_LOCATION —
-        // see createDelhiveryOrder() above for what each does.
-        if (act === 'delhiveryCreatePickup') {
-          await ensureDelhiveryPickupTable(env.DB);
-          const p = body || {};
-          const required = ['pickup_date', 'pickup_time', 'expected_package_count'];
-          const missing = required.filter(f => p[f] === undefined || p[f] === null || p[f] === '');
-          if (missing.length) return json({ ok: false, error: 'Missing required field(s): ' + missing.join(', ') }, 400);
-          if (!env.DELHIVERY_API_TOKEN) return json({ ok: false, error: 'DELHIVERY_API_TOKEN is not set in Worker secrets' }, 500);
-          if (!env.DELHIVERY_PICKUP_LOCATION) return json({ ok: false, error: 'DELHIVERY_PICKUP_LOCATION is not set in Worker secrets' }, 500);
-
-          let result;
-          try {
-            result = await createDelhiveryPickup(env, p);
-          } catch (e) {
-            return json({ ok: false, error: 'Delhivery request failed: ' + e.message }, 502);
-          }
-
-          const sessionUser = await resolveSession(request, env.DB);
-          await env.DB.prepare(`
-            INSERT INTO delhivery_pickups (pickup_date, pickup_time, expected_package_count, pickup_location, success, response_json, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-          `).bind(
-            p.pickup_date, p.pickup_time, Number(p.expected_package_count), env.DELHIVERY_PICKUP_LOCATION,
-            result.success ? 1 : 0, JSON.stringify(result.response),
-            (sessionUser && sessionUser.username) || 'unauthenticated'
-          ).run();
-
-          return json({ ok: result.success, pickupId: result.pickupId, delhiveryHttpStatus: result.httpStatus, response: result.response }, result.success ? 200 : 502);
-        }
-
-        // ── EKART — reverse pickup request creation ("Reverse Pickup"
-        //   tab of Create Parcel Pickup). Books an Ekart Elite reverse
-        //   shipment (payment_mode: "Pickup") for a customer return —
-        //   confirmed against Ekart's own OpenAPI spec.
-        // Body: { order_number, invoice_number, invoice_date, consignee_name,
-        //   consignee_phone, consignee_alt_phone, drop_address, drop_city, drop_state, drop_pincode,
-        //   products_desc, category_of_goods, hsn_code?, quantity, weight,
-        //   length, width, height, total_amount, tax_value, return_reason }
-        // Requires EKART_CLIENT_ID, EKART_USERNAME, EKART_PASSWORD,
-        // EKART_SELLER_NAME, EKART_SELLER_ADDRESS, SELLER_GST as
-        // Worker secrets — see createEkartReversePickup() above for what
-        // each does.
-        if (act === 'ekartCreateReversePickup') {
-          await ensureEkartReverseTable(env.DB);
-          const p = body || {};
-          const required = ['order_number', 'invoice_number', 'invoice_date', 'consignee_name', 'consignee_phone', 'consignee_alt_phone',
-            'drop_address', 'drop_city', 'drop_state', 'drop_pincode', 'products_desc', 'category_of_goods',
-            'quantity', 'weight', 'length', 'width', 'height', 'total_amount', 'return_reason'];
-          const missing = required.filter(f => p[f] === undefined || p[f] === null || p[f] === '');
-          if (missing.length) return json({ ok: false, error: 'Missing required field(s): ' + missing.join(', ') }, 400);
-          // Ekart rejects the request outright if these match — same check
-          // as the frontend, kept here too since this route can be called
-          // directly.
-          if (String(p.consignee_phone) === String(p.consignee_alt_phone)) {
-            return json({ ok: false, error: 'consignee_phone and consignee_alt_phone must be different (Ekart rejects a match)' }, 400);
-          }
-          if (!env.EKART_CLIENT_ID) return json({ ok: false, error: 'EKART_CLIENT_ID is not set in Worker secrets' }, 500);
-          if (!env.EKART_USERNAME || !env.EKART_PASSWORD) return json({ ok: false, error: 'EKART_USERNAME / EKART_PASSWORD are not set in Worker secrets' }, 500);
-          if (!env.EKART_SELLER_NAME || !env.EKART_SELLER_ADDRESS || !env.SELLER_GST) {
-            return json({ ok: false, error: 'EKART_SELLER_NAME / EKART_SELLER_ADDRESS / SELLER_GST are not set in Worker secrets' }, 500);
-          }
-          if (!env.EKART_PICKUP_NAME || !env.EKART_PICKUP_ADDRESS || !env.EKART_PICKUP_PHONE || !env.EKART_PICKUP_PIN || !env.EKART_PICKUP_CITY || !env.EKART_PICKUP_STATE) {
-            return json({ ok: false, error: 'EKART_PICKUP_NAME / EKART_PICKUP_ADDRESS / EKART_PICKUP_PHONE / EKART_PICKUP_PIN / EKART_PICKUP_CITY / EKART_PICKUP_STATE are not set in Worker secrets' }, 500);
-          }
-
-          let result;
-          try {
-            result = await createEkartReversePickup(env, p);
-          } catch (e) {
-            return json({ ok: false, error: 'Ekart request failed: ' + e.message }, 502);
-          }
-
-          const sessionUser = await resolveSession(request, env.DB);
-          await env.DB.prepare(`
-            INSERT INTO ekart_reverse_pickups (order_number, invoice_number, invoice_date, consignee_name, consignee_phone, consignee_alt_phone,
-              drop_address, drop_city, drop_state, drop_pincode, products_desc, category_of_goods, hsn_code,
-              quantity, weight, length, width, height, total_amount, tax_value, return_reason,
-              tracking_id, vendor, success, response_json, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-          `).bind(
-            p.order_number, p.invoice_number, p.invoice_date, p.consignee_name, String(p.consignee_phone), String(p.consignee_alt_phone),
-            p.drop_address, p.drop_city, p.drop_state, String(p.drop_pincode), p.products_desc, p.category_of_goods, p.hsn_code || '',
-            Number(p.quantity), Number(p.weight), Number(p.length), Number(p.width), Number(p.height),
-            Number(p.total_amount), Number(p.tax_value) || 0, p.return_reason,
-            result.trackingId, result.vendor, result.success ? 1 : 0, JSON.stringify(result.response),
-            (sessionUser && sessionUser.username) || 'unauthenticated'
-          ).run();
-
-          return json({ ok: result.success, trackingId: result.trackingId, vendor: result.vendor, ekartHttpStatus: result.httpStatus, response: result.response }, result.success ? 200 : 502);
         }
 
         return json({ ok: false, error: 'Unknown action' }, 400);
@@ -3154,6 +2914,87 @@ async function ensureAmazonFcTable(DB) {
   )`).run();
 }
 
+// One row per FBA shipment ID, not per appointment/email — an appointment
+// can cover several shipment IDs at once (amazon_fc_log.shipment_ids is a
+// comma-separated list), but each shipment ID is its own thing to track
+// going forward as more Amazon lifecycle emails get added later. Boxes/
+// SKUs/Units are appointment-level totals in Amazon's email (not broken
+// out per shipment), so every shipment under the same appointment shows
+// the same combined figures — that's a source limitation, not a bug here.
+// Rebuilt in full from amazon_fc_log at the end of every
+// checkNewAmazonFcEmails run (cron + manual "Check Gmail Now"), oldest
+// email first so the latest occurrence's data always wins per shipment
+// ID — this is what makes it self-healing (a reschedule email updates
+// every shipment under that appointment) and safe to have started
+// after amazon_fc_log already had rows in it. manual_status mirrors
+// amazon_fc_log's (set via amazonSetFcStatus, keyed by appointment_id)
+// rather than being independently settable here.
+async function ensureAmazonShipmentsTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS amazon_shipments (
+    shipment_id         TEXT PRIMARY KEY,
+    appointment_id      TEXT,
+    destination_fc      TEXT,
+    no_of_boxes         TEXT,
+    no_of_skus          TEXT,
+    no_of_units         TEXT,
+    appointment_status  TEXT,
+    confirmed_slot      TEXT,
+    reporting_time      TEXT,
+    email_date          TEXT,
+    gmail_msg_id        TEXT,
+    manual_status       TEXT,
+    first_detected_at   TEXT DEFAULT (datetime('now')),
+    updated_at          TEXT DEFAULT (datetime('now'))
+  )`).run();
+}
+
+// Splits "FBA15MBWY7C5, FBA15MBX58GG, FBA15MBXRJ3Y" into trimmed,
+// non-empty tokens.
+function splitShipmentIds(str) {
+  if (!str) return [];
+  return String(str).split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+}
+
+// Full rebuild of amazon_shipments from amazon_fc_log — see the note
+// above ensureAmazonShipmentsTable for why this runs every time rather
+// than being a one-off migration.
+async function rebuildAmazonShipments(env) {
+  await ensureAmazonShipmentsTable(env.DB);
+  const rows = await env.DB.prepare(
+    `SELECT * FROM amazon_fc_log ORDER BY COALESCE(email_date, detected_at) ASC`
+  ).all();
+  for (const r of (rows.results || [])) {
+    const ids = splitShipmentIds(r.shipment_ids);
+    for (const shipmentId of ids) {
+      await env.DB.prepare(`
+        INSERT INTO amazon_shipments (
+          shipment_id, appointment_id, destination_fc, no_of_boxes, no_of_skus,
+          no_of_units, appointment_status, confirmed_slot, reporting_time,
+          email_date, gmail_msg_id, manual_status, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(shipment_id) DO UPDATE SET
+          appointment_id = excluded.appointment_id,
+          destination_fc = excluded.destination_fc,
+          no_of_boxes = excluded.no_of_boxes,
+          no_of_skus = excluded.no_of_skus,
+          no_of_units = excluded.no_of_units,
+          appointment_status = excluded.appointment_status,
+          confirmed_slot = excluded.confirmed_slot,
+          reporting_time = excluded.reporting_time,
+          email_date = excluded.email_date,
+          gmail_msg_id = excluded.gmail_msg_id,
+          manual_status = excluded.manual_status,
+          updated_at = datetime('now')
+      `).bind(
+        shipmentId, r.appointment_id, r.destination_fc, r.no_of_boxes, r.no_of_skus,
+        r.no_of_units, r.appointment_status, r.confirmed_slot, r.reporting_time,
+        r.email_date, r.gmail_msg_id, r.manual_status
+      ).run();
+    }
+  }
+}
+
 async function ensureDelhiveryTable(DB) {
   await DB.prepare(`CREATE TABLE IF NOT EXISTS delhivery_orders (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3185,7 +3026,7 @@ async function ensureDelhiveryTable(DB) {
 //   DELHIVERY_PICKUP_LOCATION — exact registered pickup location name,
 //                                case-sensitive, must match Delhivery's
 //                                records exactly or every order is rejected
-//   SELLER_GST                — seller GST TIN, shared across couriers (same business, same GST)
+//   DELHIVERY_SELLER_GST      — seller GST TIN, mandatory on every order
 //   DELHIVERY_BASE_URL        — optional override; defaults to production
 //                                (https://track.delhivery.com). Set to
 //                                https://staging-express.delhivery.com
@@ -3213,7 +3054,7 @@ async function createDelhiveryOrder(env, o) {
     cod_amount: o.payment_mode === 'COD' ? String(o.total_amount) : '0',
     total_amount: String(o.total_amount),
     quantity: String(o.quantity),
-    seller_gst_tin: env.SELLER_GST || '',
+    seller_gst_tin: env.DELHIVERY_SELLER_GST || '',
     seller_name: o.seller_name || env.DELHIVERY_PICKUP_LOCATION || '',
     shipment_width: o.width ? String(o.width) : '',
     shipment_height: o.height ? String(o.height) : '',
@@ -3250,228 +3091,6 @@ async function createDelhiveryOrder(env, o) {
   const waybill = (pkg && pkg.waybill) || '';
 
   return { success, httpStatus: dResp.status, waybill, payload, response: dJson };
-}
-
-async function ensureDelhiveryPickupTable(DB) {
-  await DB.prepare(`CREATE TABLE IF NOT EXISTS delhivery_pickups (
-    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
-    pickup_date             TEXT,
-    pickup_time             TEXT,
-    expected_package_count  INTEGER,
-    pickup_location         TEXT,
-    success                 INTEGER DEFAULT 0,
-    response_json           TEXT,
-    created_by              TEXT,
-    created_at              TEXT DEFAULT (datetime('now'))
-  )`).run();
-}
-
-// ── DELHIVERY — Pickup Request Creation ──────────────────────────────
-// Proxies Delhivery's Pickup Request API (schedules a courier pickup —
-// distinct from createDelhiveryOrder above, which only manifests the
-// shipment). Same CORS reasoning as createDelhiveryOrder: has to be
-// server-side.
-//   URL: {DELHIVERY_BASE_URL}/fm/request/new/
-//   Payload: { pickup_location, pickup_date, pickup_time, expected_package_count }
-async function createDelhiveryPickup(env, p) {
-  const payload = {
-    pickup_location: env.DELHIVERY_PICKUP_LOCATION,
-    pickup_date: p.pickup_date,           // 'YYYY-MM-DD'
-    pickup_time: p.pickup_time,           // 'HH:MM:SS'
-    expected_package_count: Number(p.expected_package_count)
-  };
-
-  const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
-
-  const dResp = await fetch(base + '/fm/request/new/', {
-    method: 'POST',
-    headers: {
-      'Authorization': 'Token ' + env.DELHIVERY_API_TOKEN,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(payload)
-  });
-  const dText = await dResp.text();
-  let dJson;
-  try { dJson = JSON.parse(dText); } catch (e) { dJson = { raw: dText }; }
-
-  // Delhivery returns pickup_id on success; a rejected request can still
-  // come back HTTP 200 with an error message in the body, so check both.
-  const success = !!(dResp.ok && !dJson.error && (dJson.pickup_id || dJson.success !== false));
-  const pickupId = dJson.pickup_id || dJson.pr_id || '';
-
-  return { success, httpStatus: dResp.status, pickupId, payload, response: dJson };
-}
-
-async function ensureEkartReverseTable(DB) {
-  await DB.prepare(`CREATE TABLE IF NOT EXISTS ekart_reverse_pickups (
-    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
-    order_number            TEXT,
-    invoice_number          TEXT,
-    invoice_date            TEXT,
-    consignee_name          TEXT,
-    consignee_phone         TEXT,
-    consignee_alt_phone     TEXT,
-    drop_address            TEXT,
-    drop_city               TEXT,
-    drop_state              TEXT,
-    drop_pincode            TEXT,
-    products_desc           TEXT,
-    category_of_goods       TEXT,
-    hsn_code                TEXT,
-    quantity                INTEGER,
-    weight                  INTEGER,
-    length                  INTEGER,
-    width                   INTEGER,
-    height                  INTEGER,
-    total_amount            REAL,
-    tax_value               REAL,
-    return_reason           TEXT,
-    tracking_id             TEXT,
-    vendor                  TEXT,
-    success                 INTEGER DEFAULT 0,
-    response_json           TEXT,
-    created_by              TEXT,
-    created_at              TEXT DEFAULT (datetime('now'))
-  )`).run();
-  // Migration for the table created before consignee_alt_phone existed
-  // (Ekart rejects a request where phone == alternate phone, so this had
-  // to be added as its own field rather than reusing consignee_phone).
-  try { await DB.prepare(`ALTER TABLE ekart_reverse_pickups ADD COLUMN consignee_alt_phone TEXT`).run(); } catch (e) { /* column already exists */ }
-}
-
-// Fetches an Ekart Elite access_token. Ekart's own auth API caches and
-// returns the same token for ~24h server-side (per their docs), so — like
-// getGmailAccessToken() — there's no benefit to caching it here too;
-// just fetch fresh on every call.
-async function getEkartAccessToken(env) {
-  const base = env.EKART_BASE_URL || 'https://app.elite.ekartlogistics.in';
-  const res = await fetch(base + '/integrations/v2/auth/token/' + encodeURIComponent(env.EKART_CLIENT_ID), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: env.EKART_USERNAME, password: env.EKART_PASSWORD })
-  });
-  const text = await res.text();
-  let json;
-  try { json = JSON.parse(text); } catch (e) { json = { raw: text }; }
-  if (!res.ok || !json.access_token) {
-    throw new Error('Ekart auth failed: ' + (json.message || json.description || text));
-  }
-  return json.access_token;
-}
-
-// ── EKART — Reverse Pickup Request Creation ──────────────────────────
-// Proxies Ekart Elite's shipment-creation API (PUT /api/v1/package/create)
-// with payment_mode:"Pickup", which is how their API represents a
-// reverse pickup — a shipment travelling customer → seller instead of
-// seller → customer. Confirmed against Ekart's own OpenAPI spec.
-//
-// Field mapping notes (see their docs for the full reasoning):
-//   - payment_mode must be "Pickup" for reverse shipments
-//   - return_reason is required for Pickup mode (not for forward)
-//   - drop_location is the CUSTOMER address (counter-intuitive — this
-//     is the ekart response's own convention, since drop_location
-//     always means "where Ekart delivers to", and on a reverse
-//     shipment that's back to the seller... except here it's the
-//     customer's address being picked up FROM, per their exact wording:
-//     "the drop_location is the customer address and the pickup_location
-//     is the seller address" for reverse shipments)
-//   - pickup_location (seller warehouse) is sent explicitly with full
-//     address details every time — Ekart's docs say it can be omitted
-//     when only one address is registered (auto-filled), but that
-//     didn't hold up in practice ("Pickup Pincode is not serviceable"
-//     even for the correct registered pincode), so this sends the real
-//     warehouse address instead of relying on their auto-fill.
-//   - cod_amount is always 0 here (Pickup mode never collects COD)
-//
-// Required Cloudflare secrets/vars (Dashboard → tomahawk-returns →
-// Settings → Variables and Secrets):
-//   EKART_CLIENT_ID              — Client ID from Elite → API Settings
-//   EKART_USERNAME, EKART_PASSWORD — Elite login credentials (used only
-//                                     to mint access_token server-side)
-//   EKART_SELLER_NAME             — registered seller name (billing identity)
-//   EKART_SELLER_ADDRESS          — seller billing address
-//   SELLER_GST                    — seller GST TIN, shared across couriers (same as Delhivery's)
-//   EKART_PICKUP_NAME, EKART_PICKUP_ADDRESS, EKART_PICKUP_PHONE,
-//   EKART_PICKUP_PIN, EKART_PICKUP_CITY, EKART_PICKUP_STATE
-//                                 — the actual warehouse Ekart picks up
-//                                    reverse shipments from (registered
-//                                    on Elite → Settings → Addresses).
-//                                    Distinct from EKART_SELLER_* above,
-//                                    which is billing info, not the
-//                                    physical pickup point.
-//   EKART_BASE_URL                — optional override; defaults to
-//                                     https://app.elite.ekartlogistics.in
-async function createEkartReversePickup(env, p) {
-  const totalAmount = Number(p.total_amount);
-  const taxValue = Number(p.tax_value) || 0;
-  const taxableAmount = totalAmount - taxValue;
-
-  const payload = {
-    seller_name: env.EKART_SELLER_NAME,
-    seller_address: env.EKART_SELLER_ADDRESS,
-    seller_gst_tin: env.SELLER_GST,
-    consignee_gst_amount: 0,
-    order_number: p.order_number,
-    invoice_number: p.invoice_number,
-    invoice_date: p.invoice_date,
-    consignee_name: p.consignee_name,
-    consignee_alternate_phone: String(p.consignee_alt_phone),
-    payment_mode: 'Pickup',
-    category_of_goods: p.category_of_goods,
-    hsn_code: p.hsn_code || undefined,
-    products_desc: p.products_desc,
-    total_amount: totalAmount,
-    cod_amount: 0,
-    tax_value: taxValue,
-    taxable_amount: taxableAmount,
-    commodity_value: String(taxableAmount),
-    return_reason: p.return_reason,
-    quantity: Number(p.quantity),
-    weight: Number(p.weight),
-    length: Number(p.length),
-    height: Number(p.height),
-    width: Number(p.width),
-    drop_location: {
-      name: p.consignee_name,
-      address: p.drop_address,
-      city: p.drop_city,
-      state: p.drop_state,
-      country: 'India',
-      phone: Number(p.consignee_phone),
-      pin: Number(p.drop_pincode)
-    },
-    pickup_location: {
-      name: env.EKART_PICKUP_NAME,
-      address: env.EKART_PICKUP_ADDRESS,
-      city: env.EKART_PICKUP_CITY,
-      state: env.EKART_PICKUP_STATE,
-      country: 'India',
-      phone: Number(env.EKART_PICKUP_PHONE),
-      pin: Number(env.EKART_PICKUP_PIN)
-    }
-  };
-
-  const base = env.EKART_BASE_URL || 'https://app.elite.ekartlogistics.in';
-  const token = await getEkartAccessToken(env);
-
-  const eResp = await fetch(base + '/api/v1/package/create', {
-    method: 'PUT',
-    headers: {
-      'Authorization': 'Bearer ' + token,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(payload)
-  });
-  const eText = await eResp.text();
-  let eJson;
-  try { eJson = JSON.parse(eText); } catch (e) { eJson = { raw: eText }; }
-
-  const success = !!(eResp.ok && eJson.status === true);
-  const trackingId = eJson.tracking_id || '';
-  const vendor = eJson.vendor || '';
-
-  return { success, httpStatus: eResp.status, trackingId, vendor, payload, response: eJson };
 }
 
 // Exchanges the long-lived refresh token for a short-lived access token.
@@ -3848,6 +3467,11 @@ async function checkNewAmazonFcEmails(env) {
 
     newCount++;
   }
+
+  // Keep amazon_shipments (one row per FBA shipment ID) in sync every
+  // run, not just when new emails came in — cheap at this row count and
+  // makes it self-healing (see rebuildAmazonShipments's own comment).
+  await rebuildAmazonShipments(env);
 
   return { checked: messages.length, newLogged: newCount };
 }
