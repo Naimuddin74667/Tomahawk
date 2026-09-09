@@ -2809,7 +2809,7 @@ export default {
         //   shipment (payment_mode: "Pickup") for a customer return —
         //   confirmed against Ekart's own OpenAPI spec.
         // Body: { order_number, invoice_number, invoice_date, consignee_name,
-        //   consignee_phone, drop_address, drop_city, drop_state, drop_pincode,
+        //   consignee_phone, consignee_alt_phone, drop_address, drop_city, drop_state, drop_pincode,
         //   products_desc, category_of_goods, hsn_code?, quantity, weight,
         //   length, width, height, total_amount, tax_value, return_reason }
         // Requires EKART_CLIENT_ID, EKART_USERNAME, EKART_PASSWORD,
@@ -2819,11 +2819,17 @@ export default {
         if (act === 'ekartCreateReversePickup') {
           await ensureEkartReverseTable(env.DB);
           const p = body || {};
-          const required = ['order_number', 'invoice_number', 'invoice_date', 'consignee_name', 'consignee_phone',
+          const required = ['order_number', 'invoice_number', 'invoice_date', 'consignee_name', 'consignee_phone', 'consignee_alt_phone',
             'drop_address', 'drop_city', 'drop_state', 'drop_pincode', 'products_desc', 'category_of_goods',
             'quantity', 'weight', 'length', 'width', 'height', 'total_amount', 'return_reason'];
           const missing = required.filter(f => p[f] === undefined || p[f] === null || p[f] === '');
           if (missing.length) return json({ ok: false, error: 'Missing required field(s): ' + missing.join(', ') }, 400);
+          // Ekart rejects the request outright if these match — same check
+          // as the frontend, kept here too since this route can be called
+          // directly.
+          if (String(p.consignee_phone) === String(p.consignee_alt_phone)) {
+            return json({ ok: false, error: 'consignee_phone and consignee_alt_phone must be different (Ekart rejects a match)' }, 400);
+          }
           if (!env.EKART_CLIENT_ID) return json({ ok: false, error: 'EKART_CLIENT_ID is not set in Worker secrets' }, 500);
           if (!env.EKART_USERNAME || !env.EKART_PASSWORD) return json({ ok: false, error: 'EKART_USERNAME / EKART_PASSWORD are not set in Worker secrets' }, 500);
           if (!env.EKART_SELLER_NAME || !env.EKART_SELLER_ADDRESS || !env.SELLER_GST) {
@@ -2839,13 +2845,13 @@ export default {
 
           const sessionUser = await resolveSession(request, env.DB);
           await env.DB.prepare(`
-            INSERT INTO ekart_reverse_pickups (order_number, invoice_number, invoice_date, consignee_name, consignee_phone,
+            INSERT INTO ekart_reverse_pickups (order_number, invoice_number, invoice_date, consignee_name, consignee_phone, consignee_alt_phone,
               drop_address, drop_city, drop_state, drop_pincode, products_desc, category_of_goods, hsn_code,
               quantity, weight, length, width, height, total_amount, tax_value, return_reason,
               tracking_id, vendor, success, response_json, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
           `).bind(
-            p.order_number, p.invoice_number, p.invoice_date, p.consignee_name, String(p.consignee_phone),
+            p.order_number, p.invoice_number, p.invoice_date, p.consignee_name, String(p.consignee_phone), String(p.consignee_alt_phone),
             p.drop_address, p.drop_city, p.drop_state, String(p.drop_pincode), p.products_desc, p.category_of_goods, p.hsn_code || '',
             Number(p.quantity), Number(p.weight), Number(p.length), Number(p.width), Number(p.height),
             Number(p.total_amount), Number(p.tax_value) || 0, p.return_reason,
@@ -3249,6 +3255,7 @@ async function ensureEkartReverseTable(DB) {
     invoice_date            TEXT,
     consignee_name          TEXT,
     consignee_phone         TEXT,
+    consignee_alt_phone     TEXT,
     drop_address            TEXT,
     drop_city               TEXT,
     drop_state              TEXT,
@@ -3271,6 +3278,10 @@ async function ensureEkartReverseTable(DB) {
     created_by              TEXT,
     created_at              TEXT DEFAULT (datetime('now'))
   )`).run();
+  // Migration for the table created before consignee_alt_phone existed
+  // (Ekart rejects a request where phone == alternate phone, so this had
+  // to be added as its own field rather than reusing consignee_phone).
+  try { await DB.prepare(`ALTER TABLE ekart_reverse_pickups ADD COLUMN consignee_alt_phone TEXT`).run(); } catch (e) { /* column already exists */ }
 }
 
 // Fetches an Ekart Elite access_token. Ekart's own auth API caches and
@@ -3341,7 +3352,7 @@ async function createEkartReversePickup(env, p) {
     invoice_number: p.invoice_number,
     invoice_date: p.invoice_date,
     consignee_name: p.consignee_name,
-    consignee_alternate_phone: String(p.consignee_phone),
+    consignee_alternate_phone: String(p.consignee_alt_phone),
     payment_mode: 'Pickup',
     category_of_goods: p.category_of_goods,
     hsn_code: p.hsn_code || undefined,

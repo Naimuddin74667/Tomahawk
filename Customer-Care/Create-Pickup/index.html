@@ -428,7 +428,7 @@ table.log-table tr:last-child td { border-bottom: none; }
                 <input type="date" id="rev-invoice-date" required>
               </div>
             </div>
-            <div class="form-row">
+            <div class="form-row three">
               <div class="field">
                 <label>Customer name</label>
                 <input type="text" id="rev-name" required>
@@ -436,6 +436,11 @@ table.log-table tr:last-child td { border-bottom: none; }
               <div class="field">
                 <label>Customer phone</label>
                 <input type="tel" id="rev-phone" maxlength="10" placeholder="10-digit number" required>
+              </div>
+              <div class="field">
+                <label>Alternate phone</label>
+                <input type="tel" id="rev-alt-phone" maxlength="10" placeholder="Must differ from above" required>
+                <div class="field-hint" id="rev-alt-phone-hint"></div>
               </div>
             </div>
             <div class="form-row single">
@@ -775,6 +780,7 @@ function initReversePickup() {
     invoice_date: document.getElementById('rev-invoice-date'),
     consignee_name: document.getElementById('rev-name'),
     consignee_phone: document.getElementById('rev-phone'),
+    consignee_alt_phone: document.getElementById('rev-alt-phone'),
     drop_address: document.getElementById('rev-address'),
     drop_pincode: document.getElementById('rev-pincode'),
     drop_city: document.getElementById('rev-city'),
@@ -872,7 +878,7 @@ function initReversePickup() {
 
   // hsn_code is the one optional field — everything else here is
   // required by Ekart's shipment schema.
-  var requiredIds = ['order_number', 'return_reason', 'invoice_number', 'invoice_date', 'consignee_name', 'consignee_phone',
+  var requiredIds = ['order_number', 'return_reason', 'invoice_number', 'invoice_date', 'consignee_name', 'consignee_phone', 'consignee_alt_phone',
     'drop_address', 'drop_pincode', 'drop_city', 'drop_state', 'products_desc', 'category_of_goods',
     'quantity', 'weight', 'length', 'width', 'height', 'total_amount'];
   function validateRequired() {
@@ -880,6 +886,17 @@ function initReversePickup() {
       var el = fields[requiredIds[i]];
       if (!el.checkValidity()) { el.reportValidity(); return false; }
     }
+    // Ekart rejects the request if phone and alternate phone are the same —
+    // catch it here rather than round-tripping to their API to find out.
+    var altHint = document.getElementById('rev-alt-phone-hint');
+    if (fields.consignee_phone.value.trim() === fields.consignee_alt_phone.value.trim()) {
+      altHint.className = 'field-hint bad';
+      altHint.textContent = 'Must be different from the customer phone above.';
+      fields.consignee_alt_phone.reportValidity();
+      return false;
+    }
+    altHint.className = 'field-hint';
+    altHint.textContent = '';
     return true;
   }
 
