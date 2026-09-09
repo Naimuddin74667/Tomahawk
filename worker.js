@@ -2770,30 +2770,30 @@ export default {
         }
 
         // ── EKART — reverse pickup request creation ("Reverse Pickup"
-        //   tab of Create Parcel Pickup). Books an Ekart Elite pickup
-        //   for a customer return.
-        // ⚠️ SCAFFOLD — Ekart's actual endpoint path, auth header shape,
-        //   and payload field names have not been confirmed against
-        //   their real API docs yet (login-gated at
-        //   app.elite.ekartlogistics.in/api/docs — not reachable from
-        //   here). This posts a best-guess JSON payload to a placeholder
-        //   path; update EKART_BASE_URL/the path/the payload shape in
-        //   createEkartReversePickup() below once the real docs are in
-        //   hand, and this route + the frontend form need zero other
-        //   changes since they're already generic over the fields below.
-        // Body: { return_id, customer_name, phone, pickup_address,
-        //   pickup_pincode, pickup_city, pickup_state, product_desc,
-        //   quantity, pickup_date }
-        // Requires EKART_API_KEY and EKART_CLIENT_ID as Worker secrets
-        // (see the Client ID field on Elite's API Documentation page).
+        //   tab of Create Parcel Pickup). Books an Ekart Elite reverse
+        //   shipment (payment_mode: "Pickup") for a customer return —
+        //   confirmed against Ekart's own OpenAPI spec.
+        // Body: { order_number, invoice_number, invoice_date, consignee_name,
+        //   consignee_phone, drop_address, drop_city, drop_state, drop_pincode,
+        //   products_desc, category_of_goods, hsn_code?, quantity, weight,
+        //   length, width, height, total_amount, tax_value, return_reason }
+        // Requires EKART_CLIENT_ID, EKART_USERNAME, EKART_PASSWORD,
+        // EKART_SELLER_NAME, EKART_SELLER_ADDRESS, EKART_SELLER_GST as
+        // Worker secrets — see createEkartReversePickup() above for what
+        // each does.
         if (act === 'ekartCreateReversePickup') {
           await ensureEkartReverseTable(env.DB);
           const p = body || {};
-          const required = ['return_id', 'customer_name', 'phone', 'pickup_address', 'pickup_pincode', 'pickup_city', 'pickup_state', 'product_desc', 'quantity', 'pickup_date'];
+          const required = ['order_number', 'invoice_number', 'invoice_date', 'consignee_name', 'consignee_phone',
+            'drop_address', 'drop_city', 'drop_state', 'drop_pincode', 'products_desc', 'category_of_goods',
+            'quantity', 'weight', 'length', 'width', 'height', 'total_amount', 'return_reason'];
           const missing = required.filter(f => p[f] === undefined || p[f] === null || p[f] === '');
           if (missing.length) return json({ ok: false, error: 'Missing required field(s): ' + missing.join(', ') }, 400);
-          if (!env.EKART_API_KEY) return json({ ok: false, error: 'EKART_API_KEY is not set in Worker secrets' }, 500);
           if (!env.EKART_CLIENT_ID) return json({ ok: false, error: 'EKART_CLIENT_ID is not set in Worker secrets' }, 500);
+          if (!env.EKART_USERNAME || !env.EKART_PASSWORD) return json({ ok: false, error: 'EKART_USERNAME / EKART_PASSWORD are not set in Worker secrets' }, 500);
+          if (!env.EKART_SELLER_NAME || !env.EKART_SELLER_ADDRESS || !env.EKART_SELLER_GST) {
+            return json({ ok: false, error: 'EKART_SELLER_NAME / EKART_SELLER_ADDRESS / EKART_SELLER_GST are not set in Worker secrets' }, 500);
+          }
 
           let result;
           try {
@@ -2804,16 +2804,21 @@ export default {
 
           const sessionUser = await resolveSession(request, env.DB);
           await env.DB.prepare(`
-            INSERT INTO ekart_reverse_pickups (return_id, customer_name, phone, pickup_address, pickup_pincode, pickup_city, pickup_state, product_desc, quantity, pickup_date, success, response_json, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            INSERT INTO ekart_reverse_pickups (order_number, invoice_number, invoice_date, consignee_name, consignee_phone,
+              drop_address, drop_city, drop_state, drop_pincode, products_desc, category_of_goods, hsn_code,
+              quantity, weight, length, width, height, total_amount, tax_value, return_reason,
+              tracking_id, vendor, success, response_json, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
           `).bind(
-            p.return_id, p.customer_name, String(p.phone), p.pickup_address, String(p.pickup_pincode), p.pickup_city, p.pickup_state,
-            p.product_desc, Number(p.quantity), p.pickup_date,
-            result.success ? 1 : 0, JSON.stringify(result.response),
+            p.order_number, p.invoice_number, p.invoice_date, p.consignee_name, String(p.consignee_phone),
+            p.drop_address, p.drop_city, p.drop_state, String(p.drop_pincode), p.products_desc, p.category_of_goods, p.hsn_code || '',
+            Number(p.quantity), Number(p.weight), Number(p.length), Number(p.width), Number(p.height),
+            Number(p.total_amount), Number(p.tax_value) || 0, p.return_reason,
+            result.trackingId, result.vendor, result.success ? 1 : 0, JSON.stringify(result.response),
             (sessionUser && sessionUser.username) || 'unauthenticated'
           ).run();
 
-          return json({ ok: result.success, pickupId: result.pickupId, ekartHttpStatus: result.httpStatus, response: result.response }, result.success ? 200 : 502);
+          return json({ ok: result.success, trackingId: result.trackingId, vendor: result.vendor, ekartHttpStatus: result.httpStatus, response: result.response }, result.success ? 200 : 502);
         }
 
         return json({ ok: false, error: 'Unknown action' }, 400);
@@ -3203,58 +3208,141 @@ async function createDelhiveryPickup(env, p) {
 
 async function ensureEkartReverseTable(DB) {
   await DB.prepare(`CREATE TABLE IF NOT EXISTS ekart_reverse_pickups (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    return_id         TEXT,
-    customer_name     TEXT,
-    phone             TEXT,
-    pickup_address    TEXT,
-    pickup_pincode    TEXT,
-    pickup_city       TEXT,
-    pickup_state      TEXT,
-    product_desc      TEXT,
-    quantity          INTEGER,
-    pickup_date       TEXT,
-    success           INTEGER DEFAULT 0,
-    response_json     TEXT,
-    created_by        TEXT,
-    created_at        TEXT DEFAULT (datetime('now'))
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_number            TEXT,
+    invoice_number          TEXT,
+    invoice_date            TEXT,
+    consignee_name          TEXT,
+    consignee_phone         TEXT,
+    drop_address            TEXT,
+    drop_city               TEXT,
+    drop_state              TEXT,
+    drop_pincode            TEXT,
+    products_desc           TEXT,
+    category_of_goods       TEXT,
+    hsn_code                TEXT,
+    quantity                INTEGER,
+    weight                  INTEGER,
+    length                  INTEGER,
+    width                   INTEGER,
+    height                  INTEGER,
+    total_amount            REAL,
+    tax_value               REAL,
+    return_reason           TEXT,
+    tracking_id             TEXT,
+    vendor                  TEXT,
+    success                 INTEGER DEFAULT 0,
+    response_json           TEXT,
+    created_by              TEXT,
+    created_at              TEXT DEFAULT (datetime('now'))
   )`).run();
 }
 
+// Fetches an Ekart Elite access_token. Ekart's own auth API caches and
+// returns the same token for ~24h server-side (per their docs), so — like
+// getGmailAccessToken() — there's no benefit to caching it here too;
+// just fetch fresh on every call.
+async function getEkartAccessToken(env) {
+  const base = env.EKART_BASE_URL || 'https://app.elite.ekartlogistics.in';
+  const res = await fetch(base + '/integrations/v2/auth/token/' + encodeURIComponent(env.EKART_CLIENT_ID), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: env.EKART_USERNAME, password: env.EKART_PASSWORD })
+  });
+  const text = await res.text();
+  let json;
+  try { json = JSON.parse(text); } catch (e) { json = { raw: text }; }
+  if (!res.ok || !json.access_token) {
+    throw new Error('Ekart auth failed: ' + (json.message || json.description || text));
+  }
+  return json.access_token;
+}
+
 // ── EKART — Reverse Pickup Request Creation ──────────────────────────
-// ⚠️ SCAFFOLD — see the comment at the ekartCreateReversePickup route
-// above. The endpoint path, header names, and payload field names below
-// are a best-effort guess modeled on common reverse-logistics pickup
-// APIs (Delhivery's own reverse-pickup fields, Shiprocket's return
-// pickup request) — NOT confirmed against Ekart Elite's real docs.
-// Update this function once those are available; nothing else needs
-// to change since the route and frontend are generic over these fields.
+// Proxies Ekart Elite's shipment-creation API (PUT /api/v1/package/create)
+// with payment_mode:"Pickup", which is how their API represents a
+// reverse pickup — a shipment travelling customer → seller instead of
+// seller → customer. Confirmed against Ekart's own OpenAPI spec.
 //
-// Expected Cloudflare secrets/vars once confirmed:
-//   EKART_API_KEY     — from Elite → Settings → API Settings
-//   EKART_CLIENT_ID   — "Client ID" shown on the same API Settings page
-//   EKART_BASE_URL    — optional override; defaults to the guess below
+// Field mapping notes (see their docs for the full reasoning):
+//   - payment_mode must be "Pickup" for reverse shipments
+//   - return_reason is required for Pickup mode (not for forward)
+//   - drop_location is the CUSTOMER address (counter-intuitive — this
+//     is the ekart response's own convention, since drop_location
+//     always means "where Ekart delivers to", and on a reverse
+//     shipment that's back to the seller... except here it's the
+//     customer's address being picked up FROM, per their exact wording:
+//     "the drop_location is the customer address and the pickup_location
+//     is the seller address" for reverse shipments)
+//   - pickup_location (seller warehouse) is omitted entirely when only
+//     one address is registered with Ekart — they auto-fill it. Set
+//     EKART_PICKUP_LOCATION_ALIAS only if multiple addresses are
+//     registered and a specific one needs to be selected.
+//   - cod_amount is always 0 here (Pickup mode never collects COD)
+//
+// Required Cloudflare secrets/vars (Dashboard → tomahawk-returns →
+// Settings → Variables and Secrets):
+//   EKART_CLIENT_ID              — Client ID from Elite → API Settings
+//   EKART_USERNAME, EKART_PASSWORD — Elite login credentials (used only
+//                                     to mint access_token server-side)
+//   EKART_SELLER_NAME             — registered seller name
+//   EKART_SELLER_ADDRESS          — seller billing address
+//   EKART_SELLER_GST              — seller GST TIN
+//   EKART_PICKUP_LOCATION_ALIAS   — optional, only if multiple pickup
+//                                     addresses are registered with Ekart
+//   EKART_BASE_URL                — optional override; defaults to
+//                                     https://app.elite.ekartlogistics.in
 async function createEkartReversePickup(env, p) {
+  const totalAmount = Number(p.total_amount);
+  const taxValue = Number(p.tax_value) || 0;
+  const taxableAmount = totalAmount - taxValue;
+
   const payload = {
-    client_id: env.EKART_CLIENT_ID,
-    return_id: p.return_id,
-    customer_name: p.customer_name,
-    phone: String(p.phone),
-    pickup_address: p.pickup_address,
-    pickup_pincode: String(p.pickup_pincode),
-    pickup_city: p.pickup_city,
-    pickup_state: p.pickup_state,
-    product_desc: p.product_desc,
+    seller_name: env.EKART_SELLER_NAME,
+    seller_address: env.EKART_SELLER_ADDRESS,
+    seller_gst_tin: env.EKART_SELLER_GST,
+    consignee_gst_amount: 0,
+    order_number: p.order_number,
+    invoice_number: p.invoice_number,
+    invoice_date: p.invoice_date,
+    consignee_name: p.consignee_name,
+    consignee_alternate_phone: String(p.consignee_phone),
+    payment_mode: 'Pickup',
+    category_of_goods: p.category_of_goods,
+    hsn_code: p.hsn_code || undefined,
+    products_desc: p.products_desc,
+    total_amount: totalAmount,
+    cod_amount: 0,
+    tax_value: taxValue,
+    taxable_amount: taxableAmount,
+    commodity_value: String(taxableAmount),
+    return_reason: p.return_reason,
     quantity: Number(p.quantity),
-    pickup_date: p.pickup_date // 'YYYY-MM-DD'
+    weight: Number(p.weight),
+    length: Number(p.length),
+    height: Number(p.height),
+    width: Number(p.width),
+    drop_location: {
+      name: p.consignee_name,
+      address: p.drop_address,
+      city: p.drop_city,
+      state: p.drop_state,
+      country: 'India',
+      phone: Number(p.consignee_phone),
+      pin: Number(p.drop_pincode)
+    }
   };
+  if (env.EKART_PICKUP_LOCATION_ALIAS) {
+    payload.pickup_location = { name: env.EKART_PICKUP_LOCATION_ALIAS };
+  }
 
   const base = env.EKART_BASE_URL || 'https://app.elite.ekartlogistics.in';
+  const token = await getEkartAccessToken(env);
 
-  const eResp = await fetch(base + '/api/reverse-pickup/create', {
-    method: 'POST',
+  const eResp = await fetch(base + '/api/v1/package/create', {
+    method: 'PUT',
     headers: {
-      'Authorization': 'Bearer ' + env.EKART_API_KEY,
+      'Authorization': 'Bearer ' + token,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify(payload)
@@ -3263,10 +3351,11 @@ async function createEkartReversePickup(env, p) {
   let eJson;
   try { eJson = JSON.parse(eText); } catch (e) { eJson = { raw: eText }; }
 
-  const success = !!(eResp.ok && !eJson.error && (eJson.pickup_id || eJson.success !== false));
-  const pickupId = eJson.pickup_id || eJson.reverse_pickup_id || '';
+  const success = !!(eResp.ok && eJson.status === true);
+  const trackingId = eJson.tracking_id || '';
+  const vendor = eJson.vendor || '';
 
-  return { success, httpStatus: eResp.status, pickupId, payload, response: eJson };
+  return { success, httpStatus: eResp.status, trackingId, vendor, payload, response: eJson };
 }
 
 // Exchanges the long-lived refresh token for a short-lived access token.

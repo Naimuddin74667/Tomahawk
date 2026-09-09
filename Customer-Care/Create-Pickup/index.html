@@ -403,10 +403,6 @@ table.log-table tr:last-child td { border-bottom: none; }
         <div class="panel">
           <div class="panel-title">Ekart reverse pickup request</div>
 
-          <div class="viewer-note" style="margin-bottom:14px;">
-            &#9888;&#65039; Ekart integration is a work in progress &mdash; their real API endpoint hasn't been confirmed yet, so submissions here may fail until that's wired up.
-          </div>
-
           <div id="rev-viewer-note" class="viewer-note" hidden>
             Viewer accounts can see the pickup log on the right, but only Admins and Managers can schedule a reverse pickup.
           </div>
@@ -414,12 +410,22 @@ table.log-table tr:last-child td { border-bottom: none; }
           <div id="rev-pickup-form" autocomplete="off">
             <div class="form-row">
               <div class="field">
-                <label>Return ID</label>
-                <input type="text" id="rev-return-id" placeholder="e.g. RET-12345" required>
+                <label>Order / return number</label>
+                <input type="text" id="rev-order-number" placeholder="e.g. RET-12345" required>
               </div>
               <div class="field">
-                <label>Pickup date</label>
-                <input type="date" id="rev-date" required>
+                <label>Return reason</label>
+                <input type="text" id="rev-return-reason" placeholder="e.g. Wrong product sent" required>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="field">
+                <label>Invoice number</label>
+                <input type="text" id="rev-invoice-number" required>
+              </div>
+              <div class="field">
+                <label>Invoice date</label>
+                <input type="date" id="rev-invoice-date" required>
               </div>
             </div>
             <div class="form-row">
@@ -428,13 +434,13 @@ table.log-table tr:last-child td { border-bottom: none; }
                 <input type="text" id="rev-name" required>
               </div>
               <div class="field">
-                <label>Phone</label>
+                <label>Customer phone</label>
                 <input type="tel" id="rev-phone" maxlength="10" placeholder="10-digit number" required>
               </div>
             </div>
             <div class="form-row single">
               <div class="field">
-                <label>Pickup address</label>
+                <label>Pickup address <span class="opt">(customer's address)</span></label>
                 <textarea id="rev-address" required></textarea>
               </div>
             </div>
@@ -458,11 +464,50 @@ table.log-table tr:last-child td { border-bottom: none; }
                 <input type="text" id="rev-product" required>
               </div>
               <div class="field">
+                <label>Category of goods</label>
+                <input type="text" id="rev-category" placeholder="e.g. Power Tools" required>
+              </div>
+            </div>
+            <div class="form-row three">
+              <div class="field">
+                <label>HSN code <span class="opt">(optional)</span></label>
+                <input type="text" id="rev-hsn">
+              </div>
+              <div class="field">
                 <label>Quantity</label>
                 <input type="number" id="rev-qty" min="1" value="1" required>
               </div>
+              <div class="field">
+                <label>Weight <span class="opt">(grams)</span></label>
+                <input type="number" id="rev-weight" min="1" value="1000" required>
+              </div>
             </div>
-            <button class="submit-btn" id="rev-submit-btn" type="button">Schedule Reverse Pickup</button>
+            <div class="form-row three">
+              <div class="field">
+                <label>Length <span class="opt">(cm)</span></label>
+                <input type="number" id="rev-length" min="1" value="10" required>
+              </div>
+              <div class="field">
+                <label>Width <span class="opt">(cm)</span></label>
+                <input type="number" id="rev-width" min="1" value="10" required>
+              </div>
+              <div class="field">
+                <label>Height <span class="opt">(cm)</span></label>
+                <input type="number" id="rev-height" min="1" value="10" required>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="field">
+                <label>Total amount <span class="opt">(&#8377;, incl. tax)</span></label>
+                <input type="number" id="rev-total-amount" min="1" step="0.01" required>
+              </div>
+              <div class="field">
+                <label>Tax value <span class="opt">(&#8377;, GST portion)</span></label>
+                <input type="number" id="rev-tax-value" min="0" step="0.01" value="0">
+              </div>
+            </div>
+            <div class="field-hint">Payment mode is fixed to <b>Pickup</b> (Ekart's mode for reverse shipments) &mdash; no COD is collected on a return.</div>
+            <button class="submit-btn" id="rev-submit-btn" type="button" style="margin-top:14px;">Schedule Reverse Pickup</button>
           </div>
 
           <div class="result-box" id="rev-result-box">
@@ -481,9 +526,9 @@ table.log-table tr:last-child td { border-bottom: none; }
             <table class="log-table" id="rev-log-table">
               <thead>
                 <tr>
-                  <th>Return ID</th>
+                  <th>Order #</th>
                   <th>Customer</th>
-                  <th>Pincode</th>
+                  <th>Tracking ID</th>
                   <th>Status</th>
                   <th>By</th>
                   <th>When</th>
@@ -723,21 +768,31 @@ function initReversePickup() {
   var resultTitle = document.getElementById('rev-result-title');
   var resultBody = document.getElementById('rev-result-body');
   var fields = {
-    return_id: document.getElementById('rev-return-id'),
-    customer_name: document.getElementById('rev-name'),
-    phone: document.getElementById('rev-phone'),
-    pickup_address: document.getElementById('rev-address'),
-    pickup_pincode: document.getElementById('rev-pincode'),
-    pickup_city: document.getElementById('rev-city'),
-    pickup_state: document.getElementById('rev-state'),
-    product_desc: document.getElementById('rev-product'),
+    order_number: document.getElementById('rev-order-number'),
+    return_reason: document.getElementById('rev-return-reason'),
+    invoice_number: document.getElementById('rev-invoice-number'),
+    invoice_date: document.getElementById('rev-invoice-date'),
+    consignee_name: document.getElementById('rev-name'),
+    consignee_phone: document.getElementById('rev-phone'),
+    drop_address: document.getElementById('rev-address'),
+    drop_pincode: document.getElementById('rev-pincode'),
+    drop_city: document.getElementById('rev-city'),
+    drop_state: document.getElementById('rev-state'),
+    products_desc: document.getElementById('rev-product'),
+    category_of_goods: document.getElementById('rev-category'),
+    hsn_code: document.getElementById('rev-hsn'),
     quantity: document.getElementById('rev-qty'),
-    pickup_date: document.getElementById('rev-date')
+    weight: document.getElementById('rev-weight'),
+    length: document.getElementById('rev-length'),
+    width: document.getElementById('rev-width'),
+    height: document.getElementById('rev-height'),
+    total_amount: document.getElementById('rev-total-amount'),
+    tax_value: document.getElementById('rev-tax-value')
   };
 
-  var d = new Date();
-  d.setDate(d.getDate() + 1);
-  fields.pickup_date.value = d.toISOString().slice(0, 10);
+  // Invoice date defaults to today — the return is usually being filed
+  // against an invoice already issued, not a future one.
+  fields.invoice_date.value = new Date().toISOString().slice(0, 10);
 
   async function callWorker(action, payload) {
     var session = window.TM_getSession();
@@ -763,9 +818,9 @@ function initReversePickup() {
       rows.forEach(function (p) {
         var tr = document.createElement('tr');
         tr.innerHTML =
-          '<td>' + escapeHtml(p.return_id) + '</td>' +
-          '<td>' + escapeHtml(p.customer_name) + '</td>' +
-          '<td>' + escapeHtml(p.pickup_pincode) + '</td>' +
+          '<td>' + escapeHtml(p.order_number) + '</td>' +
+          '<td>' + escapeHtml(p.consignee_name) + '</td>' +
+          '<td>' + escapeHtml(p.tracking_id || '—') + '</td>' +
           '<td><span class="badge ' + (p.success ? 'created' : 'failed') + '">' + (p.success ? 'Scheduled' : 'Failed') + '</span></td>' +
           '<td>' + escapeHtml(p.created_by) + '</td>' +
           '<td>' + fmtWhen(p.created_at) + '</td>';
@@ -774,7 +829,11 @@ function initReversePickup() {
     } catch (e) {}
   }
 
-  var requiredIds = ['return_id', 'customer_name', 'phone', 'pickup_address', 'pickup_pincode', 'pickup_city', 'pickup_state', 'product_desc', 'quantity', 'pickup_date'];
+  // hsn_code is the one optional field — everything else here is
+  // required by Ekart's shipment schema.
+  var requiredIds = ['order_number', 'return_reason', 'invoice_number', 'invoice_date', 'consignee_name', 'consignee_phone',
+    'drop_address', 'drop_pincode', 'drop_city', 'drop_state', 'products_desc', 'category_of_goods',
+    'quantity', 'weight', 'length', 'width', 'height', 'total_amount'];
   function validateRequired() {
     for (var i = 0; i < requiredIds.length; i++) {
       var el = fields[requiredIds[i]];
@@ -792,16 +851,18 @@ function initReversePickup() {
 
     try {
       var payload = {};
-      requiredIds.forEach(function (key) { payload[key] = fields[key].value; });
+      Object.keys(fields).forEach(function (key) { payload[key] = fields[key].value; });
       var res = await callWorker('ekartCreateReversePickup', payload);
       if (res.ok) {
         resultBox.className = 'result-box show success';
         resultTitle.textContent = 'Reverse pickup scheduled';
-        resultBody.innerHTML = res.pickupId ? 'Pickup ID: <span class="result-waybill">' + escapeHtml(res.pickupId) + '</span>' : 'Ekart has logged the reverse pickup request.';
+        resultBody.innerHTML = res.trackingId
+          ? 'Ekart tracking ID: <span class="result-waybill">' + escapeHtml(res.trackingId) + '</span>' + (res.vendor ? ' (vendor: ' + escapeHtml(res.vendor) + ')' : '')
+          : 'Ekart has logged the reverse pickup request.';
       } else {
         resultBox.className = 'result-box show error';
         resultTitle.textContent = 'Reverse pickup request failed';
-        resultBody.textContent = (res.response && (res.response.error || res.response.message)) || res.error || 'Unknown error — check the log details below.';
+        resultBody.textContent = (res.response && (res.response.message || res.response.description)) || res.error || 'Unknown error — check the log details below.';
       }
     } catch (err) {
       resultBox.className = 'result-box show error';
