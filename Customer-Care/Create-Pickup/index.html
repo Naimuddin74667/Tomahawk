@@ -397,11 +397,104 @@ table.log-table tr:last-child td { border-bottom: none; }
     </div>
 
     <div class="tab-panel" id="tab-panel-reverse" hidden>
-      <div class="panel">
-        <div class="placeholder-panel">
-          <div class="ph-title">Reverse Pickup</div>
-          <div>Ekart reverse pickup integration is being wired up &mdash; coming soon.</div>
+      <div class="grid">
+
+        <!-- ── Reverse pickup request panel ── -->
+        <div class="panel">
+          <div class="panel-title">Ekart reverse pickup request</div>
+
+          <div class="viewer-note" style="margin-bottom:14px;">
+            &#9888;&#65039; Ekart integration is a work in progress &mdash; their real API endpoint hasn't been confirmed yet, so submissions here may fail until that's wired up.
+          </div>
+
+          <div id="rev-viewer-note" class="viewer-note" hidden>
+            Viewer accounts can see the pickup log on the right, but only Admins and Managers can schedule a reverse pickup.
+          </div>
+
+          <div id="rev-pickup-form" autocomplete="off">
+            <div class="form-row">
+              <div class="field">
+                <label>Return ID</label>
+                <input type="text" id="rev-return-id" placeholder="e.g. RET-12345" required>
+              </div>
+              <div class="field">
+                <label>Pickup date</label>
+                <input type="date" id="rev-date" required>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="field">
+                <label>Customer name</label>
+                <input type="text" id="rev-name" required>
+              </div>
+              <div class="field">
+                <label>Phone</label>
+                <input type="tel" id="rev-phone" maxlength="10" placeholder="10-digit number" required>
+              </div>
+            </div>
+            <div class="form-row single">
+              <div class="field">
+                <label>Pickup address</label>
+                <textarea id="rev-address" required></textarea>
+              </div>
+            </div>
+            <div class="form-row three">
+              <div class="field">
+                <label>Pincode</label>
+                <input type="text" id="rev-pincode" maxlength="6" required>
+              </div>
+              <div class="field">
+                <label>City</label>
+                <input type="text" id="rev-city" required>
+              </div>
+              <div class="field">
+                <label>State</label>
+                <input type="text" id="rev-state" required>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="field">
+                <label>Product description</label>
+                <input type="text" id="rev-product" required>
+              </div>
+              <div class="field">
+                <label>Quantity</label>
+                <input type="number" id="rev-qty" min="1" value="1" required>
+              </div>
+            </div>
+            <button class="submit-btn" id="rev-submit-btn" type="button">Schedule Reverse Pickup</button>
+          </div>
+
+          <div class="result-box" id="rev-result-box">
+            <div class="result-title" id="rev-result-title"></div>
+            <div id="rev-result-body"></div>
+          </div>
         </div>
+
+        <!-- ── Reverse pickup log panel ── -->
+        <div class="panel">
+          <div class="panel-head-row">
+            <div class="panel-title">Recent reverse pickups</div>
+            <span class="log-refresh" id="rev-log-refresh-btn">&#8635; Refresh</span>
+          </div>
+          <div class="log-table-wrap">
+            <table class="log-table" id="rev-log-table">
+              <thead>
+                <tr>
+                  <th>Return ID</th>
+                  <th>Customer</th>
+                  <th>Pincode</th>
+                  <th>Status</th>
+                  <th>By</th>
+                  <th>When</th>
+                </tr>
+              </thead>
+              <tbody id="rev-log-tbody"></tbody>
+            </table>
+            <div class="log-empty" id="rev-log-empty" hidden>No reverse pickups logged yet.</div>
+          </div>
+        </div>
+
       </div>
     </div>
 </div>
@@ -437,6 +530,8 @@ function switchPickupTab(name) {
     var canCreate = role === 'admin' || role === 'manager';
     document.getElementById('fwd-pickup-form').style.display = canCreate ? '' : 'none';
     document.getElementById('fwd-viewer-note').hidden = canCreate;
+    document.getElementById('rev-pickup-form').style.display = canCreate ? '' : 'none';
+    document.getElementById('rev-viewer-note').hidden = canCreate;
   }
 
   function showApp(user) {
@@ -493,6 +588,7 @@ function switchPickupTab(name) {
     } catch (e) { /* network hiccup — keep the optimistic render */ }
 
     initForwardPickup();
+    initReversePickup();
   })();
 
   // ── Theme ──
@@ -614,6 +710,111 @@ function initForwardPickup() {
   });
 
   document.getElementById('fwd-log-refresh-btn').addEventListener('click', fetchLog);
+
+  fetchLog();
+}
+
+// ══════════════════════════════════════════════════════════════════
+// REVERSE PICKUP — Ekart reverse pickup form + log
+// ══════════════════════════════════════════════════════════════════
+function initReversePickup() {
+  var submitBtn = document.getElementById('rev-submit-btn');
+  var resultBox = document.getElementById('rev-result-box');
+  var resultTitle = document.getElementById('rev-result-title');
+  var resultBody = document.getElementById('rev-result-body');
+  var fields = {
+    return_id: document.getElementById('rev-return-id'),
+    customer_name: document.getElementById('rev-name'),
+    phone: document.getElementById('rev-phone'),
+    pickup_address: document.getElementById('rev-address'),
+    pickup_pincode: document.getElementById('rev-pincode'),
+    pickup_city: document.getElementById('rev-city'),
+    pickup_state: document.getElementById('rev-state'),
+    product_desc: document.getElementById('rev-product'),
+    quantity: document.getElementById('rev-qty'),
+    pickup_date: document.getElementById('rev-date')
+  };
+
+  var d = new Date();
+  d.setDate(d.getDate() + 1);
+  fields.pickup_date.value = d.toISOString().slice(0, 10);
+
+  async function callWorker(action, payload) {
+    var session = window.TM_getSession();
+    var headers = { 'Content-Type': 'application/json' };
+    if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
+    var res = await fetch(window.TM_WORKER + '?action=' + encodeURIComponent(action), {
+      method: 'POST', headers: headers, body: JSON.stringify(Object.assign({ action: action }, payload || {}))
+    });
+    return res.json();
+  }
+
+  async function fetchLog() {
+    try {
+      var session = window.TM_getSession();
+      var headers = {};
+      if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
+      var res = await fetch(window.TM_WORKER + '?action=ekartListReversePickups', { headers: headers }).then(function (r) { return r.json(); });
+      var tbody = document.getElementById('rev-log-tbody');
+      var empty = document.getElementById('rev-log-empty');
+      tbody.innerHTML = '';
+      var rows = (res.ok && res.pickups) || [];
+      empty.hidden = rows.length > 0;
+      rows.forEach(function (p) {
+        var tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>' + escapeHtml(p.return_id) + '</td>' +
+          '<td>' + escapeHtml(p.customer_name) + '</td>' +
+          '<td>' + escapeHtml(p.pickup_pincode) + '</td>' +
+          '<td><span class="badge ' + (p.success ? 'created' : 'failed') + '">' + (p.success ? 'Scheduled' : 'Failed') + '</span></td>' +
+          '<td>' + escapeHtml(p.created_by) + '</td>' +
+          '<td>' + fmtWhen(p.created_at) + '</td>';
+        tbody.appendChild(tr);
+      });
+    } catch (e) {}
+  }
+
+  var requiredIds = ['return_id', 'customer_name', 'phone', 'pickup_address', 'pickup_pincode', 'pickup_city', 'pickup_state', 'product_desc', 'quantity', 'pickup_date'];
+  function validateRequired() {
+    for (var i = 0; i < requiredIds.length; i++) {
+      var el = fields[requiredIds[i]];
+      if (!el.checkValidity()) { el.reportValidity(); return false; }
+    }
+    return true;
+  }
+
+  submitBtn.addEventListener('click', async function () {
+    resultBox.className = 'result-box';
+    if (!validateRequired()) return;
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Scheduling…';
+
+    try {
+      var payload = {};
+      requiredIds.forEach(function (key) { payload[key] = fields[key].value; });
+      var res = await callWorker('ekartCreateReversePickup', payload);
+      if (res.ok) {
+        resultBox.className = 'result-box show success';
+        resultTitle.textContent = 'Reverse pickup scheduled';
+        resultBody.innerHTML = res.pickupId ? 'Pickup ID: <span class="result-waybill">' + escapeHtml(res.pickupId) + '</span>' : 'Ekart has logged the reverse pickup request.';
+      } else {
+        resultBox.className = 'result-box show error';
+        resultTitle.textContent = 'Reverse pickup request failed';
+        resultBody.textContent = (res.response && (res.response.error || res.response.message)) || res.error || 'Unknown error — check the log details below.';
+      }
+    } catch (err) {
+      resultBox.className = 'result-box show error';
+      resultTitle.textContent = 'Request failed';
+      resultBody.textContent = err.message;
+    }
+
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Schedule Reverse Pickup';
+    fetchLog();
+  });
+
+  document.getElementById('rev-log-refresh-btn').addEventListener('click', fetchLog);
 
   fetchLog();
 }
