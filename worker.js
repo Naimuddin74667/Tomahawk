@@ -362,6 +362,7 @@ async function ensureAuthTables(DB) {
       display_name  TEXT DEFAULT '',
       active        INTEGER DEFAULT 1,
       allowed_apps  TEXT DEFAULT NULL,
+      email         TEXT DEFAULT NULL,
       created_at    TEXT DEFAULT (datetime('now'))
     )`),
     DB.prepare(`CREATE TABLE IF NOT EXISTS tm_sessions (
@@ -381,6 +382,7 @@ async function ensureAuthTables(DB) {
   // (e.g. ["Delhivery-Orders","Scanner"]) restricts a "Custom" user to
   // exactly those apps regardless of what their underlying role permits.
   try { await DB.prepare(`ALTER TABLE tm_users ADD COLUMN allowed_apps TEXT DEFAULT NULL`).run(); } catch (e) { /* column already exists */ }
+  try { await DB.prepare(`ALTER TABLE tm_users ADD COLUMN email TEXT DEFAULT NULL`).run(); } catch (e) { /* column already exists */ }
   const adminExists = await DB.prepare("SELECT id FROM tm_users WHERE username = 'admin'").first();
   if (!adminExists) {
     const salt = genSalt();
@@ -453,6 +455,44 @@ async function maybeAlert(env, bridgeId, displayName, reasonText) {
     });
   } catch (e) {
     console.error('Failed to send alert email for ' + bridgeId + ':', e.message);
+  }
+}
+
+// Sends the "your Tomahawk account was created" email via Resend when an
+// admin adds a new team member with an email address. Best-effort only —
+// a failure here (bad/unverified from-domain, missing key, etc.) is logged
+// and swallowed so it never blocks user creation itself.
+async function sendWelcomeEmail(env, { to, username, password, displayName, role }) {
+  const apiKey = env.RESEND_API_KEY;
+  if (!apiKey || !to) return { sent: false, reason: !apiKey ? 'RESEND_API_KEY not set' : 'no email on file' };
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: env.NEW_USER_EMAIL_FROM || 'Tomahawk <naimuddin@bullet.co.in>',
+        to,
+        subject: 'Your Tomahawk account is ready',
+        text:
+          `Hi ${displayName || username},\n\n` +
+          `An account has been created for you on the Tomahawk internal tools portal.\n\n` +
+          `Login: https://naimuddin74667.github.io/Tomahawk/\n` +
+          `Username: ${username}\n` +
+          `Temporary password: ${password}\n` +
+          `Role: ${role}\n\n` +
+          `Please log in and you'll be prompted to keep or change this password as needed.\n\n` +
+          `— ITH Team`
+      })
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      console.error('Resend welcome-email failed:', res.status, errText);
+      return { sent: false, reason: 'Resend API error ' + res.status };
+    }
+    return { sent: true };
+  } catch (e) {
+    console.error('Failed to send welcome email to ' + to + ':', e.message);
+    return { sent: false, reason: e.message };
   }
 }
 
@@ -607,7 +647,7 @@ export default {
       // ── ADMIN — user management (always gated, see checkAuth) ────
       if (request.method === 'POST' && act === 'adminListUsers') {
         const rows = await env.DB.prepare(
-          'SELECT id, username, role, display_name, active, allowed_apps, created_at FROM tm_users ORDER BY username ASC'
+          'SELECT id, username, role, display_name, email, active, allowed_apps, created_at FROM tm_users ORDER BY username ASC'
         ).all();
         const users = (rows.results || []).map(u => ({
           ...u,
@@ -620,7 +660,7 @@ export default {
         return json({ ok: true, users });
       }
       if (request.method === 'POST' && act === 'adminCreateUser') {
-        const { username, password, role, display_name, allowed_apps } = body;
+        const { username, password, role, display_name, allowed_apps, email } = body;
         if (!username || !password || !role) return json({ ok: false, error: 'username, password, role required' });
         const validRoles = ['admin', 'manager', 'viewer', 'picker_packer', 'custom'];
         if (!validRoles.includes(role)) return json({ ok: false, error: 'Invalid role' });
@@ -630,19 +670,25 @@ export default {
         // (ACTION_TIERS, roleAllowed) only ever sees 'manager'.
         const actualRole = role === 'custom' ? 'manager' : role;
         const appsJson = role === 'custom' ? JSON.stringify(Array.isArray(allowed_apps) ? allowed_apps : []) : null;
+        const cleanEmail = email ? String(email).trim() : null;
+        const cleanUsername = String(username).toLowerCase().trim();
         const salt = genSalt();
         const hash = await hashPassword(password, salt);
         try {
           await env.DB.prepare(
-            'INSERT INTO tm_users (username, password_hash, salt, role, display_name, allowed_apps) VALUES (?, ?, ?, ?, ?, ?)'
-          ).bind(String(username).toLowerCase().trim(), hash, salt, actualRole, display_name || '', appsJson).run();
-          return json({ ok: true });
+            'INSERT INTO tm_users (username, password_hash, salt, role, display_name, allowed_apps, email) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          ).bind(cleanUsername, hash, salt, actualRole, display_name || '', appsJson, cleanEmail).run();
         } catch (e) {
           return json({ ok: false, error: 'Username already exists' });
         }
+        // Best-effort welcome email — never blocks account creation.
+        const emailResult = await sendWelcomeEmail(env, {
+          to: cleanEmail, username: cleanUsername, password, displayName: display_name, role: actualRole
+        });
+        return json({ ok: true, emailSent: emailResult.sent, emailNote: emailResult.sent ? null : emailResult.reason });
       }
       if (request.method === 'POST' && act === 'adminUpdateUser') {
-        const { id, role, display_name, active, allowed_apps } = body;
+        const { id, role, display_name, active, allowed_apps, email, username } = body;
         if (!id) return json({ ok: false, error: 'id required' });
 
         let actualRole = null;
@@ -662,13 +708,29 @@ export default {
           appsJsonToSet = JSON.stringify(Array.isArray(allowed_apps) ? allowed_apps : []);
         }
 
-        await env.DB.prepare(`
-          UPDATE tm_users SET
-            role = COALESCE(?, role),
-            display_name = COALESCE(?, display_name),
-            active = COALESCE(?, active)
-          WHERE id = ?
-        `).bind(actualRole, display_name != null ? display_name : null, active != null ? (active ? 1 : 0) : null, id).run();
+        const cleanUsername = username != null ? String(username).toLowerCase().trim() : null;
+        const cleanEmail = email != null ? (String(email).trim() || null) : null;
+
+        try {
+          await env.DB.prepare(`
+            UPDATE tm_users SET
+              role = COALESCE(?, role),
+              display_name = COALESCE(?, display_name),
+              active = COALESCE(?, active),
+              username = COALESCE(?, username),
+              email = CASE WHEN ? THEN ? ELSE email END
+            WHERE id = ?
+          `).bind(
+            actualRole,
+            display_name != null ? display_name : null,
+            active != null ? (active ? 1 : 0) : null,
+            cleanUsername,
+            email !== undefined ? 1 : 0, cleanEmail,
+            id
+          ).run();
+        } catch (e) {
+          return json({ ok: false, error: 'Username already exists' });
+        }
 
         if (appsJsonToSet !== undefined) {
           await env.DB.prepare('UPDATE tm_users SET allowed_apps = ? WHERE id = ?').bind(appsJsonToSet, id).run();

@@ -617,6 +617,12 @@ html[data-theme="light"]       .icon-moon { display: none; }
 .header-admin-btn[hidden], .header-logout-btn[hidden], .header-user[hidden] {
   display: none;
 }
+/* Same cascade issue applies to app cards (.app-card sets display:flex
+   unconditionally) — needed so applyAppVisibility()'s card.hidden = true
+   for "Custom" role restrictions actually hides the card. */
+.app-card[hidden] {
+  display: none;
+}
 
 /* ── MOBILE: header auth ── */
 @media (max-width: 640px) {
@@ -833,6 +839,14 @@ html[data-theme="light"]       .icon-moon { display: none; }
       </div>
       <div id="admin-user-list"><!-- rows injected by JS --></div>
 
+      <div class="admin-edit-box" id="edit-user-details-box" style="display:none;gap:8px;margin-top:8px;flex-wrap:wrap;">
+        <input class="admin-mini-input" id="edit-user-display-name" placeholder="display name">
+        <input class="admin-mini-input" id="edit-user-username" placeholder="username">
+        <input class="admin-mini-input" id="edit-user-email" placeholder="email" type="email">
+        <button class="admin-mini-btn" id="edit-user-details-save" style="background:var(--accent);color:#111;border-color:var(--accent);">Save</button>
+        <button class="admin-mini-btn" id="edit-user-details-cancel">Cancel</button>
+      </div>
+
       <div class="admin-app-checklist" id="edit-user-app-checklist"></div>
       <div id="edit-user-apps-actions" style="display:none;gap:8px;margin-top:8px;">
         <button class="admin-mini-btn" id="edit-user-apps-save" style="background:var(--accent);color:#111;border-color:var(--accent);">Save apps</button>
@@ -842,6 +856,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
       <div class="admin-add-form">
         <input class="admin-mini-input" id="new-user-username" placeholder="username">
         <input class="admin-mini-input" id="new-user-password" placeholder="temp password">
+        <input class="admin-mini-input" id="new-user-email" placeholder="email (optional)" type="email">
         <select class="admin-select" id="new-user-role">
           <option value="viewer">Viewer</option>
           <option value="picker_packer">Picker & Packer</option>
@@ -1376,7 +1391,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
     gate.hidden = true;
     headerUser.hidden = false;
     logoutBtn.hidden = false;
-    const label = user.display_name || user.username;
+    const label = capitalizeFirst(user.display_name || user.username);
     avatarEl.textContent = label.slice(0, 2).toUpperCase();
     nameEl.textContent = label;
     // A "Custom" account is stored internally as role='manager' with an
@@ -1407,9 +1422,13 @@ html[data-theme="light"]       .icon-moon { display: none; }
     });
   }
 
+  function capitalizeFirst(s) {
+    return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+  }
+
   function updateGreetingWithName(first) {
     const nameEl2 = document.querySelector('.hero-headline em');
-    if (nameEl2) nameEl2.textContent = first;
+    if (nameEl2) nameEl2.textContent = capitalizeFirst(first);
   }
 
   function showGate() {
@@ -1646,6 +1665,34 @@ html[data-theme="light"]       .icon-moon { display: none; }
     editAppsBox.innerHTML = '';
     editAppsActions.style.display = 'none';
   }
+  // ── Existing user: inline "Edit details" form (name / username / email) ──
+  const editDetailsBox = document.getElementById('edit-user-details-box');
+  let editingDetailsUserId = null;
+
+  function openDetailsEditor(userId, displayName, username, email) {
+    editingDetailsUserId = userId;
+    document.getElementById('edit-user-display-name').value = displayName || '';
+    document.getElementById('edit-user-username').value = username || '';
+    document.getElementById('edit-user-email').value = email || '';
+    editDetailsBox.style.display = 'flex';
+  }
+  function closeDetailsEditor() {
+    editingDetailsUserId = null;
+    editDetailsBox.style.display = 'none';
+  }
+  document.getElementById('edit-user-details-cancel').addEventListener('click', closeDetailsEditor);
+  document.getElementById('edit-user-details-save').addEventListener('click', async function () {
+    if (!editingDetailsUserId) return;
+    const display_name = document.getElementById('edit-user-display-name').value.trim();
+    const username = document.getElementById('edit-user-username').value.trim();
+    const email = document.getElementById('edit-user-email').value.trim();
+    if (!username) { alert('Username cannot be empty'); return; }
+    const res = await api('adminUpdateUser', { method: 'POST', body: { id: editingDetailsUserId, display_name, username, email } });
+    if (!res.ok) { alert(res.error || 'Failed to save'); return; }
+    closeDetailsEditor();
+    loadUsers();
+  });
+
   document.getElementById('edit-user-apps-cancel').addEventListener('click', function () {
     closeAppsEditor();
     loadUsers(); // revert the row's role dropdown if it was switched to Custom then cancelled
@@ -1669,10 +1716,11 @@ html[data-theme="light"]       .icon-moon { display: none; }
       row.className = 'admin-user-row' + (u.active ? '' : ' admin-user-inactive');
       const displayRole = u.displayRole || u.role;
       row.innerHTML = `
-        <span class="admin-user-name">${u.display_name || u.username}<br><span style="color:var(--text-faint);font-weight:400;">@${u.username}</span></span>
+        <span class="admin-user-name">${u.display_name || u.username}<br><span style="color:var(--text-faint);font-weight:400;">@${u.username}${u.email ? ' · ' + u.email : ''}</span></span>
         <select class="admin-select" data-role-for="${u.id}">${roleOptionsHtml(displayRole)}</select>
         <span>${u.active ? 'Active' : 'Inactive'}</span>
         <span class="admin-row-actions">
+          <button class="admin-mini-btn" data-edit-details="${u.id}" data-name="${(u.display_name || '').replace(/"/g, '&quot;')}" data-username="${u.username}" data-email="${u.email || ''}">Edit</button>
           ${displayRole === 'custom' ? `<button class="admin-mini-btn" data-edit-apps="${u.id}" data-apps='${JSON.stringify(u.allowedApps || [])}'>Apps</button>` : ''}
           <button class="admin-mini-btn" data-toggle-active="${u.id}" data-active="${u.active ? 1 : 0}">${u.active ? 'Deactivate' : 'Activate'}</button>
           <button class="admin-mini-btn" data-reset="${u.id}">Reset PW</button>
@@ -1691,6 +1739,16 @@ html[data-theme="light"]       .icon-moon { display: none; }
         }
         await api('adminUpdateUser', { method: 'POST', body: { id, role: this.value } });
         loadUsers();
+      });
+    });
+    userListEl.querySelectorAll('[data-edit-details]').forEach(btn => {
+      btn.addEventListener('click', function () {
+        openDetailsEditor(
+          Number(this.getAttribute('data-edit-details')),
+          this.getAttribute('data-name'),
+          this.getAttribute('data-username'),
+          this.getAttribute('data-email')
+        );
       });
     });
     userListEl.querySelectorAll('[data-edit-apps]').forEach(btn => {
@@ -1723,9 +1781,11 @@ html[data-theme="light"]       .icon-moon { display: none; }
   document.getElementById('new-user-add-btn').addEventListener('click', async function () {
     const username = document.getElementById('new-user-username').value.trim();
     const password = document.getElementById('new-user-password').value;
+    const email = document.getElementById('new-user-email').value.trim();
     const role = newUserRoleSel.value;
     if (!username || !password) { alert('Username and temp password required'); return; }
     const body = { username, password, role };
+    if (email) body.email = email;
     if (role === 'custom') {
       const apps = getCheckedApps('new');
       if (!apps.length) { alert('Pick at least one app for a Custom user'); return; }
@@ -1733,8 +1793,12 @@ html[data-theme="light"]       .icon-moon { display: none; }
     }
     const res = await api('adminCreateUser', { method: 'POST', body });
     if (!res.ok) { alert(res.error || 'Failed to create user'); return; }
+    if (email && res.emailSent === false) {
+      alert('User created, but the welcome email could not be sent (' + (res.emailNote || 'unknown error') + ').');
+    }
     document.getElementById('new-user-username').value = '';
     document.getElementById('new-user-password').value = '';
+    document.getElementById('new-user-email').value = '';
     newUserRoleSel.value = 'viewer';
     newUserChecklist.className = 'admin-app-checklist';
     newUserChecklist.innerHTML = '';
