@@ -270,7 +270,7 @@ const ACTION_TIERS = {
   delhiveryCheckPincode: 'viewer_read', delhiveryEstimateCharge: 'viewer_read',
   delhiveryCreatePickup: 'manager_up', delhiveryListPickups: 'viewer_read',
   ekartCreateReversePickup: 'manager_up', ekartListReversePickups: 'viewer_read',
-  ekartCheckPincode: 'viewer_read'
+  ekartCheckPincode: 'viewer_read', ekartEstimateCharge: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -1670,6 +1670,56 @@ export default {
           const entry = Array.isArray(dJson) ? dJson[0] : dJson;
           const totalAmount = entry && (entry.total_amount != null ? entry.total_amount : entry.charge_amount);
           return json({ ok: true, estimated: totalAmount != null, totalAmount: totalAmount, response: dJson });
+        }
+
+        // ── EKART — approximate shipping-charge estimate for a reverse
+        //   pickup, fetched before booking so the person sees a rough
+        //   cost first — same "estimate, never a guarantee, never blocks
+        //   creation" contract as delhiveryEstimateCharge above.
+        //   billingClientType/shippingDirection aren't documented with
+        //   example values in Ekart's spec (they're in the schema's
+        //   required list but missing from its properties) — best-guess
+        //   values below; if Ekart rejects them the frontend just shows
+        //   "estimate unavailable" and lets the person continue anyway.
+        if (action === 'ekartEstimateCharge') {
+          const pin = url.searchParams.get('pin');
+          const weightGrams = url.searchParams.get('weight') || '500';
+          const length = url.searchParams.get('length') || '10';
+          const width = url.searchParams.get('width') || '10';
+          const height = url.searchParams.get('height') || '10';
+          const invoiceAmount = url.searchParams.get('invoice_amount') || '0';
+          if (!pin || !/^\d{6}$/.test(pin)) return json({ ok: false, error: 'Valid 6-digit destination pincode required' }, 400);
+          if (!env.EKART_CLIENT_ID || !env.EKART_USERNAME || !env.EKART_PASSWORD || !env.EKART_PICKUP_PIN) {
+            return json({ ok: false, error: 'Ekart credentials/pickup pincode are not set in Worker secrets' }, 500);
+          }
+          const base = env.EKART_BASE_URL || 'https://app.elite.ekartlogistics.in';
+          let eJson;
+          try {
+            const token = await getEkartAccessToken(env);
+            const eResp = await fetch(base + '/data/pricing/estimate', {
+              method: 'POST',
+              headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                billingClientType: 'PREPAID',
+                shippingDirection: 'REVERSE',
+                serviceType: 'SURFACE',
+                pickupPincode: Number(env.EKART_PICKUP_PIN),
+                dropPincode: Number(pin),
+                weight: Number(weightGrams),
+                length: Number(length),
+                width: Number(width),
+                height: Number(height),
+                invoiceAmount: Number(invoiceAmount)
+              })
+            });
+            const eText = await eResp.text();
+            try { eJson = JSON.parse(eText); } catch (e) { eJson = { raw: eText }; }
+            if (!eResp.ok) return json({ ok: false, error: 'Ekart estimate lookup returned ' + eResp.status, response: eJson }, 502);
+          } catch (e) {
+            return json({ ok: false, error: 'Ekart estimate lookup failed: ' + e.message }, 502);
+          }
+          const totalAmount = eJson && eJson.total;
+          return json({ ok: true, estimated: totalAmount != null, totalAmount: totalAmount, response: eJson });
         }
 
         return json({ ok: false, error: 'Unknown action' }, 400);

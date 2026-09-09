@@ -516,6 +516,16 @@ table.log-table tr:last-child td { border-bottom: none; }
             <button class="submit-btn" id="rev-submit-btn" type="button" style="margin-top:14px;">Schedule Reverse Pickup</button>
           </div>
 
+          <div class="confirm-box" id="rev-confirm-box">
+            <div class="confirm-title">Estimated shipping charge</div>
+            <div class="confirm-amount" id="rev-confirm-amount">&#8377;&#8212;</div>
+            <div class="confirm-note" id="rev-confirm-note">This is Ekart's own estimate — the actual billed amount can differ slightly. Nothing is created yet.</div>
+            <div class="confirm-actions">
+              <button class="btn-confirm-yes" id="rev-confirm-yes-btn">Confirm &amp; Schedule Pickup</button>
+              <button class="btn-confirm-no" id="rev-confirm-no-btn">Cancel</button>
+            </div>
+          </div>
+
           <div class="result-box" id="rev-result-box">
             <div class="result-title" id="rev-result-title"></div>
             <div id="rev-result-body"></div>
@@ -773,6 +783,12 @@ function initReversePickup() {
   var resultBox = document.getElementById('rev-result-box');
   var resultTitle = document.getElementById('rev-result-title');
   var resultBody = document.getElementById('rev-result-body');
+  var confirmBox = document.getElementById('rev-confirm-box');
+  var confirmAmount = document.getElementById('rev-confirm-amount');
+  var confirmNote = document.getElementById('rev-confirm-note');
+  var confirmYesBtn = document.getElementById('rev-confirm-yes-btn');
+  var confirmNoBtn = document.getElementById('rev-confirm-no-btn');
+  var pendingPayload = null;
   var fields = {
     order_number: document.getElementById('rev-order-number'),
     return_reason: document.getElementById('rev-return-reason'),
@@ -904,13 +920,58 @@ function initReversePickup() {
     resultBox.className = 'result-box';
     if (!validateRequired()) return;
 
+    pendingPayload = {};
+    Object.keys(fields).forEach(function (key) { pendingPayload[key] = fields[key].value; });
+
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Scheduling…';
+    submitBtn.textContent = 'Getting estimate…';
 
     try {
-      var payload = {};
-      Object.keys(fields).forEach(function (key) { payload[key] = fields[key].value; });
+      var qs = new URLSearchParams({
+        pin: pendingPayload.drop_pincode,
+        weight: pendingPayload.weight || '500',
+        length: pendingPayload.length || '10',
+        width: pendingPayload.width || '10',
+        height: pendingPayload.height || '10',
+        invoice_amount: pendingPayload.total_amount || '0'
+      });
+      var est = await fetch(window.TM_WORKER + '?action=ekartEstimateCharge&' + qs.toString()).then(function (r) { return r.json(); });
+      if (est.ok && est.estimated && est.totalAmount != null) {
+        confirmAmount.textContent = '₹' + est.totalAmount;
+        confirmNote.textContent = "This is Ekart's own estimate — the actual billed amount can differ slightly. Nothing is created yet.";
+      } else {
+        confirmAmount.textContent = 'Unavailable';
+        confirmNote.textContent = "Couldn't fetch an estimate right now, but you can still proceed — nothing is created yet.";
+      }
+    } catch (err) {
+      confirmAmount.textContent = 'Unavailable';
+      confirmNote.textContent = "Couldn't fetch an estimate right now, but you can still proceed — nothing is created yet.";
+    }
+
+    confirmBox.className = 'confirm-box show';
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Schedule Reverse Pickup';
+  });
+
+  confirmNoBtn.addEventListener('click', function () {
+    confirmBox.className = 'confirm-box';
+    pendingPayload = null;
+  });
+
+  // Step 2: only on explicit confirmation does the reverse pickup
+  // actually get created.
+  confirmYesBtn.addEventListener('click', async function () {
+    if (!pendingPayload) return;
+    var payload = pendingPayload;
+    confirmYesBtn.disabled = true;
+    confirmNoBtn.disabled = true;
+    confirmYesBtn.textContent = 'Scheduling…';
+
+    try {
       var res = await callWorker('ekartCreateReversePickup', payload);
+      confirmBox.className = 'confirm-box';
+      pendingPayload = null;
+
       if (res.ok) {
         resultBox.className = 'result-box show success';
         resultTitle.textContent = 'Reverse pickup scheduled';
@@ -930,13 +991,16 @@ function initReversePickup() {
         });
       }
     } catch (err) {
+      confirmBox.className = 'confirm-box';
+      pendingPayload = null;
       resultBox.className = 'result-box show error';
       resultTitle.textContent = 'Request failed';
       resultBody.textContent = err.message;
     }
 
-    submitBtn.disabled = false;
-    submitBtn.textContent = 'Schedule Reverse Pickup';
+    confirmYesBtn.disabled = false;
+    confirmNoBtn.disabled = false;
+    confirmYesBtn.textContent = 'Confirm & Schedule Pickup';
     fetchLog();
   });
 
