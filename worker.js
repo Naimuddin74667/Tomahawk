@@ -2701,7 +2701,7 @@ export default {
         //   payment_mode: 'Prepaid'|'COD', products_desc, hsn_code,
         //   quantity, total_amount, weight? (grams), width?, height?, length? (all cm) } }
         // Requires DELHIVERY_API_TOKEN, DELHIVERY_PICKUP_LOCATION, and
-        // DELHIVERY_SELLER_GST to be set as Worker secrets/vars — see
+        // SELLER_GST to be set as Worker secrets/vars — see
         // createDelhiveryOrder() above for exactly what each does.
         if (act === 'delhiveryCreateOrder') {
           await ensureDelhiveryTable(env.DB);
@@ -2778,7 +2778,7 @@ export default {
         //   products_desc, category_of_goods, hsn_code?, quantity, weight,
         //   length, width, height, total_amount, tax_value, return_reason }
         // Requires EKART_CLIENT_ID, EKART_USERNAME, EKART_PASSWORD,
-        // EKART_SELLER_NAME, EKART_SELLER_ADDRESS, EKART_SELLER_GST as
+        // EKART_SELLER_NAME, EKART_SELLER_ADDRESS, SELLER_GST as
         // Worker secrets — see createEkartReversePickup() above for what
         // each does.
         if (act === 'ekartCreateReversePickup') {
@@ -2791,8 +2791,8 @@ export default {
           if (missing.length) return json({ ok: false, error: 'Missing required field(s): ' + missing.join(', ') }, 400);
           if (!env.EKART_CLIENT_ID) return json({ ok: false, error: 'EKART_CLIENT_ID is not set in Worker secrets' }, 500);
           if (!env.EKART_USERNAME || !env.EKART_PASSWORD) return json({ ok: false, error: 'EKART_USERNAME / EKART_PASSWORD are not set in Worker secrets' }, 500);
-          if (!env.EKART_SELLER_NAME || !env.EKART_SELLER_ADDRESS || !env.EKART_SELLER_GST) {
-            return json({ ok: false, error: 'EKART_SELLER_NAME / EKART_SELLER_ADDRESS / EKART_SELLER_GST are not set in Worker secrets' }, 500);
+          if (!env.EKART_SELLER_NAME || !env.EKART_SELLER_ADDRESS || !env.SELLER_GST) {
+            return json({ ok: false, error: 'EKART_SELLER_NAME / EKART_SELLER_ADDRESS / SELLER_GST are not set in Worker secrets' }, 500);
           }
 
           let result;
@@ -3088,7 +3088,7 @@ async function ensureDelhiveryTable(DB) {
 //   DELHIVERY_PICKUP_LOCATION — exact registered pickup location name,
 //                                case-sensitive, must match Delhivery's
 //                                records exactly or every order is rejected
-//   DELHIVERY_SELLER_GST      — seller GST TIN, mandatory on every order
+//   SELLER_GST                — seller GST TIN, shared across couriers (same business, same GST)
 //   DELHIVERY_BASE_URL        — optional override; defaults to production
 //                                (https://track.delhivery.com). Set to
 //                                https://staging-express.delhivery.com
@@ -3116,7 +3116,7 @@ async function createDelhiveryOrder(env, o) {
     cod_amount: o.payment_mode === 'COD' ? String(o.total_amount) : '0',
     total_amount: String(o.total_amount),
     quantity: String(o.quantity),
-    seller_gst_tin: env.DELHIVERY_SELLER_GST || '',
+    seller_gst_tin: env.SELLER_GST || '',
     seller_name: o.seller_name || env.DELHIVERY_PICKUP_LOCATION || '',
     shipment_width: o.width ? String(o.width) : '',
     shipment_height: o.height ? String(o.height) : '',
@@ -3287,7 +3287,7 @@ async function getEkartAccessToken(env) {
 //                                     to mint access_token server-side)
 //   EKART_SELLER_NAME             — registered seller name
 //   EKART_SELLER_ADDRESS          — seller billing address
-//   EKART_SELLER_GST              — seller GST TIN
+//   SELLER_GST                    — seller GST TIN, shared across couriers (same as Delhivery's)
 //   EKART_PICKUP_LOCATION_ALIAS   — optional, only if multiple pickup
 //                                     addresses are registered with Ekart
 //   EKART_BASE_URL                — optional override; defaults to
@@ -3300,7 +3300,7 @@ async function createEkartReversePickup(env, p) {
   const payload = {
     seller_name: env.EKART_SELLER_NAME,
     seller_address: env.EKART_SELLER_ADDRESS,
-    seller_gst_tin: env.EKART_SELLER_GST,
+    seller_gst_tin: env.SELLER_GST,
     consignee_gst_amount: 0,
     order_number: p.order_number,
     invoice_number: p.invoice_number,
