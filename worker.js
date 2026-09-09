@@ -201,6 +201,10 @@ const ACTION_TIERS = {
   //   Rebuilt from amazon_fc_log on every checkNewAmazonFcEmails run —
   //   see the note above ensureAmazonShipmentsTable in worker.js.
   amazonListShipments: 'viewer_read',
+  // — Amazon gatepass lookup (Gatepass column, matches UC_Gatepass
+  //   reference to a shipment ID) — same viewer_read tier as the
+  //   Blinkit/Flipkart gatepass proxies.
+  amazonGetGatepass: 'viewer_read',
 
   // — Flipkart "Successfully Received" email watcher (Gmail integration):
   //   auto-fills fk_ledger.received_qty by matching Consignment No. Same
@@ -1444,6 +1448,29 @@ export default {
             return new Response(await cached.text(), { headers: { ...CORS, 'X-Cache': 'HIT' } });
           }
           const res = await fetch(SA_UC_GAS_URL + '?type=flipkartGatepass');
+          if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
+          const text = await res.text();
+
+          const response = new Response(text, {
+            headers: { ...CORS, 'Cache-Control': 'public, max-age=300', 'X-Cache': 'MISS' }
+          });
+          await cache.put(cacheKey, response.clone());
+          return response;
+        }
+
+        // ── AMAZON — gatepass lookup (Gatepass column) ──────
+        // Sibling of blinkitGetGatepass / fkGetGatepass above. No
+        // backfill-regex block needed — getAmazonGatepassPayload() on the
+        // GAS side already returns a clean, exact FBA shipment ID in
+        // `reference` (no "RO "-prefix / decimal-suffix mess to clean up).
+        if (action === 'amazonGetGatepass') {
+          const cache = caches.default;
+          const cacheKey = new Request('https://cache.internal/amazon-gatepass-v1');
+          const cached = await cache.match(cacheKey);
+          if (cached) {
+            return new Response(await cached.text(), { headers: { ...CORS, 'X-Cache': 'HIT' } });
+          }
+          const res = await fetch(SA_UC_GAS_URL + '?type=amazonGatepass');
           if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
           const text = await res.text();
 
