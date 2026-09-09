@@ -448,14 +448,15 @@ table.log-table tr:last-child td { border-bottom: none; }
               <div class="field">
                 <label>Pincode</label>
                 <input type="text" id="rev-pincode" maxlength="6" required>
+                <div class="field-hint" id="rev-pin-status"></div>
               </div>
               <div class="field">
                 <label>City</label>
-                <input type="text" id="rev-city" required>
+                <input type="text" id="rev-city" readonly required>
               </div>
               <div class="field">
                 <label>State</label>
-                <input type="text" id="rev-state" required>
+                <input type="text" id="rev-state" readonly required>
               </div>
             </div>
             <div class="form-row">
@@ -793,6 +794,41 @@ function initReversePickup() {
   // Invoice date defaults to today — the return is usually being filed
   // against an invoice already issued, not a future one.
   fields.invoice_date.value = new Date().toISOString().slice(0, 10);
+
+  // ── Pincode serviceability pre-check — fires on blur, autofills
+  // city/state, and flags if Ekart doesn't do reverse pickup there at
+  // all (distinct from general forward serviceability). ──
+  var pinStatus = document.getElementById('rev-pin-status');
+  fields.drop_pincode.addEventListener('blur', async function () {
+    var pin = fields.drop_pincode.value.trim();
+    pinStatus.className = 'field-hint';
+    if (!/^\d{6}$/.test(pin)) { pinStatus.textContent = ''; fields.drop_city.value = ''; fields.drop_state.value = ''; return; }
+    pinStatus.textContent = 'Checking serviceability…';
+    fields.drop_city.value = ''; fields.drop_state.value = '';
+    try {
+      var res = await fetch(window.TM_WORKER + '?action=ekartCheckPincode&pin=' + pin).then(function (r) { return r.json(); });
+      if (!res.ok) { pinStatus.textContent = ''; return; }
+      if (!res.serviceable) {
+        pinStatus.className = 'field-hint bad';
+        pinStatus.textContent = '✗ Not a serviceable Ekart pincode — double-check it before submitting.';
+        return;
+      }
+      if (!res.reversePickup) {
+        pinStatus.className = 'field-hint bad';
+        pinStatus.textContent = '✗ Serviceable, but Ekart doesn\'t do reverse pickup from this pincode.';
+      } else {
+        pinStatus.className = 'field-hint ok';
+        pinStatus.textContent = '✓ Reverse pickup available here';
+      }
+      // City/State are read-only, filled entirely from this lookup —
+      // always set (not just when empty), so switching to a different
+      // pincode replaces any previous value rather than leaving it stale.
+      fields.drop_city.value = res.city || '';
+      fields.drop_state.value = res.state || '';
+    } catch (e) {
+      pinStatus.textContent = '';
+    }
+  });
 
   async function callWorker(action, payload) {
     var session = window.TM_getSession();

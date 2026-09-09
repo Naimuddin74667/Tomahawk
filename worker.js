@@ -269,7 +269,8 @@ const ACTION_TIERS = {
   delhiveryCreateOrder: 'manager_up', delhiveryListOrders: 'viewer_read',
   delhiveryCheckPincode: 'viewer_read', delhiveryEstimateCharge: 'viewer_read',
   delhiveryCreatePickup: 'manager_up', delhiveryListPickups: 'viewer_read',
-  ekartCreateReversePickup: 'manager_up', ekartListReversePickups: 'viewer_read'
+  ekartCreateReversePickup: 'manager_up', ekartListReversePickups: 'viewer_read',
+  ekartCheckPincode: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -1587,6 +1588,40 @@ export default {
             // Some tenants' responses also include city/state — pass through
             // if present, but the frontend must not assume they always are.
             city: pc.city || '', state: pc.state_code || pc.state || ''
+          });
+        }
+
+        // ── EKART — pincode serviceability pre-check, called from the
+        //   reverse-pickup form on blur. Ekart's response includes city/
+        //   state (autofilled into the form) and a reverse_pickup flag
+        //   specifically for "pickup from customer location" — the exact
+        //   thing a reverse shipment needs, distinct from forward
+        //   pickup/drop serviceability.
+        if (action === 'ekartCheckPincode') {
+          const pin = url.searchParams.get('pin');
+          if (!pin || !/^\d{6}$/.test(pin)) return json({ ok: false, error: 'Valid 6-digit pincode required' }, 400);
+          if (!env.EKART_CLIENT_ID || !env.EKART_USERNAME || !env.EKART_PASSWORD) {
+            return json({ ok: false, error: 'EKART_CLIENT_ID / EKART_USERNAME / EKART_PASSWORD are not set in Worker secrets' }, 500);
+          }
+          const base = env.EKART_BASE_URL || 'https://app.elite.ekartlogistics.in';
+          let eJson;
+          try {
+            const token = await getEkartAccessToken(env);
+            const eResp = await fetch(base + '/api/v2/serviceability/' + pin, {
+              headers: { 'Authorization': 'Bearer ' + token }
+            });
+            eJson = await eResp.json();
+          } catch (e) {
+            return json({ ok: false, error: 'Ekart pincode lookup failed: ' + e.message }, 502);
+          }
+          if (!eJson || eJson.status !== true) {
+            return json({ ok: true, serviceable: false, remark: eJson && eJson.remark });
+          }
+          const d = eJson.details || {};
+          return json({
+            ok: true, serviceable: true,
+            reversePickup: !!d.reverse_pickup, cod: !!d.cod,
+            city: d.city || '', state: d.state || ''
           });
         }
 
