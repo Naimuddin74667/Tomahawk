@@ -379,7 +379,7 @@ async function ensureAuthTables(DB) {
   ]);
   // Migration for tables created before allowed_apps existed. NULL means
   // "no restriction — use role as before"; a JSON array of app slugs
-  // (e.g. ["Delhivery-Orders","Scanner"]) restricts a "Custom" user to
+  // (e.g. ["Customer-Care","Scanner"]) restricts a "Custom" user to
   // exactly those apps regardless of what their underlying role permits.
   try { await DB.prepare(`ALTER TABLE tm_users ADD COLUMN allowed_apps TEXT DEFAULT NULL`).run(); } catch (e) { /* column already exists */ }
   try { await DB.prepare(`ALTER TABLE tm_users ADD COLUMN email TEXT DEFAULT NULL`).run(); } catch (e) { /* column already exists */ }
