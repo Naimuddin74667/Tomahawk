@@ -807,7 +807,11 @@ function initReversePickup() {
     fields.drop_city.value = ''; fields.drop_state.value = '';
     try {
       var res = await fetch(window.TM_WORKER + '?action=ekartCheckPincode&pin=' + pin).then(function (r) { return r.json(); });
-      if (!res.ok) { pinStatus.textContent = ''; return; }
+      if (!res.ok) {
+        pinStatus.className = 'field-hint bad';
+        pinStatus.textContent = 'Lookup failed: ' + (res.error || 'unknown error');
+        return;
+      }
       if (!res.serviceable) {
         pinStatus.className = 'field-hint bad';
         pinStatus.textContent = '✗ Not a serviceable Ekart pincode — double-check it before submitting.';
@@ -826,7 +830,8 @@ function initReversePickup() {
       fields.drop_city.value = res.city || '';
       fields.drop_state.value = res.state || '';
     } catch (e) {
-      pinStatus.textContent = '';
+      pinStatus.className = 'field-hint bad';
+      pinStatus.textContent = 'Lookup failed: ' + e.message;
     }
   });
 
