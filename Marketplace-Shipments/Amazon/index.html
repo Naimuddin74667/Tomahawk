@@ -564,7 +564,7 @@
     <div id="tab-fc" class="tab-content" style="display:flex;flex:1;flex-direction:column;min-height:0">
       <div style="flex-shrink:0;padding:.7rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.8rem;background:var(--surface)">
         <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128230; FC Appointments</div>
-        <input type="text" id="fcSearch" placeholder="Search Shipment / Appointment / FC..." oninput="_fcPage=1;fcRender()" style="width:260px;font-size:11px;padding:5px 10px">
+        <input type="text" id="fcSearch" placeholder="Search Shipment ID / Appointment / FC..." oninput="_fcPage=1;fcRender()" style="width:260px;font-size:11px;padding:5px 10px">
         <button class="btn btn-secondary btn-sm" onclick="fcLoad()" style="width:auto">&#8635; Refresh</button>
         <button class="btn btn-primary btn-sm" id="fcCheckEmailsBtn" onclick="fcCheckEmailsNow()" style="width:auto" title="Manually trigger a Gmail check &#8212; same check the 15-min cron runs automatically">&#128231; Check Gmail Now</button>
       </div>
@@ -572,10 +572,10 @@
       <!-- Stats strip — same card style/sizing as CN Ledger / Blinkit RO Ledger,
            clickable filters the same way too (click again to clear). -->
       <div class="ro-stats-row">
-        <div class="ro-stat-card is-active-view" id="fcCardTotal" onclick="fcSetCardFilter('all')" title="Show all detected FC appointment emails">
-          <div class="ro-stat-label">Total Appointments</div>
+        <div class="ro-stat-card is-active-view" id="fcCardTotal" onclick="fcSetCardFilter('all')" title="Show all tracked shipments">
+          <div class="ro-stat-label">Total Shipments</div>
           <div class="ro-stat-value" id="fcStatTotal">&mdash;</div>
-          <div class="ro-stat-sub">all FC appointment emails detected</div>
+          <div class="ro-stat-sub">all tracked FBA shipment IDs</div>
         </div>
         <div class="ro-stat-card" id="fcCardConfirmed" onclick="fcSetCardFilter('confirmed')" title="Filter: Confirmed and not cancelled">
           <div class="ro-stat-label">Confirmed</div>
@@ -593,7 +593,7 @@
         <table style="width:100%;border-collapse:collapse;font-size:13.5px">
           <thead style="position:sticky;top:0;z-index:2;background:var(--surface)">
             <tr>
-              <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Shipment ID(s)</th>
+              <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Shipment ID</th>
               <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Appointment ID</th>
               <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Dest. FC</th>
               <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Boxes</th>
@@ -1199,14 +1199,16 @@ function switchTab(name, btn) {
 // appointment_date / received_qty / status remain manual. dc_date / warehouse /
 // send_qty / items_json are parsed from the Stock Transfer Invoice PDF.
 // ══════════════════════════════════════════════════════════════════
-// FC APPOINTMENTS TAB — reads amazon_fc_log, populated by the Worker's
-// 15-min Gmail cron (checkNewAmazonFcEmails) and by the "Check Gmail Now"
-// button below (same action, amazonCheckFcEmails, on demand). Stage 1:
-// a flat, read-only-by-default detection log — no grouping/dedup by
-// appointment yet, so a reschedule of the same appointment_id shows as
-// its own row; sorted newest-first by email date so the current state
-// is always on top. Mirrors CN Ledger / Blinkit RO Ledger's card-filter
-// + pagination pattern.
+// FC APPOINTMENTS TAB — reads amazon_shipments (one row per FBA
+// shipment ID, exploded server-side out of amazon_fc_log — an
+// appointment's email can list several shipment IDs at once). Kept in
+// sync by the Worker's 15-min Gmail cron (checkNewAmazonFcEmails) and by
+// the "Check Gmail Now" button below (same action, on demand). Boxes/
+// SKUs/Units are appointment-level totals from Amazon's email, not
+// broken out per shipment — so shipments sharing an appointment show
+// the same combined figures; that's a source limitation, not a bug.
+// Sorted newest-first by last-updated. Mirrors CN Ledger / Blinkit RO
+// Ledger's card-filter + pagination pattern.
 // ══════════════════════════════════════════════════════════════════
 var _fcRows = [];
 var _fcPage = 1;
@@ -1248,7 +1250,7 @@ function fcSetCardFilter(view) {
 function fcLoad() {
   var tbody = document.getElementById('fcTbody');
   if (tbody) tbody.innerHTML = '<tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
-  fetch(getWorkerBase() + '?action=amazonListFcLog')
+  fetch(getWorkerBase() + '?action=amazonListShipments')
     .then(function (r) { return r.json(); })
     .then(function (data) {
       if (!data || !data.ok) throw new Error((data && data.error) || 'Load failed');
@@ -1296,7 +1298,7 @@ function fcFmtDate(iso) {
 }
 
 function fcMatchesSearch(r, q) {
-  return (r.shipment_ids || '').toLowerCase().indexOf(q) !== -1 ||
+  return (r.shipment_id || '').toLowerCase().indexOf(q) !== -1 ||
     (r.appointment_id || '').toLowerCase().indexOf(q) !== -1 ||
     (r.destination_fc || '').toLowerCase().indexOf(q) !== -1;
 }
@@ -1333,7 +1335,7 @@ function fcRender() {
            (fcIsCancelled(r) ? 'Unmark' : 'Cancel') + '</button>')
         : '';
       return '<tr style="border-bottom:1px solid var(--border)">' +
-        '<td style="padding:.7rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="fcCopyText(\'' + fcEsc(r.shipment_ids) + '\')" title="Click to copy">' + (r.shipment_ids || '\u2014') + '</td>' +
+        '<td style="padding:.7rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="fcCopyText(\'' + fcEsc(r.shipment_id) + '\')" title="Click to copy">' + (r.shipment_id || '\u2014') + '</td>' +
         '<td style="padding:.7rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="fcCopyText(\'' + fcEsc(r.appointment_id) + '\')" title="Click to copy">' + (r.appointment_id || '\u2014') + '</td>' +
         '<td style="padding:.7rem 1rem;text-align:center;font-weight:700">' + (r.destination_fc || '\u2014') + '</td>' +
         '<td style="padding:.7rem 1rem;text-align:center">' + (r.no_of_boxes || '\u2014') + '</td>' +
