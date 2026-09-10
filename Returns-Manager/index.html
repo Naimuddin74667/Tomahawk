@@ -3105,11 +3105,12 @@ async function sbLoad(isRetry) {
   try {
     const d = await cfGet('load');
     if (!d.ok) throw new Error(d.error || 'Load failed');
-    returns    = d.returns    || [];
-    fbaReturns = d.fbaReturns || [];
-    master     = d.master     || {};
-    meta       = d.meta       || {};
-    updateCSVStatus(); updateDashboard(); renderAll();
+    returns     = d.returns     || [];
+    fbaReturns  = d.fbaReturns  || [];
+    master      = d.master      || {};
+    meta        = d.meta        || {};
+    fbaManifest = d.fbaManifest || {};
+    updateCSVStatus(); updateDashboard(); renderAll(); updateFBABadges();
     const t = new Date().toLocaleTimeString('en-IN');
     setSyncStatus('synced', 'Synced ' + t);
     updateSyncBadge(t);
@@ -3142,7 +3143,7 @@ const WAL_KEY = 'rm_wal_v1';
 let walRecoveryChecked = false;
 function writeWAL(){
   try{
-    localStorage.setItem(WAL_KEY, JSON.stringify({returns, fbaReturns, master, meta, ts: Date.now(), pending: true}));
+    localStorage.setItem(WAL_KEY, JSON.stringify({returns, fbaReturns, master, meta, fbaManifest, ts: Date.now(), pending: true}));
   }catch(err){
     console.error('writeWAL: localStorage write failed:', err.message);
   }
@@ -3162,6 +3163,7 @@ function checkWALRecovery(){
   fbaReturns = wal.fbaReturns || fbaReturns;
   master = wal.master || master;
   meta = wal.meta || meta;
+  fbaManifest = wal.fbaManifest || fbaManifest;
   updateCSVStatus(); updateDashboard(); renderAll();
   toast('Recovered unsynced changes from last session — re-syncing...');
   scheduleSync();
@@ -3181,19 +3183,29 @@ async function doSync() {
   setSyncStatus('syncing', 'Saving...');
   try {
     // Build master CSV pairs
-    const masterStr = JSON.stringify(master);
     const CHUNK = 45000;
     const masterPairs = [];
-    if (masterStr.length <= CHUNK) {
-      masterPairs.push({ key: 'master_json', value: masterStr });
-      masterPairs.push({ key: 'master_chunks', value: '1' });
-    } else {
-      const chunks = Math.ceil(masterStr.length / CHUNK);
-      masterPairs.push({ key: 'master_chunks', value: String(chunks) });
-      for (let i = 0; i < chunks; i++) {
-        masterPairs.push({ key: 'master_json_' + i, value: masterStr.slice(i*CHUNK,(i+1)*CHUNK) });
+    // Helper: chunk a JSON string into meta-table pairs under a given key prefix
+    function pushChunked(str, prefixKey){
+      if (str.length <= CHUNK) {
+        masterPairs.push({ key: prefixKey + '_json', value: str });
+        masterPairs.push({ key: prefixKey + '_chunks', value: '1' });
+      } else {
+        const chunks = Math.ceil(str.length / CHUNK);
+        masterPairs.push({ key: prefixKey + '_chunks', value: String(chunks) });
+        for (let i = 0; i < chunks; i++) {
+          masterPairs.push({ key: prefixKey + '_json_' + i, value: str.slice(i*CHUNK,(i+1)*CHUNK) });
+        }
       }
     }
+    pushChunked(JSON.stringify(master), 'master');
+    // CSV upload status (file name, uploaded-at, record count, date range) —
+    // previously only kept in the in-page `meta` var and never sent to D1,
+    // so it silently reset to "No CSV loaded" on every reload.
+    masterPairs.push({ key: 'meta_json', value: JSON.stringify(meta) });
+    // Amazon FBA removal-order manifest — previously only ever written to
+    // localStorage (and only in local/dev mode), never synced to D1 at all.
+    pushChunked(JSON.stringify(fbaManifest), 'fba_manifest');
     const d = await cfPost('saveAll', {
       returns,
       fbaReturns,
@@ -3290,7 +3302,7 @@ const FBAK='rm_fba_v1', FBAMK='rm_fba_manifest_v1';
 function loadFBA(){if(IS_LIVE)return[];try{return JSON.parse(localStorage.getItem(FBAK))||[]}catch{return[]}}
 function loadFBAManifest(){if(IS_LIVE)return{};try{return JSON.parse(localStorage.getItem(FBAMK))||{}}catch{return{}}}
 function persistFBA(){if(IS_LIVE){scheduleSync();}else{try{localStorage.setItem(FBAK,JSON.stringify(fbaReturns));}catch(err){console.error('persistFBA: localStorage write failed:', err.message);}}updateFBABadges();}
-function persistFBAManifest(){if(!IS_LIVE){try{localStorage.setItem(FBAMK,JSON.stringify(fbaManifest));}catch(err){console.error('persistFBAManifest: localStorage write failed:', err.message);}}}
+function persistFBAManifest(){if(IS_LIVE){scheduleSync();}else{try{localStorage.setItem(FBAMK,JSON.stringify(fbaManifest));}catch(err){console.error('persistFBAManifest: localStorage write failed:', err.message);}}}
 
 let fbaReturns=loadFBA(), fbaManifest=loadFBAManifest();
 let fbaSessionCount=0, fbaSessionItems=[], fbaCurrentId=null;
