@@ -952,23 +952,31 @@ export default {
           });
           const metaMap = {};
           (meta.results || []).forEach(r => { metaMap[r.key] = r.value; });
-          let master = {};
-          try {
-            const chunks = parseInt(metaMap['master_chunks'] || '1');
-            if (chunks === 1) {
-              master = JSON.parse(metaMap['master_json'] || '{}');
-            } else {
+          // Reconstruct a chunked JSON blob written under `prefix_json`
+          // (or `prefix_json_0`, `prefix_json_1`, ... when it exceeded one
+          // meta row) back into an object.
+          function readChunked(prefix, metaMap) {
+            try {
+              const chunks = parseInt(metaMap[prefix + '_chunks'] || '1');
+              if (chunks === 1) return JSON.parse(metaMap[prefix + '_json'] || '{}');
               let str = '';
-              for (let i = 0; i < chunks; i++) str += (metaMap['master_json_' + i] || '');
-              master = JSON.parse(str || '{}');
-            }
-          } catch(e) { master = {}; }
+              for (let i = 0; i < chunks; i++) str += (metaMap[prefix + '_json_' + i] || '');
+              return JSON.parse(str || '{}');
+            } catch(e) { return {}; }
+          }
+          const master = readChunked('master', metaMap);
+          const fbaManifest = readChunked('fba_manifest', metaMap);
+          let metaOut = {};
+          try { metaOut = JSON.parse(metaMap['meta_json'] || '{}'); } catch(e) { metaOut = {}; }
+          // Back-compat: earlier deploys only ever wrote a bare `uploadedAt` key
+          if (!metaOut.uploadedAt && metaMap['uploadedAt']) metaOut.uploadedAt = metaMap['uploadedAt'];
           return json({
             ok: true,
             returns: (returns.results || []).map(rowToReturn),
             fbaReturns: fba,
             master,
-            meta: { uploadedAt: metaMap['uploadedAt'] || '' }
+            fbaManifest,
+            meta: metaOut
           });
         }
 
