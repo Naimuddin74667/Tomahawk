@@ -987,6 +987,11 @@ function processRows(rows) {
     sections[comboSize][key].qty = (sections[comboSize][key].qty||0) + sets;
     sections[comboSize][key].orderCount += 1;
     if (!sections[comboSize][key].imgUrl && imgUrl) sections[comboSize][key].imgUrl = imgUrl;
+    // Keep the first FSN we see for this group — a live-image lookup key
+    // (Flipkart resolves product pages by FSN) used only when nothing else
+    // supplied a photo. Amazon rows never populate orderFsn, so this is
+    // effectively Flipkart-only for now.
+    if (!sections[comboSize][key].fsn && orderFsn) sections[comboSize][key].fsn = orderFsn;
 
     // Tally this order's actual selling price ONCE per order/set — not
     // per component. A combo is sold under a single bundle listing (one
@@ -1098,8 +1103,44 @@ function renderSection(groups, comboSize, rowNumStart) {
   return { html, nextRow: rowNum };
 }
 
-function render(rows) {
+// ── Live product image lookup (Flipkart only, for now — see notes at the
+// worker's scrapeAmazonImage: Amazon's robots.txt blocks this path, so
+// Amazon groups keep falling back to IMAGE_MAP as before) ──
+const IMAGE_API_URL = 'https://tomahawk-returns.naimuddin.workers.dev/?action=getSkuImagesBulk';
+
+// Mutates each group in-place, filling imgUrl for any group that has an FSN
+// but no image yet (no CSV Channel Product Images, no IMAGE_MAP hit). Fails
+// soft — a network error here should never block the picklist from rendering.
+async function fillLiveImages(sections) {
+  const needsLookup = [];
+  Object.values(sections).forEach(groups => {
+    Object.values(groups).forEach(group => {
+      if (!group.imgUrl && group.fsn) {
+        needsLookup.push({ sku: group.uniqueSkus[0], fsn: group.fsn, __group: group });
+      }
+    });
+  });
+  if (!needsLookup.length) return;
+  try {
+    const resp = await fetch(IMAGE_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'getSkuImagesBulk', items: needsLookup.map(({sku, fsn}) => ({sku, fsn})) })
+    });
+    const data = await resp.json();
+    if (!data || !data.ok) return;
+    needsLookup.forEach(({ sku, __group }) => {
+      const hit = data.images && data.images[sku];
+      if (hit && hit.url) __group.imgUrl = hit.url;
+    });
+  } catch (e) {
+    console.warn('Live image lookup failed (non-fatal):', e);
+  }
+}
+
+async function render(rows) {
   const sections = processRows(rows);
+  await fillLiveImages(sections);
   const channels = [...new Set(rows.map(r => (r['Channel']||'UNKNOWN').trim().toUpperCase()))];
   const channel = channels.length > 1 ? `${channels.length} CHANNELS MERGED` : channels[0];
   document.getElementById('topbar-title').textContent = `\u{1F4CB} ${channel} \u2014 ${rows.length} Orders`;
@@ -1155,7 +1196,7 @@ function load(file) {
       if (!rows.length) { alert('No data found.'); return; }
       allRows = rows;
       await ensurePriceMap();
-      render(allRows);
+      await render(allRows);
     } catch(err) { alert('Error: ' + err.message); console.error(err); }
   };
   r.readAsText(file);
@@ -1182,7 +1223,7 @@ function loadMore(file) {
 
       allRows = allRows.concat(uniqueNew);
       await ensurePriceMap();
-      render(allRows);
+      await render(allRows);
 
       let msg = `\u2714 Added ${uniqueNew.length} orders (${allRows.length} total)`;
       if (dupeCount) msg += ` \u2014 skipped ${dupeCount} duplicate${dupeCount>1?'s':''}`;
