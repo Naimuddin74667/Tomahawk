@@ -277,7 +277,10 @@ const ACTION_TIERS = {
   //   manager_up; listing what's been created is viewer_read like
   //   everything else read-only in this file. —
   delhiveryCreateOrder: 'manager_up', delhiveryListOrders: 'viewer_read',
-  delhiveryCheckPincode: 'viewer_read', delhiveryEstimateCharge: 'viewer_read'
+  delhiveryCheckPincode: 'viewer_read', delhiveryEstimateCharge: 'viewer_read',
+  // — Order Processing: marketplace image registry (register-on-first-sight
+  // + read-cached-on-repeat), read/write but no destructive ops —
+  syncPicklistImages: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -530,6 +533,102 @@ function healthTokenOk(request, env) {
   return expected.length > 0 && supplied === expected;
 }
 
+// ══════════════════════════════════════════════════════════════════
+// ORDER PROCESSING — marketplace image registry (Flipkart live; Amazon
+// columns exist in the schema but stay empty until an ASIN source is
+// wired in — Amazon's own bot detection blocks this scrape path anyway,
+// confirmed via robots.txt + a live 403 from Cloudflare's IP range).
+//
+// Design: a combo (single SKU or a bundle's full sorted SKU set) is
+// registered exactly once, on the first picklist upload that contains it
+// — that registration does one live Flipkart scrape immediately so it's
+// never blank. Every later upload of that same combo just reads the
+// cached row (no scraping). A daily cron (6:30pm IST, see scheduled()
+// below) re-scrapes every already-registered combo's Flipkart image, so
+// data drifts stay bounded to at most a day old.
+// ══════════════════════════════════════════════════════════════════
+async function ensureImageCacheTables(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS marketplace_image_cache (
+    combo_key TEXT PRIMARY KEY,
+    uc_skus TEXT,
+    fk_sku TEXT,
+    fk_fsn TEXT,
+    fk_image_url TEXT,
+    fk_fetch_status TEXT,
+    fk_updated_at TEXT,
+    amz_sku TEXT,
+    amz_asin TEXT,
+    amz_image_url TEXT,
+    amz_fetch_status TEXT,
+    amz_updated_at TEXT,
+    created_at TEXT
+  )`).run();
+}
+
+const SCRAPE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+// Both marketplace lookups route through a Google Apps Script bridge
+// (script.google.com) instead of fetching Flipkart/Amazon directly from
+// the Worker. Cloudflare Workers' outbound IP range gets a hard 403 from
+// Flipkart even with browser-like headers — Google's IP range doesn't hit
+// the same block (confirmed Sep 2026). See /areas/order-processing.md.
+const IMAGE_BRIDGE_URL = 'https://script.google.com/macros/s/AKfycbxvS536DNyl9c7DdcAx9PvBURUjRvUEpaSbYDQqxE7bbgUAPRP6keEU7HeEVbrmTfor2A/exec';
+
+async function scrapeViaBridge(marketplace, ref) {
+  try {
+    const resp = await fetch(`${IMAGE_BRIDGE_URL}?marketplace=${marketplace}&ref=${encodeURIComponent(ref)}`, {
+      headers: { 'User-Agent': SCRAPE_UA }
+    });
+    if (!resp.ok) return { url: null, status: 'bridge_http_' + resp.status };
+    const data = await resp.json();
+    return { url: data.url || null, status: data.status || (data.ok ? 'ok' : 'unknown') };
+  } catch (e) {
+    return { url: null, status: 'bridge_error:' + e.message };
+  }
+}
+
+async function scrapeFlipkartImage(fsn) {
+  return scrapeViaBridge('flipkart', fsn);
+}
+
+// Amazon path: wired end-to-end, but Amazon returned a 200 with no usable
+// og:image via the GAS bridge in testing — likely a soft bot-check page
+// rather than the real listing. Left in place for when SP-API Catalog
+// Items (or another working Amazon path) replaces this call.
+async function scrapeAmazonImage(asin) {
+  return scrapeViaBridge('amazon', asin);
+}
+
+// IST timestamp helper — SQLite has no timezone concept, so every
+// timestamp this feature writes is IST wall-clock time, made explicit in
+// code rather than relying on a viewer to mentally offset from UTC.
+function istTimestampSql() {
+  return "datetime('now', '+5 hours', '+30 minutes')";
+}
+
+// Walks every already-registered combo and re-scrapes its Flipkart image.
+// Called from the 6:30pm IST cron branch in scheduled() below. Capped per
+// run as a safety valve — sequential awaited fetches don't burn Cloudflare
+// CPU-time while waiting on the network, but an unbounded loop over a
+// growing table is still worth bounding until real volume is seen.
+async function refreshFlipkartImages(env) {
+  await ensureImageCacheTables(env.DB);
+  const MAX_PER_RUN = 300;
+  const rows = (await env.DB.prepare(
+    "SELECT combo_key, fk_fsn FROM marketplace_image_cache WHERE fk_fsn IS NOT NULL AND fk_fsn != '' LIMIT ?"
+  ).bind(MAX_PER_RUN).all()).results || [];
+  let refreshed = 0, failed = 0;
+  for (const row of rows) {
+    const result = await scrapeFlipkartImage(row.fk_fsn);
+    await env.DB.prepare(`
+      UPDATE marketplace_image_cache
+      SET fk_image_url = ?, fk_fetch_status = ?, fk_updated_at = ${istTimestampSql()}
+      WHERE combo_key = ?
+    `).bind(result.url, result.status, row.combo_key).run();
+    if (result.url) refreshed++; else failed++;
+  }
+  return { total: rows.length, refreshed, failed };
+}
 
 export default {
   async fetch(request, env) {
@@ -2727,6 +2826,63 @@ export default {
           return json({ ok: result.success, waybill: result.waybill, delhiveryHttpStatus: result.httpStatus, response: result.response }, result.success ? 200 : 502);
         }
 
+        if (act === 'syncPicklistImages') {
+          await ensureImageCacheTables(env.DB);
+          const items = Array.isArray(body.items) ? body.items : [];
+          const MAX_ITEMS = 300;
+          const MAX_NEW_LIVE_FETCH = 15; // cap fresh scrapes per upload — repeat combos never hit this path
+          const images = {};
+          let newFetchCount = 0;
+
+          for (const item of items.slice(0, MAX_ITEMS)) {
+            const comboKey = item && item.comboKey;
+            if (!comboKey) continue;
+
+            const existing = await env.DB.prepare(
+              'SELECT fk_image_url, fk_fetch_status, amz_image_url, amz_fetch_status FROM marketplace_image_cache WHERE combo_key = ?'
+            ).bind(comboKey).first();
+
+            if (existing) {
+              images[comboKey] = {
+                fk: { url: existing.fk_image_url, status: existing.fk_fetch_status },
+                amz: { url: existing.amz_image_url, status: existing.amz_fetch_status }
+              };
+              continue;
+            }
+
+            // First time this exact combo has ever been seen — register it,
+            // and do one live Flipkart scrape right now so it's never blank
+            // on this very upload. Amazon columns stay null until an ASIN
+            // source exists (see notes above scrapeAmazonImage).
+            let fkResult = { url: null, status: 'no_ref' };
+            if (item.fkFsn && newFetchCount < MAX_NEW_LIVE_FETCH) {
+              fkResult = await scrapeFlipkartImage(item.fkFsn);
+              newFetchCount++;
+            } else if (item.fkFsn) {
+              // Over this upload's live-fetch budget — tonight's 6:30pm IST
+              // refresh (or the next upload, if under budget) will pick it up.
+              fkResult = { url: null, status: 'pending_first_fetch' };
+            }
+
+            await env.DB.prepare(`
+              INSERT INTO marketplace_image_cache
+                (combo_key, uc_skus, fk_sku, fk_fsn, fk_image_url, fk_fetch_status, fk_updated_at,
+                 amz_sku, amz_asin, amz_image_url, amz_fetch_status, amz_updated_at, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ${istTimestampSql()},
+                      ?, ?, NULL, NULL, NULL, ${istTimestampSql()})
+              ON CONFLICT(combo_key) DO NOTHING
+            `).bind(
+              comboKey, item.ucSkus || comboKey, item.fkSku || null, item.fkFsn || null,
+              fkResult.url, fkResult.status,
+              item.amzSku || null, item.amzAsin || null
+            ).run();
+
+            images[comboKey] = { fk: fkResult, amz: { url: null, status: 'not_registered' } };
+          }
+
+          return json({ ok: true, images });
+        }
+
         return json({ ok: false, error: 'Unknown action' }, 400);
       }
 
@@ -2850,6 +3006,28 @@ export default {
         console.error('scheduled health staleness check failed:', err.message);
       })
     );
+    // Daily Flipkart image refresh — 6:30pm IST only (see wrangler.toml
+    // crons: '0 13 * * *' = 13:00 UTC = 18:30 IST). Guarded on event.cron
+    // so this doesn't also fire on the existing every-15-min tick; the
+    // two schedules coincide once a day at :00, so both handlers may run
+    // back-to-back that one minute — harmless, every job above is
+    // idempotent either way.
+    if (event.cron === '0 13 * * *') {
+      ctx.waitUntil(
+        refreshFlipkartImages(env)
+          .then(result => recordHeartbeat(
+            env, 'flipkart_image_refresh', 'Flipkart Image Refresh (Worker cron, 6:30pm IST)', 'ok',
+            `Refreshed ${result.refreshed} of ${result.total} registered combo(s), ${result.failed} failed.`, 90000
+          ))
+          .catch(err => {
+            console.error('scheduled Flipkart image refresh failed:', err.message);
+            return recordHeartbeat(
+              env, 'flipkart_image_refresh', 'Flipkart Image Refresh (Worker cron, 6:30pm IST)', 'error',
+              err.message, 90000
+            ).catch(e2 => console.error('failed to record flipkart_image_refresh error heartbeat:', e2.message));
+          })
+      );
+    }
   }
 };
 
