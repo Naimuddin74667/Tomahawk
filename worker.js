@@ -2928,11 +2928,40 @@ export default {
                 };
                 continue;
               }
-              // Amazon side: ASIN is permanent for a listing, so unlike FSN
-              // there's no "did it change" re-scrape here — just keep the
-              // Seller SKU *label* current if it drifted (Seller Central
-              // rename), a plain no-scrape update, since the label doesn't
-              // affect which image gets shown.
+              // Amazon side: this combo might have been registered earlier
+              // under a Flipkart-only context (combo_key is just the UC SKU
+              // set — the same combo can show up in both channels across
+              // different uploads) and never had its ASIN resolved yet. If
+              // so, resolve + scrape now instead of leaving it stuck null
+              // forever. ASIN itself is permanent once resolved — no
+              // "did it change" re-check needed after this, unlike FSN.
+              if (item.amzSku && !existing.amz_asin) {
+                const resolvedAsin = await resolveAsinViaBridge(item.amzSku);
+                let amzResult = { url: null, status: 'asin_not_found' };
+                if (resolvedAsin && newFetchCount < MAX_NEW_LIVE_FETCH) {
+                  amzResult = await scrapeAmazonImage(resolvedAsin);
+                  newFetchCount++;
+                } else if (resolvedAsin) {
+                  amzResult = { url: null, status: 'pending_first_fetch' };
+                }
+                const amzAttempted = amzResult.status !== 'asin_not_found' && amzResult.status !== 'pending_first_fetch';
+                const amzFailures = (amzAttempted && !amzResult.url) ? 1 : 0;
+                await env.DB.prepare(`
+                  UPDATE marketplace_image_cache
+                  SET amz_sku = ?, amz_asin = ?, amz_image_url = ?, amz_fetch_status = ?, amz_updated_at = ${istTimestampSql()},
+                      amz_consecutive_failures = ?, amz_dormant = 0
+                  WHERE combo_key = ?
+                `).bind(item.amzSku, resolvedAsin, amzResult.url, amzResult.status, amzFailures, comboKey).run();
+                images[comboKey] = {
+                  fk: { url: existing.fk_image_url, status: existing.fk_dormant ? 'dormant' : existing.fk_fetch_status },
+                  amz: amzResult
+                };
+                continue;
+              }
+              // ASIN already resolved earlier — just keep the Seller SKU
+              // *label* current if it drifted (Seller Central rename), a
+              // plain no-scrape update since the label doesn't affect which
+              // image gets shown.
               if (item.amzSku && item.amzSku !== existing.amz_sku) {
                 await env.DB.prepare(
                   'UPDATE marketplace_image_cache SET amz_sku = ? WHERE combo_key = ?'
