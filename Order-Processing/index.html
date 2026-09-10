@@ -40,6 +40,27 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 .drop-zone:hover, .drop-zone.drag-over { border-color: var(--accent); background: var(--surface2); }
 .drop-zone .icon { font-size: 36px; margin-bottom: 10px; }
 .drop-zone .label { font-size: 14px; color: var(--text2); margin-bottom: 14px; }
+
+/* LOADING OVERLAY — shown from file-select through render, since live
+   image lookups (worker -> GAS -> Flipkart) can take a few seconds for a
+   fresh, uncached picklist */
+#loading-overlay {
+  display: none;
+  position: fixed; inset: 0; z-index: 999;
+  background: rgba(10,10,14,0.88);
+  flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+}
+#loading-overlay.active { display: flex; }
+.spinner {
+  width: 40px; height: 40px;
+  border: 3px solid rgba(245,168,0,0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+#loading-text { color: var(--text); font-size: 13px; font-weight: 600; font-family: var(--font-body); }
+#loading-subtext { color: var(--text2); font-size: 11px; }
 #file-input { display: none; }
 .btn { padding: 8px 20px; border-radius: 6px; font-size: 13px; font-weight: 700; cursor: pointer; border: none; font-family: inherit; }
 .btn-dark { background: var(--accent); color: #111; font-family: var(--font-body); }
@@ -393,6 +414,13 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
   </div>
   <p style="font-size:11px;color:#999;max-width:340px;text-align:center;line-height:1.6;">Shipments &rarr; New tab &rarr; Export CSV.<br>Combos auto-detected and sectioned.</p>
 </div>
+
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <div id="loading-text">Processing&hellip;</div>
+  <div id="loading-subtext"></div>
+</div>
+
 
 <div id="picklist-screen">
   <div class="actionbar no-print" style="display:flex;align-items:center;gap:10px;padding:8px 16px;background:var(--surface);border-bottom:1px solid var(--border);">
@@ -1103,10 +1131,25 @@ function renderSection(groups, comboSize, rowNumStart) {
   return { html, nextRow: rowNum };
 }
 
+// ── Loading overlay helpers ──
+function showLoading(text, subtext) {
+  document.getElementById('loading-text').textContent = text || 'Processing\u2026';
+  document.getElementById('loading-subtext').textContent = subtext || '';
+  document.getElementById('loading-overlay').classList.add('active');
+}
+function updateLoading(text, subtext) {
+  document.getElementById('loading-text').textContent = text;
+  if (subtext !== undefined) document.getElementById('loading-subtext').textContent = subtext;
+}
+function hideLoading() {
+  document.getElementById('loading-overlay').classList.remove('active');
+}
+
 // ── Live product image lookup (Flipkart only, for now — see notes at the
 // worker's scrapeAmazonImage: Amazon's robots.txt blocks this path, so
 // Amazon groups keep falling back to IMAGE_MAP as before) ──
 const IMAGE_API_URL = 'https://tomahawk-returns.naimuddin.workers.dev/?action=getSkuImagesBulk';
+const IMAGE_LOOKUP_CHUNK_SIZE = 6; // small batches -> real progress feedback + shorter per-request time
 
 // Live image is now the FIRST choice for every group that has an FSN —
 // this always checks, even if a CSV image or an IMAGE_MAP entry already
@@ -1114,7 +1157,8 @@ const IMAGE_API_URL = 'https://tomahawk-returns.naimuddin.workers.dev/?action=ge
 // CSV/IMAGE_MAP value is left in place only as a fallback for groups where
 // the live lookup comes back empty (cache miss + scrape failure) or there's
 // no FSN at all (Amazon groups). Fails soft — a network error here should
-// never block the picklist from rendering.
+// never block the picklist from rendering. Chunks requests so the loading
+// overlay can show real "X of Y" progress instead of an indefinite spinner.
 async function fillLiveImages(sections) {
   const needsLookup = [];
   Object.values(sections).forEach(groups => {
@@ -1125,26 +1169,39 @@ async function fillLiveImages(sections) {
     });
   });
   if (!needsLookup.length) return;
-  try {
-    const resp = await fetch(IMAGE_API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'getSkuImagesBulk', items: needsLookup.map(({sku, fsn}) => ({sku, fsn})) })
-    });
-    const data = await resp.json();
-    if (!data || !data.ok) return;
-    needsLookup.forEach(({ sku, __group }) => {
-      const hit = data.images && data.images[sku];
-      if (hit && hit.url) __group.imgUrl = hit.url;
-    });
-  } catch (e) {
-    console.warn('Live image lookup failed (non-fatal):', e);
+
+  const total = needsLookup.length;
+  let done = 0;
+  updateLoading('Fetching live product images\u2026', `0 of ${total}`);
+
+  for (let i = 0; i < needsLookup.length; i += IMAGE_LOOKUP_CHUNK_SIZE) {
+    const chunk = needsLookup.slice(i, i + IMAGE_LOOKUP_CHUNK_SIZE);
+    try {
+      const resp = await fetch(IMAGE_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'getSkuImagesBulk', items: chunk.map(({sku, fsn}) => ({sku, fsn})) })
+      });
+      const data = await resp.json();
+      if (data && data.ok) {
+        chunk.forEach(({ sku, __group }) => {
+          const hit = data.images && data.images[sku];
+          if (hit && hit.url) __group.imgUrl = hit.url;
+        });
+      }
+    } catch (e) {
+      console.warn('Live image lookup chunk failed (non-fatal):', e);
+    }
+    done += chunk.length;
+    updateLoading('Fetching live product images\u2026', `${Math.min(done, total)} of ${total}`);
   }
 }
 
 async function render(rows) {
+  showLoading('Reading orders\u2026');
   const sections = processRows(rows);
   await fillLiveImages(sections);
+  updateLoading('Rendering picklist\u2026');
   const channels = [...new Set(rows.map(r => (r['Channel']||'UNKNOWN').trim().toUpperCase()))];
   const channel = channels.length > 1 ? `${channels.length} CHANNELS MERGED` : channels[0];
   document.getElementById('topbar-title').textContent = `\u{1F4CB} ${channel} \u2014 ${rows.length} Orders`;
@@ -1199,9 +1256,11 @@ function load(file) {
       const rows = parseCSV(e.target.result);
       if (!rows.length) { alert('No data found.'); return; }
       allRows = rows;
+      showLoading('Loading prices\u2026');
       await ensurePriceMap();
       await render(allRows);
     } catch(err) { alert('Error: ' + err.message); console.error(err); }
+    finally { hideLoading(); }
   };
   r.readAsText(file);
 }
@@ -1226,6 +1285,7 @@ function loadMore(file) {
       const dupeCount = newRows.length - uniqueNew.length;
 
       allRows = allRows.concat(uniqueNew);
+      showLoading('Loading prices\u2026');
       await ensurePriceMap();
       await render(allRows);
 
@@ -1233,6 +1293,7 @@ function loadMore(file) {
       if (dupeCount) msg += ` \u2014 skipped ${dupeCount} duplicate${dupeCount>1?'s':''}`;
       showToast(msg);
     } catch(err) { alert('Error: ' + err.message); console.error(err); }
+    finally { hideLoading(); }
   };
   r.readAsText(file);
 }
