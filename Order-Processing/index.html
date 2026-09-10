@@ -237,17 +237,11 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
   .section-divider.combo-2 + .tbl-wrap table th:nth-child(5),
   .section-divider.combo-3 + .tbl-wrap table th:nth-child(5) { width: 8% !important; }
   .section-divider.combo-2 + .tbl-wrap table th:nth-child(6),
-  .section-divider.combo-3 + .tbl-wrap table th:nth-child(6) { width: 6% !important; }
+  .section-divider.combo-3 + .tbl-wrap table th:nth-child(6) { width: 22% !important; }
   .section-divider.combo-2 + .tbl-wrap table th:nth-child(7),
-  .section-divider.combo-3 + .tbl-wrap table th:nth-child(7) { width: 16% !important; }
-  .section-divider.combo-2 + .tbl-wrap table th:nth-child(8),
-  .section-divider.combo-3 + .tbl-wrap table th:nth-child(8) { width: 4% !important; }
+  .section-divider.combo-3 + .tbl-wrap table th:nth-child(7) { width: 4% !important; }
   .section-divider.combo-2 + .tbl-wrap table td,
   .section-divider.combo-3 + .tbl-wrap table td { word-break: break-word; }
-  .section-divider.combo-2 + .tbl-wrap table .price-line,
-  .section-divider.combo-3 + .tbl-wrap table .price-line { display: block; margin-bottom: 2px; }
-  .section-divider.combo-2 + .tbl-wrap table .price-sep,
-  .section-divider.combo-3 + .tbl-wrap table .price-sep { display: none; }
 }
 </style>
 <style>
@@ -1062,7 +1056,6 @@ function renderSection(groups, comboSize, rowNumStart) {
         <th style="width:200px">${isCombo ? 'Combo' : ''}</th>
         <th style="width:60px;text-align:center">Image</th>
         <th style="width:42px;text-align:center">Qty</th>
-        <th style="width:110px">Selling Price</th>
         <th class="check-col">&#10003;</th>
       </tr></thead>
       <tbody>`;
@@ -1107,7 +1100,6 @@ function renderSection(groups, comboSize, rowNumStart) {
           ${isCombo && isFirst ? `<td rowspan="${rowspan}" style="width:200px">${comboHtml}</td>` : isCombo && !isFirst ? '' : ''}
           ${isFirst ? `<td rowspan="${rowspan}" class="img-cell">${imgUrl ? `<img src="${imgUrl}" alt="">` : ''}</td>` : ''}
           ${isFirst ? `<td rowspan="${rowspan}" class="qty">${group.qty||group.qtyPerSku[sku]}</td>` : ''}
-          ${isFirst ? `<td rowspan="${rowspan}" class="price-cell">${formatPriceBreakdown(group.priceCounts)}</td>` : ''}
           ${isFirst ? `<td rowspan="${rowspan}" class="check-col"><input type="checkbox"></td>` : ''}
         </tr>`;
       });
@@ -1120,7 +1112,6 @@ function renderSection(groups, comboSize, rowNumStart) {
         <td style="width:200px"></td>
         <td class="img-cell">${imgUrl ? `<img src="${imgUrl}" alt="">` : ''}</td>
         <td class="qty">${group.qty||group.qtyPerSku[sku]}</td>
-        <td class="price-cell">${formatPriceBreakdown(group.priceCounts)}</td>
         <td class="check-col"><input type="checkbox"></td>
       </tr>`;
     }
@@ -1256,8 +1247,9 @@ function load(file) {
       const rows = parseCSV(e.target.result);
       if (!rows.length) { alert('No data found.'); return; }
       allRows = rows;
-      showLoading('Loading prices\u2026');
-      await ensurePriceMap();
+      // Selling Price lookup disabled for now (see ensurePriceMap) — not
+      // useful as-is, and skipping it speeds up every upload since it was
+      // a network round-trip on the critical path before rendering.
       await render(allRows);
     } catch(err) { alert('Error: ' + err.message); console.error(err); }
     finally { hideLoading(); }
@@ -1285,8 +1277,6 @@ function loadMore(file) {
       const dupeCount = newRows.length - uniqueNew.length;
 
       allRows = allRows.concat(uniqueNew);
-      showLoading('Loading prices\u2026');
-      await ensurePriceMap();
       await render(allRows);
 
       let msg = `\u2714 Added ${uniqueNew.length} orders (${allRows.length} total)`;
