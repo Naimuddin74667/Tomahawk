@@ -1108,14 +1108,18 @@ function renderSection(groups, comboSize, rowNumStart) {
 // Amazon groups keep falling back to IMAGE_MAP as before) ──
 const IMAGE_API_URL = 'https://tomahawk-returns.naimuddin.workers.dev/?action=getSkuImagesBulk';
 
-// Mutates each group in-place, filling imgUrl for any group that has an FSN
-// but no image yet (no CSV Channel Product Images, no IMAGE_MAP hit). Fails
-// soft — a network error here should never block the picklist from rendering.
+// Live image is now the FIRST choice for every group that has an FSN —
+// this always checks, even if a CSV image or an IMAGE_MAP entry already
+// exists, and overwrites imgUrl when the live lookup succeeds. The existing
+// CSV/IMAGE_MAP value is left in place only as a fallback for groups where
+// the live lookup comes back empty (cache miss + scrape failure) or there's
+// no FSN at all (Amazon groups). Fails soft — a network error here should
+// never block the picklist from rendering.
 async function fillLiveImages(sections) {
   const needsLookup = [];
   Object.values(sections).forEach(groups => {
     Object.values(groups).forEach(group => {
-      if (!group.imgUrl && group.fsn) {
+      if (group.fsn) {
         needsLookup.push({ sku: group.uniqueSkus[0], fsn: group.fsn, __group: group });
       }
     });
