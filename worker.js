@@ -556,6 +556,8 @@ async function ensureImageCacheTables(DB) {
     fk_image_url TEXT,
     fk_fetch_status TEXT,
     fk_updated_at TEXT,
+    fk_consecutive_failures INTEGER DEFAULT 0,
+    fk_dormant INTEGER DEFAULT 0,
     amz_sku TEXT,
     amz_asin TEXT,
     amz_image_url TEXT,
@@ -563,6 +565,16 @@ async function ensureImageCacheTables(DB) {
     amz_updated_at TEXT,
     created_at TEXT
   )`).run();
+  // Migration for deployments that created this table before dormant-tracking
+  // existed — ALTER TABLE ADD COLUMN has no "IF NOT EXISTS" in SQLite, so
+  // just swallow the "duplicate column" error on every run after the first.
+  const migrations = [
+    'ALTER TABLE marketplace_image_cache ADD COLUMN fk_consecutive_failures INTEGER DEFAULT 0',
+    'ALTER TABLE marketplace_image_cache ADD COLUMN fk_dormant INTEGER DEFAULT 0'
+  ];
+  for (const sql of migrations) {
+    try { await DB.prepare(sql).run(); } catch (e) { /* column already exists — fine */ }
+  }
 }
 
 const SCRAPE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -606,28 +618,35 @@ function istTimestampSql() {
   return "datetime('now', '+5 hours', '+30 minutes')";
 }
 
-// Walks every already-registered combo and re-scrapes its Flipkart image.
-// Called from the 6:30pm IST cron branch in scheduled() below. Capped per
-// run as a safety valve — sequential awaited fetches don't burn Cloudflare
-// CPU-time while waiting on the network, but an unbounded loop over a
-// growing table is still worth bounding until real volume is seen.
+// Walks every already-registered, non-dormant combo and re-scrapes its
+// Flipkart image. Called from the 6:30pm IST cron branch in scheduled()
+// below. A combo that fails 3 nights in a row (DORMANT_THRESHOLD) gets
+// marked dormant and excluded from future runs — this is what stops a
+// genuinely dead/delisted listing from being retried forever. Any success
+// resets the failure count to 0; syncPicklistImages also revives a dormant
+// row if it ever sees that combo relisted under a new FSN (see below).
+const DORMANT_THRESHOLD = 3;
+
 async function refreshFlipkartImages(env) {
   await ensureImageCacheTables(env.DB);
   const MAX_PER_RUN = 300;
   const rows = (await env.DB.prepare(
-    "SELECT combo_key, fk_fsn FROM marketplace_image_cache WHERE fk_fsn IS NOT NULL AND fk_fsn != '' LIMIT ?"
+    "SELECT combo_key, fk_fsn, fk_consecutive_failures FROM marketplace_image_cache WHERE fk_fsn IS NOT NULL AND fk_fsn != '' AND fk_dormant = 0 LIMIT ?"
   ).bind(MAX_PER_RUN).all()).results || [];
-  let refreshed = 0, failed = 0;
+  let refreshed = 0, failed = 0, wentDormant = 0;
   for (const row of rows) {
     const result = await scrapeFlipkartImage(row.fk_fsn);
+    const newFailures = result.url ? 0 : (row.fk_consecutive_failures || 0) + 1;
+    const dormant = newFailures >= DORMANT_THRESHOLD ? 1 : 0;
     await env.DB.prepare(`
       UPDATE marketplace_image_cache
-      SET fk_image_url = ?, fk_fetch_status = ?, fk_updated_at = ${istTimestampSql()}
+      SET fk_image_url = ?, fk_fetch_status = ?, fk_updated_at = ${istTimestampSql()},
+          fk_consecutive_failures = ?, fk_dormant = ?
       WHERE combo_key = ?
-    `).bind(result.url, result.status, row.combo_key).run();
-    if (result.url) refreshed++; else failed++;
+    `).bind(result.url, result.status, newFailures, dormant, row.combo_key).run();
+    if (result.url) { refreshed++; } else { failed++; if (dormant) wentDormant++; }
   }
-  return { total: rows.length, refreshed, failed };
+  return { total: rows.length, refreshed, failed, wentDormant };
 }
 
 export default {
@@ -2830,7 +2849,7 @@ export default {
           await ensureImageCacheTables(env.DB);
           const items = Array.isArray(body.items) ? body.items : [];
           const MAX_ITEMS = 300;
-          const MAX_NEW_LIVE_FETCH = 15; // cap fresh scrapes per upload — repeat combos never hit this path
+          const MAX_NEW_LIVE_FETCH = 15; // shared budget: new registrations + FSN-changed re-scrapes
           const images = {};
           let newFetchCount = 0;
 
@@ -2839,12 +2858,33 @@ export default {
             if (!comboKey) continue;
 
             const existing = await env.DB.prepare(
-              'SELECT fk_image_url, fk_fetch_status, amz_image_url, amz_fetch_status FROM marketplace_image_cache WHERE combo_key = ?'
+              'SELECT fk_sku, fk_fsn, fk_image_url, fk_fetch_status, fk_consecutive_failures, fk_dormant, amz_image_url, amz_fetch_status FROM marketplace_image_cache WHERE combo_key = ?'
             ).bind(comboKey).first();
 
             if (existing) {
+              // Same combo, but Flipkart relisted it under a different FSN
+              // (or it was never linked before and now is) — worth one fresh
+              // scrape even if the row was previously marked dormant, since
+              // a new FSN means the old failure streak no longer applies.
+              const fsnChanged = item.fkFsn && item.fkFsn !== existing.fk_fsn;
+              if (fsnChanged && newFetchCount < MAX_NEW_LIVE_FETCH) {
+                const fkResult = await scrapeFlipkartImage(item.fkFsn);
+                newFetchCount++;
+                const failures = fkResult.url ? 0 : 1;
+                await env.DB.prepare(`
+                  UPDATE marketplace_image_cache
+                  SET fk_sku = ?, fk_fsn = ?, fk_image_url = ?, fk_fetch_status = ?, fk_updated_at = ${istTimestampSql()},
+                      fk_consecutive_failures = ?, fk_dormant = 0
+                  WHERE combo_key = ?
+                `).bind(item.fkSku || existing.fk_sku, item.fkFsn, fkResult.url, fkResult.status, failures, comboKey).run();
+                images[comboKey] = {
+                  fk: fkResult,
+                  amz: { url: existing.amz_image_url, status: existing.amz_fetch_status }
+                };
+                continue;
+              }
               images[comboKey] = {
-                fk: { url: existing.fk_image_url, status: existing.fk_fetch_status },
+                fk: { url: existing.fk_image_url, status: existing.fk_dormant ? 'dormant' : existing.fk_fetch_status },
                 amz: { url: existing.amz_image_url, status: existing.amz_fetch_status }
               };
               continue;
@@ -2863,17 +2903,23 @@ export default {
               // refresh (or the next upload, if under budget) will pick it up.
               fkResult = { url: null, status: 'pending_first_fetch' };
             }
+            // Only an actual attempt (not "no_ref"/"pending_first_fetch") that
+            // came back empty counts toward the dormant-after-3 streak.
+            const attempted = fkResult.status !== 'no_ref' && fkResult.status !== 'pending_first_fetch';
+            const initialFailures = (attempted && !fkResult.url) ? 1 : 0;
 
             await env.DB.prepare(`
               INSERT INTO marketplace_image_cache
                 (combo_key, uc_skus, fk_sku, fk_fsn, fk_image_url, fk_fetch_status, fk_updated_at,
+                 fk_consecutive_failures, fk_dormant,
                  amz_sku, amz_asin, amz_image_url, amz_fetch_status, amz_updated_at, created_at)
               VALUES (?, ?, ?, ?, ?, ?, ${istTimestampSql()},
+                      ?, 0,
                       ?, ?, NULL, NULL, NULL, ${istTimestampSql()})
               ON CONFLICT(combo_key) DO NOTHING
             `).bind(
               comboKey, item.ucSkus || comboKey, item.fkSku || null, item.fkFsn || null,
-              fkResult.url, fkResult.status,
+              fkResult.url, fkResult.status, initialFailures,
               item.amzSku || null, item.amzAsin || null
             ).run();
 
@@ -3017,7 +3063,8 @@ export default {
         refreshFlipkartImages(env)
           .then(result => recordHeartbeat(
             env, 'flipkart_image_refresh', 'Flipkart Image Refresh (Worker cron, 6:30pm IST)', 'ok',
-            `Refreshed ${result.refreshed} of ${result.total} registered combo(s), ${result.failed} failed.`, 90000
+            `Refreshed ${result.refreshed} of ${result.total} registered combo(s), ${result.failed} failed` +
+              (result.wentDormant ? `, ${result.wentDormant} newly marked dormant (3 failures in a row).` : '.'), 90000
           ))
           .catch(err => {
             console.error('scheduled Flipkart image refresh failed:', err.message);
