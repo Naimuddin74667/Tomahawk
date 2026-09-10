@@ -971,6 +971,7 @@ function processRows(rows) {
     const skuRaw  = (r['Item Type SKUs']||'');
     const selRaw  = (r['Seller SKUs']||'');
     const imgRaw  = (r['Channel Product Images']||'');
+    const rowChannel = (r['Channel']||'').trim().toUpperCase();
 
     const skuList  = skuRaw.split(',').map(s=>s.trim()).filter(Boolean);
     const selList  = selRaw.split(',').map(s=>s.trim()).filter(Boolean);
@@ -991,6 +992,7 @@ function processRows(rows) {
         uniqueSkus, selMap, imgUrl, comboSize,
         comboKey: key,           // sorted UC SKU set — the D1 registry's primary key
         fkSku: selList[0] || '', // representative Channel SKU for this combo
+        channel: rowChannel,     // first channel seen for this combo — decides fkFsn vs amzSku below
         qtyPerSku: Object.fromEntries(uniqueSkus.map(s=>[s,0])),
         skuCounts: Object.fromEntries(uniqueSkus.map(s=>[s,1])),
         priceCounts: {},
@@ -1157,11 +1159,16 @@ async function fillLiveImages(sections) {
   const items = [];
   Object.values(sections).forEach(groups => {
     Object.values(groups).forEach(group => {
+      const isAmazon = group.channel && group.channel.includes('AMAZON');
       items.push({
         comboKey: group.comboKey,
         ucSkus: group.uniqueSkus.join(','),
         fkSku: group.fkSku || '',
         fkFsn: group.fsn || '',
+        // Amazon channel orders carry a Seller SKU (same CSV column as
+        // Flipkart's) but never an FSN — the Worker resolves ASIN from this
+        // via the bridge's AMZ_Catalog lookup on first registration only.
+        amzSku: isAmazon ? (group.fkSku || '') : '',
         __group: group
       });
     });
@@ -1180,14 +1187,16 @@ async function fillLiveImages(sections) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'syncPicklistImages',
-          items: chunk.map(({comboKey, ucSkus, fkSku, fkFsn}) => ({comboKey, ucSkus, fkSku, fkFsn}))
+          items: chunk.map(({comboKey, ucSkus, fkSku, fkFsn, amzSku}) => ({comboKey, ucSkus, fkSku, fkFsn, amzSku}))
         })
       });
       const data = await resp.json();
       if (data && data.ok) {
         chunk.forEach(({ comboKey, __group }) => {
           const hit = data.images && data.images[comboKey];
-          if (hit && hit.fk && hit.fk.url) __group.imgUrl = hit.fk.url;
+          if (!hit) return;
+          if (hit.fk && hit.fk.url) __group.imgUrl = hit.fk.url;
+          else if (hit.amz && hit.amz.url) __group.imgUrl = hit.amz.url;
         });
       }
     } catch (e) {
