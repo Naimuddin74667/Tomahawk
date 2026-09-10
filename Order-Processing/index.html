@@ -989,6 +989,8 @@ function processRows(rows) {
       uniqueSkus.forEach((s,i) => { selMap[s] = selList[i]||selList[0]||''; });
       sections[comboSize][key] = {
         uniqueSkus, selMap, imgUrl, comboSize,
+        comboKey: key,           // sorted UC SKU set — the D1 registry's primary key
+        fkSku: selList[0] || '', // representative Channel SKU for this combo
         qtyPerSku: Object.fromEntries(uniqueSkus.map(s=>[s,0])),
         skuCounts: Object.fromEntries(uniqueSkus.map(s=>[s,1])),
         priceCounts: {},
@@ -1136,55 +1138,63 @@ function hideLoading() {
   document.getElementById('loading-overlay').classList.remove('active');
 }
 
-// ── Live product image lookup (Flipkart only, for now — see notes at the
-// worker's scrapeAmazonImage: Amazon's robots.txt blocks this path, so
-// Amazon groups keep falling back to IMAGE_MAP as before) ──
-const IMAGE_API_URL = 'https://tomahawk-returns.naimuddin.workers.dev/?action=getSkuImagesBulk';
+// ── Marketplace image registry (Order-Processing side) ──
+// Every group on every upload gets sent here for register-or-lookup:
+//   - Combo never seen before -> Worker registers it in D1 AND does one
+//     live Flipkart scrape immediately (so it's never blank on this very
+//     upload). Amazon columns get created but stay null for now (see
+//     worker's scrapeAmazonImage notes — no working Amazon path yet).
+//   - Combo already registered -> Worker just reads the cached D1 row.
+//     No scraping happens on repeat uploads at all; that's the actual
+//     speed fix. A daily 6:30pm IST cron (Worker-side) keeps every
+//     registered combo's Flipkart image refreshed going forward.
+// Fails soft — a network error here should never block the picklist from
+// rendering; whatever imgUrl a group already had (CSV/IMAGE_MAP) stays.
+const IMAGE_API_URL = 'https://tomahawk-returns.naimuddin.workers.dev/?action=syncPicklistImages';
 const IMAGE_LOOKUP_CHUNK_SIZE = 6; // small batches -> real progress feedback + shorter per-request time
 
-// Live image is now the FIRST choice for every group that has an FSN —
-// this always checks, even if a CSV image or an IMAGE_MAP entry already
-// exists, and overwrites imgUrl when the live lookup succeeds. The existing
-// CSV/IMAGE_MAP value is left in place only as a fallback for groups where
-// the live lookup comes back empty (cache miss + scrape failure) or there's
-// no FSN at all (Amazon groups). Fails soft — a network error here should
-// never block the picklist from rendering. Chunks requests so the loading
-// overlay can show real "X of Y" progress instead of an indefinite spinner.
 async function fillLiveImages(sections) {
-  const needsLookup = [];
+  const items = [];
   Object.values(sections).forEach(groups => {
     Object.values(groups).forEach(group => {
-      if (group.fsn) {
-        needsLookup.push({ sku: group.uniqueSkus[0], fsn: group.fsn, __group: group });
-      }
+      items.push({
+        comboKey: group.comboKey,
+        ucSkus: group.uniqueSkus.join(','),
+        fkSku: group.fkSku || '',
+        fkFsn: group.fsn || '',
+        __group: group
+      });
     });
   });
-  if (!needsLookup.length) return;
+  if (!items.length) return;
 
-  const total = needsLookup.length;
+  const total = items.length;
   let done = 0;
-  updateLoading('Fetching live product images\u2026', `0 of ${total}`);
+  updateLoading('Syncing product images\u2026', `0 of ${total}`);
 
-  for (let i = 0; i < needsLookup.length; i += IMAGE_LOOKUP_CHUNK_SIZE) {
-    const chunk = needsLookup.slice(i, i + IMAGE_LOOKUP_CHUNK_SIZE);
+  for (let i = 0; i < items.length; i += IMAGE_LOOKUP_CHUNK_SIZE) {
+    const chunk = items.slice(i, i + IMAGE_LOOKUP_CHUNK_SIZE);
     try {
       const resp = await fetch(IMAGE_API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'getSkuImagesBulk', items: chunk.map(({sku, fsn}) => ({sku, fsn})) })
+        body: JSON.stringify({
+          action: 'syncPicklistImages',
+          items: chunk.map(({comboKey, ucSkus, fkSku, fkFsn}) => ({comboKey, ucSkus, fkSku, fkFsn}))
+        })
       });
       const data = await resp.json();
       if (data && data.ok) {
-        chunk.forEach(({ sku, __group }) => {
-          const hit = data.images && data.images[sku];
-          if (hit && hit.url) __group.imgUrl = hit.url;
+        chunk.forEach(({ comboKey, __group }) => {
+          const hit = data.images && data.images[comboKey];
+          if (hit && hit.fk && hit.fk.url) __group.imgUrl = hit.fk.url;
         });
       }
     } catch (e) {
-      console.warn('Live image lookup chunk failed (non-fatal):', e);
+      console.warn('Image registry sync chunk failed (non-fatal):', e);
     }
     done += chunk.length;
-    updateLoading('Fetching live product images\u2026', `${Math.min(done, total)} of ${total}`);
+    updateLoading('Syncing product images\u2026', `${Math.min(done, total)} of ${total}`);
   }
 }
 
