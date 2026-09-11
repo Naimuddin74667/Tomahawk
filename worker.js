@@ -21,7 +21,7 @@ const SA_UC_GAS_URL = 'https://script.google.com/macros/s/AKfycbwPnZl404I0IVHgIx
 // cron tick AND the manual "Check Gmail Now" button, so nothing repopulates
 // amazon_fc_log / amazon_shipments while this is true. Flip back to false
 // to resume — no other change needed.
-const AMAZON_FC_WATCHER_PAUSED = true;
+const AMAZON_FC_WATCHER_PAUSED = false;
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: CORS });
