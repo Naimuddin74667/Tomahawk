@@ -16,6 +16,13 @@ const GSHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ6Rf-UN
 // call directly; now proxied + edge-cached here via the sa_loadAll action).
 const SA_UC_GAS_URL = 'https://script.google.com/macros/s/AKfycbwPnZl404I0IVHgIxy6QRxSCdep3XbqufE73w8ZdA1qugPEdygzoRhtht10RWT6fkjGTQ/exec';
 
+// Amazon FC Appointment Email Watcher — manually paused (temporary, while
+// the shipment-tracking logic is being reworked). Blocks both the 15-min
+// cron tick AND the manual "Check Gmail Now" button, so nothing repopulates
+// amazon_fc_log / amazon_shipments while this is true. Flip back to false
+// to resume — no other change needed.
+const AMAZON_FC_WATCHER_PAUSED = true;
+
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: CORS });
 }
@@ -277,10 +284,7 @@ const ACTION_TIERS = {
   //   manager_up; listing what's been created is viewer_read like
   //   everything else read-only in this file. —
   delhiveryCreateOrder: 'manager_up', delhiveryListOrders: 'viewer_read',
-  delhiveryCheckPincode: 'viewer_read', delhiveryEstimateCharge: 'viewer_read',
-  // — Order Processing: marketplace image registry (register-on-first-sight
-  // + read-cached-on-repeat), read/write but no destructive ops —
-  syncPicklistImages: 'viewer_read'
+  delhiveryCheckPincode: 'viewer_read', delhiveryEstimateCharge: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -533,164 +537,6 @@ function healthTokenOk(request, env) {
   return expected.length > 0 && supplied === expected;
 }
 
-// ══════════════════════════════════════════════════════════════════
-// ORDER PROCESSING — marketplace image registry (Flipkart live; Amazon
-// columns exist in the schema but stay empty until an ASIN source is
-// wired in — Amazon's own bot detection blocks this scrape path anyway,
-// confirmed via robots.txt + a live 403 from Cloudflare's IP range).
-//
-// Design: a combo (single SKU or a bundle's full sorted SKU set) is
-// registered exactly once, on the first picklist upload that contains it
-// — that registration does one live Flipkart scrape immediately so it's
-// never blank. Every later upload of that same combo just reads the
-// cached row (no scraping). A daily cron (6:30pm IST, see scheduled()
-// below) re-scrapes every already-registered combo's Flipkart image, so
-// data drifts stay bounded to at most a day old.
-// ══════════════════════════════════════════════════════════════════
-async function ensureImageCacheTables(DB) {
-  await DB.prepare(`CREATE TABLE IF NOT EXISTS marketplace_image_cache (
-    combo_key TEXT PRIMARY KEY,
-    uc_skus TEXT,
-    fk_sku TEXT,
-    fk_fsn TEXT,
-    fk_image_url TEXT,
-    fk_fetch_status TEXT,
-    fk_updated_at TEXT,
-    fk_consecutive_failures INTEGER DEFAULT 0,
-    fk_dormant INTEGER DEFAULT 0,
-    amz_sku TEXT,
-    amz_asin TEXT,
-    amz_image_url TEXT,
-    amz_fetch_status TEXT,
-    amz_updated_at TEXT,
-    created_at TEXT
-  )`).run();
-  // Migration for deployments that created this table before dormant-tracking
-  // existed — ALTER TABLE ADD COLUMN has no "IF NOT EXISTS" in SQLite, so
-  // just swallow the "duplicate column" error on every run after the first.
-  const migrations = [
-    'ALTER TABLE marketplace_image_cache ADD COLUMN fk_consecutive_failures INTEGER DEFAULT 0',
-    'ALTER TABLE marketplace_image_cache ADD COLUMN fk_dormant INTEGER DEFAULT 0',
-    'ALTER TABLE marketplace_image_cache ADD COLUMN amz_consecutive_failures INTEGER DEFAULT 0',
-    'ALTER TABLE marketplace_image_cache ADD COLUMN amz_dormant INTEGER DEFAULT 0'
-  ];
-  for (const sql of migrations) {
-    try { await DB.prepare(sql).run(); } catch (e) { /* column already exists — fine */ }
-  }
-}
-
-const SCRAPE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
-
-// Both marketplace lookups route through a Google Apps Script bridge
-// (script.google.com) instead of fetching Flipkart/Amazon directly from
-// the Worker. Cloudflare Workers' outbound IP range gets a hard 403 from
-// Flipkart even with browser-like headers — Google's IP range doesn't hit
-// the same block (confirmed Sep 2026). See /areas/order-processing.md.
-const IMAGE_BRIDGE_URL = 'https://script.google.com/macros/s/AKfycbxvS536DNyl9c7DdcAx9PvBURUjRvUEpaSbYDQqxE7bbgUAPRP6keEU7HeEVbrmTfor2A/exec';
-
-async function scrapeViaBridge(marketplace, ref) {
-  try {
-    const resp = await fetch(`${IMAGE_BRIDGE_URL}?marketplace=${marketplace}&ref=${encodeURIComponent(ref)}`, {
-      headers: { 'User-Agent': SCRAPE_UA }
-    });
-    if (!resp.ok) return { url: null, status: 'bridge_http_' + resp.status };
-    const data = await resp.json();
-    return { url: data.url || null, status: data.status || (data.ok ? 'ok' : 'unknown') };
-  } catch (e) {
-    return { url: null, status: 'bridge_error:' + e.message };
-  }
-}
-
-async function scrapeFlipkartImage(fsn) {
-  return scrapeViaBridge('flipkart', fsn);
-}
-
-// Amazon path: wired end-to-end, but Amazon returned a 200 with no usable
-// og:image via the GAS bridge in testing — likely a soft bot-check page
-// rather than the real listing. Left in place for when SP-API Catalog
-// Items (or another working Amazon path) replaces this call.
-async function scrapeAmazonImage(asin) {
-  return scrapeViaBridge('amazon', asin);
-}
-
-// Resolves a Seller SKU to its ASIN via the bridge's AMZ_Catalog lookup.
-// Unlike Flipkart's FSN, ASIN is permanent for a listing — this only needs
-// to run once per SKU, at first registration, not on every repeat upload.
-async function resolveAsinViaBridge(sellerSku) {
-  try {
-    const resp = await fetch(`${IMAGE_BRIDGE_URL}?mode=asinLookup&sku=${encodeURIComponent(sellerSku)}`, {
-      headers: { 'User-Agent': SCRAPE_UA }
-    });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    return data.asin || null;
-  } catch (e) {
-    return null;
-  }
-}
-
-// IST timestamp helper — SQLite has no timezone concept, so every
-// timestamp this feature writes is IST wall-clock time, made explicit in
-// code rather than relying on a viewer to mentally offset from UTC.
-function istTimestampSql() {
-  return "datetime('now', '+5 hours', '+30 minutes')";
-}
-
-// Walks every already-registered, non-dormant combo and re-scrapes its
-// Flipkart image. Called from the 6:30pm IST cron branch in scheduled()
-// below. A combo that fails 3 nights in a row (DORMANT_THRESHOLD) gets
-// marked dormant and excluded from future runs — this is what stops a
-// genuinely dead/delisted listing from being retried forever. Any success
-// resets the failure count to 0; syncPicklistImages also revives a dormant
-// row if it ever sees that combo relisted under a new FSN (see below).
-const DORMANT_THRESHOLD = 3;
-
-async function refreshFlipkartImages(env) {
-  await ensureImageCacheTables(env.DB);
-  const MAX_PER_RUN = 300;
-  const rows = (await env.DB.prepare(
-    "SELECT combo_key, fk_fsn, fk_consecutive_failures FROM marketplace_image_cache WHERE fk_fsn IS NOT NULL AND fk_fsn != '' AND fk_dormant = 0 LIMIT ?"
-  ).bind(MAX_PER_RUN).all()).results || [];
-  let refreshed = 0, failed = 0, wentDormant = 0;
-  for (const row of rows) {
-    const result = await scrapeFlipkartImage(row.fk_fsn);
-    const newFailures = result.url ? 0 : (row.fk_consecutive_failures || 0) + 1;
-    const dormant = newFailures >= DORMANT_THRESHOLD ? 1 : 0;
-    await env.DB.prepare(`
-      UPDATE marketplace_image_cache
-      SET fk_image_url = ?, fk_fetch_status = ?, fk_updated_at = ${istTimestampSql()},
-          fk_consecutive_failures = ?, fk_dormant = ?
-      WHERE combo_key = ?
-    `).bind(result.url, result.status, newFailures, dormant, row.combo_key).run();
-    if (result.url) { refreshed++; } else { failed++; if (dormant) wentDormant++; }
-  }
-  return { total: rows.length, refreshed, failed, wentDormant };
-}
-
-// Mirrors refreshFlipkartImages for the Amazon column set. ASIN itself
-// never needs re-resolving here (it's permanent, unlike FSN) — this only
-// re-attempts the image scrape for whatever ASIN is already stored.
-async function refreshAmazonImages(env) {
-  await ensureImageCacheTables(env.DB);
-  const MAX_PER_RUN = 300;
-  const rows = (await env.DB.prepare(
-    "SELECT combo_key, amz_asin, amz_consecutive_failures FROM marketplace_image_cache WHERE amz_asin IS NOT NULL AND amz_asin != '' AND amz_dormant = 0 LIMIT ?"
-  ).bind(MAX_PER_RUN).all()).results || [];
-  let refreshed = 0, failed = 0, wentDormant = 0;
-  for (const row of rows) {
-    const result = await scrapeAmazonImage(row.amz_asin);
-    const newFailures = result.url ? 0 : (row.amz_consecutive_failures || 0) + 1;
-    const dormant = newFailures >= DORMANT_THRESHOLD ? 1 : 0;
-    await env.DB.prepare(`
-      UPDATE marketplace_image_cache
-      SET amz_image_url = ?, amz_fetch_status = ?, amz_updated_at = ${istTimestampSql()},
-          amz_consecutive_failures = ?, amz_dormant = ?
-      WHERE combo_key = ?
-    `).bind(result.url, result.status, newFailures, dormant, row.combo_key).run();
-    if (result.url) { refreshed++; } else { failed++; if (dormant) wentDormant++; }
-  }
-  return { total: rows.length, refreshed, failed, wentDormant };
-}
 
 export default {
   async fetch(request, env) {
@@ -952,31 +798,23 @@ export default {
           });
           const metaMap = {};
           (meta.results || []).forEach(r => { metaMap[r.key] = r.value; });
-          // Reconstruct a chunked JSON blob written under `prefix_json`
-          // (or `prefix_json_0`, `prefix_json_1`, ... when it exceeded one
-          // meta row) back into an object.
-          function readChunked(prefix, metaMap) {
-            try {
-              const chunks = parseInt(metaMap[prefix + '_chunks'] || '1');
-              if (chunks === 1) return JSON.parse(metaMap[prefix + '_json'] || '{}');
+          let master = {};
+          try {
+            const chunks = parseInt(metaMap['master_chunks'] || '1');
+            if (chunks === 1) {
+              master = JSON.parse(metaMap['master_json'] || '{}');
+            } else {
               let str = '';
-              for (let i = 0; i < chunks; i++) str += (metaMap[prefix + '_json_' + i] || '');
-              return JSON.parse(str || '{}');
-            } catch(e) { return {}; }
-          }
-          const master = readChunked('master', metaMap);
-          const fbaManifest = readChunked('fba_manifest', metaMap);
-          let metaOut = {};
-          try { metaOut = JSON.parse(metaMap['meta_json'] || '{}'); } catch(e) { metaOut = {}; }
-          // Back-compat: earlier deploys only ever wrote a bare `uploadedAt` key
-          if (!metaOut.uploadedAt && metaMap['uploadedAt']) metaOut.uploadedAt = metaMap['uploadedAt'];
+              for (let i = 0; i < chunks; i++) str += (metaMap['master_json_' + i] || '');
+              master = JSON.parse(str || '{}');
+            }
+          } catch(e) { master = {}; }
           return json({
             ok: true,
             returns: (returns.results || []).map(rowToReturn),
             fbaReturns: fba,
             master,
-            fbaManifest,
-            meta: metaOut
+            meta: { uploadedAt: metaMap['uploadedAt'] || '' }
           });
         }
 
@@ -1403,6 +1241,9 @@ export default {
         //    blinkitCheckRoEmails above; normally only run by the
         //    scheduled() cron.
         if (action === 'amazonCheckFcEmails') {
+          if (AMAZON_FC_WATCHER_PAUSED) {
+            return json({ ok: false, error: 'Amazon FC watcher is manually paused — flip AMAZON_FC_WATCHER_PAUSED in worker.js to resume.' }, 503);
+          }
           try {
             const result = await checkNewAmazonFcEmails(env);
             return json({ ok: true, ...result });
@@ -2896,150 +2737,6 @@ export default {
           return json({ ok: result.success, waybill: result.waybill, delhiveryHttpStatus: result.httpStatus, response: result.response }, result.success ? 200 : 502);
         }
 
-        if (act === 'syncPicklistImages') {
-          await ensureImageCacheTables(env.DB);
-          const items = Array.isArray(body.items) ? body.items : [];
-          const MAX_ITEMS = 300;
-          const MAX_NEW_LIVE_FETCH = 15; // shared budget: new registrations + FSN-changed re-scrapes (fk + amz combined)
-          const images = {};
-          let newFetchCount = 0;
-
-          for (const item of items.slice(0, MAX_ITEMS)) {
-            const comboKey = item && item.comboKey;
-            if (!comboKey) continue;
-
-            const existing = await env.DB.prepare(
-              `SELECT fk_sku, fk_fsn, fk_image_url, fk_fetch_status, fk_consecutive_failures, fk_dormant,
-                      amz_sku, amz_asin, amz_image_url, amz_fetch_status, amz_dormant
-               FROM marketplace_image_cache WHERE combo_key = ?`
-            ).bind(comboKey).first();
-
-            if (existing) {
-              // Same combo, but Flipkart relisted it under a different FSN
-              // (or it was never linked before and now is) — worth one fresh
-              // scrape even if the row was previously marked dormant, since
-              // a new FSN means the old failure streak no longer applies.
-              const fsnChanged = item.fkFsn && item.fkFsn !== existing.fk_fsn;
-              if (fsnChanged && newFetchCount < MAX_NEW_LIVE_FETCH) {
-                const fkResult = await scrapeFlipkartImage(item.fkFsn);
-                newFetchCount++;
-                const failures = fkResult.url ? 0 : 1;
-                await env.DB.prepare(`
-                  UPDATE marketplace_image_cache
-                  SET fk_sku = ?, fk_fsn = ?, fk_image_url = ?, fk_fetch_status = ?, fk_updated_at = ${istTimestampSql()},
-                      fk_consecutive_failures = ?, fk_dormant = 0
-                  WHERE combo_key = ?
-                `).bind(item.fkSku || existing.fk_sku, item.fkFsn, fkResult.url, fkResult.status, failures, comboKey).run();
-                images[comboKey] = {
-                  fk: fkResult,
-                  amz: { url: existing.amz_image_url, status: existing.amz_dormant ? 'dormant' : existing.amz_fetch_status }
-                };
-                continue;
-              }
-              // Amazon side: this combo might have been registered earlier
-              // under a Flipkart-only context (combo_key is just the UC SKU
-              // set — the same combo can show up in both channels across
-              // different uploads) and never had its ASIN resolved yet. If
-              // so, resolve + scrape now instead of leaving it stuck null
-              // forever. ASIN itself is permanent once resolved — no
-              // "did it change" re-check needed after this, unlike FSN.
-              if (item.amzSku && !existing.amz_asin) {
-                const resolvedAsin = await resolveAsinViaBridge(item.amzSku);
-                let amzResult = { url: null, status: 'asin_not_found' };
-                if (resolvedAsin && newFetchCount < MAX_NEW_LIVE_FETCH) {
-                  amzResult = await scrapeAmazonImage(resolvedAsin);
-                  newFetchCount++;
-                } else if (resolvedAsin) {
-                  amzResult = { url: null, status: 'pending_first_fetch' };
-                }
-                const amzAttempted = amzResult.status !== 'asin_not_found' && amzResult.status !== 'pending_first_fetch';
-                const amzFailures = (amzAttempted && !amzResult.url) ? 1 : 0;
-                await env.DB.prepare(`
-                  UPDATE marketplace_image_cache
-                  SET amz_sku = ?, amz_asin = ?, amz_image_url = ?, amz_fetch_status = ?, amz_updated_at = ${istTimestampSql()},
-                      amz_consecutive_failures = ?, amz_dormant = 0
-                  WHERE combo_key = ?
-                `).bind(item.amzSku, resolvedAsin, amzResult.url, amzResult.status, amzFailures, comboKey).run();
-                images[comboKey] = {
-                  fk: { url: existing.fk_image_url, status: existing.fk_dormant ? 'dormant' : existing.fk_fetch_status },
-                  amz: amzResult
-                };
-                continue;
-              }
-              // ASIN already resolved earlier — just keep the Seller SKU
-              // *label* current if it drifted (Seller Central rename), a
-              // plain no-scrape update since the label doesn't affect which
-              // image gets shown.
-              if (item.amzSku && item.amzSku !== existing.amz_sku) {
-                await env.DB.prepare(
-                  'UPDATE marketplace_image_cache SET amz_sku = ? WHERE combo_key = ?'
-                ).bind(item.amzSku, comboKey).run();
-              }
-              images[comboKey] = {
-                fk: { url: existing.fk_image_url, status: existing.fk_dormant ? 'dormant' : existing.fk_fetch_status },
-                amz: { url: existing.amz_image_url, status: existing.amz_dormant ? 'dormant' : existing.amz_fetch_status }
-              };
-              continue;
-            }
-
-            // First time this exact combo has ever been seen — register it,
-            // and do one live scrape per marketplace right now (budget
-            // permitting) so it's never blank on this very upload.
-            let fkResult = { url: null, status: 'no_ref' };
-            if (item.fkFsn && newFetchCount < MAX_NEW_LIVE_FETCH) {
-              fkResult = await scrapeFlipkartImage(item.fkFsn);
-              newFetchCount++;
-            } else if (item.fkFsn) {
-              // Over this upload's live-fetch budget — tonight's 6:30pm IST
-              // refresh (or the next upload, if under budget) will pick it up.
-              fkResult = { url: null, status: 'pending_first_fetch' };
-            }
-            const fkAttempted = fkResult.status !== 'no_ref' && fkResult.status !== 'pending_first_fetch';
-            const fkInitialFailures = (fkAttempted && !fkResult.url) ? 1 : 0;
-
-            // Amazon side: resolve ASIN from Seller SKU first (cheap, cached
-            // on the bridge — doesn't count against the scrape budget), then
-            // scrape only if resolution succeeded.
-            let amzAsin = item.amzAsin || null;
-            let amzResult = { url: null, status: 'no_ref' };
-            if (item.amzSku && !amzAsin) {
-              amzAsin = await resolveAsinViaBridge(item.amzSku);
-            }
-            if (amzAsin && newFetchCount < MAX_NEW_LIVE_FETCH) {
-              amzResult = await scrapeAmazonImage(amzAsin);
-              newFetchCount++;
-            } else if (item.amzSku && amzAsin) {
-              amzResult = { url: null, status: 'pending_first_fetch' };
-            } else if (item.amzSku && !amzAsin) {
-              amzResult = { url: null, status: 'asin_not_found' };
-            }
-            const amzAttempted = amzResult.status !== 'no_ref' && amzResult.status !== 'pending_first_fetch' && amzResult.status !== 'asin_not_found';
-            const amzInitialFailures = (amzAttempted && !amzResult.url) ? 1 : 0;
-
-            await env.DB.prepare(`
-              INSERT INTO marketplace_image_cache
-                (combo_key, uc_skus, fk_sku, fk_fsn, fk_image_url, fk_fetch_status, fk_updated_at,
-                 fk_consecutive_failures, fk_dormant,
-                 amz_sku, amz_asin, amz_image_url, amz_fetch_status, amz_updated_at,
-                 amz_consecutive_failures, amz_dormant, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ${istTimestampSql()},
-                      ?, 0,
-                      ?, ?, ?, ?, ${istTimestampSql()},
-                      ?, 0, ${istTimestampSql()})
-              ON CONFLICT(combo_key) DO NOTHING
-            `).bind(
-              comboKey, item.ucSkus || comboKey, item.fkSku || null, item.fkFsn || null,
-              fkResult.url, fkResult.status, fkInitialFailures,
-              item.amzSku || null, amzAsin, amzResult.url, amzResult.status,
-              amzInitialFailures
-            ).run();
-
-            images[comboKey] = { fk: fkResult, amz: amzResult };
-          }
-
-          return json({ ok: true, images });
-        }
-
         return json({ ok: false, error: 'Unknown action' }, 400);
       }
 
@@ -3086,20 +2783,29 @@ export default {
           ).catch(e2 => console.error('failed to record fk_received_watcher error heartbeat:', e2.message));
         })
     );
-    ctx.waitUntil(
-      checkNewAmazonFcEmails(env)
-        .then(result => recordHeartbeat(
-          env, 'amazon_fc_watcher', 'Amazon FC Appointment Email Watcher (Worker cron)', 'ok',
-          `Checked ${result.checked} email(s), logged ${result.newLogged} new.`, 900
-        ))
-        .catch(err => {
-          console.error('scheduled Amazon FC appointment email check failed:', err.message);
-          return recordHeartbeat(
-            env, 'amazon_fc_watcher', 'Amazon FC Appointment Email Watcher (Worker cron)', 'error',
-            err.message, 900
-          ).catch(e2 => console.error('failed to record amazon_fc_watcher error heartbeat:', e2.message));
-        })
-    );
+    if (AMAZON_FC_WATCHER_PAUSED) {
+      ctx.waitUntil(
+        recordHeartbeat(
+          env, 'amazon_fc_watcher', 'Amazon FC Appointment Email Watcher (Worker cron)', 'paused',
+          'Manually paused (AMAZON_FC_WATCHER_PAUSED) — not checking Gmail.', 900
+        ).catch(e2 => console.error('failed to record amazon_fc_watcher paused heartbeat:', e2.message))
+      );
+    } else {
+      ctx.waitUntil(
+        checkNewAmazonFcEmails(env)
+          .then(result => recordHeartbeat(
+            env, 'amazon_fc_watcher', 'Amazon FC Appointment Email Watcher (Worker cron)', 'ok',
+            `Checked ${result.checked} email(s), logged ${result.newLogged} new.`, 900
+          ))
+          .catch(err => {
+            console.error('scheduled Amazon FC appointment email check failed:', err.message);
+            return recordHeartbeat(
+              env, 'amazon_fc_watcher', 'Amazon FC Appointment Email Watcher (Worker cron)', 'error',
+              err.message, 900
+            ).catch(e2 => console.error('failed to record amazon_fc_watcher error heartbeat:', e2.message));
+          })
+      );
+    }
     ctx.waitUntil(
       checkFkQcEmails(env)
         .then(result => recordHeartbeat(
@@ -3163,44 +2869,6 @@ export default {
         console.error('scheduled health staleness check failed:', err.message);
       })
     );
-    // Daily marketplace image refresh — 6:30pm IST only (see wrangler.toml
-    // crons: '0 13 * * *' = 13:00 UTC = 18:30 IST). Guarded on event.cron
-    // so this doesn't also fire on the existing every-15-min tick; the
-    // two schedules coincide once a day at :00, so both handlers may run
-    // back-to-back that one minute — harmless, every job above is
-    // idempotent either way.
-    if (event.cron === '0 13 * * *') {
-      ctx.waitUntil(
-        refreshFlipkartImages(env)
-          .then(result => recordHeartbeat(
-            env, 'flipkart_image_refresh', 'Flipkart Image Refresh (Worker cron, 6:30pm IST)', 'ok',
-            `Refreshed ${result.refreshed} of ${result.total} registered combo(s), ${result.failed} failed` +
-              (result.wentDormant ? `, ${result.wentDormant} newly marked dormant (3 failures in a row).` : '.'), 90000
-          ))
-          .catch(err => {
-            console.error('scheduled Flipkart image refresh failed:', err.message);
-            return recordHeartbeat(
-              env, 'flipkart_image_refresh', 'Flipkart Image Refresh (Worker cron, 6:30pm IST)', 'error',
-              err.message, 90000
-            ).catch(e2 => console.error('failed to record flipkart_image_refresh error heartbeat:', e2.message));
-          })
-      );
-      ctx.waitUntil(
-        refreshAmazonImages(env)
-          .then(result => recordHeartbeat(
-            env, 'amazon_image_refresh', 'Amazon Image Refresh (Worker cron, 6:30pm IST)', 'ok',
-            `Refreshed ${result.refreshed} of ${result.total} registered combo(s), ${result.failed} failed` +
-              (result.wentDormant ? `, ${result.wentDormant} newly marked dormant (3 failures in a row) — expected while Amazon's scrape path stays blocked.` : '.'), 90000
-          ))
-          .catch(err => {
-            console.error('scheduled Amazon image refresh failed:', err.message);
-            return recordHeartbeat(
-              env, 'amazon_image_refresh', 'Amazon Image Refresh (Worker cron, 6:30pm IST)', 'error',
-              err.message, 90000
-            ).catch(e2 => console.error('failed to record amazon_image_refresh error heartbeat:', e2.message));
-          })
-      );
-    }
   }
 };
 
