@@ -3023,17 +3023,60 @@ function splitShipmentIds(str) {
   return String(str).split(',').map(function (s) { return s.trim(); }).filter(Boolean);
 }
 
+// Fetches the set of shipment IDs Tomahawk actually expects, from the
+// BOM7 "Amazon Year 2026" sheet (row 3638 onward) — see
+// getAmazonExpectedShipmentsPayload() in the GAS bridge. This is a GATE,
+// not a data source: a shipment only gets tracked in amazon_shipments if
+// it's BOTH in this sheet AND has a matching FC Appointment email. Every
+// actual field (date, dest FC, boxes, etc.) still comes from the email
+// itself, per explicit instruction — the sheet's own recorded date is
+// never used. Returns null (meaning "couldn't fetch, don't filter this
+// run") rather than throwing, so a transient GAS/sheet hiccup doesn't
+// silently drop real shipments — it just skips the gate for that run.
+async function fetchAmazonExpectedShipmentIds(env) {
+  try {
+    const cache = caches.default;
+    const cacheKey = new Request('https://cache.internal/amazon-expected-shipments-v1');
+    const cached = await cache.match(cacheKey);
+    let text;
+    if (cached) {
+      text = await cached.text();
+    } else {
+      const res = await fetch(SA_UC_GAS_URL + '?type=amazonExpectedShipments');
+      if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
+      text = await res.text();
+      await cache.put(cacheKey, new Response(text, { headers: { 'Cache-Control': 'public, max-age=300' } }));
+    }
+    const data = JSON.parse(text);
+    if (!data || !data.ok) throw new Error((data && data.error) || 'Unexpected response');
+    const set = new Set();
+    (data.records || []).forEach(r => { if (r.shipment_id) set.add(String(r.shipment_id).trim()); });
+    return set;
+  } catch (err) {
+    console.error('fetchAmazonExpectedShipmentIds failed, skipping the sheet gate this run:', err.message);
+    return null;
+  }
+}
+
 // Full rebuild of amazon_shipments from amazon_fc_log — see the note
 // above ensureAmazonShipmentsTable for why this runs every time rather
-// than being a one-off migration.
+// than being a one-off migration. Gated by fetchAmazonExpectedShipmentIds
+// (see its own comment): a shipment_id not in that sheet is skipped
+// entirely, and any that were previously tracked but have since dropped
+// out of the sheet get purged too — unless the sheet fetch itself failed,
+// in which case the gate is skipped for this run rather than risking a
+// mass-purge off a transient error.
 async function rebuildAmazonShipments(env) {
   await ensureAmazonShipmentsTable(env.DB);
+  const expectedIds = await fetchAmazonExpectedShipmentIds(env);
+
   const rows = await env.DB.prepare(
     `SELECT * FROM amazon_fc_log ORDER BY COALESCE(email_date, detected_at) ASC`
   ).all();
   for (const r of (rows.results || [])) {
     const ids = splitShipmentIds(r.shipment_ids);
     for (const shipmentId of ids) {
+      if (expectedIds && !expectedIds.has(shipmentId)) continue; // in the email, but not in the sheet — not one of ours
       await env.DB.prepare(`
         INSERT INTO amazon_shipments (
           shipment_id, appointment_id, destination_fc, no_of_boxes, no_of_skus,
@@ -3060,6 +3103,18 @@ async function rebuildAmazonShipments(env) {
         r.email_date, r.gmail_msg_id, r.manual_status
       ).run();
     }
+  }
+
+  // Purge anything already tracked that's no longer in the sheet — only
+  // when we actually have a fresh list to check against, and only when
+  // that list isn't suspiciously empty (an empty sheet read is more
+  // likely a bug than a real "nothing expected" state).
+  if (expectedIds && expectedIds.size > 0) {
+    const idsArr = Array.from(expectedIds);
+    const placeholders = idsArr.map(() => '?').join(',');
+    await env.DB.prepare(
+      `DELETE FROM amazon_shipments WHERE shipment_id NOT IN (${placeholders})`
+    ).bind(...idsArr).run();
   }
 }
 
