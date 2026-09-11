@@ -601,11 +601,12 @@
               <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Units</th>
               <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Appointment Date</th>
               <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Gatepass</th>
+              <th style="padding:.9rem 1rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Sent Qty</th>
               <th style="padding:.9rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Status</th>
             </tr>
           </thead>
           <tbody id="fcTbody">
-            <tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+            <tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
           </tbody>
         </table>
       </div>
@@ -1280,7 +1281,7 @@ var _fcGatepassMap = {}; // shipment_id (trimmed) -> array of gatepass records (
 
 function fcLoad() {
   var tbody = document.getElementById('fcTbody');
-  if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+  if (tbody) tbody.innerHTML = '<tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
   Promise.all([
     fetch(getWorkerBase() + '?action=amazonListShipments').then(function (r) { return r.json(); }),
     fetch(getWorkerBase() + '?action=amazonGetGatepass').then(function (r) { return r.json(); }).catch(function () { return { records: [] }; })
@@ -1306,7 +1307,7 @@ function fcLoad() {
       fcRender();
     })
     .catch(function (err) {
-      if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="padding:3rem;text-align:center;color:#e05555;font-size:11px">Failed to load: ' + (err.message || '') + '</td></tr>';
+      if (tbody) tbody.innerHTML = '<tr><td colspan="10" style="padding:3rem;text-align:center;color:#e05555;font-size:11px">Failed to load: ' + (err.message || '') + '</td></tr>';
     });
 }
 
@@ -1374,6 +1375,20 @@ function fcGatepassNumbers(shipmentId) {
   }).join('<br>');
 }
 
+// Sent Qty — combined quantity across every gatepass raised for this
+// shipment (E3 + G4 when there are two). Returns null (renders as —)
+// when there's no gatepass data to sum at all.
+function fcSentQty(shipmentId) {
+  var ref = String(shipmentId || '').trim();
+  var gps = ref ? _fcGatepassMap[ref] : null;
+  if (!gps || !gps.length) return null;
+  var total = 0, any = false;
+  gps.forEach(function (gp) {
+    if (typeof gp.quantity === 'number') { total += gp.quantity; any = true; }
+  });
+  return any ? total : null;
+}
+
 // Pulls just the date (e.g. "19 Sep 2026") out of the full slot text
 // Amazon sends ("02:45 PM 19 Sep, 2026 IST - 03:15 PM 19 Sep, 2026 IST")
 // — the person just wants the date, not the repeated time range.
@@ -1430,7 +1445,7 @@ function fcRender() {
 
   var tbody = document.getElementById('fcTbody');
   if (!pageRows.length) {
-    tbody.innerHTML = '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No FC appointments detected yet.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No FC appointments detected yet.</td></tr>';
   } else {
     tbody.innerHTML = pageRows.map(function (r) {
       var canEdit = window.TM_CAN_EDIT;
@@ -1447,6 +1462,7 @@ function fcRender() {
         '<td style="padding:.7rem 1rem;text-align:center">' + fcFmtNum(r.no_of_units) + '</td>' +
         '<td style="padding:.7rem 1rem;font-size:12px">' + fcExtractApptDate(r.confirmed_slot) + '</td>' +
         '<td style="padding:.7rem 1rem;text-align:center">' + fcGatepassBadge(r.shipment_id) + '</td>' +
+        '<td style="padding:.7rem 1rem;text-align:center">' + fcFmtNum(fcSentQty(r.shipment_id)) + '</td>' +
         '<td style="padding:.7rem 1rem">' + fcStatusBadge(r) + '</td>' +
         '</tr>';
     }).join('');
