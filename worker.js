@@ -3017,10 +3017,19 @@ async function ensureAmazonShipmentsTable(DB) {
 }
 
 // Splits "FBA15MBWY7C5, FBA15MBX58GG, FBA15MBXRJ3Y" into trimmed,
-// non-empty tokens.
+// non-empty tokens — and drops anything that isn't shaped like a real
+// FBA shipment ID. Needed because for large appointments Amazon's own
+// email TRUNCATES the list, e.g. "FBA15M8MF32D, FBA15M8L2B5G,
+// FBA15M8898MH, and 2 more shipments" — without this filter, "and 2
+// more shipments" gets treated as a literal (fake) shipment ID. Those 2
+// extra real IDs are simply not present in the email text at all and
+// can't be recovered from this source.
 function splitShipmentIds(str) {
   if (!str) return [];
-  return String(str).split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+  return String(str)
+    .split(',')
+    .map(function (s) { return s.trim(); })
+    .filter(function (s) { return /^FBA[A-Za-z0-9]+$/i.test(s); });
 }
 
 // Fetches the set of shipment IDs Tomahawk actually expects, from the
