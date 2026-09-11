@@ -1354,12 +1354,24 @@ function fcGatepassBadge(shipmentId) {
 // Gatepass number(s) for the shipment detail modal — plain code if only
 // one exists, "<facility>-<code>" pairs (e.g. "E3-GP-26-270528
 // G4-GP8601TOMAHAWKHUB0170") when a shipment has one per facility.
+// Shortens a full gatepass code down to just "GP-<trailing digits>" —
+// e.g. "GP-26-270535" -> "GP-270535", "GP8601TOMAHAWKHUB0175" -> "GP-0175".
+// Full codes are long and inconsistent in shape between facilities;
+// the trailing digit run is the part that's actually distinctive.
+function fcSimplifyGatepassCode(code) {
+  if (!code) return '\u2014';
+  var m = String(code).match(/(\d+)$/);
+  return m ? 'GP-' + m[1] : code;
+}
+
 function fcGatepassNumbers(shipmentId) {
   var ref = String(shipmentId || '').trim();
   var gps = ref ? _fcGatepassMap[ref] : null;
   if (!gps || !gps.length) return '\u2014';
-  if (gps.length === 1) return gps[0].gatepass_code || '\u2014';
-  return gps.map(function (gp) { return (gp.facility || '?') + '-' + (gp.gatepass_code || '\u2014'); }).join('  ');
+  if (gps.length === 1) return fcSimplifyGatepassCode(gps[0].gatepass_code);
+  return gps.map(function (gp) {
+    return (gp.facility || '?') + ' : ' + fcSimplifyGatepassCode(gp.gatepass_code);
+  }).join('<br>');
 }
 
 // Pulls just the date (e.g. "19 Sep 2026") out of the full slot text
@@ -1489,7 +1501,7 @@ function fcOpenDetailModal(shipmentId) {
       '<div><div style="color:var(--muted);font-size:10px;text-transform:uppercase">Dest. FC</div><div style="font-weight:700">' + (r.destination_fc || '\u2014') + '</div></div>' +
       '<div><div style="color:var(--muted);font-size:10px;text-transform:uppercase">SKUs</div><div style="font-weight:700">' + fcFmtNum(r.no_of_skus) + '</div></div>' +
       '<div><div style="color:var(--muted);font-size:10px;text-transform:uppercase">Units</div><div style="font-weight:700">' + fcFmtNum(r.no_of_units) + '</div></div>' +
-      '<div><div style="color:var(--muted);font-size:10px;text-transform:uppercase">Gatepass</div><div style="font-weight:700;font-family:\'DM Mono\',monospace">' + fcGatepassNumbers(shipmentId) + '</div></div>';
+      '<div><div style="color:var(--muted);font-size:10px;text-transform:uppercase">Gatepass</div><div style="font-weight:700;font-family:\'DM Mono\',monospace;line-height:1.5">' + fcGatepassNumbers(shipmentId) + '</div></div>';
   } else {
     summaryEl.innerHTML = '';
   }
