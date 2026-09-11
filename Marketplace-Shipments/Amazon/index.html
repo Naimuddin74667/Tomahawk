@@ -1339,6 +1339,15 @@ function fcFmtDate(iso) {
   } catch (e) { return iso; }
 }
 
+// Boxes/SKUs/Units come back from D1 with a trailing ".0" on whole
+// numbers (SQLite's numeric-to-text conversion) — this just rounds and
+// strips that for display.
+function fcFmtNum(v) {
+  if (v === null || v === undefined || v === '') return '\u2014';
+  var n = parseFloat(v);
+  return isNaN(n) ? v : String(Math.round(n));
+}
+
 function fcMatchesSearch(r, q) {
   return (r.shipment_id || '').toLowerCase().indexOf(q) !== -1 ||
     (r.appointment_id || '').toLowerCase().indexOf(q) !== -1 ||
@@ -1380,9 +1389,9 @@ function fcRender() {
         '<td style="padding:.7rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="fcCopyText(\'' + fcEsc(r.shipment_id) + '\')" title="Click to copy">' + (r.shipment_id || '\u2014') + '</td>' +
         '<td style="padding:.7rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="fcCopyText(\'' + fcEsc(r.appointment_id) + '\')" title="Click to copy">' + (r.appointment_id || '\u2014') + '</td>' +
         '<td style="padding:.7rem 1rem;text-align:center;font-weight:700">' + (r.destination_fc || '\u2014') + '</td>' +
-        '<td style="padding:.7rem 1rem;text-align:center">' + (r.no_of_boxes || '\u2014') + '</td>' +
-        '<td style="padding:.7rem 1rem;text-align:center">' + (r.no_of_skus || '\u2014') + '</td>' +
-        '<td style="padding:.7rem 1rem;text-align:center">' + (r.no_of_units || '\u2014') + '</td>' +
+        '<td style="padding:.7rem 1rem;text-align:center">' + fcFmtNum(r.no_of_boxes) + '</td>' +
+        '<td style="padding:.7rem 1rem;text-align:center">' + fcFmtNum(r.no_of_skus) + '</td>' +
+        '<td style="padding:.7rem 1rem;text-align:center">' + fcFmtNum(r.no_of_units) + '</td>' +
         '<td style="padding:.7rem 1rem;font-size:12px">' + fcExtractApptDate(r.confirmed_slot) + '</td>' +
         '<td style="padding:.7rem 1rem;text-align:center">' + fcGatepassBadge(r.shipment_id) + '</td>' +
         '<td style="padding:.7rem 1rem">' + fcStatusBadge(r) + '</td>' +
