@@ -208,6 +208,10 @@ const ACTION_TIERS = {
   //   Rebuilt from amazon_fc_log on every checkNewAmazonFcEmails run —
   //   see the note above ensureAmazonShipmentsTable in worker.js.
   amazonListShipments: 'viewer_read',
+  // — Amazon shipment line-item detail (Product/ASIN/Total/Barcode per
+  //   shipment), persisted once from BOM7 — powers the FC Appointments
+  //   tab's row-click detail view.
+  amazonListShipmentItems: 'viewer_read',
   // — Amazon gatepass lookup (Gatepass column, matches UC_Gatepass
   //   reference to a shipment ID) — same viewer_read tier as the
   //   Blinkit/Flipkart gatepass proxies.
@@ -1352,6 +1356,20 @@ export default {
             'SELECT * FROM amazon_shipments ORDER BY updated_at DESC LIMIT 500'
           ).all();
           return json({ ok: true, rows: rows.results || [] });
+        }
+
+        // ── AMAZON SHIPMENT ITEMS — per-SKU line items (Product/ASIN/
+        //    Total/Barcode) for one shipment, persisted from BOM7 by
+        //    rebuildAmazonShipments. Powers the FC Appointments tab's
+        //    row-click detail view.
+        if (action === 'amazonListShipmentItems') {
+          await ensureAmazonShipmentItemsTable(env.DB);
+          const shipmentId = (url.searchParams.get('shipment_id') || '').trim();
+          if (!shipmentId) return json({ ok: false, error: 'shipment_id required' }, 400);
+          const rows = await env.DB.prepare(
+            'SELECT product, asin, total, barcode FROM amazon_shipment_items WHERE shipment_id = ? ORDER BY id'
+          ).bind(shipmentId).all();
+          return json({ ok: true, items: rows.results || [] });
         }
 
         // ── AMAZON FC APPOINTMENT WATCHER — set a manual status (e.g.
@@ -3016,6 +3034,25 @@ async function ensureAmazonShipmentsTable(DB) {
   )`).run();
 }
 
+// Per-SKU line items (Product / ASIN / Total / Barcode) for a shipment's
+// row-click detail view — sourced from BOM7 (see getAmazonExpectedShipmentsPayload
+// in the GAS bridge) and persisted once per shipment rather than
+// re-fetched live on every click, since the source sheet isn't expected
+// to change after the fact.
+async function ensureAmazonShipmentItemsTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS amazon_shipment_items (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    shipment_id  TEXT,
+    product      TEXT,
+    asin         TEXT,
+    total        TEXT,
+    barcode      TEXT
+  )`).run();
+  await DB.prepare(
+    `CREATE INDEX IF NOT EXISTS idx_amazon_shipment_items_shipment_id ON amazon_shipment_items(shipment_id)`
+  ).run();
+}
+
 // Splits "FBA15MBWY7C5, FBA15MBX58GG, FBA15MBXRJ3Y" into trimmed,
 // non-empty tokens — and drops anything that isn't shaped like a real
 // FBA shipment ID. Needed because for large appointments Amazon's own
@@ -3070,7 +3107,8 @@ async function fetchAmazonExpectedShipments(env) {
       if (!r.shipment_id) return;
       detailMap.set(String(r.shipment_id).trim(), {
         no_of_skus: (typeof r.no_of_skus === 'number') ? r.no_of_skus : null,
-        no_of_units: (typeof r.no_of_units === 'number') ? r.no_of_units : null
+        no_of_units: (typeof r.no_of_units === 'number') ? r.no_of_units : null,
+        items: Array.isArray(r.items) ? r.items : null
       });
     });
     return detailMap;
@@ -3090,6 +3128,7 @@ async function fetchAmazonExpectedShipments(env) {
 // mass-purge off a transient error.
 async function rebuildAmazonShipments(env) {
   await ensureAmazonShipmentsTable(env.DB);
+  await ensureAmazonShipmentItemsTable(env.DB);
   const expectedDetails = await fetchAmazonExpectedShipments(env);
 
   const rows = await env.DB.prepare(
@@ -3131,6 +3170,19 @@ async function rebuildAmazonShipments(env) {
         noOfUnits, r.appointment_status, r.confirmed_slot, r.reporting_time,
         r.email_date, r.gmail_msg_id, r.manual_status
       ).run();
+
+      // Persist the per-SKU line items once per shipment (delete + re-insert
+      // is simplest/cheap at this volume, and self-heals if the sheet's
+      // block ever legitimately changes before the appointment is over).
+      if (sheetDetail && Array.isArray(sheetDetail.items)) {
+        await ensureAmazonShipmentItemsTable(env.DB);
+        await env.DB.prepare('DELETE FROM amazon_shipment_items WHERE shipment_id = ?').bind(shipmentId).run();
+        for (const item of sheetDetail.items) {
+          await env.DB.prepare(
+            'INSERT INTO amazon_shipment_items (shipment_id, product, asin, total, barcode) VALUES (?, ?, ?, ?, ?)'
+          ).bind(shipmentId, item.product || null, item.asin || null, item.total, item.barcode || null).run();
+        }
+      }
     }
   }
 
@@ -3143,6 +3195,10 @@ async function rebuildAmazonShipments(env) {
     const placeholders = idsArr.map(() => '?').join(',');
     await env.DB.prepare(
       `DELETE FROM amazon_shipments WHERE shipment_id NOT IN (${placeholders})`
+    ).bind(...idsArr).run();
+    await ensureAmazonShipmentItemsTable(env.DB);
+    await env.DB.prepare(
+      `DELETE FROM amazon_shipment_items WHERE shipment_id NOT IN (${placeholders})`
     ).bind(...idsArr).run();
   }
 }
