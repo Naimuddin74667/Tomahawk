@@ -3222,15 +3222,32 @@ async function rebuildAmazonShipments(env) {
           // actually uses) — fall back to matching on the raw product
           // name itself for the cases where seller SKU and Uniware SKU
           // happen to be identical strings and no uc_sku was resolved.
+          //
+          // A bundle master SKU is never gatepassed as itself — its
+          // physical components are — so when bundle_children is present,
+          // show the child SKUs pipe-joined in place of the (always-empty)
+          // bundle SKU, and each child's own Sent Qty pipe-joined in the
+          // same order, instead of a single lookup that would never match.
+          let displayUcSku = item.uc_sku;
           let sentQty = null;
-          if (skuTotals) {
+
+          if (Array.isArray(item.bundle_children) && item.bundle_children.length) {
+            displayUcSku = item.bundle_children.join(' | ');
+            const childQtys = item.bundle_children.map(child => {
+              if (!skuTotals) return '\u2014';
+              const val = skuTotals.get(shipmentId + '|' + child);
+              return (typeof val === 'number') ? String(val) : '\u2014';
+            });
+            sentQty = childQtys.join(' | ');
+          } else if (skuTotals) {
             const lookupSku = item.uc_sku || item.product;
             const val = skuTotals.get(shipmentId + '|' + lookupSku);
             if (typeof val === 'number') sentQty = val;
           }
+
           await env.DB.prepare(
             'INSERT INTO amazon_shipment_items (shipment_id, product, asin, total, barcode, uc_sku, sent_qty) VALUES (?, ?, ?, ?, ?, ?, ?)'
-          ).bind(shipmentId, item.product || null, item.asin || null, item.total, item.barcode || null, item.uc_sku || null, sentQty).run();
+          ).bind(shipmentId, item.product || null, item.asin || null, item.total, item.barcode || null, displayUcSku || null, sentQty).run();
         }
       }
     }
