@@ -1367,7 +1367,7 @@ export default {
           const shipmentId = (url.searchParams.get('shipment_id') || '').trim();
           if (!shipmentId) return json({ ok: false, error: 'shipment_id required' }, 400);
           const rows = await env.DB.prepare(
-            'SELECT product, asin, total, barcode FROM amazon_shipment_items WHERE shipment_id = ? ORDER BY id'
+            'SELECT product, asin, total, barcode, uc_sku, sent_qty FROM amazon_shipment_items WHERE shipment_id = ? ORDER BY id'
           ).bind(shipmentId).all();
           return json({ ok: true, items: rows.results || [] });
         }
@@ -3051,6 +3051,11 @@ async function ensureAmazonShipmentItemsTable(DB) {
   await DB.prepare(
     `CREATE INDEX IF NOT EXISTS idx_amazon_shipment_items_shipment_id ON amazon_shipment_items(shipment_id)`
   ).run();
+  // Added later than the original table — ALTER TABLE ADD COLUMN has no
+  // "IF NOT EXISTS" in SQLite, so just swallow the error on repeat runs
+  // once the columns already exist.
+  try { await DB.prepare(`ALTER TABLE amazon_shipment_items ADD COLUMN uc_sku TEXT`).run(); } catch (e) {}
+  try { await DB.prepare(`ALTER TABLE amazon_shipment_items ADD COLUMN sent_qty TEXT`).run(); } catch (e) {}
 }
 
 // Splits "FBA15MBWY7C5, FBA15MBX58GG, FBA15MBXRJ3Y" into trimmed,
@@ -3067,6 +3072,40 @@ function splitShipmentIds(str) {
     .split(',')
     .map(function (s) { return s.trim(); })
     .filter(function (s) { return /^FBA[A-Za-z0-9]+$/i.test(s); });
+}
+
+// Fetches per-SKU gatepass quantity totals — see the `sku_totals` note
+// on getAmazonGatepassPayload() in the GAS bridge. Keyed by
+// "<shipment_id>|<uniware_sku>" -> summed quantity across every
+// matching gatepass row (E3 + G4 combined, when a SKU is split).
+// Returns null on failure (skip the override this run, same fallback
+// posture as fetchAmazonExpectedShipments).
+async function fetchAmazonGatepassSkuTotals(env) {
+  try {
+    const cache = caches.default;
+    const cacheKey = new Request('https://cache.internal/amazon-gatepass-sku-totals-v1');
+    const cached = await cache.match(cacheKey);
+    let text;
+    if (cached) {
+      text = await cached.text();
+    } else {
+      const res = await fetch(SA_UC_GAS_URL + '?type=amazonGatepass');
+      if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
+      text = await res.text();
+      await cache.put(cacheKey, new Response(text, { headers: { 'Cache-Control': 'public, max-age=300' } }));
+    }
+    const data = JSON.parse(text);
+    if (!data || !data.ok) throw new Error((data && data.error) || 'Unexpected response');
+    const map = new Map();
+    (data.sku_totals || []).forEach(r => {
+      if (!r.reference || !r.sku_code) return;
+      map.set(String(r.reference).trim() + '|' + String(r.sku_code).trim(), r.quantity);
+    });
+    return map;
+  } catch (err) {
+    console.error('fetchAmazonGatepassSkuTotals failed, skipping per-SKU Sent Qty this run:', err.message);
+    return null;
+  }
 }
 
 // Fetches per-shipment detail Tomahawk actually expects, from the BOM7
@@ -3130,6 +3169,7 @@ async function rebuildAmazonShipments(env) {
   await ensureAmazonShipmentsTable(env.DB);
   await ensureAmazonShipmentItemsTable(env.DB);
   const expectedDetails = await fetchAmazonExpectedShipments(env);
+  const skuTotals = await fetchAmazonGatepassSkuTotals(env);
 
   const rows = await env.DB.prepare(
     `SELECT * FROM amazon_fc_log ORDER BY COALESCE(email_date, detected_at) ASC`
@@ -3178,9 +3218,19 @@ async function rebuildAmazonShipments(env) {
         await ensureAmazonShipmentItemsTable(env.DB);
         await env.DB.prepare('DELETE FROM amazon_shipment_items WHERE shipment_id = ?').bind(shipmentId).run();
         for (const item of sheetDetail.items) {
+          // Sent Qty is looked up by Uniware SKU (the join key UC_Gatepass
+          // actually uses) — fall back to matching on the raw product
+          // name itself for the cases where seller SKU and Uniware SKU
+          // happen to be identical strings and no uc_sku was resolved.
+          let sentQty = null;
+          if (skuTotals) {
+            const lookupSku = item.uc_sku || item.product;
+            const val = skuTotals.get(shipmentId + '|' + lookupSku);
+            if (typeof val === 'number') sentQty = val;
+          }
           await env.DB.prepare(
-            'INSERT INTO amazon_shipment_items (shipment_id, product, asin, total, barcode) VALUES (?, ?, ?, ?, ?)'
-          ).bind(shipmentId, item.product || null, item.asin || null, item.total, item.barcode || null).run();
+            'INSERT INTO amazon_shipment_items (shipment_id, product, asin, total, barcode, uc_sku, sent_qty) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          ).bind(shipmentId, item.product || null, item.asin || null, item.total, item.barcode || null, item.uc_sku || null, sentQty).run();
         }
       }
     }
