@@ -946,6 +946,37 @@
 </div>
 <script>document.getElementById('ledgerItemsModal').addEventListener('click',function(e){if(e.target===this)closeLedgerItemsModal();});</script>
 
+<!-- FC SHIPMENT DETAIL MODAL — read-only per-SKU breakdown (Product /
+     Asin NO / Total / Barcode) for one shipment, opened by clicking a
+     row on the FC Appointments tab. Data comes from amazon_shipment_items
+     (persisted once from BOM7, not re-fetched live per click). -->
+<div class="modal-bg" id="fcItemsModal">
+  <div class="modal" style="width:640px;max-height:90vh;overflow-y:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem">
+      <div class="modal-title" style="margin-bottom:0">&#128230; Shipment Detail &mdash; <span id="fc-di-shipment-id" style="color:var(--accent)"></span></div>
+      <button onclick="fcCloseDetailModal()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
+    </div>
+    <div id="fc-di-summary" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;background:var(--bg-raised);border:1px solid var(--border);border-radius:6px;padding:.7rem .9rem;margin-bottom:1rem;font-size:12px"></div>
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead>
+        <tr>
+          <th style="padding:.5rem .6rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Product</th>
+          <th style="padding:.5rem .6rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Asin NO</th>
+          <th style="padding:.5rem .6rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Total</th>
+          <th style="padding:.5rem .6rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Barcode</th>
+        </tr>
+      </thead>
+      <tbody id="fc-di-body">
+        <tr><td colspan="4" style="padding:2rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+      </tbody>
+    </table>
+    <div class="btn-row" style="margin-top:1rem">
+      <button class="btn btn-primary" onclick="fcCloseDetailModal()">Close</button>
+    </div>
+  </div>
+</div>
+<script>document.getElementById('fcItemsModal').addEventListener('click',function(e){if(e.target===this)fcCloseDetailModal();});</script>
+
 <!-- LEDGER SETTINGS MODAL — password-gated Delete All (pincode mapping retired — warehouse is read directly off the PDF) -->
 <div class="modal-bg" id="ledgerSettingsModal">
   <div class="modal" style="width:420px">
@@ -1382,12 +1413,12 @@ function fcRender() {
     tbody.innerHTML = pageRows.map(function (r) {
       var canEdit = window.TM_CAN_EDIT;
       var actionsHtml = canEdit
-        ? ('<button class="btn btn-secondary btn-sm" style="width:auto;padding:3px 8px;font-size:10px" onclick="fcToggleCancelled(\'' + fcEsc(r.appointment_id) + '\')">' +
+        ? ('<button class="btn btn-secondary btn-sm" style="width:auto;padding:3px 8px;font-size:10px" onclick="event.stopPropagation();fcToggleCancelled(\'' + fcEsc(r.appointment_id) + '\')">' +
            (fcIsCancelled(r) ? 'Unmark' : 'Cancel') + '</button>')
         : '';
-      return '<tr style="border-bottom:1px solid var(--border)">' +
-        '<td style="padding:.7rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="fcCopyText(\'' + fcEsc(r.shipment_id) + '\')" title="Click to copy">' + (r.shipment_id || '\u2014') + '</td>' +
-        '<td style="padding:.7rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="fcCopyText(\'' + fcEsc(r.appointment_id) + '\')" title="Click to copy">' + (r.appointment_id || '\u2014') + '</td>' +
+      return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="fcOpenDetailModal(\'' + fcEsc(r.shipment_id) + '\')">' +
+        '<td style="padding:.7rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="event.stopPropagation();fcCopyText(\'' + fcEsc(r.shipment_id) + '\')" title="Click to copy">' + (r.shipment_id || '\u2014') + '</td>' +
+        '<td style="padding:.7rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="event.stopPropagation();fcCopyText(\'' + fcEsc(r.appointment_id) + '\')" title="Click to copy">' + (r.appointment_id || '\u2014') + '</td>' +
         '<td style="padding:.7rem 1rem;text-align:center;font-weight:700">' + (r.destination_fc || '\u2014') + '</td>' +
         '<td style="padding:.7rem 1rem;text-align:center">' + fcFmtNum(r.no_of_boxes) + '</td>' +
         '<td style="padding:.7rem 1rem;text-align:center">' + fcFmtNum(r.no_of_skus) + '</td>' +
@@ -1434,6 +1465,53 @@ function fcToggleCancelled(appointmentId) {
     toast(nextStatus ? 'Marked cancelled' : 'Unmarked cancelled', 'ok');
     fcLoad();
   }).catch(function (err) { toast('Failed: ' + (err.message || ''), 'err'); });
+}
+
+// Row-click detail view — Product/Asin NO/Total/Barcode for one
+// shipment, from amazon_shipment_items (persisted once from BOM7).
+function fcOpenDetailModal(shipmentId) {
+  if (!shipmentId) return;
+  document.getElementById('fc-di-shipment-id').textContent = shipmentId;
+  var r = _fcRows.find(function (row) { return row.shipment_id === shipmentId; });
+  var summaryEl = document.getElementById('fc-di-summary');
+  if (r) {
+    summaryEl.innerHTML =
+      '<div><div style="color:var(--muted);font-size:10px;text-transform:uppercase">Dest. FC</div><div style="font-weight:700">' + (r.destination_fc || '\u2014') + '</div></div>' +
+      '<div><div style="color:var(--muted);font-size:10px;text-transform:uppercase">SKUs</div><div style="font-weight:700">' + fcFmtNum(r.no_of_skus) + '</div></div>' +
+      '<div><div style="color:var(--muted);font-size:10px;text-transform:uppercase">Units</div><div style="font-weight:700">' + fcFmtNum(r.no_of_units) + '</div></div>';
+  } else {
+    summaryEl.innerHTML = '';
+  }
+
+  var tbody = document.getElementById('fc-di-body');
+  tbody.innerHTML = '<tr><td colspan="4" style="padding:2rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+  document.getElementById('fcItemsModal').classList.add('show');
+
+  fetch(getWorkerBase() + '?action=amazonListShipmentItems&shipment_id=' + encodeURIComponent(shipmentId))
+    .then(function (res) { return res.json(); })
+    .then(function (data) {
+      if (!data || !data.ok) throw new Error((data && data.error) || 'Load failed');
+      var items = data.items || [];
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="4" style="padding:2rem;text-align:center;color:var(--muted);font-size:11px">No item detail found for this shipment.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = items.map(function (it) {
+        return '<tr style="border-bottom:1px solid var(--border)">' +
+          '<td style="padding:.5rem .6rem">' + (it.product || '\u2014') + '</td>' +
+          '<td style="padding:.5rem .6rem;font-family:\'DM Mono\',monospace">' + (it.asin || '\u2014') + '</td>' +
+          '<td style="padding:.5rem .6rem;text-align:center">' + fcFmtNum(it.total) + '</td>' +
+          '<td style="padding:.5rem .6rem;font-family:\'DM Mono\',monospace">' + (it.barcode || '\u2014') + '</td>' +
+          '</tr>';
+      }).join('');
+    })
+    .catch(function (err) {
+      tbody.innerHTML = '<tr><td colspan="4" style="padding:2rem;text-align:center;color:#e05555;font-size:11px">Failed to load: ' + (err.message || '') + '</td></tr>';
+    });
+}
+
+function fcCloseDetailModal() {
+  document.getElementById('fcItemsModal').classList.remove('show');
 }
 
 var _ledgerRows = [];
