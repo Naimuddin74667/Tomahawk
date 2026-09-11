@@ -965,10 +965,11 @@
           <th style="padding:.5rem .6rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Asin NO</th>
           <th style="padding:.5rem .6rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Barcode</th>
           <th style="padding:.5rem .6rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Total Qty</th>
+          <th style="padding:.5rem .6rem;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Sent Qty</th>
         </tr>
       </thead>
       <tbody id="fc-di-body">
-        <tr><td colspan="4" style="padding:2rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+        <tr><td colspan="5" style="padding:2rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
       </tbody>
     </table>
     <div class="btn-row" style="margin-top:1rem">
@@ -1523,7 +1524,7 @@ function fcOpenDetailModal(shipmentId) {
   }
 
   var tbody = document.getElementById('fc-di-body');
-  tbody.innerHTML = '<tr><td colspan="4" style="padding:2rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="5" style="padding:2rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
   document.getElementById('fcItemsModal').classList.add('show');
 
   fetch(getWorkerBase() + '?action=amazonListShipmentItems&shipment_id=' + encodeURIComponent(shipmentId))
@@ -1532,20 +1533,23 @@ function fcOpenDetailModal(shipmentId) {
       if (!data || !data.ok) throw new Error((data && data.error) || 'Load failed');
       var items = data.items || [];
       if (!items.length) {
-        tbody.innerHTML = '<tr><td colspan="4" style="padding:2rem;text-align:center;color:var(--muted);font-size:11px">No item detail found for this shipment.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" style="padding:2rem;text-align:center;color:var(--muted);font-size:11px">No item detail found for this shipment.</td></tr>';
         return;
       }
       tbody.innerHTML = items.map(function (it) {
         return '<tr style="border-bottom:1px solid var(--border)">' +
-          '<td style="padding:.5rem .6rem">' + (it.product || '\u2014') + '</td>' +
+          '<td style="padding:.5rem .6rem">' + (it.product || '\u2014') +
+            (it.uc_sku ? '<div style="color:var(--muted);font-size:10.5px;margin-top:2px">' + it.uc_sku + '</div>' : '') +
+          '</td>' +
           '<td style="padding:.5rem .6rem;font-family:\'DM Mono\',monospace">' + (it.asin || '\u2014') + '</td>' +
           '<td style="padding:.5rem .6rem;font-family:\'DM Mono\',monospace">' + (it.barcode || '\u2014') + '</td>' +
           '<td style="padding:.5rem .6rem;text-align:center">' + fcFmtNum(it.total) + '</td>' +
+          '<td style="padding:.5rem .6rem;text-align:center">' + fcFmtNum(it.sent_qty) + '</td>' +
           '</tr>';
       }).join('');
     })
     .catch(function (err) {
-      tbody.innerHTML = '<tr><td colspan="4" style="padding:2rem;text-align:center;color:#e05555;font-size:11px">Failed to load: ' + (err.message || '') + '</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="5" style="padding:2rem;text-align:center;color:#e05555;font-size:11px">Failed to load: ' + (err.message || '') + '</td></tr>';
     });
 }
 
