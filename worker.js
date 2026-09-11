@@ -3032,20 +3032,27 @@ function splitShipmentIds(str) {
     .filter(function (s) { return /^FBA[A-Za-z0-9]+$/i.test(s); });
 }
 
-// Fetches the set of shipment IDs Tomahawk actually expects, from the
-// BOM7 "Amazon Year 2026" sheet (row 3638 onward) — see
-// getAmazonExpectedShipmentsPayload() in the GAS bridge. This is a GATE,
-// not a data source: a shipment only gets tracked in amazon_shipments if
-// it's BOTH in this sheet AND has a matching FC Appointment email. Every
-// actual field (date, dest FC, boxes, etc.) still comes from the email
-// itself, per explicit instruction — the sheet's own recorded date is
-// never used. Returns null (meaning "couldn't fetch, don't filter this
+// Fetches per-shipment detail Tomahawk actually expects, from the BOM7
+// "Amazon Year 2026" sheet (row 3638 onward) — see
+// getAmazonExpectedShipmentsPayload() in the GAS bridge. Two jobs:
+//   1. GATE — a shipment only gets tracked in amazon_shipments if it's
+//      BOTH in this sheet AND has a matching FC Appointment email.
+//   2. Real per-shipment no_of_skus/no_of_units — Amazon's email only
+//      ever gives an appointment-level total shared across every
+//      shipment ID under that appointment; this sheet has each
+//      shipment's own product block, so its counts are used instead
+//      wherever available. Boxes has no per-shipment breakdown in this
+//      sheet, so it's left alone (stays the email's appointment total).
+//      Every other field (date, dest FC, etc.) still comes from the
+//      email, per explicit instruction.
+// Returns null (meaning "couldn't fetch, don't filter or override this
 // run") rather than throwing, so a transient GAS/sheet hiccup doesn't
-// silently drop real shipments — it just skips the gate for that run.
-async function fetchAmazonExpectedShipmentIds(env) {
+// silently drop or corrupt real shipments — it just skips the gate/
+// override for that run and falls back to email-only values.
+async function fetchAmazonExpectedShipments(env) {
   try {
     const cache = caches.default;
-    const cacheKey = new Request('https://cache.internal/amazon-expected-shipments-v1');
+    const cacheKey = new Request('https://cache.internal/amazon-expected-shipments-v2');
     const cached = await cache.match(cacheKey);
     let text;
     if (cached) {
@@ -3058,18 +3065,24 @@ async function fetchAmazonExpectedShipmentIds(env) {
     }
     const data = JSON.parse(text);
     if (!data || !data.ok) throw new Error((data && data.error) || 'Unexpected response');
-    const set = new Set();
-    (data.records || []).forEach(r => { if (r.shipment_id) set.add(String(r.shipment_id).trim()); });
-    return set;
+    const detailMap = new Map();
+    (data.records || []).forEach(r => {
+      if (!r.shipment_id) return;
+      detailMap.set(String(r.shipment_id).trim(), {
+        no_of_skus: (typeof r.no_of_skus === 'number') ? r.no_of_skus : null,
+        no_of_units: (typeof r.no_of_units === 'number') ? r.no_of_units : null
+      });
+    });
+    return detailMap;
   } catch (err) {
-    console.error('fetchAmazonExpectedShipmentIds failed, skipping the sheet gate this run:', err.message);
+    console.error('fetchAmazonExpectedShipments failed, skipping the sheet gate/override this run:', err.message);
     return null;
   }
 }
 
 // Full rebuild of amazon_shipments from amazon_fc_log — see the note
 // above ensureAmazonShipmentsTable for why this runs every time rather
-// than being a one-off migration. Gated by fetchAmazonExpectedShipmentIds
+// than being a one-off migration. Gated by fetchAmazonExpectedShipments
 // (see its own comment): a shipment_id not in that sheet is skipped
 // entirely, and any that were previously tracked but have since dropped
 // out of the sheet get purged too — unless the sheet fetch itself failed,
@@ -3077,7 +3090,7 @@ async function fetchAmazonExpectedShipmentIds(env) {
 // mass-purge off a transient error.
 async function rebuildAmazonShipments(env) {
   await ensureAmazonShipmentsTable(env.DB);
-  const expectedIds = await fetchAmazonExpectedShipmentIds(env);
+  const expectedDetails = await fetchAmazonExpectedShipments(env);
 
   const rows = await env.DB.prepare(
     `SELECT * FROM amazon_fc_log ORDER BY COALESCE(email_date, detected_at) ASC`
@@ -3085,7 +3098,14 @@ async function rebuildAmazonShipments(env) {
   for (const r of (rows.results || [])) {
     const ids = splitShipmentIds(r.shipment_ids);
     for (const shipmentId of ids) {
-      if (expectedIds && !expectedIds.has(shipmentId)) continue; // in the email, but not in the sheet — not one of ours
+      if (expectedDetails && !expectedDetails.has(shipmentId)) continue; // in the email, but not in the sheet — not one of ours
+
+      // Prefer the sheet's real per-shipment SKU/unit counts over the
+      // email's appointment-level total, when we have them.
+      const sheetDetail = expectedDetails ? expectedDetails.get(shipmentId) : null;
+      const noOfSkus = (sheetDetail && sheetDetail.no_of_skus != null) ? sheetDetail.no_of_skus : r.no_of_skus;
+      const noOfUnits = (sheetDetail && sheetDetail.no_of_units != null) ? sheetDetail.no_of_units : r.no_of_units;
+
       await env.DB.prepare(`
         INSERT INTO amazon_shipments (
           shipment_id, appointment_id, destination_fc, no_of_boxes, no_of_skus,
@@ -3107,8 +3127,8 @@ async function rebuildAmazonShipments(env) {
           manual_status = excluded.manual_status,
           updated_at = datetime('now')
       `).bind(
-        shipmentId, r.appointment_id, r.destination_fc, r.no_of_boxes, r.no_of_skus,
-        r.no_of_units, r.appointment_status, r.confirmed_slot, r.reporting_time,
+        shipmentId, r.appointment_id, r.destination_fc, r.no_of_boxes, noOfSkus,
+        noOfUnits, r.appointment_status, r.confirmed_slot, r.reporting_time,
         r.email_date, r.gmail_msg_id, r.manual_status
       ).run();
     }
@@ -3118,8 +3138,8 @@ async function rebuildAmazonShipments(env) {
   // when we actually have a fresh list to check against, and only when
   // that list isn't suspiciously empty (an empty sheet read is more
   // likely a bug than a real "nothing expected" state).
-  if (expectedIds && expectedIds.size > 0) {
-    const idsArr = Array.from(expectedIds);
+  if (expectedDetails && expectedDetails.size > 0) {
+    const idsArr = Array.from(expectedDetails.keys());
     const placeholders = idsArr.map(() => '?').join(',');
     await env.DB.prepare(
       `DELETE FROM amazon_shipments WHERE shipment_id NOT IN (${placeholders})`
