@@ -1237,10 +1237,34 @@ function fcCheckEmailsNow() {
 function fcIsCancelled(r) { return r.manual_status === 'cancelled'; }
 function fcIsConfirmed(r) { return !fcIsCancelled(r) && /confirm/i.test(r.appointment_status || ''); }
 
+// Computed lifecycle status — a strict flow, not independent flags:
+//   Created -> Under Packing -> Ready to Dispatch -> Out For Delivery / Overdue -> (later) Inwarded
+// Cancelled overrides all of it. Driven entirely by Gatepass state + the
+// appointment date, same inputs already used for the Gatepass column.
 function fcStatusBadge(r) {
   if (fcIsCancelled(r)) return '<span style="color:#ff8080;font-weight:700">Cancelled</span>';
-  if (fcIsConfirmed(r)) return '<span style="color:#6dc87a;font-weight:700">Confirmed</span>';
-  return '<span style="color:var(--muted);font-weight:700">' + (r.appointment_status || '\u2014') + '</span>';
+
+  var ref = String(r.shipment_id || '').trim();
+  var gps = ref ? _fcGatepassMap[ref] : null;
+  var hasGatepass = !!(gps && gps.length);
+  var allDone = hasGatepass && gps.every(function (gp) { return gp.type === 'NON_RETURNABLE' && gp.status === 'CLOSED'; });
+
+  if (!hasGatepass) return '<span style="color:var(--muted);font-weight:700">Created</span>';
+  if (!allDone) return '<span style="color:#5b9fe3;font-weight:700">Under Packing</span>';
+
+  // Gatepass fully done — where we are now depends on the appointment date.
+  var apptDateStr = fcExtractApptDate(r.confirmed_slot);
+  var apptDate = new Date(apptDateStr);
+  if (isNaN(apptDate.getTime())) {
+    return '<span style="color:var(--accent);font-weight:700">Ready to Dispatch</span>';
+  }
+  apptDate.setHours(0, 0, 0, 0);
+  var today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  if (apptDate.getTime() > today.getTime()) return '<span style="color:var(--accent);font-weight:700">Ready to Dispatch</span>';
+  if (apptDate.getTime() === today.getTime()) return '<span style="color:#6dc87a;font-weight:700">Out For Delivery</span>';
+  return '<span style="color:#ff8080;font-weight:700">Overdue</span>';
 }
 
 // Gatepass column — matches UC_Gatepass's reference field to this
