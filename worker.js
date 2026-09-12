@@ -3760,7 +3760,15 @@ async function checkNewAmazonFcEmails(env) {
   await ensureAmazonFcTable(env.DB);
   const accessToken = await getGmailAccessToken(env);
 
-  const query = encodeURIComponent('label:Amazon "FC Appointment Confirmation"');
+  // Amazon sends a DIFFERENT subject/heading for a reschedule than for
+  // the original confirmation ("FC Appointment Reschedule" vs "FC
+  // Appointment Confirmation") — unlike Blinkit, which reuses one email
+  // type for both. Catching both here means a reschedule just becomes
+  // its own new row (deduped by gmail_msg_id, same as everything else),
+  // and rebuildAmazonShipments's "latest wins" resync already picks up
+  // its updated slot/reporting-time automatically — no extra logic
+  // needed beyond finding the email at all.
+  const query = encodeURIComponent('label:Amazon ("FC Appointment Confirmation" OR "FC Appointment Reschedule")');
   let messages = [];
   let pageToken = '';
   for (let page = 0; page < 10; page++) {
