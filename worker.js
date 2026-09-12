@@ -3230,68 +3230,92 @@ async function rebuildAmazonShipments(env) {
         await ensureAmazonShipmentItemsTable(env.DB);
         await env.DB.prepare('DELETE FROM amazon_shipment_items WHERE shipment_id = ?').bind(shipmentId).run();
 
-        // Tracks which gatepass SKU lines have already been matched to a
-        // BOM7 item for THIS shipment, so the quantity-match fallback
-        // below never claims the same gatepass line for two different
-        // items.
-        const claimedSkus = new Set();
+        // A mutable per-shipment pool of remaining gatepass quantity,
+        // keyed by Uniware SKU. The SAME SKU can be both a standalone
+        // product AND a bundle's component (e.g. a drill sold alone AND
+        // inside a "set") — UC_Gatepass only ever has ONE combined
+        // quantity line for that SKU, so it has to be split rather than
+        // letting every consumer claim the full total independently.
+        // Simple (non-bundle) items draw from this pool FIRST, in BOM7
+        // order; bundle items draw whatever's left afterward, scaled by
+        // each component's recipe qty-per-bundle.
+        const pool = new Map();
+        if (skuTotals) {
+          (skuTotals.byShipment.get(shipmentId) || []).forEach(c => {
+            pool.set(c.sku, (pool.get(c.sku) || 0) + c.quantity);
+          });
+        }
+        const usedForInference = new Set();
+        const results = new Map(); // item index -> { displayUcSku, sentQty, sentQtyInferred, matchedSku }
 
-        for (const item of sheetDetail.items) {
-          // Sent Qty is looked up by Uniware SKU (the join key UC_Gatepass
-          // actually uses) — fall back to matching on the raw product
-          // name itself for the cases where seller SKU and Uniware SKU
-          // happen to be identical strings and no uc_sku was resolved.
-          //
-          // A bundle master SKU is never gatepassed as itself — its
-          // physical components are — so when bundle_children is present,
-          // show the child SKUs pipe-joined in place of the (always-empty)
-          // bundle SKU, and each child's own Sent Qty pipe-joined in the
-          // same order, instead of a single lookup that would never match.
-          let displayUcSku = item.uc_sku;
-          let sentQty = null;
-          let sentQtyInferred = false;
-          let matchedSku = null;
+        // PASS 1 — simple items.
+        sheetDetail.items.forEach((item, idx) => {
+          if (Array.isArray(item.bundle_children) && item.bundle_children.length) return; // pass 2 handles these
 
-          if (Array.isArray(item.bundle_children) && item.bundle_children.length) {
-            displayUcSku = item.bundle_children.join(' | ');
-            const childQtys = item.bundle_children.map(child => {
-              if (!skuTotals) return '\u2014';
-              const val = skuTotals.exact.get(shipmentId + '|' + child);
-              if (typeof val === 'number') { claimedSkus.add(child); return String(val); }
-              return '\u2014';
-            });
-            sentQty = childQtys.join(' | ');
-          } else if (skuTotals) {
-            const lookupSku = item.uc_sku || item.product;
-            const val = skuTotals.exact.get(shipmentId + '|' + lookupSku);
-            if (typeof val === 'number') {
-              sentQty = val;
-              claimedSkus.add(lookupSku);
-            } else if (typeof item.total === 'number') {
-              // Fallback: the warehouse sometimes gatepasses a SKU
-              // substitution/conversion instead of the resolved uc_sku
-              // (e.g. seller SKU maps to "EPS-B08-Paint-Sparyer" but the
-              // actual gatepass line is "TEPS-B600" for the same
-              // physical product). Look for any UNCLAIMED gatepass line
-              // for this shipment whose quantity exactly matches this
-              // item's own Total Qty, and treat that as the match —
-              // flagged as inferred (not a confirmed SKU match), with
-              // the actual matched SKU stored so the frontend can show
-              // it on hover.
-              const candidates = skuTotals.byShipment.get(shipmentId) || [];
-              const match = candidates.find(c => !claimedSkus.has(c.sku) && c.quantity === item.total);
-              if (match) {
-                sentQty = match.quantity;
-                sentQtyInferred = true;
-                matchedSku = match.sku;
-                claimedSkus.add(match.sku);
+          let sentQty = null, inferred = false, matchedSku = null;
+          const lookupSku = item.uc_sku || item.product;
+          const available = pool.get(lookupSku) || 0;
+
+          if (available > 0) {
+            const take = (typeof item.total === 'number') ? Math.min(item.total, available) : available;
+            sentQty = take;
+            pool.set(lookupSku, available - take);
+          } else if (typeof item.total === 'number') {
+            // Fallback: the warehouse sometimes gatepasses a SKU
+            // substitution/conversion instead of the resolved uc_sku
+            // (e.g. seller SKU maps to "EPS-B08-Paint-Sparyer" but the
+            // actual gatepass line is "TEPS-B600" for the same physical
+            // product). Look for any remaining pool entry not already
+            // used for a prior inference whose quantity exactly matches
+            // this item's own Total Qty, and treat that as the match —
+            // flagged as inferred, with the matched SKU stored for the
+            // frontend to show on hover.
+            for (const [sku, qty] of pool.entries()) {
+              if (usedForInference.has(sku) || qty <= 0) continue;
+              if (qty === item.total) {
+                sentQty = qty;
+                inferred = true;
+                matchedSku = sku;
+                pool.set(sku, 0);
+                usedForInference.add(sku);
+                break;
               }
             }
           }
 
+          results.set(idx, { displayUcSku: item.uc_sku, sentQty, sentQtyInferred: inferred, matchedSku });
+        });
+
+        // PASS 2 — bundle items, from whatever's left in the pool.
+        sheetDetail.items.forEach((item, idx) => {
+          if (!(Array.isArray(item.bundle_children) && item.bundle_children.length)) return;
+
+          const displayUcSku = item.bundle_children.map(c => c.sku).join(' | ');
+          const childQtys = item.bundle_children.map(child => {
+            const available = pool.get(child.sku) || 0;
+            const needed = (typeof item.total === 'number') ? item.total * (child.qty || 1) : available;
+            const take = Math.min(needed, available);
+            if (take > 0) {
+              pool.set(child.sku, available - take);
+              return String(take);
+            }
+            return '\u2014';
+          });
+
+          results.set(idx, { displayUcSku, sentQty: childQtys.join(' | '), sentQtyInferred: false, matchedSku: null });
+        });
+
+        // Persist in original BOM7 order.
+        for (let idx = 0; idx < sheetDetail.items.length; idx++) {
+          const item = sheetDetail.items[idx];
+          const res = results.get(idx) || {};
           await env.DB.prepare(
             'INSERT INTO amazon_shipment_items (shipment_id, product, asin, total, barcode, uc_sku, sent_qty, sent_qty_inferred, matched_sku) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-          ).bind(shipmentId, item.product || null, item.asin || null, item.total, item.barcode || null, displayUcSku || null, sentQty, sentQtyInferred ? 1 : 0, matchedSku).run();
+          ).bind(
+            shipmentId, item.product || null, item.asin || null, item.total, item.barcode || null,
+            res.displayUcSku || null, (res.sentQty !== undefined ? res.sentQty : null),
+            res.sentQtyInferred ? 1 : 0, res.matchedSku || null
+          ).run();
         }
       }
     }
