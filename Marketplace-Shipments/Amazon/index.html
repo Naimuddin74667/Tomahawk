@@ -511,7 +511,7 @@
 
     <div id="tab-boxlabel" class="tab-content" style="display:none">
       <div class="left-inner" style="display:flex;flex-direction:column;gap:.8rem">
-        <div style="font-size:11px;color:var(--muted);line-height:1.6">Upload an Amazon FBA box/shipping-label PDF &rarr; auto-detects each label's actual content &rarr; crops away the blank space below it.</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6">Upload an Amazon FBA box/shipping-label PDF &rarr; auto-detects each label's actual content &rarr; stretches it to a fixed 150 x 100mm label.</div>
 
         <div class="file-drop" id="boxlabelDrop" ondragover="blDragOver(event)" ondragleave="blDragLeave()" ondrop="blDropFile(event)">
           <input type="file" accept=".pdf" onchange="blFileSelected(this)">
@@ -3928,7 +3928,8 @@ flushPendingLedgerSyncs(); // retry any ledger saves that failed to sync last se
 (function(){
   var BL_SETTINGS_KEY = 'alg_cropper_v1';
   var BL_DETECT_SCALE = 2.2;
-  var BL_EXTRA_PAD_MM = 4; // extra breathing room around the detected content, all sides — bumped from 2.5mm since anti-aliased pixels at the very edge of bold text (e.g. the bottom "UNCOVERED" line) can sit just below the detection threshold, making the detected boundary land slightly inside the visible text
+  var BL_OUTPUT_WIDTH_MM = 150;  // fixed output page size — detected content is
+  var BL_OUTPUT_HEIGHT_MM = 100; // stretched to fill this exactly, not just cropped in place
 
   var blOriginalBytes = null; // Uint8Array, cloned per read since pdfjs/pdf-lib each consume their own copy
   var blPageCount = 0;
@@ -4109,25 +4110,27 @@ flushPendingLedgerSyncs(); // retry any ledger saves that failed to sync last se
 
         for (var j=0; j<boxes.length; j++){
           // Tight rect = exact bounding box of the detected content (text/
-          // barcode ink), no padding.
-          var tightRect = blPixelBoxToPdfRect(boxes[j], r.pageWidthPt, r.pageHeightPt, 0);
+          // barcode ink) plus a small breathing margin — this is the
+          // portion of the ORIGINAL page that gets stretched to exactly
+          // fill the fixed output size below.
+          var tightRect = blPixelBoxToPdfRect(boxes[j], r.pageWidthPt, r.pageHeightPt, padMm);
+          var pxLeft = Math.max(0, tightRect.x);
+          var pxBottom = Math.max(0, tightRect.y);
+          var pxRight = Math.min(r.pageWidthPt, tightRect.x + tightRect.width);
+          var pxTop = Math.min(r.pageHeightPt, tightRect.y + tightRect.height);
 
-          // Blank margin between the content and the page edge = user padding + fixed breathing room.
-          var totalPadPt = (padMm + BL_EXTRA_PAD_MM) * 72 / 25.4;
-          var pxLeft = Math.max(0, tightRect.x - totalPadPt);
-          var pxBottom = Math.max(0, tightRect.y - totalPadPt);
-          var pxRight = Math.min(r.pageWidthPt, tightRect.x + tightRect.width + totalPadPt);
-          var pxTop = Math.min(r.pageHeightPt, tightRect.y + tightRect.height + totalPadPt);
-          var pageRect = { x: pxLeft, y: pxBottom, width: pxRight-pxLeft, height: pxTop-pxBottom };
+          // Fixed output size: 150mm wide x 100mm tall, no rotation — the
+          // detected content (whatever its natural aspect ratio) gets
+          // stretched to fill this exactly, rather than just cropped in
+          // place at its original scale.
+          var outWidthPt = BL_OUTPUT_WIDTH_MM * 72 / 25.4;
+          var outHeightPt = BL_OUTPUT_HEIGHT_MM * 72 / 25.4;
 
-          var copiedArr = await outDoc.copyPages(srcDoc, [i]);
-          var copied = copiedArr[0];
-          copied.setMediaBox(pageRect.x, pageRect.y, pageRect.width, pageRect.height);
-          copied.setCropBox(pageRect.x, pageRect.y, pageRect.width, pageRect.height);
-          // No border drawn — Amazon's own label content doesn't have or
-          // want one, unlike Flipkart's (this tool no longer handles those;
-          // Flipkart's box-label splitting has its own dedicated tool).
-          outDoc.addPage(copied);
+          var embedded = await outDoc.embedPage(srcDoc.getPage(i), {
+            left: pxLeft, bottom: pxBottom, right: pxRight, top: pxTop
+          });
+          var newPage = outDoc.addPage([outWidthPt, outHeightPt]);
+          newPage.drawPage(embedded, { x: 0, y: 0, width: outWidthPt, height: outHeightPt });
         }
 
         document.getElementById('blProgressFill').style.width = Math.round(((i+1)/blPageCount)*100) + '%';
