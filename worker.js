@@ -1367,7 +1367,7 @@ export default {
           const shipmentId = (url.searchParams.get('shipment_id') || '').trim();
           if (!shipmentId) return json({ ok: false, error: 'shipment_id required' }, 400);
           const rows = await env.DB.prepare(
-            'SELECT product, asin, total, barcode, uc_sku, sent_qty, sent_qty_inferred FROM amazon_shipment_items WHERE shipment_id = ? ORDER BY id'
+            'SELECT product, asin, total, barcode, uc_sku, sent_qty, sent_qty_inferred, matched_sku FROM amazon_shipment_items WHERE shipment_id = ? ORDER BY id'
           ).bind(shipmentId).all();
           return json({ ok: true, items: rows.results || [] });
         }
@@ -3057,6 +3057,7 @@ async function ensureAmazonShipmentItemsTable(DB) {
   try { await DB.prepare(`ALTER TABLE amazon_shipment_items ADD COLUMN uc_sku TEXT`).run(); } catch (e) {}
   try { await DB.prepare(`ALTER TABLE amazon_shipment_items ADD COLUMN sent_qty TEXT`).run(); } catch (e) {}
   try { await DB.prepare(`ALTER TABLE amazon_shipment_items ADD COLUMN sent_qty_inferred INTEGER DEFAULT 0`).run(); } catch (e) {}
+  try { await DB.prepare(`ALTER TABLE amazon_shipment_items ADD COLUMN matched_sku TEXT`).run(); } catch (e) {}
 }
 
 // Splits "FBA15MBWY7C5, FBA15MBX58GG, FBA15MBXRJ3Y" into trimmed,
@@ -3249,6 +3250,7 @@ async function rebuildAmazonShipments(env) {
           let displayUcSku = item.uc_sku;
           let sentQty = null;
           let sentQtyInferred = false;
+          let matchedSku = null;
 
           if (Array.isArray(item.bundle_children) && item.bundle_children.length) {
             displayUcSku = item.bundle_children.join(' | ');
@@ -3273,21 +3275,23 @@ async function rebuildAmazonShipments(env) {
               // physical product). Look for any UNCLAIMED gatepass line
               // for this shipment whose quantity exactly matches this
               // item's own Total Qty, and treat that as the match —
-              // flagged as inferred (not a confirmed SKU match) so the
-              // frontend can highlight it.
+              // flagged as inferred (not a confirmed SKU match), with
+              // the actual matched SKU stored so the frontend can show
+              // it on hover.
               const candidates = skuTotals.byShipment.get(shipmentId) || [];
               const match = candidates.find(c => !claimedSkus.has(c.sku) && c.quantity === item.total);
               if (match) {
                 sentQty = match.quantity;
                 sentQtyInferred = true;
+                matchedSku = match.sku;
                 claimedSkus.add(match.sku);
               }
             }
           }
 
           await env.DB.prepare(
-            'INSERT INTO amazon_shipment_items (shipment_id, product, asin, total, barcode, uc_sku, sent_qty, sent_qty_inferred) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-          ).bind(shipmentId, item.product || null, item.asin || null, item.total, item.barcode || null, displayUcSku || null, sentQty, sentQtyInferred ? 1 : 0).run();
+            'INSERT INTO amazon_shipment_items (shipment_id, product, asin, total, barcode, uc_sku, sent_qty, sent_qty_inferred, matched_sku) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          ).bind(shipmentId, item.product || null, item.asin || null, item.total, item.barcode || null, displayUcSku || null, sentQty, sentQtyInferred ? 1 : 0, matchedSku).run();
         }
       }
     }
