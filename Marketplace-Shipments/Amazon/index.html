@@ -511,7 +511,7 @@
 
     <div id="tab-boxlabel" class="tab-content" style="display:none">
       <div class="left-inner" style="display:flex;flex-direction:column;gap:.8rem">
-        <div style="font-size:11px;color:var(--muted);line-height:1.6">Upload a Flipkart box/shipping-label PDF &rarr; auto-detects each label's border box &rarr; crops it to its own page.</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.6">Upload an Amazon FBA box/shipping-label PDF &rarr; auto-detects each label's actual content &rarr; crops away the blank space below it.</div>
 
         <div class="file-drop" id="boxlabelDrop" ondragover="blDragOver(event)" ondragleave="blDragLeave()" ondrop="blDropFile(event)">
           <input type="file" accept=".pdf" onchange="blFileSelected(this)">
@@ -553,7 +553,7 @@
                 </label>
                 <input type="range" id="blThreshSlider" min="215" max="250" step="5" value="240" style="width:100%;accent-color:var(--accent)">
               </div>
-              <div style="font-size:10px;color:var(--muted);line-height:1.5">Only touch these if a batch isn't cropping cleanly &mdash; the defaults work for standard Flipkart labels. Lower sensitivity if faint borders are being missed; raise it if background specks get picked up as content.</div>
+              <div style="font-size:10px;color:var(--muted);line-height:1.5">Only touch these if a batch isn't cropping cleanly &mdash; the defaults work for standard Amazon FBA labels. Lower sensitivity if faint text is being missed; raise it if background specks get picked up as content.</div>
             </div>
           </div>
         </div>
@@ -3896,13 +3896,15 @@ loadGSheetLookup();
 flushPendingLedgerSyncs(); // retry any ledger saves that failed to sync last session
 
 // ── BOX LABEL CROPPER ──
-// Auto-detects each label's border-box on a Flipkart box/shipping-label PDF
-// and outputs a new PDF with each label cropped to its own page.
+// Auto-detects each label's actual content (text/barcode ink) on an
+// Amazon FBA box/shipping-label PDF and crops away the blank space
+// below it, outputting each label on its own tightly-cropped page — no
+// border drawn, since Amazon's own labels don't have or want one.
 // Namespaced with bl_ / bl* to avoid clashing with the rest of the app.
 (function(){
   var BL_SETTINGS_KEY = 'alg_cropper_v1';
   var BL_DETECT_SCALE = 2.2;
-  var BL_EXTRA_PAD_MM = 2.5; // extra breathing room outside the drawn border, all sides
+  var BL_EXTRA_PAD_MM = 2.5; // extra breathing room around the detected content, all sides
 
   var blOriginalBytes = null; // Uint8Array, cloned per read since pdfjs/pdf-lib each consume their own copy
   var blPageCount = 0;
@@ -4082,12 +4084,11 @@ flushPendingLedgerSyncs(); // retry any ledger saves that failed to sync last se
         }
 
         for (var j=0; j<boxes.length; j++){
-          // Tight rect = exact content/border edge, no padding — this is where the
-          // original Flipkart border line already sits, so our drawn border lands
-          // right on top of it instead of creating a second, offset rectangle.
+          // Tight rect = exact bounding box of the detected content (text/
+          // barcode ink), no padding.
           var tightRect = blPixelBoxToPdfRect(boxes[j], r.pageWidthPt, r.pageHeightPt, 0);
 
-          // Blank margin between the border and the page edge = user padding + fixed breathing room.
+          // Blank margin between the content and the page edge = user padding + fixed breathing room.
           var totalPadPt = (padMm + BL_EXTRA_PAD_MM) * 72 / 25.4;
           var pxLeft = Math.max(0, tightRect.x - totalPadPt);
           var pxBottom = Math.max(0, tightRect.y - totalPadPt);
@@ -4099,17 +4100,9 @@ flushPendingLedgerSyncs(); // retry any ledger saves that failed to sync last se
           var copied = copiedArr[0];
           copied.setMediaBox(pageRect.x, pageRect.y, pageRect.width, pageRect.height);
           copied.setCropBox(pageRect.x, pageRect.y, pageRect.width, pageRect.height);
-          // Draw a solid border so the label always has a clean frame, even if
-          // the original border line got clipped during detection.
-          var bw = 1;
-          copied.drawRectangle({
-            x: tightRect.x - bw/2,
-            y: tightRect.y - bw/2,
-            width: tightRect.width + bw,
-            height: tightRect.height + bw,
-            borderColor: PDFLib.rgb(0,0,0),
-            borderWidth: bw
-          });
+          // No border drawn — Amazon's own label content doesn't have or
+          // want one, unlike Flipkart's (this tool no longer handles those;
+          // Flipkart's box-label splitting has its own dedicated tool).
           outDoc.addPage(copied);
         }
 
