@@ -1430,6 +1430,29 @@ function fcFmtSentQty(v) {
   return fcFmtNum(v);
 }
 
+// Compares each Sent Qty segment against the matching Expected Qty
+// segment (both pipe-joined the same way for bundles, single value
+// otherwise) and highlights any that fall short in red — a missing
+// segment (shown as —) counts as a full shortfall too.
+function fcRenderSentQty(sentRaw, expectedRaw) {
+  var sentParts = (sentRaw === null || sentRaw === undefined || sentRaw === '')
+    ? [] : String(sentRaw).split('|').map(function (s) { return s.trim(); });
+  var expParts = (expectedRaw === null || expectedRaw === undefined || expectedRaw === '')
+    ? [] : String(expectedRaw).split('|').map(function (s) { return s.trim(); });
+
+  var n = Math.max(sentParts.length, expParts.length, 1);
+  var out = [];
+  for (var i = 0; i < n; i++) {
+    var sPart = sentParts[i];
+    var eNum = (expParts[i] !== undefined) ? parseFloat(expParts[i]) : NaN;
+    var sNum = (sPart !== undefined) ? parseFloat(sPart) : NaN;
+    var display = (sPart === undefined || sPart === '') ? '\u2014' : (isNaN(sNum) ? sPart : String(Math.round(sNum)));
+    var short = !isNaN(eNum) && eNum > 0 && (isNaN(sNum) || sNum < eNum);
+    out.push(short ? '<span style="color:#ff8080;font-weight:700">' + display + '</span>' : display);
+  }
+  return out.join('<br>');
+}
+
 // A bundle's uc_sku comes through pipe-joined (one child SKU per bundle
 // component) — this renders each on its own line instead of run
 // together on one line.
@@ -1570,7 +1593,7 @@ function fcOpenDetailModal(shipmentId) {
           '<td style="padding:.5rem .6rem;font-family:\'DM Mono\',monospace">' + (it.asin || '\u2014') + '</td>' +
           '<td style="padding:.5rem .6rem;font-family:\'DM Mono\',monospace">' + (it.barcode || '\u2014') + '</td>' +
           '<td style="padding:.5rem .6rem;text-align:center">' + fcFmtNum(it.total) + '</td>' +
-          '<td style="padding:.5rem .6rem;text-align:center;line-height:1.5">' + fcFmtSentQty(it.sent_qty) + '</td>' +
+          '<td style="padding:.5rem .6rem;text-align:center;line-height:1.5">' + fcRenderSentQty(it.sent_qty, it.expected_qty) + '</td>' +
           '</tr>';
       }).join('');
     })
