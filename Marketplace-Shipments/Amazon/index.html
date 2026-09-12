@@ -1408,7 +1408,11 @@ function fcRender() {
   document.getElementById('fcStatCancelled').textContent = statsBase.filter(fcIsCancelled).length;
 
   var rows = _fcRows.slice().sort(function (a, b) {
-    return (b.email_date || b.detected_at || '').localeCompare(a.email_date || a.detected_at || '');
+    // Newest FETCHED shipment on top (first_detected_at = when this row
+    // was first created in amazon_shipments), not the appointment's own
+    // email_date — a shipment just picked up today should show first
+    // even if it belongs to an older-dated appointment.
+    return (b.first_detected_at || b.email_date || '').localeCompare(a.first_detected_at || a.email_date || '');
   });
   if (q) rows = rows.filter(function (r) { return fcMatchesSearch(r, q); });
   if (_fcCardFilter === 'confirmed') rows = rows.filter(fcIsConfirmed);
@@ -1430,16 +1434,16 @@ function fcRender() {
            (fcIsCancelled(r) ? 'Unmark' : 'Cancel') + '</button>')
         : '';
       return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="fcOpenDetailModal(\'' + fcEsc(r.shipment_id) + '\')">' +
-        '<td style="padding:.7rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="event.stopPropagation();fcCopyText(\'' + fcEsc(r.shipment_id) + '\')" title="Click to copy">' + (r.shipment_id || '\u2014') + '</td>' +
-        '<td style="padding:.7rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="event.stopPropagation();fcCopyText(\'' + fcEsc(r.appointment_id) + '\')" title="Click to copy">' + (r.appointment_id || '\u2014') + '</td>' +
-        '<td style="padding:.7rem 1rem;text-align:center;font-weight:700">' + (r.destination_fc || '\u2014') + '</td>' +
-        '<td style="padding:.7rem 1rem;text-align:center">' + fcFmtNum(r.no_of_boxes) + '</td>' +
-        '<td style="padding:.7rem 1rem;text-align:center">' + fcFmtNum(r.no_of_skus) + '</td>' +
-        '<td style="padding:.7rem 1rem;text-align:center">' + fcFmtNum(r.no_of_units) + '</td>' +
-        '<td style="padding:.7rem 1rem;font-size:12px">' + fcExtractApptDate(r.confirmed_slot) + '</td>' +
-        '<td style="padding:.7rem 1rem;text-align:center">' + fcGatepassBadge(r.shipment_id) + '</td>' +
-        '<td style="padding:.7rem 1rem;text-align:center">' + fcFmtNum(fcSentQty(r.shipment_id)) + '</td>' +
-        '<td style="padding:.7rem 1rem">' + fcStatusBadge(r) + '</td>' +
+        '<td style="padding:1.35rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="event.stopPropagation();fcCopyText(\'' + fcEsc(r.shipment_id) + '\')" title="Click to copy">' + (r.shipment_id || '\u2014') + '</td>' +
+        '<td style="padding:1.35rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="event.stopPropagation();fcCopyText(\'' + fcEsc(r.appointment_id) + '\')" title="Click to copy">' + (r.appointment_id || '\u2014') + '</td>' +
+        '<td style="padding:1.35rem 1rem;text-align:center;font-weight:700">' + (r.destination_fc || '\u2014') + '</td>' +
+        '<td style="padding:1.35rem 1rem;text-align:center">' + fcFmtNum(r.no_of_boxes) + '</td>' +
+        '<td style="padding:1.35rem 1rem;text-align:center">' + fcFmtNum(r.no_of_skus) + '</td>' +
+        '<td style="padding:1.35rem 1rem;text-align:center">' + fcFmtNum(r.no_of_units) + '</td>' +
+        '<td style="padding:1.35rem 1rem;font-size:12px">' + fcExtractApptDate(r.confirmed_slot) + '</td>' +
+        '<td style="padding:1.35rem 1rem;text-align:center">' + fcGatepassBadge(r.shipment_id) + '</td>' +
+        '<td style="padding:1.35rem 1rem;text-align:center">' + fcFmtNum(fcSentQty(r.shipment_id)) + '</td>' +
+        '<td style="padding:1.35rem 1rem">' + fcStatusBadge(r) + '</td>' +
         '</tr>';
     }).join('');
   }
