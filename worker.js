@@ -1367,7 +1367,7 @@ export default {
           const shipmentId = (url.searchParams.get('shipment_id') || '').trim();
           if (!shipmentId) return json({ ok: false, error: 'shipment_id required' }, 400);
           const rows = await env.DB.prepare(
-            'SELECT product, asin, total, barcode, uc_sku, sent_qty, sent_qty_inferred, matched_sku FROM amazon_shipment_items WHERE shipment_id = ? ORDER BY id'
+            'SELECT product, asin, total, barcode, uc_sku, sent_qty, sent_qty_inferred, matched_sku, expected_qty FROM amazon_shipment_items WHERE shipment_id = ? ORDER BY id'
           ).bind(shipmentId).all();
           return json({ ok: true, items: rows.results || [] });
         }
@@ -3058,6 +3058,7 @@ async function ensureAmazonShipmentItemsTable(DB) {
   try { await DB.prepare(`ALTER TABLE amazon_shipment_items ADD COLUMN sent_qty TEXT`).run(); } catch (e) {}
   try { await DB.prepare(`ALTER TABLE amazon_shipment_items ADD COLUMN sent_qty_inferred INTEGER DEFAULT 0`).run(); } catch (e) {}
   try { await DB.prepare(`ALTER TABLE amazon_shipment_items ADD COLUMN matched_sku TEXT`).run(); } catch (e) {}
+  try { await DB.prepare(`ALTER TABLE amazon_shipment_items ADD COLUMN expected_qty TEXT`).run(); } catch (e) {}
 }
 
 // Splits "FBA15MBWY7C5, FBA15MBX58GG, FBA15MBXRJ3Y" into trimmed,
@@ -3283,7 +3284,7 @@ async function rebuildAmazonShipments(env) {
             }
           }
 
-          results.set(idx, { displayUcSku: item.uc_sku, sentQty, sentQtyInferred: inferred, matchedSku });
+          results.set(idx, { displayUcSku: item.uc_sku, sentQty, sentQtyInferred: inferred, matchedSku, expectedQty: item.total });
         });
 
         // PASS 2 — bundle items, from whatever's left in the pool.
@@ -3291,9 +3292,11 @@ async function rebuildAmazonShipments(env) {
           if (!(Array.isArray(item.bundle_children) && item.bundle_children.length)) return;
 
           const displayUcSku = item.bundle_children.map(c => c.sku).join(' | ');
+          const neededList = [];
           const childQtys = item.bundle_children.map(child => {
             const available = pool.get(child.sku) || 0;
             const needed = (typeof item.total === 'number') ? item.total * (child.qty || 1) : available;
+            neededList.push(needed);
             const take = Math.min(needed, available);
             if (take > 0) {
               pool.set(child.sku, available - take);
@@ -3302,7 +3305,7 @@ async function rebuildAmazonShipments(env) {
             return '\u2014';
           });
 
-          results.set(idx, { displayUcSku, sentQty: childQtys.join(' | '), sentQtyInferred: false, matchedSku: null });
+          results.set(idx, { displayUcSku, sentQty: childQtys.join(' | '), sentQtyInferred: false, matchedSku: null, expectedQty: neededList.join(' | ') });
         });
 
         // Persist in original BOM7 order.
@@ -3310,11 +3313,11 @@ async function rebuildAmazonShipments(env) {
           const item = sheetDetail.items[idx];
           const res = results.get(idx) || {};
           await env.DB.prepare(
-            'INSERT INTO amazon_shipment_items (shipment_id, product, asin, total, barcode, uc_sku, sent_qty, sent_qty_inferred, matched_sku) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO amazon_shipment_items (shipment_id, product, asin, total, barcode, uc_sku, sent_qty, sent_qty_inferred, matched_sku, expected_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
           ).bind(
             shipmentId, item.product || null, item.asin || null, item.total, item.barcode || null,
             res.displayUcSku || null, (res.sentQty !== undefined ? res.sentQty : null),
-            res.sentQtyInferred ? 1 : 0, res.matchedSku || null
+            res.sentQtyInferred ? 1 : 0, res.matchedSku || null, (res.expectedQty !== undefined ? res.expectedQty : item.total)
           ).run();
         }
       }
