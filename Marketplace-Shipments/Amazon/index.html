@@ -576,10 +576,10 @@
           <div class="ro-stat-value" id="fcStatTotal">&mdash;</div>
           <div class="ro-stat-sub">all tracked FBA shipment IDs</div>
         </div>
-        <div class="ro-stat-card" id="fcCardConfirmed" onclick="fcSetCardFilter('confirmed')" title="Filter: Confirmed and not cancelled">
-          <div class="ro-stat-label">Confirmed</div>
+        <div class="ro-stat-card" id="fcCardConfirmed" onclick="fcSetCardFilter('confirmed')" title="Filter: not cancelled and not yet Ready to Dispatch (still Created or Under Packing)">
+          <div class="ro-stat-label">RTD Pending</div>
           <div class="ro-stat-value accent" id="fcStatConfirmed">&mdash;</div>
-          <div class="ro-stat-sub">confirmed, not cancelled</div>
+          <div class="ro-stat-sub">not cancelled, not yet Ready to Dispatch</div>
         </div>
         <div class="ro-stat-card" id="fcCardCancelled" onclick="fcSetCardFilter('cancelled')" title="Filter: manually marked cancelled">
           <div class="ro-stat-label">Cancelled</div>
@@ -1235,7 +1235,17 @@ function fcCheckEmailsNow() {
 }
 
 function fcIsCancelled(r) { return r.manual_status === 'cancelled'; }
-function fcIsConfirmed(r) { return !fcIsCancelled(r) && /confirm|reschedul/i.test(r.appointment_status || ''); }
+// "RTD Pending" — not cancelled, and hasn't reached Ready to Dispatch yet
+// (still shows as Created or Under Packing in fcStatusBadge, i.e. the
+// gatepass isn't fully CLOSED/NON_RETURNABLE across every match).
+function fcIsConfirmed(r) {
+  if (fcIsCancelled(r)) return false;
+  var ref = String(r.shipment_id || '').trim();
+  var gps = ref ? _fcGatepassMap[ref] : null;
+  var hasGatepass = !!(gps && gps.length);
+  var allDone = hasGatepass && gps.every(function (gp) { return gp.type === 'NON_RETURNABLE' && gp.status === 'CLOSED'; });
+  return !allDone;
+}
 
 // Computed lifecycle status — a strict flow, not independent flags:
 //   Created -> Under Packing -> Ready to Dispatch -> Out For Delivery / Overdue -> (later) Inwarded
@@ -1434,16 +1444,16 @@ function fcRender() {
            (fcIsCancelled(r) ? 'Unmark' : 'Cancel') + '</button>')
         : '';
       return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="fcOpenDetailModal(\'' + fcEsc(r.shipment_id) + '\')">' +
-        '<td style="padding:1.15rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="event.stopPropagation();fcCopyText(\'' + fcEsc(r.shipment_id) + '\')" title="Click to copy">' + (r.shipment_id || '\u2014') + '</td>' +
-        '<td style="padding:1.15rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="event.stopPropagation();fcCopyText(\'' + fcEsc(r.appointment_id) + '\')" title="Click to copy">' + (r.appointment_id || '\u2014') + '</td>' +
-        '<td style="padding:1.15rem 1rem;text-align:center;font-weight:700">' + (r.destination_fc || '\u2014') + '</td>' +
-        '<td style="padding:1.15rem 1rem;text-align:center">' + fcFmtNum(r.no_of_boxes) + '</td>' +
-        '<td style="padding:1.15rem 1rem;text-align:center">' + fcFmtNum(r.no_of_skus) + '</td>' +
-        '<td style="padding:1.15rem 1rem;text-align:center">' + fcFmtNum(r.no_of_units) + '</td>' +
-        '<td style="padding:1.15rem 1rem;font-size:12px">' + fcExtractApptDate(r.confirmed_slot) + '</td>' +
-        '<td style="padding:1.15rem 1rem;text-align:center">' + fcGatepassBadge(r.shipment_id) + '</td>' +
-        '<td style="padding:1.15rem 1rem;text-align:center">' + fcFmtNum(fcSentQty(r.shipment_id)) + '</td>' +
-        '<td style="padding:1.15rem 1rem">' + fcStatusBadge(r) + '</td>' +
+        '<td style="padding:1rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="event.stopPropagation();fcCopyText(\'' + fcEsc(r.shipment_id) + '\')" title="Click to copy">' + (r.shipment_id || '\u2014') + '</td>' +
+        '<td style="padding:1rem 1rem;font-family:\'DM Mono\',monospace;cursor:pointer" onclick="event.stopPropagation();fcCopyText(\'' + fcEsc(r.appointment_id) + '\')" title="Click to copy">' + (r.appointment_id || '\u2014') + '</td>' +
+        '<td style="padding:1rem 1rem;text-align:center;font-weight:700">' + (r.destination_fc || '\u2014') + '</td>' +
+        '<td style="padding:1rem 1rem;text-align:center">' + fcFmtNum(r.no_of_boxes) + '</td>' +
+        '<td style="padding:1rem 1rem;text-align:center">' + fcFmtNum(r.no_of_skus) + '</td>' +
+        '<td style="padding:1rem 1rem;text-align:center">' + fcFmtNum(r.no_of_units) + '</td>' +
+        '<td style="padding:1rem 1rem;font-size:12px">' + fcExtractApptDate(r.confirmed_slot) + '</td>' +
+        '<td style="padding:1rem 1rem;text-align:center">' + fcGatepassBadge(r.shipment_id) + '</td>' +
+        '<td style="padding:1rem 1rem;text-align:center">' + fcFmtNum(fcSentQty(r.shipment_id)) + '</td>' +
+        '<td style="padding:1rem 1rem">' + fcStatusBadge(r) + '</td>' +
         '</tr>';
     }).join('');
   }
