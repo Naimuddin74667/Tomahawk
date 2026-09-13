@@ -1247,6 +1247,12 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs
 
 const WORKER  = 'https://tomahawk-returns.naimuddin.workers.dev';
 const IS_LIVE = location.hostname === 'naimuddin74667.github.io';
+// TEMP TOGGLE: while true, label generation skips the Gemini B&W wait/queue
+// entirely — uses an existing B&W image if one is already saved in bwStore,
+// otherwise goes straight to the color image. Flip back to false to restore
+// auto-generation before printing. (buildLabelHtml's own bw-then-color
+// fallback is unaffected either way.)
+const SKIP_BW_GENERATION = true;
 const SHEET_ID  = '1stBN2H_kB2RYupmbz3UFb4dbidZ5iPZgtV78qUeRnok';
 const SHEET_GID = '559509176';
 const LOGO_PATH = 'M796.6 803.57l625.42 0c4.17,0.55 6.71,2.65 7.48,6.14l-84.8 151.21 -181.47 0c-16.1,25.18 -100.16,178.13 -252.2,458.77l-203.52 0 -0.67 -3.08c109.72,-202.64 190.86,-354.55 243.59,-455.69l-240.46 0 -0.77 -3.7c47.6,-91.52 76.61,-142.78 87.4,-153.65zm-14.19 821.74l-287.36 153.05 187.35 -278.86 1362.49 0 -8.53 5.99 -1253.95 119.82zm6102.31 -1005.2l131.69 -113.42 0 215.51 -960.53 0 8.48 -6 820.36 -96.09zm-574.92 183.46l298.9 0 1.32 6.14c-45.66,84.33 -70.46,131.58 -74.1,141.4 160.29,-96.44 243.35,-144.55 249.31,-144.55l224.51 0 1.32 6.11c-3.09,0.39 -163.87,96.95 -482.4,289.8l215.31 314.14 -5.44 3.08 -212.81 0c-5.17,-3.62 -50.38,-70.48 -135.48,-200.49l-3.14 0c-57.01,115.32 -92.82,182.15 -107.4,200.49l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.77,-24.7l-1.96 -9.09c-2.91,-13.47 -17.46,-33.95 -43.92,-61.58l5.47 -2.99zm-900.24 0.38l295.21 0 0.67 3.13 -177.4 332.67 0.7 3.15 3.15 0 281.78 -191.3c5.47,6.84 8.72,12.09 9.42,15.42l50.56 191.26 2.97 0c-0.06,-5.07 62.84,-123.21 188.62,-354.33l199.85 0 7 3.13c-2.97,8.9 -110.79,213.14 -323.65,612.64l-212.28 0c-4.01,0 -6.55,-2.09 -7.43,-6.09l-8.67 -40.1c-6.4,-29.71 -17.38,-75.75 -32.99,-138.44l-289.68 184.63 -221.52 0 -0.69 -3.12 276.81 -529.56 -3.98 -18.37c-2.88,-13.46 -17.46,-33.93 -43.89,-61.59l5.44 -3.13zm-792.78 -0.38l758.24 0 0.66 2.99c-195.43,377.28 -303.39,581.65 -323.9,613.13l-197.37 0c-4.22,0 -6.58,-2.06 -7.45,-6.06 5.76,-4.89 46.12,-79.83 121.01,-225.06l-249.55 0c-5.54,7.52 -48.45,84.55 -128.62,231.12l-203.51 0 -0.67 -3.08c178.19,-329 269.43,-500.66 273.89,-514.68 2.75,-6.83 3.49,-17.15 2.64,-30.81 -2.41,-11.19 -17.16,-31.67 -44.05,-61.41l-1.32 -6.14zm185.18 228.04l249.02 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.73 0c-2.8,0 -16.07,23.62 -40.03,70.69z';
@@ -2339,9 +2345,13 @@ async function generateLabels(type) {
   }
   const valid = items.filter(it=>it.internalSku&&it.boxes>0&&it.qtyPerBox>0);
   if (!valid.length) { showToast('No valid items to generate labels for',true); return; }
-  // Wait for B&W images before generating labels
-  const ucSkusNeeded = new Set(valid.map(function(it) { return it.ucSku; }).filter(Boolean));
-  await waitForBw(ucSkusNeeded);
+  // Wait for B&W images before generating labels (skipped while SKIP_BW_GENERATION
+  // is true — falls straight to an existing B&W if saved, else the color image;
+  // see buildLabelHtml's imgSrc fallback)
+  if (!SKIP_BW_GENERATION) {
+    const ucSkusNeeded = new Set(valid.map(function(it) { return it.ucSku; }).filter(Boolean));
+    await waitForBw(ucSkusNeeded);
+  }
 
   setSyncPill('⏳ Generating…','');
   generatedLabels = [];
@@ -2786,6 +2796,7 @@ function needsBw(m) {
 }
 
 function scheduleBwIfNeeded(idx) {
+  if (SKIP_BW_GENERATION) return; // TEMP: auto B&W generation on link/save paused
   const m = skuMap[idx];
   if (!m || !needsBw(m) || !getGeminiKey()) return;
   bwQueue.add(m.ucSku);
