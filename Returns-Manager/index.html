@@ -1391,6 +1391,19 @@ function persistCSV(){
 }
 
 let returns=loadR(), master=loadCSV(), meta=loadM();
+// ── Sync-diff snapshot ──────────────────────────────────────────
+// Fingerprints of what D1 last confirmed it has, so doSync() only ever
+// sends rows that actually changed instead of re-upserting everything
+// on every autosave (see rows_written cap incident, Sep 2026).
+let lastSyncedReturns=new Map(), lastSyncedFba=new Map();
+let lastSyncedMasterSig=null, lastSyncedMetaSig=null, lastSyncedFbaManifestSig=null;
+function seedSyncSnapshot(){
+  lastSyncedReturns=new Map(returns.map(r=>[r.id, JSON.stringify(r)]));
+  lastSyncedFba=new Map(fbaReturns.map(r=>[r.id, JSON.stringify(r)]));
+  lastSyncedMasterSig=JSON.stringify(master);
+  lastSyncedMetaSig=JSON.stringify(meta);
+  lastSyncedFbaManifestSig=JSON.stringify(fbaManifest);
+}
 let currentProcessId=null, claimNeeded=null;
 let sessionCount=0, sessionItems=[];
 let resModalId=null, resChoice=null;
@@ -3110,6 +3123,7 @@ async function sbLoad(isRetry) {
     master      = d.master      || {};
     meta        = d.meta        || {};
     fbaManifest = d.fbaManifest || {};
+    seedSyncSnapshot(); // baseline = what D1 just confirmed it has
     updateCSVStatus(); updateDashboard(); renderAll(); updateFBABadges();
     const t = new Date().toLocaleTimeString('en-IN');
     setSyncStatus('synced', 'Synced ' + t);
@@ -3182,7 +3196,24 @@ function scheduleSync() {
 async function doSync() {
   setSyncStatus('syncing', 'Saving...');
   try {
-    // Build master CSV pairs
+    // ── Diff against the last D1-confirmed snapshot ──────────────
+    // saveAll upserts whatever rows it's given, so re-sending the full
+    // returns/fbaReturns arrays (and the full master CSV) on every single
+    // edit was writing the ENTIRE dataset to D1 on every autosave tick —
+    // this is what blew through the daily rows_written cap. Only rows
+    // that actually changed since the last confirmed sync are sent now.
+    const dirtyReturns = [];
+    for (const r of returns) {
+      const sig = JSON.stringify(r);
+      if (lastSyncedReturns.get(r.id) !== sig) dirtyReturns.push(r);
+    }
+    const dirtyFba = [];
+    for (const r of fbaReturns) {
+      const sig = JSON.stringify(r);
+      if (lastSyncedFba.get(r.id) !== sig) dirtyFba.push(r);
+    }
+
+    // Build master CSV pairs — but only if master/meta/fbaManifest actually changed
     const CHUNK = 45000;
     const masterPairs = [];
     // Helper: chunk a JSON string into meta-table pairs under a given key prefix
@@ -3198,20 +3229,45 @@ async function doSync() {
         }
       }
     }
-    pushChunked(JSON.stringify(master), 'master');
-    // CSV upload status (file name, uploaded-at, record count, date range) —
-    // previously only kept in the in-page `meta` var and never sent to D1,
-    // so it silently reset to "No CSV loaded" on every reload.
-    masterPairs.push({ key: 'meta_json', value: JSON.stringify(meta) });
-    // Amazon FBA removal-order manifest — previously only ever written to
-    // localStorage (and only in local/dev mode), never synced to D1 at all.
-    pushChunked(JSON.stringify(fbaManifest), 'fba_manifest');
+    const masterSig = JSON.stringify(master);
+    const masterChanged = masterSig !== lastSyncedMasterSig;
+    if (masterChanged) pushChunked(masterSig, 'master');
+
+    // CSV upload status (file name, uploaded-at, record count, date range).
+    const metaSig = JSON.stringify(meta);
+    const metaChanged = metaSig !== lastSyncedMetaSig;
+    if (metaChanged) masterPairs.push({ key: 'meta_json', value: metaSig });
+
+    // Amazon FBA removal-order manifest.
+    const fbaManifestSig = JSON.stringify(fbaManifest);
+    const fbaManifestChanged = fbaManifestSig !== lastSyncedFbaManifestSig;
+    if (fbaManifestChanged) pushChunked(fbaManifestSig, 'fba_manifest');
+
+    // Nothing actually changed since the last confirmed sync — skip the
+    // round-trip (and the D1 writes) entirely.
+    if (!dirtyReturns.length && !dirtyFba.length && !masterPairs.length) {
+      const t = new Date().toLocaleTimeString('en-IN');
+      setSyncStatus('synced', 'Synced ' + t);
+      updateSyncBadge(t);
+      clearWAL();
+      return;
+    }
+
     const d = await cfPost('saveAll', {
-      returns,
-      fbaReturns,
+      returns: dirtyReturns,
+      fbaReturns: dirtyFba,
       masterPairs
     });
     if (!d.ok) throw new Error(d.error || 'Save failed');
+
+    // D1 confirmed — advance the snapshot so only *further* changes get
+    // sent next time. Only mark the pieces we actually sent.
+    dirtyReturns.forEach(r => lastSyncedReturns.set(r.id, JSON.stringify(r)));
+    dirtyFba.forEach(r => lastSyncedFba.set(r.id, JSON.stringify(r)));
+    if (masterChanged) lastSyncedMasterSig = masterSig;
+    if (metaChanged) lastSyncedMetaSig = metaSig;
+    if (fbaManifestChanged) lastSyncedFbaManifestSig = fbaManifestSig;
+
     const t = new Date().toLocaleTimeString('en-IN');
     setSyncStatus('synced', 'Synced ' + t);
     updateSyncBadge(t);
