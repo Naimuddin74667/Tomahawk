@@ -1283,13 +1283,25 @@ function fcStatusBadge(r) {
 // (split across facilities), so this checks ALL of them. Rules:
 //   no matching gatepass at all                                -> NA (red ✗)
 //   EVERY match is type NON_RETURNABLE and status CLOSED        -> Done (green ✓)
-//   at least one matched, but not all closed/non-returnable yet -> Reserved (orange)
-function fcGatepassBadge(shipmentId) {
+//   at least one matched, but not all closed/non-returnable yet -> Reserved (orange), with
+//     reserved % + qty breakdown (Sent Qty / Total Qty) shown underneath since that's the
+//     detail that actually explains WHY it's still Reserved instead of Done.
+function fcGatepassBadge(shipmentId, totalQty) {
   var ref = String(shipmentId || '').trim();
   var gps = ref ? _fcGatepassMap[ref] : null;
   if (!gps || !gps.length) return '<span style="color:#ff8080;font-weight:700">&#10007; NA</span>';
   var allDone = gps.every(function (gp) { return gp.type === 'NON_RETURNABLE' && gp.status === 'CLOSED'; });
   if (allDone) return '<span style="color:#6dc87a;font-weight:700">&#10003; Done</span>';
+
+  var sentQty = fcSentQty(shipmentId);
+  var total = parseFloat(totalQty);
+  var sent = parseFloat(sentQty);
+  if (!isNaN(total) && total > 0 && !isNaN(sent)) {
+    var pct = Math.round((sent / total) * 100);
+    return '<span style="color:var(--accent);font-weight:700">&#9679; Reserved &middot; ' + pct + '%</span>' +
+      '<div style="font-size:10.5px;font-weight:400;color:var(--muted);margin-top:2px">' +
+      fcFmtNum(sent) + ' / ' + fcFmtNum(total) + ' units</div>';
+  }
   return '<span style="color:var(--accent);font-weight:700">&#9679; Reserved</span>';
 }
 
@@ -1451,7 +1463,7 @@ function fcRender() {
         '<td style="padding:.98rem 1rem;text-align:center">' + fcFmtNum(r.no_of_skus) + '</td>' +
         '<td style="padding:.98rem 1rem;text-align:center">' + fcFmtNum(r.no_of_units) + '</td>' +
         '<td style="padding:.98rem 1rem;font-size:12px">' + fcExtractApptDate(r.confirmed_slot) + '</td>' +
-        '<td style="padding:.98rem 1rem;text-align:center">' + fcGatepassBadge(r.shipment_id) + '</td>' +
+        '<td style="padding:.98rem 1rem;text-align:center">' + fcGatepassBadge(r.shipment_id, r.no_of_units) + '</td>' +
         '<td style="padding:.98rem 1rem;text-align:center">' + fcFmtNum(fcSentQty(r.shipment_id)) + '</td>' +
         '<td style="padding:.98rem 1rem">' + fcStatusBadge(r) + '</td>' +
         '</tr>';
