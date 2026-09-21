@@ -402,6 +402,8 @@ async function ensureAuthTables(DB) {
   // (e.g. ["Delhivery-Orders","Scanner"]) restricts a "Custom" user to
   // exactly those apps regardless of what their underlying role permits.
   try { await DB.prepare(`ALTER TABLE tm_users ADD COLUMN allowed_apps TEXT DEFAULT NULL`).run(); } catch (e) { /* column already exists */ }
+  // Migration: optional email per user (shown/edited on the Manage Users page).
+  try { await DB.prepare(`ALTER TABLE tm_users ADD COLUMN email TEXT DEFAULT ''`).run(); } catch (e) { /* column already exists */ }
   const adminExists = await DB.prepare("SELECT id FROM tm_users WHERE username = 'admin'").first();
   if (!adminExists) {
     const salt = genSalt();
@@ -628,7 +630,7 @@ export default {
       // ── ADMIN — user management (always gated, see checkAuth) ────
       if (request.method === 'POST' && act === 'adminListUsers') {
         const rows = await env.DB.prepare(
-          'SELECT id, username, role, display_name, active, allowed_apps, created_at FROM tm_users ORDER BY username ASC'
+          'SELECT id, username, role, display_name, email, active, allowed_apps, created_at FROM tm_users ORDER BY username ASC'
         ).all();
         const users = (rows.results || []).map(u => ({
           ...u,
@@ -641,7 +643,7 @@ export default {
         return json({ ok: true, users });
       }
       if (request.method === 'POST' && act === 'adminCreateUser') {
-        const { username, password, role, display_name, allowed_apps } = body;
+        const { username, password, role, display_name, allowed_apps, email } = body;
         if (!username || !password || !role) return json({ ok: false, error: 'username, password, role required' });
         const validRoles = ['admin', 'manager', 'viewer', 'picker_packer', 'custom'];
         if (!validRoles.includes(role)) return json({ ok: false, error: 'Invalid role' });
@@ -655,16 +657,28 @@ export default {
         const hash = await hashPassword(password, salt);
         try {
           await env.DB.prepare(
-            'INSERT INTO tm_users (username, password_hash, salt, role, display_name, allowed_apps) VALUES (?, ?, ?, ?, ?, ?)'
-          ).bind(String(username).toLowerCase().trim(), hash, salt, actualRole, display_name || '', appsJson).run();
+            'INSERT INTO tm_users (username, password_hash, salt, role, display_name, allowed_apps, email) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          ).bind(String(username).toLowerCase().trim(), hash, salt, actualRole, display_name || '', appsJson, String(email || '').trim()).run();
           return json({ ok: true });
         } catch (e) {
           return json({ ok: false, error: 'Username already exists' });
         }
       }
       if (request.method === 'POST' && act === 'adminUpdateUser') {
-        const { id, role, display_name, active, allowed_apps } = body;
+        const { id, role, display_name, active, allowed_apps, username, email } = body;
         if (!id) return json({ ok: false, error: 'id required' });
+
+        // Optional username change — same normalisation as adminCreateUser,
+        // and refuse if another account already has it (username is UNIQUE).
+        let newUsername = null;
+        if (username != null) {
+          newUsername = String(username).toLowerCase().trim();
+          if (!newUsername) return json({ ok: false, error: 'Username cannot be empty' });
+          const clash = await env.DB.prepare('SELECT id FROM tm_users WHERE username = ? AND id != ?').bind(newUsername, id).first();
+          if (clash) return json({ ok: false, error: 'Username already exists' });
+        }
+        // Optional email change — '' is allowed (clears it); undefined leaves it alone.
+        const newEmail = email != null ? String(email).trim() : null;
 
         let actualRole = null;
         let appsJsonToSet; // undefined = leave allowed_apps untouched
@@ -687,9 +701,11 @@ export default {
           UPDATE tm_users SET
             role = COALESCE(?, role),
             display_name = COALESCE(?, display_name),
-            active = COALESCE(?, active)
+            active = COALESCE(?, active),
+            username = COALESCE(?, username),
+            email = COALESCE(?, email)
           WHERE id = ?
-        `).bind(actualRole, display_name != null ? display_name : null, active != null ? (active ? 1 : 0) : null, id).run();
+        `).bind(actualRole, display_name != null ? display_name : null, active != null ? (active ? 1 : 0) : null, newUsername, newEmail, id).run();
 
         if (appsJsonToSet !== undefined) {
           await env.DB.prepare('UPDATE tm_users SET allowed_apps = ? WHERE id = ?').bind(appsJsonToSet, id).run();
