@@ -846,7 +846,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     <div class="stat-card" id="card-ideal-stock">
       <div class="stat-label">Ideal Stock</div>
       <div class="stat-value" id="stat-ideal-stock">—</div>
-      <div class="stat-sub">E3 &gt; 0, not linked to any channel · click to view</div>
+      <div class="stat-sub">E3 &gt; 0, not linked anywhere (incl. via bundle) · click to view</div>
     </div>
     <div class="stat-card" id="card-bundle-sku">
       <div class="stat-label">Bundle SKU</div>
@@ -1101,7 +1101,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   var archivedSkus = {};     // { skuCode: true } — manually archived SKUs, from D1 (sa_archived_skus)
   var recQtyOverrides = {};  // { skuCode: number } — manually saved Rec. Qty, from D1 (sa_recqty_overrides)
   var appSettings = {};      // { default_rec_qty: '20', ... } — from D1 (sa_settings)
-  var bundleComponentMap = {}; // { skuCode: masterSkuCode } — components whose inferred master SKU is channel-linked
+  var bundleComponentMap = {}; // { childSku: [parentSku, ...] } — components of at least one channel-linked bundle (see computeBundleComponents)
   var inventoryBySku = {};   // { skuCode: row } — quick lookup into allRows, used by Bundle SKU view's Stock column
   var currentView = 'idle';  // 'idle' | 'archived'
   var sortDesc = true;
@@ -1122,8 +1122,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   // UC naming quirk, not a real bundle — bare-tool variants are never used
   // as a base for further bundling (per standing convention), so despite
   // the underscore they're standalone sellable items with their own real
-  // stock and their own box qty. Same regex already used by getSkuBase()
-  // below to identify these as components, not composites.
+  // stock and their own box qty.
   //
   // The Qty/Box Data view is meant to be a reference list of simple SKUs
   // only, so genuine BUNDLE-type underscore SKUs are excluded there even
@@ -1308,48 +1307,28 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   }
 
   // ---- BUNDLE COMPONENT DETECTION ------------------------------------------
-  // Unicommerce has NO structured bundle/kit/master-SKU field anywhere in the
-  // synced data (checked UC_ItemMaster.type, UC_Catalog.skuType,
-  // itemDetailFieldDTOList, tags — all empty or uniform). This is inferred
-  // purely from SKU naming patterns:
-  //   SPR_<Part>_<Master>   -> base = <Master>  (e.g. SPR_Motor_TCLB-A20 -> TCLB-A20)
-  //   <Master>-Bare-Tool(s) -> base = <Master>  (e.g. T32052-Bare-Tools -> T32052)
-  // A component only counts as a "Bundle SKU" if some OTHER sku containing
-  // that base string is found AND that other sku has a real channel listing —
-  // i.e. the bundle itself is actually sellable somewhere, so the loose
-  // component doesn't need its own listing. This is a heuristic, not fact —
-  // worth a human sanity check before trusting it fully.
-  function getSkuBase(sku) {
-    if (!sku) return null;
-    if (/^SPR[_-]/i.test(sku)) {
-      var parts = sku.split('_');
-      return parts.length > 1 ? parts[parts.length - 1] : null;
-    }
-    var stripped = sku.replace(/[-_]Bare[-_]Tools?$/i, '');
-    return (stripped !== sku) ? stripped : null;
-  }
-
+  // A SKU with no channel listing of its own is still NOT "Ideal Stock" if
+  // it's a component of a bundle that IS linked to a marketplace — it gets
+  // sold through that bundle. Uses the real bundle recipes from
+  // UC_BundleComposition (BUNDLE_MASTER_DATA, via the GAS bridge's
+  // ?type=bundles route) and each bundle's hasChannelListing flag (GAS v17:
+  // true = at least one LINKED row in UC_ChannelListings, any channel).
+  // Replaces the old SKU-naming heuristic (SPR_/Bare-Tool pattern guessing).
+  // Result: bundleComponentMap = { childSku: [linkedParentSku, ...] }
+  // NOTE: an older localStorage bundle cache (pre-v17) has no
+  // hasChannelListing field — those bundles count as unlinked until the
+  // next successful live refresh fills it in.
   function computeBundleComponents() {
     bundleComponentMap = {};
-    var allSkuList = allRows.map(function (r) { return r.skuCode; });
-    var skuByCode = {};
-    allRows.forEach(function (r) { skuByCode[r.skuCode] = r; });
-
-    allRows.forEach(function (r) {
-      var e3 = Number(r.E3_stock) || 0;
-      // Only relevant for current Ideal Stock candidates (E3>0, unlinked)
-      if (e3 <= 0 || r.hasChannelListing !== false) return;
-      var base = getSkuBase(r.skuCode);
-      if (!base) return;
-      for (var i = 0; i < allSkuList.length; i++) {
-        var candidate = allSkuList[i];
-        if (candidate === r.skuCode || candidate.indexOf(base) === -1) continue;
-        var candidateRow = skuByCode[candidate];
-        if (candidateRow && candidateRow.hasChannelListing === true) {
-          bundleComponentMap[r.skuCode] = candidate;
-          break;
-        }
-      }
+    Object.keys(BUNDLE_MASTER_DATA || {}).forEach(function (parentSku) {
+      var b = BUNDLE_MASTER_DATA[parentSku];
+      if (!b || b.hasChannelListing !== true) return; // bundle not linked anywhere -> doesn't cover its children
+      (b.components || []).forEach(function (c) {
+        if (!c || !c.sku) return;
+        var child = String(c.sku).trim();
+        if (!bundleComponentMap[child]) bundleComponentMap[child] = [];
+        bundleComponentMap[child].push(parentSku);
+      });
     });
   }
 
@@ -1392,7 +1371,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     } else if (currentView === 'idealstock') {
       // E3 has stock (live to sell) but no channel listing exists anywhere —
       // a listing problem, unrelated to G4/E3 warehouse balance. Excludes
-      // Bundle SKU components (covered by their master's listing).
+      // components of any channel-linked bundle (sold through that bundle).
       baseRows = allRows.filter(function (r) {
         var e3 = Number(r.E3_stock) || 0;
         return e3 > 0 && r.hasChannelListing === false && !bundleComponentMap.hasOwnProperty(r.skuCode);
@@ -1483,8 +1462,8 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     // "Ideal Stock" — E3 has stock (live to sell) but the SKU isn't linked
     // to any marketplace channel at all, so it literally can't be sold
     // anywhere. A listing problem, not a warehouse-transfer problem.
-    // Excludes SKUs identified as Bundle SKU components (see below) — those
-    // are covered by their master's listing and don't need their own.
+    // Excludes components of any channel-linked bundle (UC_BundleComposition
+    // + bundle's LINKED listing) — they're sold through that bundle.
     var idealStockCount = 0;
     allRows.forEach(function (r) {
       var e3 = Number(r.E3_stock) || 0;
@@ -1887,7 +1866,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       } else if (currentView === 'lowstock') {
         emptyMsg = 'No SKUs currently have low E3 stock with G4 available to send.';
       } else if (currentView === 'idealstock') {
-        emptyMsg = 'No SKUs currently have E3 stock with zero channel listings.';
+        emptyMsg = 'No SKUs currently have E3 stock with no listing of their own or via a linked bundle.';
       } else if (currentView === 'bundlesku') {
         emptyMsg = 'No bundle/master SKUs match this search.';
       } else if (currentView === 'qtybox') {
