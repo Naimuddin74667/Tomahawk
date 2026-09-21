@@ -805,10 +805,6 @@ html[data-theme="light"]       .icon-moon { display: none; }
       <svg width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M17 10a7 7 0 11-2.05-4.95M17 3v4h-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <span class="admin-btn-label">Refresh SKU List</span>
     </button>
-    <button class="header-admin-btn" id="header-admin-btn" hidden title="Manage Users">
-      <svg width="13" height="13" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="6.5" r="3.5" stroke="currentColor" stroke-width="1.5"/><path d="M3 17c0-3.5 3.1-6 7-6s7 2.5 7 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-      <span class="admin-btn-label">Manage Users</span>
-    </button>
     <div class="header-user" id="header-user" hidden>
       <div class="user-avatar" id="user-avatar">--</div>
       <span class="user-name" id="user-name-display">—</span>
@@ -823,7 +819,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
 
 <!-- ============================================================
      BLOCK 6.5 — ADMIN USER MANAGEMENT MODAL
-     Admin-only. Opened via the "Manage Users" header button.
+     Admin-only. Opened via the "Manage Users" card (last card in the apps grid).
 ============================================================ -->
 <div class="admin-modal-backdrop" id="admin-modal-backdrop" hidden>
   <div class="admin-modal">
@@ -1213,6 +1209,37 @@ html[data-theme="light"]       .icon-moon { display: none; }
         </div>
       </a>
 
+      <!-- Card 12: Manage Users — admin only, hidden by default; JS reveals it
+           once the logged-in user's role is confirmed to be admin. Opens the
+           user-management modal (Block 6.5) instead of navigating.
+           No data-app-slug on purpose: it's not an app, so it must not appear
+           in the Custom-role allow-list or be touched by applyAppVisibility(). -->
+      <a href="#" class="app-card" id="manage-users-card" hidden role="button"
+         style="--card-color:var(--accent);--card-color-dim:var(--accent-dim);--card-color-border:var(--accent-border);">
+        <div class="card-corner-glow"></div>
+        <div class="card-top">
+          <div class="card-icon">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <circle cx="10" cy="6.5" r="3.5" stroke="var(--accent)" stroke-width="1.5"/>
+              <path d="M3 17c0-3.5 3.1-6 7-6s7 2.5 7 6" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <span class="card-badge">Admin only</span>
+        </div>
+        <div class="card-name">Manage Users</div>
+        <div class="card-version">Accounts · Roles</div>
+        <div class="card-desc">Add team members, set roles and Custom app access, deactivate accounts, and control auth enforcement across the portal</div>
+        <div class="card-chips">
+          <span class="chip chip-colored">tm_users</span>
+          <span class="chip chip-colored">Roles</span>
+          <span class="chip">Auth enforcement</span>
+        </div>
+        <div class="card-footer">
+          <span class="card-open-label">Open panel</span>
+          <div class="card-open-arrow">→</div>
+        </div>
+      </a>
+
     
     </div>
 
@@ -1383,7 +1410,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
   const loginBtn   = document.getElementById('auth-login-btn');
   const headerUser = document.getElementById('header-user');
   const logoutBtn  = document.getElementById('header-logout-btn');
-  const adminBtn   = document.getElementById('header-admin-btn');
+  const adminBtn   = document.getElementById('manage-users-card'); // Manage Users card (was a header button)
   const avatarEl   = document.getElementById('user-avatar');
   const nameEl     = document.getElementById('user-name-display');
   const roleBadge  = document.getElementById('user-role-badge');
@@ -1405,8 +1432,31 @@ html[data-theme="light"]       .icon-moon { display: none; }
     if (refreshSkuBtn) refreshSkuBtn.hidden = user.role !== 'admin';
     var masterSheetCard = document.getElementById('master-sheet-card');
     if (masterSheetCard) masterSheetCard.hidden = user.role !== 'admin';
+    applyRoleCardVisibility(user);
     applyAppVisibility(user);
     updateGreetingWithName(label.split(' ')[0]);
+  }
+
+  // Apps every non-admin role can see on the hub. Admins see every card.
+  // To open another app to the team, just add its data-app-slug here.
+  var TEAM_VISIBLE_APPS = [
+    'Order-Processing',
+    'Marketplace-Shipments',
+    'Returns-Manager',
+    'Inward-Label-Generator',
+    'Dashboard',
+    'Stock-Alert'
+  ];
+
+  // Hides every app card not in TEAM_VISIBLE_APPS for non-admin users.
+  // Runs before applyAppVisibility(), which can narrow further for Custom
+  // accounts but never reveals a card hidden here.
+  function applyRoleCardVisibility(user) {
+    if (user.role === 'admin') return;
+    document.querySelectorAll('.app-card[data-app-slug]').forEach(function (card) {
+      var slug = card.getAttribute('data-app-slug');
+      if (TEAM_VISIBLE_APPS.indexOf(slug) === -1) card.hidden = true;
+    });
   }
 
   // Hides any app card not in the user's allow-list. Applied ON TOP of
@@ -1820,7 +1870,8 @@ html[data-theme="light"]       .icon-moon { display: none; }
     if (res.ok) loadEnforceStatus();
   });
 
-  adminBtn.addEventListener('click', function () {
+  adminBtn.addEventListener('click', function (e) {
+    e.preventDefault(); // card is an <a href="#"> — don't jump to top
     modalBackdrop.hidden = false;
     loadUsers();
     loadEnforceStatus();
