@@ -129,13 +129,24 @@ a { color: inherit; text-decoration: none; }
 }
 
 .admin-user-row {
-  display: grid; grid-template-columns: 1.3fr .9fr 1fr auto; gap: 8px;
+  display: grid; grid-template-columns: 1.4fr 1.6fr .8fr; gap: 8px;
   align-items: center; padding: 9px 0;
   border-bottom: 1px solid var(--border-subtle); font-size: 12px;
 }
 .admin-user-row.header-row { color: var(--text-faint); font-size: 10px; text-transform: uppercase; letter-spacing: .07em; padding-bottom: 6px; }
 .admin-user-name { color: var(--text-primary); font-weight: 600; }
-.admin-user-inactive { opacity: .4; }
+.admin-user-inactive { opacity: .45; }
+/* Rows are clickable — whole row opens the Edit popup */
+.admin-user-row.clickable { cursor: pointer; border-radius: var(--radius-sm); padding-left: 8px; padding-right: 8px; margin: 0 -8px; }
+.admin-user-row.clickable:hover { background: var(--bg-raised); }
+.admin-user-sub { color: var(--text-faint); font-weight: 400; font-size: 11px; }
+.admin-user-email { color: var(--text-secondary); word-break: break-all; }
+.admin-user-email.empty { color: var(--text-faint); }
+.admin-role-pill { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: var(--accent-dim); color: var(--accent); border: 1px solid var(--accent-border); }
+.admin-inactive-tag { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #f87171; margin-left: 6px; }
+/* Popup: status + reset row */
+.edit-divider { border-top: 1px solid var(--border-subtle); margin: 16px 0 12px; }
+.edit-row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .admin-select, .admin-mini-input {
   width: 100%; background: var(--bg-raised); border: 1px solid var(--border-default);
   border-radius: var(--radius-sm); padding: 5px 8px; font-size: 11.5px; color: var(--text-primary);
@@ -181,7 +192,7 @@ a { color: inherit; text-decoration: none; }
 @media (max-width: 640px) {
   .admin-modal-backdrop { padding: 16px; }
   .admin-modal { padding: 18px; }
-  .admin-user-row { grid-template-columns: 1fr; gap: 4px; padding: 12px 0; }
+  .admin-user-row { grid-template-columns: 1fr; gap: 4px; padding: 12px 8px; }
   .admin-user-row.header-row { display: none; }
   .admin-add-form { grid-template-columns: 1fr; }
   .admin-enforce-box { flex-direction: column; align-items: flex-start; }
@@ -251,16 +262,10 @@ a { color: inherit; text-decoration: none; }
     <div class="admin-section">
       <div class="admin-section-label">Team members</div>
       <div class="admin-user-row header-row">
-        <span>User</span><span>Role</span><span>Status</span><span></span>
+        <span>Name</span><span>Email</span><span>Role</span>
       </div>
       <div id="admin-user-list"><!-- rows injected by JS --></div>
 
-
-      <div class="admin-app-checklist" id="edit-user-app-checklist"></div>
-      <div id="edit-user-apps-actions" style="display:none;gap:8px;margin-top:8px;">
-        <button class="admin-mini-btn" id="edit-user-apps-save" style="background:var(--accent);color:#111;border-color:var(--accent);">Save apps</button>
-        <button class="admin-mini-btn" id="edit-user-apps-cancel">Cancel</button>
-      </div>
 
       <div class="admin-add-form">
         <input class="admin-mini-input" id="new-user-username" placeholder="username">
@@ -305,6 +310,16 @@ a { color: inherit; text-decoration: none; }
       <input class="admin-mini-input" id="edit-user-username" placeholder="username"></div>
     <div class="edit-field"><label for="edit-user-email">Email</label>
       <input class="admin-mini-input" id="edit-user-email" placeholder="email" type="email"></div>
+    <div class="edit-field"><label for="edit-user-role">Role</label>
+      <select class="admin-select" id="edit-user-role" style="padding:8px 10px;font-size:13px;"></select></div>
+    <!-- Only shown when Role = Custom -->
+    <div class="admin-app-checklist" id="edit-user-app-checklist"></div>
+
+    <div class="edit-divider"></div>
+    <div class="edit-row-actions">
+      <button class="admin-mini-btn" id="edit-user-toggle-active">Deactivate user</button>
+      <button class="admin-mini-btn" id="edit-user-reset-pw">Reset password</button>
+    </div>
     <div class="edit-actions">
       <button class="admin-mini-btn" id="edit-user-details-cancel">Cancel</button>
       <button class="admin-mini-btn" id="edit-user-details-save" style="background:var(--accent);color:#111;border-color:var(--accent);">Save</button>
@@ -399,139 +414,107 @@ a { color: inherit; text-decoration: none; }
     }
   });
 
-  // ── Existing user: shared inline "Apps" editor, opened per-row ──
-  const editAppsBox = document.getElementById('edit-user-app-checklist');
-  const editAppsActions = document.getElementById('edit-user-apps-actions');
-  let editingUserId = null;
+  // ── Edit-user popup ──
+  // One popup handles everything for an existing user: name, username,
+  // email, role (+ app checklist when Custom), activate/deactivate and
+  // password reset. Clicking any row in the list opens it.
+  const editModal      = document.getElementById('edit-user-modal');
+  const editRoleSel    = document.getElementById('edit-user-role');
+  const editAppsBox    = document.getElementById('edit-user-app-checklist');
+  const editActiveBtn  = document.getElementById('edit-user-toggle-active');
+  let editingUser = null; // the full user object from adminListUsers
 
-  function openAppsEditor(userId, checkedSlugs) {
-    editingUserId = userId;
-    editAppsBox.innerHTML = appChecklistHtml('edit', checkedSlugs || []);
-    editAppsBox.className = 'admin-app-checklist show';
-    editAppsActions.style.display = 'flex';
+  function renderEditApps() {
+    if (editRoleSel.value === 'custom') {
+      editAppsBox.innerHTML = appChecklistHtml('edit', (editingUser && editingUser.allowedApps) || []);
+      editAppsBox.className = 'admin-app-checklist show';
+    } else {
+      editAppsBox.className = 'admin-app-checklist';
+      editAppsBox.innerHTML = '';
+    }
   }
-  function closeAppsEditor() {
-    editingUserId = null;
-    editAppsBox.className = 'admin-app-checklist';
-    editAppsBox.innerHTML = '';
-    editAppsActions.style.display = 'none';
-  }
-  // ── Existing user: inline "Edit details" form (name / username / email) ──
-  const editDetailsBox = document.getElementById('edit-user-modal'); // popup backdrop
-  let editingDetailsUserId = null;
+  editRoleSel.addEventListener('change', renderEditApps);
 
-  function openDetailsEditor(userId, displayName, username, email) {
-    editingDetailsUserId = userId;
-    document.getElementById('edit-user-display-name').value = displayName || '';
-    document.getElementById('edit-user-username').value = username || '';
-    document.getElementById('edit-user-email').value = email || '';
-    document.getElementById('edit-user-modal-sub').textContent = username ? '@' + username : '';
-    editDetailsBox.hidden = false;
+  function openEditUser(u) {
+    editingUser = u;
+    document.getElementById('edit-user-modal-sub').textContent = '@' + u.username;
+    document.getElementById('edit-user-display-name').value = u.display_name || '';
+    document.getElementById('edit-user-username').value = u.username || '';
+    document.getElementById('edit-user-email').value = u.email || '';
+    editRoleSel.innerHTML = roleOptionsHtml(u.displayRole || u.role);
+    renderEditApps();
+    editActiveBtn.textContent = u.active ? 'Deactivate user' : 'Activate user';
+    editActiveBtn.className = 'admin-mini-btn' + (u.active ? ' danger' : '');
+    editModal.hidden = false;
     document.getElementById('edit-user-display-name').focus();
   }
-  function closeDetailsEditor() {
-    editingDetailsUserId = null;
-    editDetailsBox.hidden = true;
+  function closeEditUser() {
+    editingUser = null;
+    editModal.hidden = true;
   }
-  // Close the popup via ✕, clicking the dark backdrop, or Esc
-  document.getElementById('edit-user-modal-close').addEventListener('click', closeDetailsEditor);
-  editDetailsBox.addEventListener('click', function (e) { if (e.target === editDetailsBox) closeDetailsEditor(); });
-  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !editDetailsBox.hidden) closeDetailsEditor(); });
-  document.getElementById('edit-user-details-cancel').addEventListener('click', closeDetailsEditor);
+  document.getElementById('edit-user-details-cancel').addEventListener('click', closeEditUser);
+  document.getElementById('edit-user-modal-close').addEventListener('click', closeEditUser);
+  editModal.addEventListener('click', function (e) { if (e.target === editModal) closeEditUser(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !editModal.hidden) closeEditUser(); });
+
   document.getElementById('edit-user-details-save').addEventListener('click', async function () {
-    if (!editingDetailsUserId) return;
+    if (!editingUser) return;
     const display_name = document.getElementById('edit-user-display-name').value.trim();
     const username = document.getElementById('edit-user-username').value.trim();
     const email = document.getElementById('edit-user-email').value.trim();
+    const role = editRoleSel.value;
     if (!username) { alert('Username cannot be empty'); return; }
-    const res = await api('adminUpdateUser', { method: 'POST', body: { id: editingDetailsUserId, display_name, username, email } });
+    const body = { id: editingUser.id, display_name, username, email, role };
+    if (role === 'custom') {
+      body.allowed_apps = getCheckedApps('edit');
+      if (!body.allowed_apps.length) { alert('Pick at least one app for a Custom user'); return; }
+    }
+    const res = await api('adminUpdateUser', { method: 'POST', body });
     if (!res.ok) { alert(res.error || 'Failed to save'); return; }
-    closeDetailsEditor();
+    closeEditUser();
     loadUsers();
   });
 
-  document.getElementById('edit-user-apps-cancel').addEventListener('click', function () {
-    closeAppsEditor();
-    loadUsers(); // revert the row's role dropdown if it was switched to Custom then cancelled
-  });
-  document.getElementById('edit-user-apps-save').addEventListener('click', async function () {
-    if (!editingUserId) return;
-    const apps = getCheckedApps('edit');
-    const res = await api('adminUpdateUser', { method: 'POST', body: { id: editingUserId, role: 'custom', allowed_apps: apps } });
-    if (!res.ok) { alert(res.error || 'Failed to save'); return; }
-    closeAppsEditor();
+  editActiveBtn.addEventListener('click', async function () {
+    if (!editingUser) return;
+    const goingActive = !editingUser.active;
+    if (!goingActive && !confirm('Deactivate @' + editingUser.username + '? They will be logged out immediately.')) return;
+    const res = await api('adminUpdateUser', { method: 'POST', body: { id: editingUser.id, active: goingActive } });
+    if (!res.ok) { alert(res.error || 'Failed'); return; }
+    closeEditUser();
     loadUsers();
   });
 
+  document.getElementById('edit-user-reset-pw').addEventListener('click', async function () {
+    if (!editingUser) return;
+    const pw = prompt('New temporary password for @' + editingUser.username + ':');
+    if (!pw) return;
+    const res = await api('adminResetPassword', { method: 'POST', body: { id: editingUser.id, newPassword: pw } });
+    alert(res.ok ? 'Password reset. They\u2019ll need to log in again.' : (res.error || 'Failed'));
+  });
+
+  function escapeHtml(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // List shows only Name (@username below), Email, Role. Click a row to edit.
   async function loadUsers() {
     userListEl.innerHTML = '<div style="padding:10px 0;color:var(--text-faint);font-size:11px;">Loading…</div>';
     const res = await api('adminListUsers', { method: 'POST', body: {} });
-    if (!res.ok) { userListEl.innerHTML = '<div style="color:#f87171;font-size:11px;">' + (res.error || 'Failed to load users') + '</div>'; return; }
+    if (!res.ok) { userListEl.innerHTML = '<div style="color:#f87171;font-size:11px;">' + escapeHtml(res.error || 'Failed to load users') + '</div>'; return; }
     userListEl.innerHTML = '';
     (res.users || []).forEach(u => {
       const row = document.createElement('div');
-      row.className = 'admin-user-row' + (u.active ? '' : ' admin-user-inactive');
+      row.className = 'admin-user-row clickable' + (u.active ? '' : ' admin-user-inactive');
+      row.title = 'Click to edit';
       const displayRole = u.displayRole || u.role;
       row.innerHTML = `
-        <span class="admin-user-name">${u.display_name || u.username}<br><span style="color:var(--text-faint);font-weight:400;">@${u.username}${u.email ? ' · ' + u.email : ''}</span></span>
-        <select class="admin-select" data-role-for="${u.id}">${roleOptionsHtml(displayRole)}</select>
-        <span>${u.active ? 'Active' : 'Inactive'}</span>
-        <span class="admin-row-actions">
-          <button class="admin-mini-btn" data-edit-details="${u.id}" data-name="${(u.display_name || '').replace(/"/g, '&quot;')}" data-username="${u.username}" data-email="${u.email || ''}">Edit</button>
-          ${displayRole === 'custom' ? `<button class="admin-mini-btn" data-edit-apps="${u.id}" data-apps='${JSON.stringify(u.allowedApps || [])}'>Apps</button>` : ''}
-          <button class="admin-mini-btn" data-toggle-active="${u.id}" data-active="${u.active ? 1 : 0}">${u.active ? 'Deactivate' : 'Activate'}</button>
-          <button class="admin-mini-btn" data-reset="${u.id}">Reset PW</button>
-        </span>
+        <span class="admin-user-name">${escapeHtml(u.display_name || u.username)}${u.active ? '' : '<span class="admin-inactive-tag">Inactive</span>'}<br><span class="admin-user-sub">@${escapeHtml(u.username)}</span></span>
+        <span class="admin-user-email ${u.email ? '' : 'empty'}">${u.email ? escapeHtml(u.email) : '—'}</span>
+        <span><span class="admin-role-pill">${escapeHtml(ROLE_LABELS[displayRole] || displayRole)}</span></span>
       `;
+      row.addEventListener('click', function () { openEditUser(u); });
       userListEl.appendChild(row);
-    });
-
-    userListEl.querySelectorAll('[data-role-for]').forEach(sel => {
-      sel.addEventListener('change', async function () {
-        const id = Number(this.getAttribute('data-role-for'));
-        if (this.value === 'custom') {
-          // Don't save yet — open the checklist so they pick apps first.
-          openAppsEditor(id, []);
-          return;
-        }
-        await api('adminUpdateUser', { method: 'POST', body: { id, role: this.value } });
-        loadUsers();
-      });
-    });
-    userListEl.querySelectorAll('[data-edit-details]').forEach(btn => {
-      btn.addEventListener('click', function () {
-        openDetailsEditor(
-          Number(this.getAttribute('data-edit-details')),
-          this.getAttribute('data-name'),
-          this.getAttribute('data-username'),
-          this.getAttribute('data-email')
-        );
-      });
-    });
-    userListEl.querySelectorAll('[data-edit-apps]').forEach(btn => {
-      btn.addEventListener('click', function () {
-        const id = Number(this.getAttribute('data-edit-apps'));
-        let apps = [];
-        try { apps = JSON.parse(this.getAttribute('data-apps') || '[]'); } catch (e) {}
-        openAppsEditor(id, apps);
-      });
-    });
-    userListEl.querySelectorAll('[data-toggle-active]').forEach(btn => {
-      btn.addEventListener('click', async function () {
-        const id = this.getAttribute('data-toggle-active');
-        const isActive = this.getAttribute('data-active') === '1';
-        await api('adminUpdateUser', { method: 'POST', body: { id: Number(id), active: !isActive } });
-        loadUsers();
-      });
-    });
-    userListEl.querySelectorAll('[data-reset]').forEach(btn => {
-      btn.addEventListener('click', async function () {
-        const id = this.getAttribute('data-reset');
-        const pw = prompt('New temporary password for this user:');
-        if (!pw) return;
-        const res2 = await api('adminResetPassword', { method: 'POST', body: { id: Number(id), newPassword: pw } });
-        alert(res2.ok ? 'Password reset. They\u2019ll need to log in again.' : (res2.error || 'Failed'));
-      });
     });
   }
 
