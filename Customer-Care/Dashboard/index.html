@@ -412,8 +412,8 @@ table.log-table tr:last-child td { border-bottom: none; }
     </div>
     <div class="table-wrap">
       <table class="case-table">
-        <thead><tr><th>Case</th><th>Customer</th><th>Product</th><th>Journey</th><th>Status</th></tr></thead>
-        <tbody id="case-body"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+        <thead><tr><th>Case</th><th>Customer</th><th>Product</th><th>Status</th></tr></thead>
+        <tbody id="case-body"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -565,13 +565,16 @@ table.log-table tr:last-child td { border-bottom: none; }
       if (r.received_at) return r.job_type === 'Refund' ? 'Refund pending' : 'Awaiting send-back';
       var rs = legStage(r);
       if (rs === 'Delivered') return 'To verify';
-      if (rs === 'Cancelled' || rs === 'Lost' || rs === 'RTO') return 'Pickup cancelled';
+      if (rs === 'Cancelled') return 'Cancelled';
+      if (rs === 'Lost' || rs === 'RTO') return 'Pickup issue';
       if (rs === 'In Transit' || rs === 'At Last Mile' || rs === 'Out For Delivery') return 'Coming to us';
       return 'Awaiting pickup';
     }
     var s = legStage(f);
     if (s === 'Delivered') return 'Closed';
-    if (s === 'Failed' || s === 'Cancelled' || s === 'RTO' || s === 'Lost') return 'Failed';
+    if (s === 'Failed') return 'Failed';
+    if (s === 'Cancelled') return 'Cancelled';
+    if (s === 'RTO' || s === 'Lost') return 'Delivery issue';
     return 'Shipping';
   }
   var STATUS_META = {
@@ -583,51 +586,23 @@ table.log-table tr:last-child td { border-bottom: none; }
     'Sent back': { cls: 'b-blue', c: '#60a5fa' },
     'Shipping': { cls: 'b-blue', c: '#60a5fa' },
     'Closed': { cls: 'b-green', c: '#22c55e' },
-    'Pickup cancelled': { cls: 'b-red', c: '#f87171' },
+    'Pickup issue': { cls: 'b-red', c: '#f87171' },
+    'Delivery issue': { cls: 'b-red', c: '#f87171' },
     'Send-back issue': { cls: 'b-red', c: '#f87171' },
     'Failed': { cls: 'b-red', c: '#f87171' }
   };
   // Four tiles (click to filter):
   //   All cases — everything
-  //   Open      — not Closed (failed bookings / cancelled pickups excluded: nothing is moving)
+  //   Open      — not Closed (failed/cancelled cases aren't listed at all)
   //   Upcoming  — reverse pickups booked and on their way to us, not yet verified received
   //   Sent back — forward parcels on their way to the customer (not yet delivered)
   var TILES = [
     { key: '', label: 'All cases', c: 'var(--text)', test: function () { return true; } },
-    { key: 'open', label: 'Open cases', c: 'var(--accent)', test: function (c) { return !/^(Closed|Failed|Pickup cancelled)$/.test(c.status); } },
+    { key: 'open', label: 'Open cases', c: 'var(--accent)', test: function (c) { return c.status !== 'Closed'; } },
     { key: 'upcoming', label: 'Upcoming', c: '#60a5fa', test: function (c) { return /^(Awaiting pickup|Coming to us|To verify)$/.test(c.status); } },
     { key: 'sentback', label: 'Sent back', c: '#22c55e', test: function (c) { return c.status === 'Sent back' || c.status === 'Shipping'; } }
   ];
   function tileTest(key) { for (var i = 0; i < TILES.length; i++) if (TILES[i].key === key) return TILES[i].test; return TILES[0].test; }
-
-  // Journey chips: reverse case = Booked › Picked up › At warehouse ›
-  // Verified › Sent back / Refunded › Delivered / Closed.
-  function journeyHtml(c) {
-    var steps = [];
-    function add(label, state) { steps.push('<span class="step ' + state + '">' + esc(label) + '</span>'); }
-    var r = c.reverse, f = c.forward;
-    if (r) {
-      var rs = legStage(r), moved = rs !== 'Created' && rs !== 'Failed' && rs !== 'Cancelled';
-      add('Booked', r.delhivery_ok ? 'done' : 'bad');
-      add('Picked up', moved || r.received_at ? 'done' : (rs === 'Cancelled' ? 'bad' : ''));
-      add('At warehouse', rs === 'Delivered' || r.received_at ? 'done' : '');
-      add('Verified', r.received_at ? 'done' : (rs === 'Delivered' ? 'now' : ''));
-      if (r.job_type === 'Refund') {
-        add('Refunded', r.refunded_at ? 'done' : (r.received_at ? 'now' : ''));
-      } else {
-        var fs = legStage(f);
-        add('Sent back', f ? 'done' : (r.received_at ? 'now' : ''));
-        add('Delivered', fs === 'Delivered' ? 'done' : (f && /Failed|Cancelled|RTO|Lost/.test(fs) ? 'bad' : (f ? 'now' : '')));
-      }
-    } else {
-      var s = legStage(f), order = ['Created', 'RTD', 'In Transit', 'Out For Delivery', 'Delivered'];
-      var labels = ['Booked', 'Packed', 'In transit', 'Out for delivery', 'Delivered'];
-      var idx = s === 'At Last Mile' ? 2 : order.indexOf(s);
-      var bad = /Failed|Cancelled|RTO|Lost/.test(s);
-      labels.forEach(function (l, i) { add(l, bad && i > 0 ? (i === 1 ? 'bad' : '') : (i < idx || (i === idx && s === 'Delivered') ? 'done' : (i === idx ? 'now' : ''))); });
-    }
-    return '<div class="journey">' + steps.join('<span class="step-sep">&#8250;</span>') + '</div>';
-  }
 
   function buildCases(orders) {
     var byId = {};
@@ -652,6 +627,8 @@ table.log-table tr:last-child td { border-bottom: none; }
       c.kind = c.reverse ? (c.reverse.job_type || 'Reverse') : 'forward';
       c.search = [c.id, c.forward && c.forward.order_id, c.reverse && c.reverse.waybill, c.forward && c.forward.waybill, c.customer, c.product, sh.phone].join(' ').toLowerCase();
     });
+    // Failed bookings and cancelled shipments aren't shown at all.
+    out = out.filter(function (c) { return c.status !== 'Failed' && c.status !== 'Cancelled'; });
     out.sort(function (a, b) { return String(b.created || '').localeCompare(String(a.created || '')); });
     return out;
   }
@@ -677,7 +654,7 @@ table.log-table tr:last-child td { border-bottom: none; }
       return tileTest(tileFilter)(c) && (!kind || c.kind === kind) && (!q || c.search.indexOf(q) !== -1);
     });
     var body = document.getElementById('case-body');
-    if (!rows.length) { body.innerHTML = '<tr><td colspan="5" class="muted">No cases match.</td></tr>'; return; }
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="4" class="muted">No cases match.</td></tr>'; return; }
     body.innerHTML = '';
     rows.forEach(function (c) {
       var m = STATUS_META[c.status] || { cls: 'b-gray' };
@@ -691,7 +668,6 @@ table.log-table tr:last-child td { border-bottom: none; }
         '<td>' + ids + '<div class="sub">' + kindLabel + '</div></td>' +
         '<td>' + esc(c.customer || '—') + (c.city ? '<div class="sub">' + esc(c.city) + '</div>' : '') + '</td>' +
         '<td>' + esc(c.product || '—') + '</td>' +
-        '<td>' + journeyHtml(c) + '</td>' +
         '<td><span class="badge ' + m.cls + '">' + esc(c.status) + '</span><div class="sub">' + esc(fmtWhen(c.created)) + '</div></td>';
       tr.addEventListener('click', function () { openCase(c); });
       body.appendChild(tr);
@@ -735,7 +711,7 @@ table.log-table tr:last-child td { border-bottom: none; }
     document.getElementById('case-title').innerHTML = esc(c.id) + ' <span class="badge ' + ((STATUS_META[c.status] || {}).cls || 'b-gray') + '">' + esc(c.status) + '</span>';
     document.getElementById('case-sub').textContent = [c.customer, c.city].filter(Boolean).join(' · ');
     var box = document.getElementById('case-body-modal');
-    box.innerHTML = journeyHtml(c) + legs.map(function (l, i) { return legHtml(l[0], l[1], i); }).join('');
+    box.innerHTML = legs.map(function (l, i) { return legHtml(l[0], l[1], i); }).join('');
     box.querySelectorAll('.track-btn').forEach(function (b) {
       b.addEventListener('click', function () { track(legs[+b.dataset.leg][0], b); });
     });
@@ -770,7 +746,7 @@ table.log-table tr:last-child td { border-bottom: none; }
       cases = buildCases(res.orders || []);
       renderTiles(); renderTable();
     } catch (e) {
-      document.getElementById('case-body').innerHTML = '<tr><td colspan="5" class="muted">Couldn\'t load cases: ' + esc(e.message) + '</td></tr>';
+      document.getElementById('case-body').innerHTML = '<tr><td colspan="4" class="muted">Couldn\'t load cases: ' + esc(e.message) + '</td></tr>';
     }
   }
   document.getElementById('q').addEventListener('input', renderTable);
