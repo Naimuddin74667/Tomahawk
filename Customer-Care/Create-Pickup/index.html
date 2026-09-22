@@ -217,6 +217,21 @@ table.log-table tr.log-row:hover td { background: var(--surface2); }
 .om-btn { padding: 9px 14px; border-radius: 7px; font-family: var(--font-body); font-weight: 700; font-size: 12.5px; cursor: pointer; border: 1px solid var(--border); background: var(--surface2); color: var(--text); }
 .om-btn.primary { background: var(--accent); color: #111; border-color: var(--accent); }
 .om-btn:disabled { opacity: .4; cursor: not-allowed; }
+.om-btn.busy { opacity: .6; cursor: progress; }
+/* Live tracking (Track now) */
+.om-track { margin-top: 16px; }
+.om-track-head { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+.om-track-status { font-size: 15px; font-weight: 700; color: var(--accent); }
+.om-track-meta { font-size: 12px; color: var(--text2); margin-top: 3px; line-height: 1.5; }
+.om-track-meta a { color: var(--accent); }
+.om-timeline { list-style: none; border-left: 2px solid var(--border); margin-left: 6px; padding-left: 16px; max-height: 280px; overflow-y: auto; }
+.om-timeline li { position: relative; padding-bottom: 12px; }
+.om-timeline li::before { content: ''; position: absolute; left: -22px; top: 4px; width: 10px; height: 10px; border-radius: 50%; background: var(--border); }
+.om-timeline li:first-child::before { background: var(--accent); }
+.om-tl-status { font-size: 12.5px; font-weight: 700; color: var(--text); }
+.om-tl-detail { font-size: 12px; color: var(--text); margin-top: 1px; }
+.om-tl-meta { font-size: 11px; color: var(--text2); margin-top: 2px; }
+.om-track-error { font-size: 12.5px; color: var(--red); }
 @media (max-width: 560px) { .om-grid { grid-template-columns: 1fr 1fr; } }
 
 /* Shipping-label download button in the Recent orders table */
@@ -1284,6 +1299,50 @@ function initDelhiveryApp() {
     return '<div class="om-section"><div class="om-section-title">' + title + '</div><div class="om-grid">' + fields.join('') + '</div></div>';
   }
 
+  // ── Track now — pulls live status + scan history from Delhivery via
+  // the Worker and shows it under the buttons. Clicking again refreshes.
+  function fmtScanTime(t) {
+    if (!t) return '';
+    var d = new Date(t);
+    return isNaN(d) ? t : d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+  async function loadTracking(o, btn) {
+    if (btn.classList.contains('busy')) return;
+    var box = document.getElementById('om-track');
+    btn.classList.add('busy');
+    btn.textContent = 'Tracking…';
+    box.hidden = false;
+    var trackUrl = 'https://www.delhivery.com/track-v2/package/' + encodeURIComponent(o.waybill);
+    try {
+      var t = await workerGet('delhiveryTrack&waybill=' + encodeURIComponent(o.waybill));
+      if (!t || !t.ok) throw new Error((t && t.error) || 'unknown error');
+      var meta = [];
+      if (t.location || t.at) meta.push([t.location, fmtScanTime(t.at)].filter(Boolean).join(' · '));
+      if (t.detail) meta.push(escapeHtml(t.detail));
+      if (t.expectedDelivery) meta.push('Expected delivery: ' + escapeHtml(fmtScanTime(t.expectedDelivery)));
+      box.innerHTML =
+        '<div class="om-section-title">Live tracking</div>' +
+        '<div class="om-track-head">' +
+          '<div class="om-track-status">' + escapeHtml(t.status || 'No status yet') + '</div>' +
+          '<div class="om-track-meta">' + meta.map(function (m) { return '<div>' + m + '</div>'; }).join('') +
+            '<div><a href="' + trackUrl + '" target="_blank" rel="noopener">Open on Delhivery &#8599;</a></div></div>' +
+        '</div>' +
+        (t.scans && t.scans.length
+          ? '<ul class="om-timeline">' + t.scans.map(function (sc) {
+              return '<li><div class="om-tl-status">' + escapeHtml(sc.status || '') + '</div>' +
+                (sc.detail ? '<div class="om-tl-detail">' + escapeHtml(sc.detail) + '</div>' : '') +
+                '<div class="om-tl-meta">' + escapeHtml([sc.location, fmtScanTime(sc.at)].filter(Boolean).join(' · ')) + '</div></li>';
+            }).join('') + '</ul>'
+          : '<div class="om-track-meta">No scans yet — the parcel hasn\'t been picked up.</div>');
+    } catch (e) {
+      box.innerHTML = '<div class="om-section-title">Live tracking</div>' +
+        '<div class="om-track-error">Couldn\'t load tracking: ' + escapeHtml(e.message) + '</div>' +
+        '<div class="om-track-meta"><a href="' + trackUrl + '" target="_blank" rel="noopener">Open on Delhivery &#8599;</a></div>';
+    }
+    btn.classList.remove('busy');
+    btn.innerHTML = '&#8635; Refresh tracking';
+  }
+
   function openOrderModal(o) {
     var sh = (safeJson(o.payload_json).shipments || [])[0] || {};
     var resp = safeJson(o.response_json);
@@ -1326,10 +1385,14 @@ function initDelhiveryApp() {
       ]) +
       '<div class="om-actions">' +
         '<button type="button" class="om-btn primary" id="om-dl-btn"' + (o.delhivery_ok && o.waybill ? '' : ' disabled') + '>&#11015; Download label (4×6)</button>' +
-      '</div>';
+        '<button type="button" class="om-btn" id="om-track-btn"' + (o.delhivery_ok && o.waybill ? '' : ' disabled') + '>&#128205; Track now</button>' +
+      '</div>' +
+      '<div class="om-track" id="om-track" hidden></div>';
 
     var omDl = document.getElementById('om-dl-btn');
     if (!omDl.disabled) omDl.addEventListener('click', function () { downloadLabel(o, omDl); });
+    var omTrack = document.getElementById('om-track-btn');
+    if (!omTrack.disabled) omTrack.addEventListener('click', function () { loadTracking(o, omTrack); });
     orderModal.hidden = false;
   }
 

@@ -293,7 +293,9 @@ const ACTION_TIERS = {
   //   Amazon listing price/weight/dimensions per UC SKU. Read-only. —
   delhiveryNextOrderId: 'viewer_read', delhiveryAmzProductInfo: 'viewer_read',
   // — Shipping-label PDF link for a created waybill (Recent orders ⬇ button). —
-  delhiveryGetLabel: 'viewer_read'
+  delhiveryGetLabel: 'viewer_read',
+  // — Live tracking for a waybill (order details popup "Track now"). —
+  delhiveryTrack: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -1638,6 +1640,50 @@ export default {
             });
           }
           return json({ ok: true, pdfUrl });
+        }
+
+        // ── DELHIVERY — live tracking for one waybill (Track now button).
+        //   Delhivery's Package Tracking API; returns the current status
+        //   plus every scan, newest first, trimmed to the fields the
+        //   popup shows. Not cached — it's meant to be live.
+        if (action === 'delhiveryTrack') {
+          const wb = String(url.searchParams.get('waybill') || '').trim();
+          if (!/^\d{6,20}$/.test(wb)) return json({ ok: false, error: 'Valid waybill required' }, 400);
+          if (!env.DELHIVERY_API_TOKEN) return json({ ok: false, error: 'DELHIVERY_API_TOKEN is not set in Worker secrets' }, 500);
+          const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
+          let tJson;
+          try {
+            const tResp = await fetch(base + '/api/v1/packages/json/?waybill=' + wb, {
+              headers: { 'Authorization': 'Token ' + env.DELHIVERY_API_TOKEN }
+            });
+            const tText = await tResp.text();
+            try { tJson = JSON.parse(tText); } catch (e) { tJson = { raw: tText.slice(0, 500) }; }
+          } catch (e) {
+            return json({ ok: false, error: 'Delhivery tracking request failed: ' + e.message }, 502);
+          }
+          const sh = ((tJson && tJson.ShipmentData) || [])[0];
+          const s = sh && sh.Shipment;
+          if (!s) return json({ ok: false, error: (tJson && (tJson.Error || tJson.error)) || 'No tracking data found for this waybill yet', response: tJson }, 502);
+          const st = s.Status || {};
+          const scans = (s.Scans || []).map(x => x.ScanDetail || x).map(d => ({
+            status: d.Scan || d.Status || '',
+            detail: d.Instructions || '',
+            location: d.ScannedLocation || d.StatusLocation || '',
+            at: d.ScanDateTime || d.StatusDateTime || ''
+          })).reverse(); // Delhivery lists oldest first
+          return json({
+            ok: true,
+            waybill: wb,
+            status: st.Status || '',
+            statusType: st.StatusType || '',
+            detail: st.Instructions || '',
+            location: st.StatusLocation || '',
+            at: st.StatusDateTime || '',
+            expectedDelivery: s.ExpectedDeliveryDate || s.PromisedDeliveryDate || '',
+            origin: s.Origin || '',
+            destination: s.Destination || '',
+            scans
+          });
         }
 
         // ── DELHIVERY — next Order ID for the Create-Pickup form.
