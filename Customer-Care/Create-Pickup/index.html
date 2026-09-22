@@ -1352,11 +1352,18 @@ function initDelhiveryApp() {
     setDims(DEFAULT_DIM_CM, DEFAULT_DIM_CM, DEFAULT_DIM_CM);
   }
 
+  // Dimensions/weight must be whole numbers — decimals (e.g. 24.7 cm from
+  // an Amazon listing) are always rounded UP, never down.
+  function ceilVal(v) { var n = parseFloat(v); return isNaN(n) ? v : Math.ceil(n); }
   function setDims(l, w, h) {
-    document.getElementById('f-length').value = l;
-    document.getElementById('f-width').value = w;
-    document.getElementById('f-height').value = h;
+    document.getElementById('f-length').value = ceilVal(l);
+    document.getElementById('f-width').value = ceilVal(w);
+    document.getElementById('f-height').value = ceilVal(h);
   }
+  ['f-length', 'f-width', 'f-height', 'f-weight'].forEach(function (id) {
+    var el = document.getElementById(id);
+    el.addEventListener('change', function () { if (el.value !== '') el.value = ceilVal(el.value); });
+  });
 
   function applyProduct(val) {
     selectedProduct = val;
@@ -1390,7 +1397,7 @@ function initDelhiveryApp() {
       return;
     }
     if (p.price) { autoUnitPrice = p.price; amountField.value = +(p.price * (parseInt(qtyField.value, 10) || 1)).toFixed(2); }
-    document.getElementById('f-weight').value = p.weight || DEFAULT_WEIGHT_G;
+    document.getElementById('f-weight').value = ceilVal(p.weight || DEFAULT_WEIGHT_G);
     if (p.length && p.width && p.height) setDims(p.length, p.width, p.height);
     else setDims(DEFAULT_DIM_CM, DEFAULT_DIM_CM, DEFAULT_DIM_CM);
     productHint.className = 'field-hint ok';
@@ -1775,10 +1782,10 @@ function initDelhiveryApp() {
       quantity: document.getElementById('f-qty').value,
       total_amount: document.getElementById('f-amount').value,
       hsn_code: document.getElementById('f-hsn').value.trim(),
-      weight: document.getElementById('f-weight').value || undefined,
-      width: document.getElementById('f-width').value || undefined,
-      height: document.getElementById('f-height').value || undefined,
-      length: document.getElementById('f-length').value || undefined
+      weight: ceilVal(document.getElementById('f-weight').value) || undefined,
+      width: ceilVal(document.getElementById('f-width').value) || undefined,
+      height: ceilVal(document.getElementById('f-height').value) || undefined,
+      length: ceilVal(document.getElementById('f-length').value) || undefined
     };
   }
 
@@ -1842,6 +1849,10 @@ function initDelhiveryApp() {
     confirmBox.className = 'confirm-box';
 
     if (!courierPrefix()) return;
+    ['f-length', 'f-width', 'f-height', 'f-weight'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el.value !== '') el.value = ceilVal(el.value); // 24.7 → 25 before the browser's whole-number check
+    });
     if (!validateRequiredFields()) return;
 
     if (!orderIdField.value) {
