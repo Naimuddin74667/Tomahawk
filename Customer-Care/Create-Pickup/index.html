@@ -201,6 +201,14 @@ table.log-table tr:last-child td { border-bottom: none; }
 }
 .row-act:hover { background: var(--accent); color: #111; }
 .row-act.busy { opacity: .5; cursor: progress; }
+.log-row.needs-verify td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.log-row.needs-verify td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.row-act.verify { background: var(--accent); color: #111; }
+.verify-note {
+  font-size: 11px; font-weight: 700; color: var(--accent); padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--accent); margin-left: auto; margin-right: 12px; white-space: nowrap;
+}
+.verify-note[hidden] { display: none; }
 .link-note { font-size: 10.5px; color: var(--text2); margin-top: 3px; white-space: nowrap; }
 .badge.st-rtd      { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 .badge.st-transit  { background: color-mix(in srgb, #60a5fa 18%, transparent); color: #60a5fa; }
@@ -580,6 +588,7 @@ table.log-table td.dl-cell { width: 38px; padding-right: 0; }
     <div class="panel">
       <div class="panel-head-row">
         <div class="panel-title" id="log-title">Recent orders</div>
+        <div class="verify-note" id="verify-note" hidden></div>
         <span class="log-refresh" id="log-refresh-btn">&#8635; Refresh</span>
       </div>
       <div class="log-table-wrap">
@@ -1428,7 +1437,7 @@ function initDelhiveryApp() {
     var st = orderStage(o);
     var n = parseInt(o.reattempts, 10) || 0;
     var STAGE_LABEL = o.direction === 'reverse'
-      ? { 'Created': 'Pickup Scheduled', 'In Transit': 'Picked Up', 'Delivered': 'Received' }
+      ? { 'Created': 'Pickup Scheduled', 'In Transit': 'Picked Up', 'Delivered': 'Delivered' }
       : { 'RTD': 'Ready To Dispatch' };
     return '<span class="badge ' + (STAGE_CLASS[st] || 'st-created') + '">' + escapeHtml(STAGE_LABEL[st] || st) + '</span>' +
       (n > 0 ? '<span class="reattempt-ico" title="Reattempt ×' + n + '">&#8635;' + (n > 1 ? n : '') + '</span>' : '');
@@ -1441,7 +1450,13 @@ function initDelhiveryApp() {
   function reverseActionsHtml(o) {
     if (o.direction !== 'reverse' || !o.delhivery_ok) return '';
     if (o.linked_order_id) return '<div class="link-note">Sent back as ' + escapeHtml(o.linked_order_id) + '</div>';
-    if (!o.received_at) return '<div><button type="button" class="row-act" data-act="recv">Mark received</button></div>';
+    if (!o.received_at) {
+      // Only once the courier says it's delivered to us: highlighted row +
+      // button to verify it physically arrived. Before that, no action.
+      return needsVerify(o)
+        ? '<div><button type="button" class="row-act verify" data-act="recv">Verify received</button></div>'
+        : '';
+    }
     // Refund case: checked → refund given → Closed (no send-back).
     if (o.job_type === 'Refund') {
       return o.refunded_at
@@ -1451,8 +1466,14 @@ function initDelhiveryApp() {
     return '<div><button type="button" class="row-act" data-act="sendback">Send back &#8594;</button></div>';
   }
 
+  // Courier shows the parcel delivered to our warehouse, but we haven't
+  // confirmed it physically arrived yet.
+  function needsVerify(o) {
+    return o.direction === 'reverse' && o.delhivery_ok && !o.received_at && o.track_stage === 'Delivered';
+  }
+
   async function markReceived(o, btn) {
-    if (!confirm('Mark ' + o.order_id + ' as received at the warehouse?')) return;
+    if (!confirm((o.courier || 'Delhivery') + ' shows ' + o.order_id + ' delivered to us.\n\nConfirm the parcel has physically arrived at the warehouse?')) return;
     btn.classList.add('busy');
     try {
       var res = await callWorker('delhiveryMarkReceived', { order_id: o.order_id });
@@ -1522,6 +1543,11 @@ function initDelhiveryApp() {
   var lastOrders = [];
   function renderLog(allOrders) {
     var orders = (allOrders || []).filter(function (o) { return (o.direction || 'forward') === pickupMode; });
+    var pending = orders.filter(needsVerify).length;
+    var note = document.getElementById('verify-note');
+    note.hidden = !pending;
+    note.textContent = pending + ' to verify';
+    note.title = pending + ' delivered by the courier — verify receipt below';
     var tbody = document.getElementById('log-tbody');
     var empty = document.getElementById('log-empty');
     tbody.innerHTML = '';
@@ -1565,7 +1591,7 @@ function initDelhiveryApp() {
 
       // Whole row is clickable — opens the order details popup. Clicks on
       // the ⬇ label button don't open it.
-      tr.className = 'log-row';
+      tr.className = 'log-row' + (needsVerify(o) ? ' needs-verify' : '');
       tr.title = 'Click to view details';
       tr.addEventListener('click', function (e) {
         if (e.target.closest('.label-dl-btn') || e.target.closest('.row-act')) return;
