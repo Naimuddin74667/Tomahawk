@@ -1040,7 +1040,7 @@ function initDelhiveryApp() {
   // with an F (FRPR / FRPL). FOC stays FOC.
   var TYPE_PREFIXES = {
     forward: { Repaired: 'FRPR', Replacement: 'FRPL', FOC: 'FOC' },
-    reverse: { Repair: 'RPR', Replacement: 'RPL' }
+    reverse: { Repair: 'RPR', Replacement: 'RPL', Refund: 'RFD' }
   };
   var pickupMode = 'forward';   // 'forward' | 'reverse' — set by the page tabs
   var typeField = document.getElementById('f-type');
@@ -1093,7 +1093,7 @@ function initDelhiveryApp() {
       options: [['', '— Select type —'], ['Repaired', 'Repaired'], ['Replacement', 'Replacement'], ['FOC', 'FOC']] },
     reverse: { title: 'New reverse pickup', name: 'Customer Name', add: 'Pickup Address (customer)', type: 'Return Reason',
       addPh: 'Where Delhivery collects the parcel from — house/flat no., street, area', log: 'Recent reverse pickups',
-      options: [['', '— Select reason —'], ['Repair', 'Repair'], ['Replacement', 'Replacement']] }
+      options: [['', '— Select reason —'], ['Repair', 'Repair'], ['Replacement', 'Replacement'], ['Refund', 'Refund']] }
   };
   window.setPickupMode = function (m) {
     if (m !== 'forward' && m !== 'reverse') return;
@@ -1413,12 +1413,13 @@ function initDelhiveryApp() {
   // (track_stage, refreshed by the Worker when this list loads).
   var STAGE_CLASS = {
     'Failed': 'failed', 'Created': 'st-created', 'RTD': 'st-rtd', 'In Transit': 'st-transit',
-    'At Last Mile': 'st-lastmile', 'Out For Delivery': 'st-ofd', 'Delivered': 'created', 'Received': 'created',
+    'At Last Mile': 'st-lastmile', 'Out For Delivery': 'st-ofd', 'Delivered': 'created', 'Received': 'created', 'Closed': 'created',
     'RTO': 'failed', 'Cancelled': 'failed', 'Lost': 'failed'
   };
   function orderStage(o) {
     if (!o.delhivery_ok) return 'Failed';
     var st = o.track_stage || 'Created';
+    if (o.direction === 'reverse' && o.refunded_at) return 'Closed';   // Refund case: refund given
     if (o.direction === 'reverse' && o.received_at) return 'Received'; // marked received by us — wins over tracking
     if (st === 'Created' && o.rtd_at) return 'RTD';
     return st;
@@ -1441,6 +1442,12 @@ function initDelhiveryApp() {
     if (o.direction !== 'reverse' || !o.delhivery_ok) return '';
     if (o.linked_order_id) return '<div class="link-note">Sent back as ' + escapeHtml(o.linked_order_id) + '</div>';
     if (!o.received_at) return '<div><button type="button" class="row-act" data-act="recv">Mark received</button></div>';
+    // Refund case: checked → refund given → Closed (no send-back).
+    if (o.job_type === 'Refund') {
+      return o.refunded_at
+        ? '<div class="link-note">Refunded ' + escapeHtml(fmtWhen(o.refunded_at)) + '</div>'
+        : '<div><button type="button" class="row-act" data-act="refund">Refund given</button></div>';
+    }
     return '<div><button type="button" class="row-act" data-act="sendback">Send back &#8594;</button></div>';
   }
 
@@ -1453,6 +1460,19 @@ function initDelhiveryApp() {
       fetchLog(true);
     } catch (e) {
       alert("Couldn't mark it received: " + e.message);
+      btn.classList.remove('busy');
+    }
+  }
+
+  async function markRefunded(o, btn) {
+    if (!confirm('Refund given for ' + o.order_id + '? This closes the case.')) return;
+    btn.classList.add('busy');
+    try {
+      var res = await callWorker('delhiveryMarkRefunded', { order_id: o.order_id });
+      if (!res.ok) throw new Error(res.error || 'failed');
+      fetchLog(true);
+    } catch (e) {
+      alert("Couldn't close it: " + e.message);
       btn.classList.remove('busy');
     }
   }
@@ -1536,6 +1556,7 @@ function initDelhiveryApp() {
           e.stopPropagation(); // don't open the details popup
           if (b.dataset.act === 'recv') markReceived(o, b);
           if (b.dataset.act === 'sendback') startSendBack(o);
+          if (b.dataset.act === 'refund') markRefunded(o, b);
         });
       });
 
