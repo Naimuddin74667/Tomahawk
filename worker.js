@@ -295,7 +295,10 @@ const ACTION_TIERS = {
   // — Shipping-label PDF link for a created waybill (Recent orders ⬇ button). —
   delhiveryGetLabel: 'viewer_read',
   // — Live tracking for a waybill (order details popup "Track now"). —
-  delhiveryTrack: 'viewer_read'
+  delhiveryTrack: 'viewer_read',
+  // — Ekart forward orders (same flow as Delhivery above). —
+  ekartCreateOrder: 'manager_up', ekartCheckPincode: 'viewer_read', ekartEstimateCharge: 'viewer_read',
+  ekartGetLabel: 'viewer_read', ekartTrack: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -1603,6 +1606,9 @@ export default {
           try {
             await refreshDelhiveryStages(env, url.searchParams.get('refresh') === '1');
           } catch (e) { console.error('delhivery stage refresh failed:', e.message); }
+          try {
+            await refreshEkartStages(env, url.searchParams.get('refresh') === '1');
+          } catch (e) { console.error('ekart stage refresh failed:', e.message); }
           const rows = await env.DB.prepare(
             'SELECT * FROM delhivery_orders ORDER BY created_at DESC LIMIT 100'
           ).all();
@@ -1779,6 +1785,124 @@ export default {
         //   check before every order: a non-serviceable pin gets
         //   created as NSZ (non-serviceable zone) and bounced back
         //   anyway, so there's no upside to skipping it.
+        // ══ EKART — FORWARD ORDERS (Create-Pickup, Courier = Ekart) ═══════
+        // Same flow as Delhivery: pincode check → estimate → create → label
+        // → live status. Orders are stored in delhivery_orders with
+        // courier = 'Ekart' so they share the Recent orders list and the
+        // daily Order ID serial. Helpers: getEkartToken, ekartBase,
+        // createEkartForwardOrder, deriveEkartStage (bottom of file).
+
+        // Pincode serviceability (Ekart Elite /api/v2/serviceability/{pin}).
+        if (action === 'ekartCheckPincode') {
+          const pin = url.searchParams.get('pin');
+          if (!pin || !/^\d{6}$/.test(pin)) return json({ ok: false, error: 'Valid 6-digit pincode required' }, 400);
+          if (!ekartConfigured(env)) return json({ ok: false, error: 'EKART_CLIENT_ID / EKART_USERNAME / EKART_PASSWORD are not set in Worker secrets' }, 500);
+          let eJson;
+          try {
+            const token = await getEkartToken(env);
+            const eResp = await fetch(ekartBase(env) + '/api/v2/serviceability/' + pin, { headers: { 'Authorization': 'Bearer ' + token } });
+            eJson = await eResp.json();
+          } catch (e) {
+            return json({ ok: false, error: 'Ekart pincode lookup failed: ' + e.message }, 502);
+          }
+          if (!eJson || eJson.status !== true) return json({ ok: true, serviceable: false, remark: eJson && eJson.remark });
+          const d = eJson.details || {};
+          return json({ ok: true, serviceable: true, cod: !!d.cod, prepaid: true, reversePickup: !!d.reverse_pickup, city: d.city || '', state: d.state || '' });
+        }
+
+        // Charge estimate before booking (Ekart /data/pricing/estimate,
+        // FORWARD). An estimate only — never blocks creation.
+        if (action === 'ekartEstimateCharge') {
+          const pin = url.searchParams.get('pin');
+          if (!pin || !/^\d{6}$/.test(pin)) return json({ ok: false, error: 'Valid 6-digit destination pincode required' }, 400);
+          if (!ekartConfigured(env)) return json({ ok: false, error: 'Ekart credentials are not set in Worker secrets' }, 500);
+          const num = (k, d) => Number(url.searchParams.get(k) || d);
+          let eJson;
+          try {
+            const token = await getEkartToken(env);
+            const eResp = await fetch(ekartBase(env) + '/data/pricing/estimate', {
+              method: 'POST',
+              headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                billingClientType: 'EXISTING_CLIENT',   // ITH is an onboarded account
+                shippingDirection: 'FORWARD',
+                serviceType: 'SURFACE',
+                pickupPincode: Number(env.EKART_PICKUP_PIN || 421302),
+                dropPincode: Number(pin),
+                weight: num('weight', 500), length: num('length', 5), width: num('width', 5), height: num('height', 5),
+                invoiceAmount: num('invoice_amount', 0),
+                codAmount: url.searchParams.get('payment_mode') === 'COD' ? num('invoice_amount', 0) : 0
+              })
+            });
+            const eText = await eResp.text();
+            try { eJson = JSON.parse(eText); } catch (e) { eJson = { raw: eText }; }
+            if (!eResp.ok) return json({ ok: false, error: 'Ekart estimate lookup returned ' + eResp.status, response: eJson }, 502);
+          } catch (e) {
+            return json({ ok: false, error: 'Ekart estimate lookup failed: ' + e.message }, 502);
+          }
+          const total = eJson && (eJson.total != null ? eJson.total : eJson.totalAmount);
+          return json({ ok: true, estimated: total != null, totalAmount: total, response: eJson });
+        }
+
+        // Shipping label PDF (Ekart /api/v1/package/label, json_only=false),
+        // streamed back so the browser can save it. First download = RTD.
+        if (action === 'ekartGetLabel') {
+          const tid = String(url.searchParams.get('waybill') || '').trim();
+          if (!/^[A-Za-z0-9]{6,40}$/.test(tid)) return json({ ok: false, error: 'Valid tracking ID required' }, 400);
+          if (!ekartConfigured(env)) return json({ ok: false, error: 'Ekart credentials are not set in Worker secrets' }, 500);
+          let lResp;
+          try {
+            const token = await getEkartToken(env);
+            lResp = await fetch(ekartBase(env) + '/api/v1/package/label?json_only=false', {
+              method: 'POST',
+              headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', 'Accept': 'application/octet-stream' },
+              body: JSON.stringify({ ids: [tid] })
+            });
+          } catch (e) {
+            return json({ ok: false, error: 'Ekart label request failed: ' + e.message }, 502);
+          }
+          const type = lResp.headers.get('Content-Type') || '';
+          if (!lResp.ok || /json|text\/html/i.test(type)) {
+            const t = await lResp.text();
+            return json({ ok: false, error: 'Ekart returned no label (' + lResp.status + ')', response: t.slice(0, 500) }, 502);
+          }
+          await ensureDelhiveryTable(env.DB);
+          await env.DB.prepare(
+            "UPDATE delhivery_orders SET rtd_at = COALESCE(rtd_at, datetime('now')) WHERE waybill = ? AND delhivery_ok = 1"
+          ).bind(tid).run();
+          return new Response(lResp.body, {
+            status: 200,
+            headers: Object.assign({}, CORS, { 'Content-Type': 'application/pdf', 'Content-Disposition': 'attachment; filename="' + tid + '.pdf"' })
+          });
+        }
+
+        // Live tracking for one Ekart shipment (order popup "Track now").
+        // Ekart's /api/v1/track/{id} is public — no token needed.
+        if (action === 'ekartTrack') {
+          const tid = String(url.searchParams.get('waybill') || '').trim();
+          if (!/^[A-Za-z0-9]{6,40}$/.test(tid)) return json({ ok: false, error: 'Valid tracking ID required' }, 400);
+          let tJson;
+          try {
+            const tResp = await fetch(ekartBase(env) + '/api/v1/track/' + tid);
+            const tText = await tResp.text();
+            try { tJson = JSON.parse(tText); } catch (e) { tJson = { raw: tText.slice(0, 500) }; }
+          } catch (e) {
+            return json({ ok: false, error: 'Ekart tracking request failed: ' + e.message }, 502);
+          }
+          const tr = tJson && tJson.track;
+          if (!tr) return json({ ok: false, error: 'No tracking data found for this shipment yet', response: tJson }, 502);
+          const d = deriveEkartStage(tr);
+          await ensureDelhiveryTable(env.DB);
+          await env.DB.prepare(
+            "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now') WHERE waybill = ?"
+          ).bind(d.stage, d.rawStatus, d.reattempts, tid).run();
+          const scans = (tr.details || []).map(x => ({
+            status: x.status || '', detail: x.desc || '', location: x.location || '',
+            at: x.ctime ? new Date(Number(x.ctime)).toISOString() : ''
+          })).sort((a, b) => (a.at < b.at ? 1 : -1));
+          return json({ ok: true, status: tr.status || '', stage: d.stage, location: tr.location || '', detail: tr.desc || '', scans });
+        }
+
         if (action === 'delhiveryCheckPincode') {
           const pin = url.searchParams.get('pin');
           if (!pin || !/^\d{6}$/.test(pin)) return json({ ok: false, error: 'Valid 6-digit pincode required' }, 400);
@@ -2918,6 +3042,34 @@ export default {
         // Requires DELHIVERY_API_TOKEN, DELHIVERY_PICKUP_LOCATION, and
         // DELHIVERY_SELLER_GST to be set as Worker secrets/vars — see
         // createDelhiveryOrder() above for exactly what each does.
+        // ── EKART — create a forward order (same inputs as delhiveryCreateOrder).
+        if (act === 'ekartCreateOrder') {
+          await ensureDelhiveryTable(env.DB);
+          const o = body.order || {};
+          const required = ['name', 'add', 'pin', 'city', 'state', 'phone', 'order', 'payment_mode', 'products_desc', 'quantity', 'total_amount'];
+          const missing = required.filter(f => o[f] === undefined || o[f] === null || o[f] === '');
+          if (missing.length) return json({ ok: false, error: 'Missing required field(s): ' + missing.join(', ') }, 400);
+          if (!ekartConfigured(env)) return json({ ok: false, error: 'EKART_CLIENT_ID / EKART_USERNAME / EKART_PASSWORD are not set in Worker secrets' }, 500);
+
+          let result;
+          try {
+            result = await createEkartForwardOrder(env, o);
+          } catch (e) {
+            return json({ ok: false, error: 'Ekart request failed: ' + e.message }, 502);
+          }
+          const sessionUser = await resolveSession(request, env.DB);
+          await env.DB.prepare(`
+            INSERT INTO delhivery_orders (order_id, waybill, status, delhivery_ok, payload_json, response_json, created_by, job_type, remark, courier, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Ekart', datetime('now'))
+          `).bind(
+            o.order, result.trackingId, result.success ? 'created' : 'failed',
+            result.success ? 1 : 0, JSON.stringify(result.logPayload), JSON.stringify(result.response),
+            (sessionUser && sessionUser.username) || 'unauthenticated', o.job_type || '',
+            String(o.remark || '').trim()
+          ).run();
+          return json({ ok: result.success, waybill: result.trackingId, response: result.response, error: result.success ? undefined : result.error }, result.success ? 200 : 502);
+        }
+
         if (act === 'delhiveryCreateOrder') {
           await ensureDelhiveryTable(env.DB);
           const o = body.order || {};
@@ -3648,7 +3800,8 @@ async function ensureDelhiveryTable(DB) {
   //   track_status — Delhivery's own raw status text, for the popup
   //   reattempts   — delivery reattempts so far (0 = none)
   //   tracked_at   — when tracking was last pulled
-  for (const col of ['rtd_at TEXT', 'track_stage TEXT', 'track_status TEXT', 'reattempts INTEGER DEFAULT 0', 'tracked_at TEXT']) {
+  // courier — 'Delhivery' (default, incl. all older rows) or 'Ekart'.
+  for (const col of ['rtd_at TEXT', 'track_stage TEXT', 'track_status TEXT', 'reattempts INTEGER DEFAULT 0', 'tracked_at TEXT', "courier TEXT DEFAULT 'Delhivery'"]) {
     try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN ${col}`).run(); } catch (e) { /* column already exists */ }
   }
 }
@@ -3665,6 +3818,7 @@ async function refreshDelhiveryStages(env, force) {
   const rows = await env.DB.prepare(`
     SELECT waybill FROM delhivery_orders
     WHERE delhivery_ok = 1 AND waybill IS NOT NULL AND waybill != ''
+      AND COALESCE(courier, 'Delhivery') = 'Delhivery'
       AND (track_stage IS NULL OR track_stage NOT IN ('Delivered','RTO','Cancelled','Lost'))
       ${force ? '' : "AND (tracked_at IS NULL OR tracked_at < datetime('now', '-10 minutes'))"}
     ORDER BY created_at DESC LIMIT 100
@@ -3721,6 +3875,142 @@ function deriveDelhiveryStage(s) {
   else if (status === 'in transit' || /in transit|picked up|shipment picked/.test(instr)) stage = 'In Transit';
   else stage = 'Created'; // Manifested / Not Picked / Open / Scheduled
   return { stage, rawStatus: raw, reattempts };
+}
+
+
+// ══ EKART — forward-order helpers ═════════════════════════════════════
+// Ekart Elite API (https://app.elite.ekartlogistics.in). Auth: POST
+// /integrations/v2/auth/token/{EKART_CLIENT_ID} with Elite username +
+// password → bearer access_token (Ekart caches it ~24h on their side).
+// Config: EKART_CLIENT_ID + EKART_PASSWORD (secrets), EKART_USERNAME,
+// EKART_SELLER_NAME/ADDRESS, SELLER_GST, EKART_PICKUP_* (wrangler.toml).
+function ekartBase(env) { return env.EKART_BASE_URL || 'https://app.elite.ekartlogistics.in'; }
+function ekartConfigured(env) { return !!(env.EKART_CLIENT_ID && env.EKART_USERNAME && env.EKART_PASSWORD); }
+
+async function getEkartToken(env) {
+  const res = await fetch(ekartBase(env) + '/integrations/v2/auth/token/' + encodeURIComponent(env.EKART_CLIENT_ID), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: env.EKART_USERNAME, password: env.EKART_PASSWORD })
+  });
+  const text = await res.text();
+  let j; try { j = JSON.parse(text); } catch (e) { j = { raw: text }; }
+  if (!res.ok || !j.access_token) throw new Error('Ekart auth failed: ' + (j.message || j.description || text.slice(0, 200)));
+  return j.access_token;
+}
+
+// Builds and sends one forward shipment (PUT /api/v1/package/create).
+//   payment_mode: 'Prepaid' or 'COD' (COD collects the declared value)
+//   drop_location  = customer; pickup_location = our Bhiwandi warehouse,
+//   sent in full every time (Ekart's auto-fill proved unreliable).
+//   invoice_number/date = our Order ID / today (these are free shipments —
+//   repairs, replacements, FOC — with no separate tax invoice).
+//   Ekart rejects a consignee_alternate_phone equal to the phone, so when
+//   none is given we send our support number instead.
+const EKART_SUPPORT_PHONE = '8928949415';
+
+async function createEkartForwardOrder(env, o) {
+  const total = Number(o.total_amount) || 0;
+  const cod = String(o.payment_mode).toUpperCase() === 'COD';
+  const phone = String(o.phone).replace(/\D/g, '').slice(-10);
+  let alt = String(o.alt_phone || '').replace(/\D/g, '').slice(-10);
+  if (!alt || alt === phone) alt = EKART_SUPPORT_PHONE;
+  const todayIst = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+
+  const payload = {
+    seller_name: env.EKART_SELLER_NAME,
+    seller_address: env.EKART_SELLER_ADDRESS,
+    seller_gst_tin: env.SELLER_GST,
+    consignee_gst_amount: 0,
+    order_number: o.order,
+    invoice_number: o.order,
+    invoice_date: todayIst,
+    consignee_name: o.name,
+    consignee_alternate_phone: alt,
+    payment_mode: cod ? 'COD' : 'Prepaid',
+    category_of_goods: o.category_of_goods || 'Tools & Hardware',
+    hsn_code: o.hsn_code || undefined,
+    products_desc: o.products_desc,
+    total_amount: total,
+    cod_amount: cod ? total : 0,
+    tax_value: 0,
+    taxable_amount: total,
+    commodity_value: String(total),
+    quantity: Number(o.quantity) || 1,
+    weight: Number(o.weight) || 500,
+    length: Number(o.length) || 5,
+    height: Number(o.height) || 5,
+    width: Number(o.width) || 5,
+    drop_location: {
+      name: o.name, address: o.add, city: o.city, state: o.state, country: 'India',
+      phone: Number(phone), pin: Number(o.pin)
+    },
+    pickup_location: {
+      name: env.EKART_PICKUP_NAME, address: env.EKART_PICKUP_ADDRESS,
+      city: env.EKART_PICKUP_CITY, state: env.EKART_PICKUP_STATE, country: 'India',
+      phone: Number(env.EKART_PICKUP_PHONE || EKART_SUPPORT_PHONE), pin: Number(env.EKART_PICKUP_PIN)
+    }
+  };
+
+  const token = await getEkartToken(env);
+  const eResp = await fetch(ekartBase(env) + '/api/v1/package/create', {
+    method: 'PUT',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const eText = await eResp.text();
+  let eJson; try { eJson = JSON.parse(eText); } catch (e) { eJson = { raw: eText.slice(0, 1000) }; }
+  const success = !!(eResp.ok && eJson.status === true && eJson.tracking_id);
+  const error = success ? '' : (eJson.remark || eJson.message || eJson.description || eJson.raw || ('HTTP ' + eResp.status));
+
+  // Stored in the same shape as Delhivery orders (shipments[0]) so the
+  // Recent orders list, order popup and label code read it the same way.
+  const logPayload = { courier: 'Ekart', shipments: [Object.assign({}, o, {
+    shipment_length: payload.length, shipment_width: payload.width, shipment_height: payload.height
+  })], ekart_request: payload };
+  return { success, httpStatus: eResp.status, trackingId: eJson.tracking_id || '', error: String(error), logPayload, response: eJson };
+}
+
+// Maps Ekart's track object to our stage names (same set as Delhivery).
+function deriveEkartStage(tr) {
+  const raw = String((tr && tr.status) || '');
+  const s = raw.toLowerCase();
+  const reattempts = Math.max(0, (Number(tr && tr.attempts) || 0) - 1);
+  let stage;
+  if (/^rto|rto /.test(s)) stage = 'RTO';
+  else if (/cancel/.test(s)) stage = 'Cancelled';
+  else if (/lost|damaged/.test(s)) stage = 'Lost';
+  else if (s === 'delivered') stage = 'Delivered';
+  else if (/out for delivery/.test(s)) stage = 'Out For Delivery';
+  else if (/undelivered/.test(s)) stage = 'At Last Mile';
+  else if (/in transit|picked up|shipment delayed/.test(s)) stage = 'In Transit';
+  else stage = 'Created'; // Order Placed / Pickup Pending / Pickup Scheduled / Out for Pickup / Not Picked
+  return { stage, rawStatus: raw, reattempts };
+}
+
+// Refreshes stages for open Ekart orders (one public track call each,
+// max 30 per list load; skips ones tracked in the last 10 min unless forced).
+async function refreshEkartStages(env, force) {
+  const rows = await env.DB.prepare(`
+    SELECT waybill FROM delhivery_orders
+    WHERE delhivery_ok = 1 AND waybill IS NOT NULL AND waybill != '' AND courier = 'Ekart'
+      AND (track_stage IS NULL OR track_stage NOT IN ('Delivered','RTO','Cancelled','Lost'))
+      ${force ? '' : "AND (tracked_at IS NULL OR tracked_at < datetime('now', '-10 minutes'))"}
+    ORDER BY created_at DESC LIMIT 30
+  `).all();
+  const stmts = [];
+  await Promise.all((rows.results || []).map(async r => {
+    try {
+      const resp = await fetch(ekartBase(env) + '/api/v1/track/' + encodeURIComponent(r.waybill));
+      const j = await resp.json();
+      if (!j || !j.track) return;
+      const d = deriveEkartStage(j.track);
+      stmts.push(env.DB.prepare(
+        "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now') WHERE waybill = ?"
+      ).bind(d.stage, d.rawStatus, d.reattempts, String(r.waybill)));
+    } catch (e) { /* skip this one */ }
+  }));
+  if (stmts.length) await env.DB.batch(stmts);
 }
 
 // ── DELHIVERY — daily Order ID serial ────────────────────────────────
