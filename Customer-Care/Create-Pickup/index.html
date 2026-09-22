@@ -192,10 +192,35 @@ table.log-table tr:last-child td { border-bottom: none; }
 .details-toggle { cursor: pointer; color: var(--accent); font-size: 11px; user-select: none; }
 .log-consignee { font-size: 11.5px; color: var(--text); margin: 2px 0 1px; }
 table.log-table tr.log-row { cursor: pointer; transition: background .12s; }
-table.log-table tr.log-row:hover td, table.log-table tr.log-row.open td { background: var(--surface2); }
-table.log-table tr.log-row.open td { border-bottom-color: transparent; }
-table.log-table tr.log-detail-row td { background: var(--surface2); padding-top: 0; }
-table.log-table tr.log-detail-row .details-json { margin-top: 0; }
+table.log-table tr.log-row:hover td { background: var(--surface2); }
+/* Order details popup (same backdrop pattern as Manage Users' modal) */
+.order-modal-backdrop {
+  position: fixed; inset: 0; z-index: 400; background: rgba(0,0,0,.6);
+  display: flex; align-items: flex-start; justify-content: center; padding: 60px 20px; overflow-y: auto;
+}
+.order-modal-backdrop[hidden] { display: none; }
+.order-modal { width: 100%; max-width: 640px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 22px; }
+.order-modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.order-modal-title { font-family: var(--font-display); font-weight: 800; font-size: 17px; color: var(--text); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.order-modal-sub { font-size: 12px; color: var(--text2); margin-top: 4px; }
+.order-modal-close { width: 30px; height: 30px; border-radius: 50%; background: var(--surface2); border: 1px solid var(--border); color: var(--text2); cursor: pointer; font-size: 13px; flex-shrink: 0; }
+.order-modal-close:hover { border-color: var(--accent); color: var(--text); }
+.om-section { margin-bottom: 16px; }
+.om-section-title { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+.om-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 14px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+.om-grid .om-wide { grid-column: 1 / -1; }
+.om-label { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text2); margin-bottom: 2px; }
+.om-value { font-size: 13px; color: var(--text); word-break: break-word; }
+.om-value.mono { font-family: monospace; font-size: 12.5px; }
+.om-value.bad { color: var(--red); }
+.om-actions { display: flex; gap: 10px; margin-top: 4px; }
+.om-btn { padding: 9px 14px; border-radius: 7px; font-family: var(--font-body); font-weight: 700; font-size: 12.5px; cursor: pointer; border: 1px solid var(--border); background: var(--surface2); color: var(--text); }
+.om-btn.primary { background: var(--accent); color: #111; border-color: var(--accent); }
+.om-btn:disabled { opacity: .4; cursor: not-allowed; }
+.om-raw summary { cursor: pointer; font-size: 11.5px; color: var(--text2); margin-top: 12px; }
+.om-raw .details-json { display: block; }
+@media (max-width: 560px) { .om-grid { grid-template-columns: 1fr 1fr; } }
+
 /* Shipping-label download button in the Recent orders table */
 .label-dl-btn {
   width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface2);
@@ -533,6 +558,19 @@ table.log-table td.dl-cell { width: 38px; padding-right: 0; }
           <tbody id="log-tbody"></tbody>
         </table>
         <div class="log-empty" id="log-empty" hidden>No orders logged yet.</div>
+        <!-- Order details popup — filled by openOrderModal() -->
+        <div class="order-modal-backdrop" id="order-modal" hidden>
+          <div class="order-modal" role="dialog" aria-modal="true" aria-labelledby="order-modal-title">
+            <div class="order-modal-header">
+              <div>
+                <div class="order-modal-title" id="order-modal-title"></div>
+                <div class="order-modal-sub" id="order-modal-sub"></div>
+              </div>
+              <button type="button" class="order-modal-close" id="order-modal-close" title="Close">&#10005;</button>
+            </div>
+            <div id="order-modal-body"></div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1133,60 +1171,121 @@ function initDelhiveryApp() {
         '<td><span class="badge ' + statusClass + '">' + (o.delhivery_ok ? 'Created' : 'Failed') + '</span></td>';
       tbody.appendChild(tr);
 
-      // Label download — the Worker fetches Delhivery's packing-slip PDF
-      // for this waybill and streams it back; saved as <OrderID>_<AWB>.pdf.
       var dlBtn = tr.querySelector('.label-dl-btn');
-      if (canDownload) dlBtn.addEventListener('click', async function () {
-        if (dlBtn.classList.contains('busy')) return;
-        dlBtn.classList.add('busy');
-        try {
-          var session = window.TM_getSession();
-          var headers = {};
-          if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
-          var resp = await fetch(window.TM_WORKER + '?action=delhiveryGetLabel&file=1&waybill=' + encodeURIComponent(o.waybill), { headers: headers });
-          var type = resp.headers.get('Content-Type') || '';
-          if (!resp.ok || type.indexOf('application/pdf') === -1) {
-            var err = {};
-            try { err = await resp.json(); } catch (e2) {}
-            throw new Error(err.error || ('HTTP ' + resp.status));
-          }
-          var blob = await to4x6Pdf(await resp.arrayBuffer());
-          var a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = String(o.order_id || 'label').replace(/[^A-Za-z0-9_-]/g, '_') + '_' + o.waybill + '.pdf';
-          document.body.appendChild(a);
-          a.click();
-          setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-        } catch (e) {
-          alert("Couldn't download the label: " + e.message);
-        }
-        dlBtn.classList.remove('busy');
-      });
+      if (canDownload) dlBtn.addEventListener('click', function () { downloadLabel(o, dlBtn); });
 
-      // Whole row is clickable — opens/closes a full-width details row
-      // underneath (remark + Delhivery's response). Clicks on the ⬇
-      // label button don't toggle it.
+      // Whole row is clickable — opens the order details popup. Clicks on
+      // the ⬇ label button don't open it.
       tr.className = 'log-row';
       tr.title = 'Click to view details';
-      var detailTr = null;
       tr.addEventListener('click', function (e) {
         if (e.target.closest('.label-dl-btn')) return;
-        if (detailTr) { detailTr.remove(); detailTr = null; tr.classList.remove('open'); return; }
-        var pretty = '';
-        try { pretty = JSON.stringify(JSON.parse(o.response_json || '{}'), null, 2); } catch (err) { pretty = o.response_json || ''; }
-        detailTr = document.createElement('tr');
-        detailTr.className = 'log-detail-row';
-        var td = document.createElement('td');
-        td.colSpan = tr.children.length;
-        var box = document.createElement('div');
-        box.className = 'details-json show';
-        box.textContent = (o.remark ? 'Remark: ' + o.remark + '\n\n' : '') + pretty;
-        td.appendChild(box);
-        detailTr.appendChild(td);
-        tr.after(detailTr);
-        tr.classList.add('open');
+        openOrderModal(o);
       });
     });
+  }
+
+  // ── Label download — the Worker fetches Delhivery's packing-slip PDF
+  // for the waybill and streams it back; rescaled to 4×6 and saved as
+  // <OrderID>_<AWB>.pdf. `btn` just shows a busy state while it runs.
+  async function downloadLabel(o, btn) {
+    if (btn.classList.contains('busy')) return;
+    btn.classList.add('busy');
+    try {
+      var session = window.TM_getSession();
+      var headers = {};
+      if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
+      var resp = await fetch(window.TM_WORKER + '?action=delhiveryGetLabel&file=1&waybill=' + encodeURIComponent(o.waybill), { headers: headers });
+      var type = resp.headers.get('Content-Type') || '';
+      if (!resp.ok || type.indexOf('application/pdf') === -1) {
+        var err = {};
+        try { err = await resp.json(); } catch (e2) {}
+        throw new Error(err.error || ('HTTP ' + resp.status));
+      }
+      var blob = await to4x6Pdf(await resp.arrayBuffer());
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = String(o.order_id || 'label').replace(/[^A-Za-z0-9_-]/g, '_') + '_' + o.waybill + '.pdf';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    } catch (e) {
+      alert("Couldn't download the label: " + e.message);
+    }
+    btn.classList.remove('busy');
+  }
+
+  // ── Order details popup ──────────────────────────────────────────────
+  // Everything comes from what's already in the log row: payload_json
+  // (what we sent Delhivery) and response_json (what they sent back).
+  var orderModal = document.getElementById('order-modal');
+  var orderModalBody = document.getElementById('order-modal-body');
+  function closeOrderModal() { orderModal.hidden = true; }
+  document.getElementById('order-modal-close').addEventListener('click', closeOrderModal);
+  orderModal.addEventListener('click', function (e) { if (e.target === orderModal) closeOrderModal(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !orderModal.hidden) closeOrderModal(); });
+
+  function safeJson(str) { try { return JSON.parse(str || '{}'); } catch (e) { return {}; } }
+  function omField(label, value, opts) {
+    opts = opts || {};
+    var v = (value === undefined || value === null || value === '') ? '&#8212;' : escapeHtml(String(value));
+    return '<div class="' + (opts.wide ? 'om-wide' : '') + '"><div class="om-label">' + label + '</div>' +
+      '<div class="om-value' + (opts.mono ? ' mono' : '') + (opts.bad ? ' bad' : '') + '">' + v + '</div></div>';
+  }
+  function omSection(title, fields) {
+    return '<div class="om-section"><div class="om-section-title">' + title + '</div><div class="om-grid">' + fields.join('') + '</div></div>';
+  }
+
+  function openOrderModal(o) {
+    var sh = (safeJson(o.payload_json).shipments || [])[0] || {};
+    var resp = safeJson(o.response_json);
+    var pkg = (resp.packages || [])[0] || {};
+    var remarks = [].concat(pkg.remarks || []).filter(Boolean).join('; ') || resp.rmk || '';
+    var dims = (sh.shipment_length && sh.shipment_width && sh.shipment_height)
+      ? sh.shipment_length + ' × ' + sh.shipment_width + ' × ' + sh.shipment_height + ' cm' : '';
+    var place = [sh.city, sh.state].filter(Boolean).join(', ');
+
+    document.getElementById('order-modal-title').innerHTML = escapeHtml(o.order_id || '') +
+      ' <span class="badge ' + (o.delhivery_ok ? 'created' : 'failed') + '">' + (o.delhivery_ok ? 'Created' : 'Failed') + '</span>';
+    document.getElementById('order-modal-sub').textContent =
+      [o.job_type, 'by ' + (o.created_by || '—'), fmtWhen(o.created_at)].filter(Boolean).join(' · ');
+
+    orderModalBody.innerHTML =
+      omSection('Shipment', [
+        omField('Waybill (AWB)', o.waybill, { mono: true }),
+        omField('Courier', 'Delhivery'),
+        omField('Sort code', pkg.sort_code, { mono: true }),
+        omField('Delhivery status', pkg.status || (o.delhivery_ok ? 'Success' : 'Failed'), { bad: !o.delhivery_ok }),
+        omField('Payment', sh.payment_mode),
+        omField('COD amount', sh.payment_mode === 'COD' ? '₹' + (sh.cod_amount || 0) : ''),
+        remarks ? omField('Delhivery remarks', remarks, { wide: true, bad: !o.delhivery_ok }) : ''
+      ]) +
+      omSection('Consignee', [
+        omField('Name', sh.name),
+        omField('Phone', sh.phone, { mono: true }),
+        omField('Pincode', sh.pin, { mono: true }),
+        omField('Address', sh.add, { wide: true }),
+        omField('City / State', place, { wide: true })
+      ]) +
+      omSection('Product', [
+        omField('Product', sh.products_desc, { wide: true }),
+        omField('Quantity', sh.quantity),
+        omField('Declared value', sh.total_amount ? '₹' + sh.total_amount : ''),
+        omField('HSN', sh.hsn_code, { mono: true }),
+        omField('Weight', sh.weight ? sh.weight + ' g' : ''),
+        omField('Dimensions (L×W×H)', dims),
+        o.remark ? omField('Remark', o.remark, { wide: true }) : ''
+      ]) +
+      '<div class="om-actions">' +
+        '<button type="button" class="om-btn primary" id="om-dl-btn"' + (o.delhivery_ok && o.waybill ? '' : ' disabled') + '>&#11015; Download label (4×6)</button>' +
+      '</div>' +
+      '<details class="om-raw"><summary>Raw Delhivery response</summary>' +
+        '<div class="details-json"></div></details>';
+
+    orderModalBody.querySelector('.om-raw .details-json').textContent = JSON.stringify(resp, null, 2);
+    var omDl = document.getElementById('om-dl-btn');
+    if (!omDl.disabled) omDl.addEventListener('click', function () { downloadLabel(o, omDl); });
+    orderModal.hidden = false;
   }
 
   document.getElementById('log-refresh-btn').addEventListener('click', fetchLog);
