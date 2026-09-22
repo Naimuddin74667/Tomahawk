@@ -1611,9 +1611,11 @@ export default {
           try {
             await refreshEkartStages(env, url.searchParams.get('refresh') === '1');
           } catch (e) { console.error('ekart stage refresh failed:', e.message); }
+          // ?limit= (default 100, max 500) — the Customer Care Dashboard asks for more.
+          const lim = Math.min(500, Math.max(1, parseInt(url.searchParams.get('limit') || '100', 10) || 100));
           const rows = await env.DB.prepare(
-            'SELECT * FROM delhivery_orders ORDER BY created_at DESC LIMIT 100'
-          ).all();
+            'SELECT * FROM delhivery_orders ORDER BY created_at DESC LIMIT ?'
+          ).bind(lim).all();
           return json({ ok: true, orders: rows.results || [] });
         }
 

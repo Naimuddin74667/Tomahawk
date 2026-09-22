@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600;700&family=Roboto+Slab:wght@700&display=swap" rel="stylesheet">
-<title>Customer Care — Tomahawk</title>
+<title>Customer Care Dashboard — Tomahawk</title>
 <style>
 /* ── Design tokens (matches the rest of the Tomahawk suite) ── */
 :root {
@@ -257,6 +257,77 @@ table.log-table tr:last-child td { border-bottom: none; }
   text-align: center; padding: 60px 20px; color: var(--text2); font-size: 13px;
 }
 .placeholder-panel .ph-title { font-family: var(--font-display); font-size: 16px; font-weight: 800; color: var(--text); }
+/* ── Customer Care Dashboard ── */
+.back-link { font-size: 12px; font-weight: 600; color: var(--text2); text-decoration: none; display: inline-block; margin-bottom: 10px; }
+.back-link:hover { color: var(--accent); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 18px; }
+.tile {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px;
+  cursor: pointer; transition: border-color .12s, transform .12s; text-align: left; color: var(--text); font: inherit;
+}
+.tile:hover { border-color: var(--tile-c, var(--accent)); transform: translateY(-1px); }
+.tile.active { border-color: var(--tile-c, var(--accent)); box-shadow: inset 0 0 0 1px var(--tile-c, var(--accent)); }
+.tile-n { font-family: var(--font-display); font-weight: 800; font-size: 26px; color: var(--tile-c, var(--text)); line-height: 1.1; }
+.tile-l { font-size: 11px; color: var(--text2); margin-top: 4px; font-weight: 600; }
+.tile.attn .tile-n::after { content: ' •'; color: var(--accent); }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+.panel-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.panel-title { font-family: var(--font-display); font-size: 13px; font-weight: 800; color: var(--accent); letter-spacing: 1px; text-transform: uppercase; }
+.tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tools input, .tools select {
+  background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px;
+  padding: 7px 10px; font: inherit; font-size: 12px; outline: none;
+}
+.tools input { width: 260px; max-width: 100%; }
+.tools input:focus, .tools select:focus { border-color: var(--accent); }
+.log-refresh { font-size: 11px; color: var(--text2); cursor: pointer; white-space: nowrap; }
+.log-refresh:hover { color: var(--accent); }
+.table-wrap { overflow-x: auto; }
+.case-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.case-table th { text-align: left; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--text2); padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.case-table td { padding: 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.case-table tr.case-row { cursor: pointer; }
+.case-table tr.case-row:hover td { background: var(--surface2); }
+.case-table tr.attn td { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.case-table tr.attn td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.mono { font-family: 'DM Mono', ui-monospace, monospace; font-size: 11.5px; }
+.sub { font-size: 10.5px; color: var(--text2); margin-top: 2px; }
+.muted { color: var(--text2); text-align: center; padding: 24px; }
+.journey { display: flex; gap: 3px; align-items: center; flex-wrap: wrap; }
+.step { font-size: 9.5px; font-weight: 700; padding: 3px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--text2); white-space: nowrap; }
+.step.done { border-color: color-mix(in srgb, #22c55e 50%, transparent); color: #22c55e; background: color-mix(in srgb, #22c55e 10%, transparent); }
+.step.now { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.step.bad { border-color: color-mix(in srgb, #f87171 50%, transparent); color: #f87171; }
+.step-sep { color: var(--text2); font-size: 9px; opacity: .6; }
+.badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; text-transform: uppercase; letter-spacing: .03em; }
+.b-green { background: color-mix(in srgb, #22c55e 15%, transparent); color: #22c55e; }
+.b-amber { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.b-blue { background: color-mix(in srgb, #60a5fa 15%, transparent); color: #60a5fa; }
+.b-gray { background: var(--surface2); color: var(--text2); }
+.b-red { background: color-mix(in srgb, #f87171 15%, transparent); color: #f87171; }
+/* popup */
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: 50px 16px; overflow-y: auto; }
+.modal-backdrop[hidden] { display: none; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; width: 100%; max-width: 720px; padding: 22px; }
+.modal-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+.modal-title { font-family: var(--font-display); font-weight: 800; font-size: 17px; }
+.modal-sub { font-size: 12px; color: var(--text2); margin-top: 3px; }
+.modal-close { background: var(--surface2); border: 1px solid var(--border); color: var(--text2); border-radius: 50%; width: 30px; height: 30px; cursor: pointer; }
+.leg { border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-top: 12px; }
+.leg-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.leg-title { font-weight: 700; font-size: 13px; }
+.leg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 14px; margin-top: 10px; font-size: 12px; }
+.leg-grid .k { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: .04em; }
+.track-btn { font-size: 11px; font-weight: 700; padding: 5px 12px; border-radius: 7px; border: 1px solid var(--accent); background: transparent; color: var(--accent); cursor: pointer; }
+.track-btn:hover { background: var(--accent); color: #111; }
+.track-box { margin-top: 10px; font-size: 12px; }
+.scan-list { list-style: none; margin: 8px 0 0; padding: 0; border-left: 2px solid var(--border); }
+.scan-list li { padding: 0 0 10px 12px; position: relative; }
+.scan-list li::before { content: ''; position: absolute; left: -5px; top: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--border); }
+.scan-list li:first-child::before { background: var(--accent); }
+.scan-st { font-weight: 700; }
+.scan-meta { font-size: 10.5px; color: var(--text2); }
+@media (max-width: 640px) { .tools input { width: 100%; } }
 </style>
 </head>
 <body>
@@ -271,7 +342,7 @@ table.log-table tr:last-child td { border-bottom: none; }
       </div>
     </div>
     <div style="font-size:11.5px;color:var(--text2);margin-bottom:14px;">
-      Login now happens once on the <a href="../index.html" style="color:var(--accent)">Tomahawk hub</a>. Redirecting you there&#8230;
+      Login now happens once on the <a href="../../index.html" style="color:var(--accent)">Tomahawk hub</a>. Redirecting you there&#8230;
     </div>
   </div>
 </div>
@@ -314,63 +385,46 @@ table.log-table tr:last-child td { border-bottom: none; }
 
 <div class="page">
   <div class="page-head">
-    <div class="page-title">Customer Care</div>
-    <div class="page-sub">Pick a tool below</div>
+    <a href="../" class="back-link">&#8592; Customer Care</a>
+    <div class="page-title">Dashboard</div>
+    <div class="page-sub">Every pickup and shipment in one place — each case tracked from pickup to close</div>
   </div>
 
-  <!-- ── Landing: sub-card picker (Marketplace Shipments card style) ── -->
-  <div id="cc-landing">
-    <div class="cc-landing-grid">
+  <!-- Stage tiles — click one to filter the list -->
+  <div class="tiles" id="tiles"></div>
 
-      <!-- Dashboard — first card: all pickups/shipments as tracked cases. -->
-      <a class="cc-card" href="./Dashboard/"
-           style="--card-color:#F5A800;--card-color-dim:#F5A80015;--card-color-border:#F5A80040;">
-        <div class="cc-card-glow"></div>
-        <div class="cc-card-icon">
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <rect x="3" y="10" width="3" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/>
-            <rect x="8.5" y="6" width="3" height="11" rx="1" stroke="currentColor" stroke-width="1.5"/>
-            <rect x="14" y="3" width="3" height="14" rx="1" stroke="currentColor" stroke-width="1.5"/>
-          </svg>
-        </div>
-        <div class="cc-card-platform">Overview</div>
-        <div class="cc-card-name">Dashboard</div>
-        <div class="cc-card-desc">Every pickup and shipment in one place — each case tracked from pickup to close, with live courier tracking.</div>
-        <div class="cc-card-chips">
-          <span class="cc-chip">Live tracking</span>
-          <span class="cc-chip cc-chip-gray">All couriers</span>
-        </div>
-        <div class="cc-card-footer">
-          <span class="cc-card-cta">Open</span>
-          <div class="cc-card-arrow">&rarr;</div>
-        </div>
-      </a>
-
-      <a class="cc-card" href="./Create-Pickup/"
-           style="--card-color:#2dd4bf;--card-color-dim:#2dd4bf15;--card-color-border:#2dd4bf40;">
-        <div class="cc-card-glow"></div>
-        <div class="cc-card-icon">
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <path d="M4 11v-1a6 6 0 0112 0v1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            <rect x="2" y="11" width="4" height="5" rx="1.4" stroke="currentColor" stroke-width="1.5"/>
-            <rect x="14" y="11" width="4" height="5" rx="1.4" stroke="currentColor" stroke-width="1.5"/>
-            <path d="M16 16v.5A2.5 2.5 0 0113.5 19H11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-        </div>
-        <div class="cc-card-platform">Delhivery + Ekart</div>
-        <div class="cc-card-name">Create Parcel Pickup</div>
-        <div class="cc-card-desc">Book forward orders (Delhivery or Ekart) and Delhivery reverse pickups for repairs, replacements and refunds.</div>
-        <div class="cc-card-chips">
-          <span class="cc-chip">Live production</span>
-          <span class="cc-chip cc-chip-gray">Ekart reverse soon</span>
-        </div>
-        <div class="cc-card-footer">
-          <span class="cc-card-cta">Open</span>
-          <div class="cc-card-arrow">&rarr;</div>
-        </div>
-      </a>
-
+  <div class="panel">
+    <div class="panel-head-row">
+      <div class="panel-title">All cases</div>
+      <div class="tools">
+        <input type="search" id="q" placeholder="Search order ID, customer, waybill, product…">
+        <select id="f-kind">
+          <option value="">All types</option>
+          <option value="Repair">Repair</option>
+          <option value="Replacement">Replacement</option>
+          <option value="Refund">Refund</option>
+          <option value="forward">Forward only</option>
+        </select>
+        <span class="log-refresh" id="refresh-btn">&#8635; Refresh</span>
+      </div>
     </div>
+    <div class="table-wrap">
+      <table class="case-table">
+        <thead><tr><th>Case</th><th>Customer</th><th>Product</th><th>Journey</th><th>Status</th></tr></thead>
+        <tbody id="case-body"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Case details + live tracking popup -->
+<div class="modal-backdrop" id="case-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <div><div class="modal-title" id="case-title"></div><div class="modal-sub" id="case-sub"></div></div>
+      <button class="modal-close" id="case-close" title="Close">&#10005;</button>
+    </div>
+    <div id="case-body-modal"></div>
   </div>
 </div>
 
@@ -385,7 +439,7 @@ table.log-table tr:last-child td { border-bottom: none; }
 
   function getSession() { try { return JSON.parse(localStorage.getItem(TM_SESSION_KEY) || 'null'); } catch (e) { return null; } }
   function clearSession() { localStorage.removeItem(TM_SESSION_KEY); }
-  function goToHub() { window.location.href = '../index.html'; }
+  function goToHub() { window.location.href = '../../index.html'; }
 
   window.TM_ROLE = null;
   window.TM_WORKER = TM_WORKER;
@@ -408,7 +462,7 @@ table.log-table tr:last-child td { border-bottom: none; }
       '<div class="access-denied-screen">' +
       '<div style="font-size:15px;font-weight:700;">You don\'t have access to this app</div>' +
       '<div style="font-size:13px;color:var(--text2);max-width:320px;">Picker &amp; Packer accounts only have access to the Scanner App.</div>' +
-      '<a href="../index.html" style="margin-top:8px;color:var(--accent);font-size:13px;text-decoration:none;">&#8592; Back to Tomahawk Operations</a>' +
+      '<a href="../../index.html" style="margin-top:8px;color:var(--accent);font-size:13px;text-decoration:none;">&#8592; Back to Tomahawk Operations</a>' +
       '</div>';
   }
 
@@ -454,6 +508,265 @@ table.log-table tr:last-child td { border-bottom: none; }
     document.documentElement.setAttribute('data-theme', isLight ? 'dark' : 'light');
     localStorage.setItem('tm_theme', isLight ? 'dark' : 'light');
   };
+})();
+</script>
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+// CUSTOMER CARE DASHBOARD — every order from Create Parcel Pickup
+// (delhiveryListOrders: Delhivery + Ekart, forward + reverse), compiled
+// into CASES: a reverse pickup together with the forward order that sent
+// it back (linked_order_id), or a standalone forward order (e.g. FOC).
+// Stages follow the same rules as Create-Pickup's Recent lists.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var cases = [], tileFilter = '';
+
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function safeJson(s) { try { return JSON.parse(s || '{}'); } catch (e) { return {}; } }
+  function ship(o) { return (safeJson(o && o.payload_json).shipments || [])[0] || {}; }
+  function fmtWhen(t) {
+    if (!t) return '';
+    var s = String(t); if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) s = s.replace(' ', 'T') + 'Z';
+    var d = new Date(s);
+    return isNaN(d) ? String(t) : d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+  function api(q) {
+    var s = window.TM_getSession(), h = {};
+    if (s && s.token) h['X-Tomahawk-Session'] = s.token;
+    return fetch(window.TM_WORKER + '?action=' + q, { headers: h }).then(function (r) { return r.json(); });
+  }
+
+  // Courier-side stage of one leg (same as Create-Pickup).
+  function legStage(o) {
+    if (!o) return '';
+    if (!o.delhivery_ok) return 'Failed';
+    var st = o.track_stage || 'Created';
+    if (st === 'Created' && o.rtd_at && o.direction !== 'reverse') return 'RTD';
+    return st;
+  }
+  var LIVE_FWD = { 'Created': 'Booked', 'RTD': 'Ready To Dispatch', 'In Transit': 'In Transit', 'At Last Mile': 'At Last Mile',
+    'Out For Delivery': 'Out For Delivery', 'Delivered': 'Delivered', 'RTO': 'RTO', 'Cancelled': 'Cancelled', 'Lost': 'Lost', 'Failed': 'Failed' };
+
+  // One status per case — drives the tiles, badge and filters.
+  function caseStatus(c) {
+    var r = c.reverse, f = c.forward;
+    if (r) {
+      if (!r.delhivery_ok) return 'Failed';
+      if (r.refunded_at) return 'Closed';
+      if (f) {
+        var fs = legStage(f);
+        if (fs === 'Delivered') return 'Closed';
+        if (fs === 'Failed' || fs === 'Cancelled' || fs === 'RTO' || fs === 'Lost') return 'Send-back issue';
+        return 'Sent back';
+      }
+      if (r.received_at) return r.job_type === 'Refund' ? 'Refund pending' : 'Awaiting send-back';
+      var rs = legStage(r);
+      if (rs === 'Delivered') return 'To verify';
+      if (rs === 'Cancelled' || rs === 'Lost' || rs === 'RTO') return 'Pickup cancelled';
+      if (rs === 'In Transit' || rs === 'At Last Mile' || rs === 'Out For Delivery') return 'Coming to us';
+      return 'Awaiting pickup';
+    }
+    var s = legStage(f);
+    if (s === 'Delivered') return 'Closed';
+    if (s === 'Failed' || s === 'Cancelled' || s === 'RTO' || s === 'Lost') return 'Failed';
+    return 'Shipping';
+  }
+  var STATUS_META = {
+    'To verify': { cls: 'b-amber', c: 'var(--accent)', attn: true },
+    'Awaiting pickup': { cls: 'b-gray', c: 'var(--text)' },
+    'Coming to us': { cls: 'b-blue', c: '#60a5fa' },
+    'Awaiting send-back': { cls: 'b-amber', c: 'var(--accent)' },
+    'Refund pending': { cls: 'b-amber', c: 'var(--accent)' },
+    'Sent back': { cls: 'b-blue', c: '#60a5fa' },
+    'Shipping': { cls: 'b-blue', c: '#60a5fa' },
+    'Closed': { cls: 'b-green', c: '#22c55e' },
+    'Pickup cancelled': { cls: 'b-red', c: '#f87171' },
+    'Send-back issue': { cls: 'b-red', c: '#f87171' },
+    'Failed': { cls: 'b-red', c: '#f87171' }
+  };
+  var TILE_ORDER = ['To verify', 'Awaiting pickup', 'Coming to us', 'Awaiting send-back', 'Refund pending', 'Sent back', 'Shipping', 'Closed', 'Pickup cancelled', 'Send-back issue', 'Failed'];
+
+  // Journey chips: reverse case = Booked › Picked up › At warehouse ›
+  // Verified › Sent back / Refunded › Delivered / Closed.
+  function journeyHtml(c) {
+    var steps = [];
+    function add(label, state) { steps.push('<span class="step ' + state + '">' + esc(label) + '</span>'); }
+    var r = c.reverse, f = c.forward;
+    if (r) {
+      var rs = legStage(r), moved = rs !== 'Created' && rs !== 'Failed' && rs !== 'Cancelled';
+      add('Booked', r.delhivery_ok ? 'done' : 'bad');
+      add('Picked up', moved || r.received_at ? 'done' : (rs === 'Cancelled' ? 'bad' : ''));
+      add('At warehouse', rs === 'Delivered' || r.received_at ? 'done' : '');
+      add('Verified', r.received_at ? 'done' : (rs === 'Delivered' ? 'now' : ''));
+      if (r.job_type === 'Refund') {
+        add('Refunded', r.refunded_at ? 'done' : (r.received_at ? 'now' : ''));
+      } else {
+        var fs = legStage(f);
+        add('Sent back', f ? 'done' : (r.received_at ? 'now' : ''));
+        add('Delivered', fs === 'Delivered' ? 'done' : (f && /Failed|Cancelled|RTO|Lost/.test(fs) ? 'bad' : (f ? 'now' : '')));
+      }
+    } else {
+      var s = legStage(f), order = ['Created', 'RTD', 'In Transit', 'Out For Delivery', 'Delivered'];
+      var labels = ['Booked', 'Packed', 'In transit', 'Out for delivery', 'Delivered'];
+      var idx = s === 'At Last Mile' ? 2 : order.indexOf(s);
+      var bad = /Failed|Cancelled|RTO|Lost/.test(s);
+      labels.forEach(function (l, i) { add(l, bad && i > 0 ? (i === 1 ? 'bad' : '') : (i < idx || (i === idx && s === 'Delivered') ? 'done' : (i === idx ? 'now' : ''))); });
+    }
+    return '<div class="journey">' + steps.join('<span class="step-sep">&#8250;</span>') + '</div>';
+  }
+
+  function buildCases(orders) {
+    var byId = {};
+    orders.forEach(function (o) { if (o.order_id) byId[o.order_id] = byId[o.order_id] || o; });
+    var used = {}, out = [];
+    orders.forEach(function (o) {
+      if (o.direction !== 'reverse') return;
+      var f = o.linked_order_id ? byId[o.linked_order_id] : null;
+      if (f) used[f.order_id] = true;
+      out.push({ id: o.order_id, reverse: o, forward: f, created: o.created_at });
+    });
+    orders.forEach(function (o) {
+      if (o.direction === 'reverse' || used[o.order_id]) return;
+      out.push({ id: o.order_id, reverse: null, forward: o, created: o.created_at });
+    });
+    out.forEach(function (c) {
+      c.status = caseStatus(c);
+      var lead = c.reverse || c.forward, sh = ship(lead);
+      c.customer = sh.name || '';
+      c.city = [sh.city, sh.state].filter(Boolean).join(', ');
+      c.product = String(sh.products_desc || '').replace(/^(Repair|Replacement|Refund|Repaired|FOC)\s*-\s*/i, '');
+      c.kind = c.reverse ? (c.reverse.job_type || 'Reverse') : 'forward';
+      c.search = [c.id, c.forward && c.forward.order_id, c.reverse && c.reverse.waybill, c.forward && c.forward.waybill, c.customer, c.product, sh.phone].join(' ').toLowerCase();
+    });
+    out.sort(function (a, b) { return String(b.created || '').localeCompare(String(a.created || '')); });
+    return out;
+  }
+
+  function renderTiles() {
+    var counts = {};
+    cases.forEach(function (c) { counts[c.status] = (counts[c.status] || 0) + 1; });
+    var html = '<button class="tile' + (tileFilter === '' ? ' active' : '') + '" data-f=""><div class="tile-n">' + cases.length + '</div><div class="tile-l">All cases</div></button>';
+    TILE_ORDER.forEach(function (st) {
+      var n = counts[st] || 0, m = STATUS_META[st];
+      if (!n && /cancelled|issue|Failed/i.test(st)) return; // hide empty problem tiles
+      html += '<button class="tile' + (tileFilter === st ? ' active' : '') + (m.attn && n ? ' attn' : '') + '" data-f="' + esc(st) + '" style="--tile-c:' + m.c + '">' +
+        '<div class="tile-n">' + n + '</div><div class="tile-l">' + esc(st) + '</div></button>';
+    });
+    var el = document.getElementById('tiles');
+    el.innerHTML = html;
+    el.querySelectorAll('.tile').forEach(function (t) {
+      t.addEventListener('click', function () { tileFilter = t.dataset.f === tileFilter ? '' : t.dataset.f; renderTiles(); renderTable(); });
+    });
+  }
+
+  function renderTable() {
+    var q = document.getElementById('q').value.trim().toLowerCase();
+    var kind = document.getElementById('f-kind').value;
+    var rows = cases.filter(function (c) {
+      return (!tileFilter || c.status === tileFilter) && (!kind || c.kind === kind) && (!q || c.search.indexOf(q) !== -1);
+    });
+    var body = document.getElementById('case-body');
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="5" class="muted">No cases match.</td></tr>'; return; }
+    body.innerHTML = '';
+    rows.forEach(function (c) {
+      var m = STATUS_META[c.status] || { cls: 'b-gray' };
+      var tr = document.createElement('tr');
+      tr.className = 'case-row' + (m.attn ? ' attn' : '');
+      var ids = c.reverse
+        ? '<div class="mono">' + esc(c.reverse.order_id) + '</div>' + (c.forward ? '<div class="sub mono">&#8627; ' + esc(c.forward.order_id) + '</div>' : '')
+        : '<div class="mono">' + esc(c.forward.order_id) + '</div>';
+      var kindLabel = c.reverse ? esc(c.kind) + ' · ' + esc(c.reverse.courier || 'Delhivery') : 'Forward · ' + esc(c.forward.courier || 'Delhivery');
+      tr.innerHTML =
+        '<td>' + ids + '<div class="sub">' + kindLabel + '</div></td>' +
+        '<td>' + esc(c.customer || '—') + (c.city ? '<div class="sub">' + esc(c.city) + '</div>' : '') + '</td>' +
+        '<td>' + esc(c.product || '—') + '</td>' +
+        '<td>' + journeyHtml(c) + '</td>' +
+        '<td><span class="badge ' + m.cls + '">' + esc(c.status) + '</span><div class="sub">' + esc(fmtWhen(c.created)) + '</div></td>';
+      tr.addEventListener('click', function () { openCase(c); });
+      body.appendChild(tr);
+    });
+  }
+
+  // ── Case popup: both legs + live tracking per leg ──
+  var modal = document.getElementById('case-modal');
+  function closeCase() { modal.hidden = true; }
+  document.getElementById('case-close').addEventListener('click', closeCase);
+  modal.addEventListener('click', function (e) { if (e.target === modal) closeCase(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !modal.hidden) closeCase(); });
+
+  function legHtml(o, title, idx) {
+    var sh = ship(o), st = legStage(o);
+    var stLabel = o.direction === 'reverse'
+      ? ({ 'Created': 'Pickup Scheduled', 'In Transit': 'Picked Up', 'Delivered': 'Delivered to us' }[st] || st)
+      : (LIVE_FWD[st] || st);
+    var f = function (k, v) { return '<div><div class="k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
+    var extra = [];
+    if (o.received_at) extra.push(f('Verified received', fmtWhen(o.received_at)));
+    if (o.refunded_at) extra.push(f('Refunded', fmtWhen(o.refunded_at)));
+    if (o.rtd_at && o.direction !== 'reverse') extra.push(f('Label printed', fmtWhen(o.rtd_at)));
+    return '<div class="leg">' +
+      '<div class="leg-head"><div class="leg-title">' + esc(title) + ' — <span class="mono">' + esc(o.order_id) + '</span></div>' +
+        (o.delhivery_ok && o.waybill ? '<button class="track-btn" data-leg="' + idx + '">Track now</button>' : '') + '</div>' +
+      '<div class="leg-grid">' +
+        f('Courier', o.courier || 'Delhivery') + f('Waybill', o.waybill) + f('Courier status', stLabel + (o.track_status ? ' (' + o.track_status + ')' : '')) +
+        f('Booked', fmtWhen(o.created_at) + (o.created_by ? ' by ' + o.created_by : '')) +
+        f(o.direction === 'reverse' ? 'Pickup from' : 'Deliver to', [sh.name, sh.phone].filter(Boolean).join(' · ')) +
+        f('Address', [sh.add, sh.city, sh.state, sh.pin].filter(Boolean).join(', ')) +
+        f('Product', sh.products_desc) + f('Value', sh.total_amount ? '₹' + sh.total_amount : '') +
+        (o.remark ? f('Remark', o.remark) : '') + extra.join('') +
+      '</div><div class="track-box" id="track-' + idx + '" hidden></div></div>';
+  }
+
+  function openCase(c) {
+    var legs = [];
+    if (c.reverse) legs.push([c.reverse, 'Reverse pickup (' + (c.reverse.job_type || '') + ')']);
+    if (c.forward) legs.push([c.forward, c.reverse ? 'Send-back shipment' : 'Forward shipment']);
+    document.getElementById('case-title').innerHTML = esc(c.id) + ' <span class="badge ' + ((STATUS_META[c.status] || {}).cls || 'b-gray') + '">' + esc(c.status) + '</span>';
+    document.getElementById('case-sub').textContent = [c.customer, c.city].filter(Boolean).join(' · ');
+    var box = document.getElementById('case-body-modal');
+    box.innerHTML = journeyHtml(c) + legs.map(function (l, i) { return legHtml(l[0], l[1], i); }).join('');
+    box.querySelectorAll('.track-btn').forEach(function (b) {
+      b.addEventListener('click', function () { track(legs[+b.dataset.leg][0], b); });
+    });
+    modal.hidden = false;
+  }
+
+  async function track(o, btn) {
+    var box = document.getElementById('track-' + btn.dataset.leg);
+    box.hidden = false; box.innerHTML = 'Tracking…'; btn.disabled = true;
+    try {
+      var t = await api((o.courier === 'Ekart' ? 'ekartTrack' : 'delhiveryTrack') + '&waybill=' + encodeURIComponent(o.waybill));
+      if (!t || !t.ok) throw new Error((t && t.error) || 'no data');
+      var scans = t.scans || [];
+      box.innerHTML = '<div><b>' + esc(t.status || 'No status yet') + '</b>' +
+        (t.location ? ' · ' + esc(t.location) : '') + (t.at ? ' · ' + esc(fmtWhen(t.at)) : '') + '</div>' +
+        (t.detail ? '<div class="scan-meta">' + esc(t.detail) + '</div>' : '') +
+        (t.expectedDelivery ? '<div class="scan-meta">Expected: ' + esc(fmtWhen(t.expectedDelivery)) + '</div>' : '') +
+        (scans.length ? '<ul class="scan-list">' + scans.map(function (s) {
+          return '<li><div class="scan-st">' + esc(s.status) + '</div><div class="scan-meta">' +
+            esc([s.location, fmtWhen(s.at)].filter(Boolean).join(' · ')) + (s.detail ? ' — ' + esc(s.detail) : '') + '</div></li>';
+        }).join('') + '</ul>' : '<div class="scan-meta">No scans yet.</div>');
+    } catch (e) {
+      box.innerHTML = '<span style="color:#f87171">Couldn\'t load tracking: ' + esc(e.message) + '</span>';
+    }
+    btn.disabled = false; btn.textContent = 'Refresh tracking';
+  }
+
+  async function load(force) {
+    try {
+      var res = await api('delhiveryListOrders&limit=500' + (force ? '&refresh=1' : ''));
+      if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
+      cases = buildCases(res.orders || []);
+      renderTiles(); renderTable();
+    } catch (e) {
+      document.getElementById('case-body').innerHTML = '<tr><td colspan="5" class="muted">Couldn\'t load cases: ' + esc(e.message) + '</td></tr>';
+    }
+  }
+  document.getElementById('q').addEventListener('input', renderTable);
+  document.getElementById('f-kind').addEventListener('change', renderTable);
+  document.getElementById('refresh-btn').addEventListener('click', function () { load(true); });
+  load(false);
 })();
 </script>
 
