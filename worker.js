@@ -1618,6 +1618,36 @@ export default {
           if (!/^\d{6,20}$/.test(wb)) return json({ ok: false, error: 'Valid waybill required' }, 400);
           if (!env.DELHIVERY_API_TOKEN) return json({ ok: false, error: 'DELHIVERY_API_TOKEN is not set in Worker secrets' }, 500);
           const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
+
+          // &json=1 → return Delhivery's packing-slip DATA (not their PDF).
+          // Create-Pickup draws the label itself so it matches the Delhivery
+          // One portal layout exactly (the API's own PDF uses an older design).
+          if (url.searchParams.get('json') === '1') {
+            let dJson;
+            try {
+              const dResp = await fetch(base + '/api/p/packing_slip?wbns=' + wb + '&pdf=false', {
+                headers: { 'Authorization': 'Token ' + env.DELHIVERY_API_TOKEN }
+              });
+              const dText = await dResp.text();
+              try { dJson = JSON.parse(dText); } catch (e) { dJson = { raw: dText.slice(0, 500) }; }
+            } catch (e) {
+              return json({ ok: false, error: 'Delhivery label request failed: ' + e.message }, 502);
+            }
+            const dPkg = (dJson && dJson.packages && dJson.packages[0]) || null;
+            // First label download = packed, waiting for pickup → RTD stage.
+            await ensureDelhiveryTable(env.DB);
+            await env.DB.prepare(
+              "UPDATE delhivery_orders SET rtd_at = COALESCE(rtd_at, datetime('now')) WHERE waybill = ? AND delhivery_ok = 1"
+            ).bind(wb).run();
+            // Barcode images are big base64 blobs the page redraws itself — drop them.
+            if (dPkg) { delete dPkg.barcode; delete dPkg.oid_barcode; }
+            // RTD → make sure it's covered by a pickup request (Delhivery One
+            // then shows it under "Ready for Pickup"). No-op if one exists.
+            let pickup = null;
+            try { pickup = await ensureDelhiveryPickup(env, 'label'); } catch (e) { pickup = { ok: false, error: e.message }; }
+            return json({ ok: !!dPkg, pkg: dPkg, pickup, error: dPkg ? undefined : 'Delhivery returned no label data', response: dPkg ? undefined : dJson });
+          }
+
           let lJson;
           try {
             const lResp = await fetch(base + '/api/p/packing_slip?wbns=' + wb + '&pdf=true&pdf_size=4R', {
@@ -1642,6 +1672,7 @@ export default {
             await env.DB.prepare(
               "UPDATE delhivery_orders SET rtd_at = COALESCE(rtd_at, datetime('now')) WHERE waybill = ? AND delhivery_ok = 1"
             ).bind(wb).run();
+            try { await ensureDelhiveryPickup(env, 'label'); } catch (e) { /* never block the label */ }
             return new Response(pdfResp.body, {
               status: 200,
               headers: Object.assign({}, CORS, {
@@ -2914,7 +2945,14 @@ export default {
             String(o.remark || '').trim()
           ).run();
 
-          return json({ ok: result.success, waybill: result.waybill, delhiveryHttpStatus: result.httpStatus, response: result.response }, result.success ? 200 : 502);
+          // Make sure a pickup request exists (today or the earliest date possible).
+          // Never blocks the order — any failure is just reported back.
+          let pickup = null;
+          if (result.success) {
+            try { pickup = await ensureDelhiveryPickup(env, 'order'); } catch (e) { pickup = { ok: false, error: e.message }; }
+          }
+
+          return json({ ok: result.success, waybill: result.waybill, delhiveryHttpStatus: result.httpStatus, response: result.response, pickup }, result.success ? 200 : 502);
         }
 
         return json({ ok: false, error: 'Unknown action' }, 400);
@@ -3501,6 +3539,88 @@ async function rebuildAmazonShipments(env) {
       `DELETE FROM amazon_shipment_items WHERE shipment_id NOT IN (${placeholders})`
     ).bind(...idsArr).run();
   }
+}
+
+// ── DELHIVERY — automatic pickup request (evening slot 14:00–18:00) ─────
+// Delhivery One moves manifested orders from "Ready to Ship" to "Ready for
+// Pickup" once a pickup request exists for the pickup location. Delhivery's
+// pickup API works per location + date (not per AWB), so one request per
+// day covers every order booked for that day.
+//   · Called after every successful order (so a pickup always exists) and
+//     again when a label is downloaded (RTD) — a no-op if one already exists.
+//   · Date: today (IST) if it's before 17:00, otherwise the next day.
+//     Sundays are skipped. If Delhivery refuses a date, tries the next one.
+//   · delhivery_pickups remembers which dates already have a request so we
+//     never raise duplicates.
+const DELHIVERY_PICKUP_TIME = '14:00:00';   // evening slot start (14–18)
+const DELHIVERY_PICKUP_LAST_HOUR_IST = 17;  // after this, book for next day
+
+async function ensureDelhiveryPickupTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS delhivery_pickups (
+    pickup_date   TEXT PRIMARY KEY,   -- YYYY-MM-DD (IST)
+    pickup_id     TEXT,
+    pickup_time   TEXT,
+    status        TEXT,               -- 'created' | 'exists' (already on Delhivery)
+    trigger       TEXT,               -- 'order' | 'label'
+    response_json TEXT,
+    created_at    TEXT DEFAULT (datetime('now'))
+  )`).run();
+}
+
+function istDateParts(offsetDays) {
+  const d = new Date(Date.now() + 330 * 60000 + (offsetDays || 0) * 86400000);
+  return { ymd: d.toISOString().slice(0, 10), hour: d.getUTCHours(), dow: d.getUTCDay() };
+}
+
+async function ensureDelhiveryPickup(env, trigger) {
+  if (!env.DELHIVERY_API_TOKEN || !env.DELHIVERY_PICKUP_LOCATION) return { ok: false, error: 'Delhivery secrets not set' };
+  await ensureDelhiveryPickupTable(env.DB);
+  const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
+
+  // Candidate dates, earliest first: today (if not too late) + next days, no Sundays.
+  const dates = [];
+  for (let i = istDateParts(0).hour >= DELHIVERY_PICKUP_LAST_HOUR_IST ? 1 : 0; dates.length < 3 && i < 7; i++) {
+    const p = istDateParts(i);
+    if (p.dow !== 0) dates.push(p.ymd);
+  }
+
+  let lastErr = '';
+  for (const date of dates) {
+    const have = await env.DB.prepare('SELECT pickup_id, status FROM delhivery_pickups WHERE pickup_date = ?').bind(date).first();
+    if (have) return { ok: true, status: 'exists', date, pickup_id: have.pickup_id, slot: '14:00–18:00' };
+
+    let resp, text = '', data = {};
+    try {
+      resp = await fetch(base + '/fm/request/new/', {
+        method: 'POST',
+        headers: { 'Authorization': 'Token ' + env.DELHIVERY_API_TOKEN, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+          pickup_location: env.DELHIVERY_PICKUP_LOCATION,
+          pickup_date: date,
+          pickup_time: DELHIVERY_PICKUP_TIME,
+          expected_package_count: 1
+        })
+      });
+      text = await resp.text();
+      try { data = JSON.parse(text); } catch (e) { data = { raw: text.slice(0, 500) }; }
+    } catch (e) {
+      lastErr = 'Pickup request failed: ' + e.message;
+      continue;
+    }
+
+    const msg = JSON.stringify(data).toLowerCase();
+    const pickupId = data.pickup_id || data.pickupId || (data.data && data.data.pickup_id) || '';
+    const alreadyThere = data.pr_exist === true || /already (exist|raised|created|scheduled)/.test(msg);
+    if ((resp.ok && pickupId) || alreadyThere) {
+      await env.DB.prepare(
+        'INSERT OR IGNORE INTO delhivery_pickups (pickup_date, pickup_id, pickup_time, status, trigger, response_json) VALUES (?, ?, ?, ?, ?, ?)'
+      ).bind(date, String(pickupId || ''), DELHIVERY_PICKUP_TIME, pickupId ? 'created' : 'exists', trigger || '', text.slice(0, 2000)).run();
+      return { ok: true, status: pickupId ? 'created' : 'exists', date, pickup_id: String(pickupId || ''), slot: '14:00–18:00' };
+    }
+    lastErr = (data.error && (data.error.message || data.error)) || data.message || data.raw || ('HTTP ' + resp.status);
+    // Refused for this date (too late, holiday…) — try the next date.
+  }
+  return { ok: false, error: String(lastErr || 'No pickup date accepted') };
 }
 
 async function ensureDelhiveryTable(DB) {
