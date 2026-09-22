@@ -506,7 +506,7 @@ table.log-table td.dl-cell { width: 38px; padding-right: 0; }
         <div class="form-row single">
           <div class="field">
             <label>Remark <span class="opt">optional</span></label>
-            <input type="text" id="f-remark" autocomplete="off" maxlength="300" placeholder="Internal note — saved in the order log, not printed on the label">
+            <input type="text" id="f-remark" autocomplete="off" maxlength="300" placeholder="Printed on the label under the product name">
           </div>
         </div>
 
@@ -1032,6 +1032,7 @@ function labelDataFor(o, pkg) {
     sellerName: firstVal(pkg.snm, pkg.seller_name, LABEL_DEFAULTS.sellerName),
     sellerAddr: firstVal(pkg.sadd, pkg.seller_address, LABEL_DEFAULTS.sellerAddr),
     product: firstVal(pkg.prd, pkg.products_desc, sh.products_desc),
+    remark: String(o.remark || '').trim(),   // printed as-is under the product
     qty: qty,
     price: price,
     total: amount,
@@ -1131,6 +1132,12 @@ async function buildPortalLabelPdf(d) {
   var py = 254.7 + s0;
   var prodLines = wrap(d.product, 165, 6.1);
   prodLines.forEach(function (ln, i) { text(ln, L, py + i * 8.8, 6.1); });
+  // Remark (if entered on the form) — printed exactly as typed, under the
+  // Type - Model line, wrapping within the product column.
+  if (d.remark) {
+    var ry = py + prodLines.length * 8.8 + 1;
+    wrap(d.remark, 165, 6.1).slice(0, 12).forEach(function (ln, i) { text(ln, L, ry + i * 8.8, 6.1); });
+  }
   text(d.qty, 208.8, py, 6.1, 'normal', 'right');
   text(d.price, 240, py, 6.1, 'normal', 'right');
   text(d.total, 270.6, py, 6.1, 'normal', 'right');
