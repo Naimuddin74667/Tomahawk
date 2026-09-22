@@ -1616,11 +1616,13 @@ export default {
         //   package weight in grams, L/W/H in cm) for auto-filling the
         //   Create-Pickup form. Built by the UC_Inventory_API GAS bridge
         //   (?type=amzProductInfo) from the Amazon API Sheet's AMZ_Fees
-        //   tab + UC_ChannelListings. Cached 30 min — the Amazon sheet
+        //   tab + UC_ChannelListings, falling back to the Flipkart API
+        //   Sheet's FK-Listings-Report when there's no Amazon listing
+        //   (GAS v19 — each product carries source: amazon|flipkart). Cached 30 min — the Amazon sheet
         //   itself only refreshes AMZ_Fees every 2 hours.
         if (action === 'delhiveryAmzProductInfo') {
           const cache = caches.default;
-          const cacheKey = new Request('https://cache.internal/cp-amz-product-info-v1');
+          const cacheKey = new Request('https://cache.internal/cp-amz-product-info-v2');
           const cached = await cache.match(cacheKey);
           if (cached) return json(await cached.json());
           let data;
