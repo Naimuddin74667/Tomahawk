@@ -260,7 +260,9 @@ table.log-table tr:last-child td { border-bottom: none; }
 /* ── Customer Care Dashboard ── */
 .back-link { font-size: 12px; font-weight: 600; color: var(--text2); text-decoration: none; display: inline-block; margin-bottom: 10px; }
 .back-link:hover { color: var(--accent); }
-.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 18px; }
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+@media (max-width: 760px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.tile-flag { font-size: 9.5px; font-weight: 700; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 1px 6px; margin-left: 4px; }
 .tile {
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px;
   cursor: pointer; transition: border-color .12s, transform .12s; text-align: left; color: var(--text); font: inherit;
@@ -585,7 +587,18 @@ table.log-table tr:last-child td { border-bottom: none; }
     'Send-back issue': { cls: 'b-red', c: '#f87171' },
     'Failed': { cls: 'b-red', c: '#f87171' }
   };
-  var TILE_ORDER = ['To verify', 'Awaiting pickup', 'Coming to us', 'Awaiting send-back', 'Refund pending', 'Sent back', 'Shipping', 'Closed', 'Pickup cancelled', 'Send-back issue', 'Failed'];
+  // Four tiles (click to filter):
+  //   All cases — everything
+  //   Open      — not Closed (failed bookings / cancelled pickups excluded: nothing is moving)
+  //   Upcoming  — reverse pickups booked and on their way to us, not yet verified received
+  //   Sent back — forward parcels on their way to the customer (not yet delivered)
+  var TILES = [
+    { key: '', label: 'All cases', c: 'var(--text)', test: function () { return true; } },
+    { key: 'open', label: 'Open cases', c: 'var(--accent)', test: function (c) { return !/^(Closed|Failed|Pickup cancelled)$/.test(c.status); } },
+    { key: 'upcoming', label: 'Upcoming', c: '#60a5fa', test: function (c) { return /^(Awaiting pickup|Coming to us|To verify)$/.test(c.status); } },
+    { key: 'sentback', label: 'Sent back', c: '#22c55e', test: function (c) { return c.status === 'Sent back' || c.status === 'Shipping'; } }
+  ];
+  function tileTest(key) { for (var i = 0; i < TILES.length; i++) if (TILES[i].key === key) return TILES[i].test; return TILES[0].test; }
 
   // Journey chips: reverse case = Booked › Picked up › At warehouse ›
   // Verified › Sent back / Refunded › Delivered / Closed.
@@ -644,19 +657,16 @@ table.log-table tr:last-child td { border-bottom: none; }
   }
 
   function renderTiles() {
-    var counts = {};
-    cases.forEach(function (c) { counts[c.status] = (counts[c.status] || 0) + 1; });
-    var html = '<button class="tile' + (tileFilter === '' ? ' active' : '') + '" data-f=""><div class="tile-n">' + cases.length + '</div><div class="tile-l">All cases</div></button>';
-    TILE_ORDER.forEach(function (st) {
-      var n = counts[st] || 0, m = STATUS_META[st];
-      if (!n && /cancelled|issue|Failed/i.test(st)) return; // hide empty problem tiles
-      html += '<button class="tile' + (tileFilter === st ? ' active' : '') + (m.attn && n ? ' attn' : '') + '" data-f="' + esc(st) + '" style="--tile-c:' + m.c + '">' +
-        '<div class="tile-n">' + n + '</div><div class="tile-l">' + esc(st) + '</div></button>';
-    });
     var el = document.getElementById('tiles');
-    el.innerHTML = html;
+    el.innerHTML = TILES.map(function (t) {
+      var n = cases.filter(t.test).length;
+      var verify = t.key === 'upcoming' ? cases.filter(function (c) { return c.status === 'To verify'; }).length : 0;
+      return '<button class="tile' + (tileFilter === t.key ? ' active' : '') + '" data-f="' + t.key + '" style="--tile-c:' + t.c + '">' +
+        '<div class="tile-n">' + n + '</div><div class="tile-l">' + esc(t.label) +
+        (verify ? ' <span class="tile-flag">' + verify + ' to verify</span>' : '') + '</div></button>';
+    }).join('');
     el.querySelectorAll('.tile').forEach(function (t) {
-      t.addEventListener('click', function () { tileFilter = t.dataset.f === tileFilter ? '' : t.dataset.f; renderTiles(); renderTable(); });
+      t.addEventListener('click', function () { tileFilter = t.dataset.f; renderTiles(); renderTable(); });
     });
   }
 
@@ -664,7 +674,7 @@ table.log-table tr:last-child td { border-bottom: none; }
     var q = document.getElementById('q').value.trim().toLowerCase();
     var kind = document.getElementById('f-kind').value;
     var rows = cases.filter(function (c) {
-      return (!tileFilter || c.status === tileFilter) && (!kind || c.kind === kind) && (!q || c.search.indexOf(q) !== -1);
+      return tileTest(tileFilter)(c) && (!kind || c.kind === kind) && (!q || c.search.indexOf(q) !== -1);
     });
     var body = document.getElementById('case-body');
     if (!rows.length) { body.innerHTML = '<tr><td colspan="5" class="muted">No cases match.</td></tr>'; return; }
