@@ -191,6 +191,11 @@ table.log-table tr:last-child td { border-bottom: none; }
 .mono { font-family: monospace; font-size: 11.5px; }
 .details-toggle { cursor: pointer; color: var(--accent); font-size: 11px; user-select: none; }
 .log-consignee { font-size: 11.5px; color: var(--text); margin: 2px 0 1px; }
+table.log-table tr.log-row { cursor: pointer; transition: background .12s; }
+table.log-table tr.log-row:hover td, table.log-table tr.log-row.open td { background: var(--surface2); }
+table.log-table tr.log-row.open td { border-bottom-color: transparent; }
+table.log-table tr.log-detail-row td { background: var(--surface2); padding-top: 0; }
+table.log-table tr.log-detail-row .details-json { margin-top: 0; }
 /* Shipping-label download button in the Recent orders table */
 .label-dl-btn {
   width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface2);
@@ -1088,8 +1093,6 @@ function initDelhiveryApp() {
         '</button></td>' +
         '<td class="mono">' + escapeHtml(o.order_id) +
           (consignee ? '<div class="log-consignee">' + escapeHtml(consignee) + '</div>' : '') +
-          '<div class="details-toggle" data-idx="' + idx + '">view details</div>' +
-          '<div class="details-json" id="details-' + idx + '"></div>' +
         '</td>' +
         '<td class="mono">' + (o.waybill ? escapeHtml(o.waybill) : '&#8212;') + '</td>' +
         '<td>' + (o.job_type ? escapeHtml(o.job_type) : '&#8212;') + '</td>' +
@@ -1120,14 +1123,28 @@ function initDelhiveryApp() {
         dlBtn.classList.remove('busy');
       });
 
-      var toggle = tr.querySelector('.details-toggle');
-      var jsonBox = tr.querySelector('.details-json');
-      toggle.addEventListener('click', function () {
-        if (jsonBox.classList.contains('show')) { jsonBox.classList.remove('show'); return; }
+      // Whole row is clickable — opens/closes a full-width details row
+      // underneath (remark + Delhivery's response). Clicks on the ⬇
+      // label button don't toggle it.
+      tr.className = 'log-row';
+      tr.title = 'Click to view details';
+      var detailTr = null;
+      tr.addEventListener('click', function (e) {
+        if (e.target.closest('.label-dl-btn')) return;
+        if (detailTr) { detailTr.remove(); detailTr = null; tr.classList.remove('open'); return; }
         var pretty = '';
-        try { pretty = JSON.stringify(JSON.parse(o.response_json || '{}'), null, 2); } catch (e) { pretty = o.response_json || ''; }
-        jsonBox.textContent = (o.remark ? 'Remark: ' + o.remark + '\n\n' : '') + pretty;
-        jsonBox.classList.add('show');
+        try { pretty = JSON.stringify(JSON.parse(o.response_json || '{}'), null, 2); } catch (err) { pretty = o.response_json || ''; }
+        detailTr = document.createElement('tr');
+        detailTr.className = 'log-detail-row';
+        var td = document.createElement('td');
+        td.colSpan = tr.children.length;
+        var box = document.createElement('div');
+        box.className = 'details-json show';
+        box.textContent = (o.remark ? 'Remark: ' + o.remark + '\n\n' : '') + pretty;
+        td.appendChild(box);
+        detailTr.appendChild(td);
+        tr.after(detailTr);
+        tr.classList.add('open');
       });
     });
   }
