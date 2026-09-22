@@ -288,7 +288,10 @@ const ACTION_TIERS = {
   //   manager_up; listing what's been created is viewer_read like
   //   everything else read-only in this file. —
   delhiveryCreateOrder: 'manager_up', delhiveryListOrders: 'viewer_read',
-  delhiveryCheckPincode: 'viewer_read', delhiveryEstimateCharge: 'viewer_read'
+  delhiveryCheckPincode: 'viewer_read', delhiveryEstimateCharge: 'viewer_read',
+  // — Create-Pickup form helpers: next daily Order ID (RPR/REP/FOC) and
+  //   Amazon listing price/weight/dimensions per UC SKU. Read-only. —
+  delhiveryNextOrderId: 'viewer_read', delhiveryAmzProductInfo: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -1596,6 +1599,48 @@ export default {
           return json({ ok: true, orders: rows.results || [] });
         }
 
+        // ── DELHIVERY — next Order ID for the Create-Pickup form.
+        //   Format <PREFIX>-DDMMYYNN (IST date), NN = daily serial that
+        //   runs separately per prefix and resets every day. See
+        //   nextDelhiveryOrderId() for how the serial is worked out.
+        if (action === 'delhiveryNextOrderId') {
+          await ensureDelhiveryTable(env.DB);
+          const prefix = String(url.searchParams.get('prefix') || '').toUpperCase();
+          if (!DELHIVERY_ORDER_PREFIXES.includes(prefix)) {
+            return json({ ok: false, error: 'prefix must be one of ' + DELHIVERY_ORDER_PREFIXES.join(', ') }, 400);
+          }
+          return json({ ok: true, orderId: await nextDelhiveryOrderId(env.DB, prefix) });
+        }
+
+        // ── DELHIVERY — Amazon listing info per UC SKU (selling price,
+        //   package weight in grams, L/W/H in cm) for auto-filling the
+        //   Create-Pickup form. Built by the UC_Inventory_API GAS bridge
+        //   (?type=amzProductInfo) from the Amazon API Sheet's AMZ_Fees
+        //   tab + UC_ChannelListings. Cached 30 min — the Amazon sheet
+        //   itself only refreshes AMZ_Fees every 2 hours.
+        if (action === 'delhiveryAmzProductInfo') {
+          const cache = caches.default;
+          const cacheKey = new Request('https://cache.internal/cp-amz-product-info-v1');
+          const cached = await cache.match(cacheKey);
+          if (cached) return json(await cached.json());
+          let data;
+          try {
+            const res = await fetch(SA_UC_GAS_URL + '?type=amzProductInfo');
+            if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
+            data = await res.json();
+          } catch (e) {
+            return json({ ok: false, error: 'Amazon product info unavailable: ' + e.message }, 502);
+          }
+          if (!data || !data.products) {
+            return json({ ok: false, error: (data && data.error) || 'GAS bridge returned no products — is the amzProductInfo route deployed?' }, 502);
+          }
+          const out = { ok: true, products: data.products, syncedAt: data.syncedAt || null };
+          await cache.put(cacheKey, new Response(JSON.stringify(out), {
+            headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=1800' }
+          }));
+          return json(out);
+        }
+
         // ── DELHIVERY — pincode serviceability pre-check, called from
         //   the order form before submission so a bad/non-serviceable
         //   pincode is caught immediately instead of after a failed
@@ -2760,12 +2805,13 @@ export default {
 
           const sessionUser = await resolveSession(request, env.DB);
           await env.DB.prepare(`
-            INSERT INTO delhivery_orders (order_id, waybill, status, delhivery_ok, payload_json, response_json, created_by, job_type, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            INSERT INTO delhivery_orders (order_id, waybill, status, delhivery_ok, payload_json, response_json, created_by, job_type, remark, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
           `).bind(
             o.order, result.waybill, result.success ? 'created' : 'failed',
             result.success ? 1 : 0, JSON.stringify(result.payload), JSON.stringify(result.response),
-            (sessionUser && sessionUser.username) || 'unauthenticated', o.job_type || ''
+            (sessionUser && sessionUser.username) || 'unauthenticated', o.job_type || '',
+            String(o.remark || '').trim()
           ).run();
 
           return json({ ok: result.success, waybill: result.waybill, delhiveryHttpStatus: result.httpStatus, response: result.response }, result.success ? 200 : 502);
@@ -3372,6 +3418,34 @@ async function ensureDelhiveryTable(DB) {
   )`).run();
   // Migration for tables created before job_type existed.
   try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN job_type TEXT`).run(); } catch (e) { /* column already exists */ }
+  // Migration for tables created before remark existed (internal note
+  // from the Create-Pickup form — stored here only, not sent to Delhivery).
+  try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN remark TEXT`).run(); } catch (e) { /* column already exists */ }
+}
+
+// ── DELHIVERY — daily Order ID serial ────────────────────────────────
+// Order IDs look like RPR-22092601: prefix by Type (RPR = Repaired,
+// REP = Replacement, FOC = FOC), then today's date as DDMMYY in IST,
+// then a 2-digit serial. The serial runs separately per prefix and
+// resets every day. Only successfully created orders count, so a
+// failed attempt (bad pincode etc.) doesn't burn a number. If two
+// people book at the exact same moment, Delhivery rejects the second
+// as a duplicate and the form bumps the serial and retries itself.
+const DELHIVERY_ORDER_PREFIXES = ['RPR', 'REP', 'FOC'];
+
+async function nextDelhiveryOrderId(DB, prefix) {
+  const ist = new Date(Date.now() + 330 * 60 * 1000); // UTC+5:30
+  const pad = n => String(n).padStart(2, '0');
+  const base = prefix + '-' + pad(ist.getUTCDate()) + pad(ist.getUTCMonth() + 1) + String(ist.getUTCFullYear()).slice(-2);
+  const rows = await DB.prepare(
+    'SELECT order_id FROM delhivery_orders WHERE delhivery_ok = 1 AND order_id LIKE ?'
+  ).bind(base + '%').all();
+  let max = 0;
+  (rows.results || []).forEach(r => {
+    const tail = String(r.order_id || '').slice(base.length);
+    if (/^\d+$/.test(tail)) max = Math.max(max, parseInt(tail, 10));
+  });
+  return base + pad(max + 1);
 }
 
 // ── DELHIVERY — Forward Order Creation ───────────────────────────────
