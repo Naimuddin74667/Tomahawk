@@ -1300,6 +1300,24 @@ function initDelhiveryApp() {
     productList.style.display = 'block';
   }
 
+  // Amazon/Flipkart listing data is keyed by SKU text, which isn't always
+  // written the same way as the UC SKU (CHT-20A vs "CHT 20A" / "cht_20a").
+  // Fallback: compare letters+digits only, both against the keys and the
+  // listing's own Amazon SKU. If several match, the highest price wins
+  // (same rule as the GAS bridge).
+  function skuKey(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+  function fuzzyAmzLookup(ucSku) {
+    var want = skuKey(ucSku), best = null;
+    if (!want || !amzInfo) return null;
+    Object.keys(amzInfo).forEach(function (k) {
+      var p = amzInfo[k];
+      if (skuKey(k) === want || skuKey(p && p.amzSku) === want) {
+        if (!best || (Number(p.price) || 0) > (Number(best.price) || 0)) best = p;
+      }
+    });
+    return best;
+  }
+
   function hideProductList() { productList.style.display = 'none'; }
 
   // Last fallback when a product's listing has no weight/dimensions.
@@ -1338,7 +1356,7 @@ function initDelhiveryApp() {
         : 'Loading Amazon listing data…';
       return;
     }
-    var p = amzInfo[val];
+    var p = amzInfo[val] || fuzzyAmzLookup(val);
     if (!p) {
       amountField.value = '';
       productHint.className = 'field-hint bad';
