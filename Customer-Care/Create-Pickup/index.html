@@ -126,6 +126,11 @@ html[data-theme="light"]       .icon-moon { display: none; }
 .field input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .field textarea { resize: vertical; min-height: 54px; }
 .field-hint { font-size: 10.5px; color: var(--text2); margin-top: 5px; line-height: 1.5; }
+/* Product picker — same search-box + listbox pattern as the Inward
+   Label Generator's UC SKU combo. */
+.field select.product-list { margin-top: 4px; padding: 4px; font-size: 12.5px; }
+.field select.product-list option { padding: 5px 8px; border-radius: 4px; }
+.field select.product-list option.opt-other { color: var(--accent); font-weight: 700; }
 
 .submit-btn {
   width: 100%; margin-top: 6px; padding: 12px; border-radius: 8px; border: none;
@@ -347,7 +352,7 @@ table.log-table tr:last-child td { border-bottom: none; }
         <div class="form-row single">
           <div class="field">
             <label>Order ID</label>
-            <input type="text" id="f-order" required readonly placeholder="Fills in once you enter the phone number below">
+            <input type="text" id="f-order" required readonly placeholder="Fills in once you select Type below">
           </div>
         </div>
 
@@ -397,21 +402,27 @@ table.log-table tr:last-child td { border-bottom: none; }
           </div>
         </div>
 
-        <div class="form-row single" id="desc-text-wrap">
+        <div class="form-row single">
           <div class="field">
-            <label>Products Description</label>
-            <input type="text" id="f-desc" required placeholder="e.g. TCD-12D Cordless Drill">
+            <label>Product</label>
+            <input type="text" id="f-product-search" autocomplete="off" placeholder="Loading UC SKUs&#8230;">
+            <select id="f-product-list" class="product-list" size="7" style="display:none;"></select>
+            <div class="field-hint" id="product-hint"></div>
+          </div>
+        </div>
+
+        <div class="form-row single" id="product-other-wrap" style="display:none;">
+          <div class="field">
+            <label>Product Name</label>
+            <input type="text" id="f-product-other" autocomplete="off" placeholder="e.g. TCD-12D Cordless Drill">
             <div class="field-hint">For multi-item orders, list them together here — this MVP creates one shipment per order (one waybill).</div>
           </div>
         </div>
 
-        <div class="form-row single" id="desc-sku-wrap" style="display:none;">
+        <div class="form-row single">
           <div class="field">
-            <label>Replacement SKU</label>
-            <select id="f-replacement-sku">
-              <option value="">Loading SKUs&#8230;</option>
-            </select>
-            <div class="field-hint" id="sku-list-hint"></div>
+            <label>Remark <span class="opt">optional</span></label>
+            <input type="text" id="f-remark" autocomplete="off" maxlength="300" placeholder="Internal note — saved in the order log, not printed on the label">
           </div>
         </div>
 
@@ -783,19 +794,6 @@ function fmtWhen(iso) {
   } catch (e) { return iso; }
 }
 
-function genOrderId(phone) {
-  var d = new Date();
-  var pad = function (n) { return String(n).padStart(2, '0'); };
-  var ddmm = pad(d.getDate()) + pad(d.getMonth() + 1);
-  if (phone && /^\d{10}$/.test(phone)) {
-    return 'RPR-' + phone + '-' + ddmm;
-  }
-  var datePart = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate());
-  var timePart = pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
-  var rand = Math.floor(Math.random() * 900 + 100); // 3-digit random tail
-  return 'TH-' + datePart + '-' + timePart + '-' + rand;
-}
-
 function initDelhiveryApp() {
   var submitBtn = document.getElementById('submit-btn');
   var resultBox = document.getElementById('result-box');
@@ -805,78 +803,173 @@ function initDelhiveryApp() {
   var orderIdField = document.getElementById('f-order');
   var phoneField = document.getElementById('f-phone');
 
-  // Order ID is fully automatic and read-only — blank until a valid
-  // 10-digit phone is entered, then RPR-<phone>-DDMM. Updates live as
-  // the phone number is typed/corrected, not just on blur.
-  function bumpOrderIdForPhone() {
-    var phone = phoneField.value.trim();
-    orderIdField.value = /^\d{10}$/.test(phone) ? genOrderId(phone) : '';
+  // GET helper — sends the session token like callWorker does for POSTs.
+  async function workerGet(query) {
+    var session = window.TM_getSession();
+    var headers = {};
+    if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
+    return fetch(window.TM_WORKER + '?action=' + query, { headers: headers }).then(function (r) { return r.json(); });
   }
 
-  // ── Type field — switches Products Description between free text and
-  // a UC Master SKU dropdown when "Replacement" is selected. Reuses the
-  // same enabled-SKU cache the hub's Master Sheet dropdown reads from
-  // (ucsku_getList), so no separate SKU source to maintain here.
+  // ── Order ID — <PREFIX>-DDMMYYNN, read-only. Prefix comes from Type;
+  // the Worker works out today's date (IST) and the next daily serial
+  // for that prefix (separate count per prefix, resets every day). ──
+  var TYPE_PREFIX = { Repaired: 'RPR', Replacement: 'REP', FOC: 'FOC' };
   var typeField = document.getElementById('f-type');
-  var descTextWrap = document.getElementById('desc-text-wrap');
-  var descSkuWrap = document.getElementById('desc-sku-wrap');
-  var descTextField = document.getElementById('f-desc');
-  var skuSelect = document.getElementById('f-replacement-sku');
-  var skuListHint = document.getElementById('sku-list-hint');
-  var skuListLoaded = false;
+  var orderIdReq = 0; // ignores stale replies if Type is switched quickly
 
-  async function loadSkuListOnce() {
-    if (skuListLoaded) return;
-    skuListLoaded = true;
+  async function refreshOrderId() {
+    var prefix = TYPE_PREFIX[typeField.value];
+    var reqNo = ++orderIdReq;
+    orderIdField.value = '';
+    if (!prefix) { orderIdField.placeholder = 'Fills in once you select Type below'; return false; }
+    orderIdField.placeholder = 'Getting next Order ID…';
     try {
-      var res = await fetch(window.TM_WORKER + '?action=ucsku_getList').then(function (r) { return r.json(); });
-      var skus = (res && res.skus) || [];
-      if (!skus.length) {
-        skuSelect.innerHTML = '<option value="">No SKUs available</option>';
-        skuListHint.textContent = 'The shared SKU list is empty — an admin can refresh it from the hub, or type the SKU manually by switching Type back temporarily.';
-        return;
-      }
-      skuSelect.innerHTML = '<option value="">Select a SKU&#8230;</option>' +
-        skus.map(function (s) { return '<option value="' + escapeHtml(s) + '">' + escapeHtml(s) + '</option>'; }).join('');
-      skuListHint.textContent = skus.length + ' enabled SKUs, from the same shared list used across the portal.';
+      var res = await workerGet('delhiveryNextOrderId&prefix=' + prefix);
+      if (reqNo !== orderIdReq) return false;
+      if (res && res.ok && res.orderId) { orderIdField.value = res.orderId; return true; }
+    } catch (e) { /* falls through to the message below */ }
+    if (reqNo === orderIdReq) orderIdField.placeholder = "Couldn't get the Order ID — switch Type to retry";
+    return false;
+  }
+  typeField.addEventListener('change', refreshOrderId);
+
+  // Used only when Delhivery rejects an ID as a duplicate (e.g. two
+  // people booking at the same second): RPR-22092603 -> RPR-22092604.
+  function bumpOrderIdSerial() {
+    var m = /^([A-Z]+-\d{6})(\d+)$/.exec(orderIdField.value.trim());
+    if (!m) return;
+    orderIdField.value = m[1] + String(parseInt(m[2], 10) + 1).padStart(2, '0');
+  }
+
+  // ── Product — searchable list of enabled UC SKUs (same shared list
+  // the rest of the portal uses, ucsku_getList) plus an "Other" option.
+  // Picking a SKU auto-fills Declared Value, Weight and L×W×H from its
+  // Amazon listing (delhiveryAmzProductInfo — AMZ_Fees via the GAS
+  // bridge; highest-priced listing wins if a SKU has several). All
+  // three stay editable. "Other" = free-text name, values by hand. ──
+  var OTHER = '__OTHER__';
+  var productSearch = document.getElementById('f-product-search');
+  var productList = document.getElementById('f-product-list');
+  var productHint = document.getElementById('product-hint');
+  var productOtherWrap = document.getElementById('product-other-wrap');
+  var productOtherField = document.getElementById('f-product-other');
+  var amountField = document.getElementById('f-amount');
+  var qtyField = document.getElementById('f-qty');
+  var ucSkus = [];
+  var amzInfo = null;          // { ucSku: { price, weight, length, width, height, amzSku } }
+  var amzInfoFailed = false;
+  var selectedProduct = '';    // '' | UC SKU | OTHER
+  var autoUnitPrice = null;    // Amazon price for the picked SKU, for qty changes
+
+  async function loadProductSources() {
+    try {
+      var res = await workerGet('ucsku_getList');
+      ucSkus = ((res && res.skus) || []).slice().sort();
+      productSearch.placeholder = ucSkus.length ? 'Search ' + ucSkus.length + ' enabled UC SKUs, or pick Other…' : 'SKU list is empty — type to pick Other';
     } catch (e) {
-      skuSelect.innerHTML = '<option value="">Couldn\'t load SKU list</option>';
-      skuListHint.textContent = "Couldn't reach the SKU list — you can switch Type away and back to retry.";
-      skuListLoaded = false;
+      productSearch.placeholder = "Couldn't load the SKU list — you can still pick Other";
     }
+    try {
+      var info = await workerGet('delhiveryAmzProductInfo');
+      if (info && info.ok && info.products) amzInfo = info.products; else amzInfoFailed = true;
+    } catch (e) { amzInfoFailed = true; }
+    // A SKU picked before the Amazon data arrived gets filled now.
+    if (selectedProduct && selectedProduct !== OTHER) applyProduct(selectedProduct);
   }
 
-  function updateDescMode() {
-    if (typeField.value === 'Replacement') {
-      descTextWrap.style.display = 'none';
-      descSkuWrap.style.display = '';
-      descTextField.removeAttribute('required');
-      skuSelect.setAttribute('required', 'required');
-      loadSkuListOnce();
-    } else {
-      descTextWrap.style.display = '';
-      descSkuWrap.style.display = 'none';
-      descTextField.setAttribute('required', 'required');
-      skuSelect.removeAttribute('required');
-    }
+  function renderProductList() {
+    var q = productSearch.value.trim().toLowerCase();
+    var matches = q ? ucSkus.filter(function (s) { return s.toLowerCase().indexOf(q) !== -1; }) : ucSkus;
+    var html = matches.slice(0, 50).map(function (s) {
+      return '<option value="' + escapeHtml(s) + '">' + escapeHtml(s) + '</option>';
+    }).join('');
+    if (matches.length > 50) html += '<option value="" disabled>… ' + (matches.length - 50) + ' more — keep typing to narrow down</option>';
+    html += '<option value="' + OTHER + '" class="opt-other">Other (not in the list)</option>';
+    productList.innerHTML = html;
+    productList.style.display = 'block';
   }
-  typeField.addEventListener('change', updateDescMode);
-  phoneField.addEventListener('input', bumpOrderIdForPhone);
 
-  // Bumps a numeric suffix onto the current order ID: base -> base-2 ->
-  // base-3 -> ... Used automatically when Delhivery rejects an ID as a
-  // duplicate, so the person never has to manually resolve it.
-  function bumpOrderIdSuffix() {
-    var base = genOrderId(phoneField.value.trim());
-    var current = orderIdField.value.trim();
-    if (current === base) {
-      orderIdField.value = base + '-2';
-    } else if (current.indexOf(base + '-') === 0 && /^\d+$/.test(current.slice(base.length + 1))) {
-      orderIdField.value = base + '-' + (parseInt(current.slice(base.length + 1), 10) + 1);
-    } else {
-      orderIdField.value = base;
-    }
+  function hideProductList() { productList.style.display = 'none'; }
+
+  function setDims(l, w, h) {
+    document.getElementById('f-length').value = l;
+    document.getElementById('f-width').value = w;
+    document.getElementById('f-height').value = h;
   }
+
+  function applyProduct(val) {
+    selectedProduct = val;
+    autoUnitPrice = null;
+    hideProductList();
+    productHint.className = 'field-hint';
+    if (val === OTHER) {
+      productSearch.value = 'Other';
+      productOtherWrap.style.display = '';
+      amountField.value = '';
+      productHint.textContent = 'Enter the product name below, then fill Declared Value, Weight and Dimensions by hand.';
+      productOtherField.focus();
+      return;
+    }
+    productSearch.value = val;
+    productOtherWrap.style.display = 'none';
+    productOtherField.value = '';
+    if (!amzInfo) {
+      productHint.textContent = amzInfoFailed
+        ? "Couldn't load Amazon listing data — enter Declared Value, Weight and Dimensions by hand."
+        : 'Loading Amazon listing data…';
+      return;
+    }
+    var p = amzInfo[val];
+    if (!p) {
+      amountField.value = '';
+      productHint.className = 'field-hint bad';
+      productHint.textContent = 'No Amazon listing found for this SKU — enter Declared Value, Weight and Dimensions by hand.';
+      return;
+    }
+    if (p.price) { autoUnitPrice = p.price; amountField.value = +(p.price * (parseInt(qtyField.value, 10) || 1)).toFixed(2); }
+    if (p.weight) document.getElementById('f-weight').value = p.weight;
+    if (p.length && p.width && p.height) setDims(p.length, p.width, p.height);
+    productHint.className = 'field-hint ok';
+    productHint.textContent = '✓ Filled from Amazon listing ' + p.amzSku + ' — check the values before booking.';
+  }
+
+  productSearch.addEventListener('focus', renderProductList);
+  productSearch.addEventListener('input', function () {
+    // Typing again means the earlier pick no longer applies.
+    selectedProduct = '';
+    autoUnitPrice = null;
+    productOtherWrap.style.display = 'none';
+    productHint.className = 'field-hint';
+    productHint.textContent = '';
+    renderProductList();
+  });
+  productSearch.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowDown' && productList.style.display !== 'none') {
+      e.preventDefault(); productList.focus(); productList.selectedIndex = 0;
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      var first = productList.options[0];
+      if (productList.style.display !== 'none' && first && first.value) applyProduct(first.value);
+    } else if (e.key === 'Escape') {
+      hideProductList();
+    }
+  });
+  productList.addEventListener('click', function () { if (productList.value) applyProduct(productList.value); });
+  productList.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && productList.value) { e.preventDefault(); applyProduct(productList.value); }
+    if (e.key === 'Escape') { hideProductList(); productSearch.focus(); }
+  });
+  // Close the list when clicking anywhere else in the page.
+  document.addEventListener('mousedown', function (e) {
+    if (e.target !== productSearch && e.target !== productList && !productList.contains(e.target)) hideProductList();
+  });
+  // Declared Value tracks Quantity while it's still the Amazon price.
+  qtyField.addEventListener('input', function () {
+    if (autoUnitPrice) amountField.value = +(autoUnitPrice * (parseInt(qtyField.value, 10) || 1)).toFixed(2);
+  });
+  amountField.addEventListener('input', function () { autoUnitPrice = null; }); // manual edit wins
+  loadProductSources();
 
   // ── Live volumetric-weight hint — Delhivery Surface uses (L×W×H)/5000
   // ── Pincode serviceability pre-check — fires on blur so a bad pincode
@@ -963,7 +1056,7 @@ function initDelhiveryApp() {
         if (jsonBox.classList.contains('show')) { jsonBox.classList.remove('show'); return; }
         var pretty = '';
         try { pretty = JSON.stringify(JSON.parse(o.response_json || '{}'), null, 2); } catch (e) { pretty = o.response_json || ''; }
-        jsonBox.textContent = pretty;
+        jsonBox.textContent = (o.remark ? 'Remark: ' + o.remark + '\n\n' : '') + pretty;
         jsonBox.classList.add('show');
       });
     });
@@ -980,9 +1073,7 @@ function initDelhiveryApp() {
 
   function gatherOrder() {
     var jobType = document.getElementById('f-type').value;
-    var rawDesc = jobType === 'Replacement'
-      ? skuSelect.value.trim()
-      : document.getElementById('f-desc').value.trim();
+    var rawDesc = selectedProduct === OTHER ? productOtherField.value.trim() : selectedProduct;
     return {
       order: orderIdField.value.trim(),
       name: document.getElementById('f-name').value.trim(),
@@ -996,6 +1087,7 @@ function initDelhiveryApp() {
       // in the UI, this is just how it's sent for manifestation.
       products_desc: jobType + ' - ' + rawDesc,
       job_type: jobType,
+      remark: document.getElementById('f-remark').value.trim(),
       payment_mode: document.getElementById('f-payment').value,
       quantity: document.getElementById('f-qty').value,
       total_amount: document.getElementById('f-amount').value,
@@ -1010,12 +1102,16 @@ function initDelhiveryApp() {
   // Manual equivalent of form.reset() — needed because this is now a
   // plain <div>, not a <form> (see the click-vs-submit comment below).
   function resetFormFields() {
-    ['f-name', 'f-phone', 'f-add', 'f-pin', 'f-city', 'f-state', 'f-desc', 'f-amount'].forEach(function (id) {
+    ['f-name', 'f-phone', 'f-add', 'f-pin', 'f-city', 'f-state', 'f-amount', 'f-product-search', 'f-product-other', 'f-remark'].forEach(function (id) {
       document.getElementById(id).value = '';
     });
     document.getElementById('f-type').value = '';
-    updateDescMode();
-    skuSelect.value = '';
+    selectedProduct = '';
+    autoUnitPrice = null;
+    productOtherWrap.style.display = 'none';
+    productHint.className = 'field-hint';
+    productHint.textContent = '';
+    hideProductList();
     document.getElementById('f-payment').value = 'Prepaid';
     document.getElementById('f-qty').value = '1';
     document.getElementById('f-hsn').value = '8467';
@@ -1024,6 +1120,7 @@ function initDelhiveryApp() {
     document.getElementById('f-width').value = '10';
     document.getElementById('f-height').value = '10';
     orderIdField.value = '';
+    orderIdField.placeholder = 'Fills in once you select Type below';
   }
 
   // Step 1: clicking the button fetches an estimate and shows the confirm
@@ -1042,10 +1139,18 @@ function initDelhiveryApp() {
       var el = document.getElementById(requiredFieldIds[i]);
       if (!el.checkValidity()) { el.reportValidity(); return false; }
     }
-    // Description field differs by Type mode — check whichever is active.
-    var descEl = typeField.value === 'Replacement' ? skuSelect : descTextField;
-    if (!descEl.value.trim()) {
-      if (typeof descEl.reportValidity === 'function') descEl.reportValidity();
+    // Product must be picked from the list (a UC SKU or Other); Other
+    // also needs a product name.
+    if (!selectedProduct) {
+      productSearch.setCustomValidity('Pick a product from the list, or choose Other.');
+      productSearch.reportValidity();
+      productSearch.setCustomValidity('');
+      return false;
+    }
+    if (selectedProduct === OTHER && !productOtherField.value.trim()) {
+      productOtherField.setCustomValidity('Enter the product name.');
+      productOtherField.reportValidity();
+      productOtherField.setCustomValidity('');
       return false;
     }
     return true;
@@ -1060,7 +1165,7 @@ function initDelhiveryApp() {
     if (!orderIdField.value) {
       resultBox.className = 'result-box show error';
       resultTitle.textContent = 'Order ID not ready';
-      resultBody.textContent = 'Enter a valid 10-digit phone number above — the Order ID fills in automatically from it.';
+      resultBody.textContent = 'Select a Type above — the Order ID fills in automatically from it. If it stays blank, switch Type to retry.';
       return;
     }
 
@@ -1107,6 +1212,11 @@ function initDelhiveryApp() {
     confirmYesBtn.textContent = 'Creating order…';
 
     try {
+      // Re-fetch the serial right before creating, in case someone else
+      // booked the same type while this form was open.
+      confirmYesBtn.textContent = 'Checking Order ID…';
+      if (!(await refreshOrderId())) throw new Error("Couldn't get the next Order ID from the server — try again.");
+      confirmYesBtn.textContent = 'Creating order…';
       var res, attempts = 0;
       while (true) {
         order.order = orderIdField.value.trim();
@@ -1118,7 +1228,7 @@ function initDelhiveryApp() {
         attempts++;
         if (!isDuplicate || attempts >= 5) break;
         confirmYesBtn.textContent = 'Duplicate ID — retrying…';
-        bumpOrderIdSuffix();
+        bumpOrderIdSerial();
       }
 
       confirmBox.className = 'confirm-box';
