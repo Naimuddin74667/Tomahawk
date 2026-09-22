@@ -1623,6 +1623,20 @@ export default {
           const pkg = (lJson && lJson.packages && lJson.packages[0]) || {};
           const pdfUrl = pkg.pdf_download_link || pkg.pdf_url || '';
           if (!pdfUrl) return json({ ok: false, error: 'Delhivery returned no PDF link for this waybill', response: lJson }, 502);
+          // &file=1 → stream the PDF bytes back through the Worker so the
+          // browser can save it as a real file (the S3 link itself sends
+          // no CORS headers, so the page can't fetch it directly).
+          if (url.searchParams.get('file') === '1') {
+            const pdfResp = await fetch(pdfUrl);
+            if (!pdfResp.ok) return json({ ok: false, error: 'Label PDF download failed: ' + pdfResp.status }, 502);
+            return new Response(pdfResp.body, {
+              status: 200,
+              headers: Object.assign({}, CORS, {
+                'Content-Type': 'application/pdf',
+                'Content-Disposition': 'attachment; filename="' + wb + '.pdf"'
+              })
+            });
+          }
           return json({ ok: true, pdfUrl });
         }
 

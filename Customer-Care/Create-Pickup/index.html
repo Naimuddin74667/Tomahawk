@@ -1101,24 +1101,32 @@ function initDelhiveryApp() {
         '<td><span class="badge ' + statusClass + '">' + (o.delhivery_ok ? 'Created' : 'Failed') + '</span></td>';
       tbody.appendChild(tr);
 
-      // Label download — asks the Worker for Delhivery's packing-slip PDF
-      // link for this waybill, then opens it in a new tab.
+      // Label download — the Worker fetches Delhivery's packing-slip PDF
+      // for this waybill and streams it back; saved as <OrderID>_<AWB>.pdf.
       var dlBtn = tr.querySelector('.label-dl-btn');
       if (canDownload) dlBtn.addEventListener('click', async function () {
         if (dlBtn.classList.contains('busy')) return;
         dlBtn.classList.add('busy');
-        var tab = window.open('', '_blank'); // opened now so pop-up blockers allow it
         try {
-          var res = await workerGet('delhiveryGetLabel&waybill=' + encodeURIComponent(o.waybill));
-          if (res && res.ok && res.pdfUrl) {
-            if (tab) tab.location.href = res.pdfUrl; else window.location.href = res.pdfUrl;
-          } else {
-            if (tab) tab.close();
-            alert("Couldn't get the label: " + ((res && res.error) || 'unknown error'));
+          var session = window.TM_getSession();
+          var headers = {};
+          if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
+          var resp = await fetch(window.TM_WORKER + '?action=delhiveryGetLabel&file=1&waybill=' + encodeURIComponent(o.waybill), { headers: headers });
+          var type = resp.headers.get('Content-Type') || '';
+          if (!resp.ok || type.indexOf('application/pdf') === -1) {
+            var err = {};
+            try { err = await resp.json(); } catch (e2) {}
+            throw new Error(err.error || ('HTTP ' + resp.status));
           }
+          var blob = await resp.blob();
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = String(o.order_id || 'label').replace(/[^A-Za-z0-9_-]/g, '_') + '_' + o.waybill + '.pdf';
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
         } catch (e) {
-          if (tab) tab.close();
-          alert("Couldn't get the label: " + e.message);
+          alert("Couldn't download the label: " + e.message);
         }
         dlBtn.classList.remove('busy');
       });
