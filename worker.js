@@ -1950,8 +1950,9 @@ export default {
           const params = new URLSearchParams({
             md: 'S',                 // Surface
             ss: 'Delivered',         // required by this endpoint; best-known value for a pre-booking estimate
-            d_pin: pin,
-            o_pin: originPin,
+            // Reverse pickup travels customer → warehouse, so swap the pins.
+            d_pin: url.searchParams.get('direction') === 'reverse' ? originPin : pin,
+            o_pin: url.searchParams.get('direction') === 'reverse' ? pin : originPin,
             cgm: String(weightGrams),
             pt: paymentMode
           });
@@ -3073,6 +3074,11 @@ export default {
         if (act === 'delhiveryCreateOrder') {
           await ensureDelhiveryTable(env.DB);
           const o = body.order || {};
+          // Reverse pickup = same Delhivery create call with payment_mode
+          // "Pickup": Delhivery collects from the customer (name/add/pin
+          // below) and delivers to our pickup_location warehouse.
+          const isReverse = o.direction === 'reverse';
+          if (isReverse) o.payment_mode = 'Pickup';
           const required = ['name', 'add', 'pin', 'phone', 'order', 'payment_mode', 'products_desc', 'hsn_code', 'quantity', 'total_amount'];
           const missing = required.filter(f => o[f] === undefined || o[f] === null || o[f] === '');
           if (missing.length) return json({ ok: false, error: 'Missing required field(s): ' + missing.join(', ') }, 400);
@@ -3088,19 +3094,19 @@ export default {
 
           const sessionUser = await resolveSession(request, env.DB);
           await env.DB.prepare(`
-            INSERT INTO delhivery_orders (order_id, waybill, status, delhivery_ok, payload_json, response_json, created_by, job_type, remark, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            INSERT INTO delhivery_orders (order_id, waybill, status, delhivery_ok, payload_json, response_json, created_by, job_type, remark, direction, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
           `).bind(
             o.order, result.waybill, result.success ? 'created' : 'failed',
             result.success ? 1 : 0, JSON.stringify(result.payload), JSON.stringify(result.response),
             (sessionUser && sessionUser.username) || 'unauthenticated', o.job_type || '',
-            String(o.remark || '').trim()
+            String(o.remark || '').trim(), isReverse ? 'reverse' : 'forward'
           ).run();
 
           // Make sure a pickup request exists (today or the earliest date possible).
           // Never blocks the order — any failure is just reported back.
           let pickup = null;
-          if (result.success) {
+          if (result.success && !isReverse) {   // reverse: Delhivery picks up from the customer
             try { pickup = await ensureDelhiveryPickup(env, 'order'); } catch (e) { pickup = { ok: false, error: e.message }; }
           }
 
@@ -3801,7 +3807,7 @@ async function ensureDelhiveryTable(DB) {
   //   reattempts   — delivery reattempts so far (0 = none)
   //   tracked_at   — when tracking was last pulled
   // courier — 'Delhivery' (default, incl. all older rows) or 'Ekart'.
-  for (const col of ['rtd_at TEXT', 'track_stage TEXT', 'track_status TEXT', 'reattempts INTEGER DEFAULT 0', 'tracked_at TEXT', "courier TEXT DEFAULT 'Delhivery'"]) {
+  for (const col of ['rtd_at TEXT', 'track_stage TEXT', 'track_status TEXT', 'reattempts INTEGER DEFAULT 0', 'tracked_at TEXT', "courier TEXT DEFAULT 'Delhivery'", "direction TEXT DEFAULT 'forward'"]) {
     try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN ${col}`).run(); } catch (e) { /* column already exists */ }
   }
 }
@@ -4021,7 +4027,10 @@ async function refreshEkartStages(env, force) {
 // failed attempt (bad pincode etc.) doesn't burn a number. If two
 // people book at the exact same moment, Delhivery rejects the second
 // as a duplicate and the form bumps the serial and retries itself.
-const DELHIVERY_ORDER_PREFIXES = ['RPR', 'REP', 'FOC'];
+// Forward: FRPR (repaired, sent back), FRPL (replacement), FOC.
+// Reverse pickups: RPR (repair), RPL (replacement). Each prefix has its
+// own daily serial.
+const DELHIVERY_ORDER_PREFIXES = ['FRPR', 'FRPL', 'FOC', 'RPR', 'RPL'];
 
 async function nextDelhiveryOrderId(DB, prefix) {
   const ist = new Date(Date.now() + 330 * 60 * 1000); // UTC+5:30
