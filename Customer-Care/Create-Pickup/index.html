@@ -349,10 +349,19 @@ table.log-table tr:last-child td { border-bottom: none; }
       </div>
 
       <div id="order-form" autocomplete="off">
-        <div class="form-row single">
+        <div class="form-row">
           <div class="field">
             <label>Order ID</label>
             <input type="text" id="f-order" required readonly placeholder="Fills in once you select Type below">
+          </div>
+          <div class="field">
+            <label>Courier Partner</label>
+            <select id="f-courier">
+              <option value="Delhivery" selected>Delhivery</option>
+              <option value="Ekart">Ekart</option>
+              <option value="Other">Other</option>
+            </select>
+            <div class="field-hint bad" id="courier-hint" style="display:none;">Booking via this courier isn't live yet — only Delhivery works for now.</div>
           </div>
         </div>
 
@@ -834,6 +843,20 @@ function initDelhiveryApp() {
   }
   typeField.addEventListener('change', refreshOrderId);
 
+  // ── Courier Partner — Delhivery is the default and the only courier
+  // that can book right now. Ekart / Other are selectable so the choice
+  // is visible, but the Create button stays disabled until they're built. ──
+  var courierField = document.getElementById('f-courier');
+  var courierHint = document.getElementById('courier-hint');
+  function updateCourierMode() {
+    var isDelhivery = courierField.value === 'Delhivery';
+    courierHint.style.display = isDelhivery ? 'none' : '';
+    submitBtn.disabled = !isDelhivery;
+    submitBtn.textContent = isDelhivery ? 'Create Delhivery Order' : 'Create ' + courierField.value + ' Order (coming soon)';
+    if (!isDelhivery) confirmBox.className = 'confirm-box'; // hide any open Delhivery estimate
+  }
+  courierField.addEventListener('change', updateCourierMode);
+
   // Used only when Delhivery rejects an ID as a duplicate (e.g. two
   // people booking at the same second): RPR-22092603 -> RPR-22092604.
   function bumpOrderIdSerial() {
@@ -1106,6 +1129,7 @@ function initDelhiveryApp() {
       document.getElementById(id).value = '';
     });
     document.getElementById('f-type').value = '';
+    courierField.value = 'Delhivery';
     selectedProduct = '';
     autoUnitPrice = null;
     productOtherWrap.style.display = 'none';
@@ -1160,6 +1184,7 @@ function initDelhiveryApp() {
     resultBox.className = 'result-box';
     confirmBox.className = 'confirm-box';
 
+    if (courierField.value !== 'Delhivery') return;
     if (!validateRequiredFields()) return;
 
     if (!orderIdField.value) {
