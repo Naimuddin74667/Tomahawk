@@ -300,7 +300,7 @@ const ACTION_TIERS = {
   ekartCreateOrder: 'manager_up', ekartCheckPincode: 'viewer_read', ekartEstimateCharge: 'viewer_read',
   ekartGetLabel: 'viewer_read', ekartTrack: 'viewer_read',
   // — Reverse pickup: mark a parcel as received at the warehouse. —
-  delhiveryMarkReceived: 'manager_up'
+  delhiveryMarkReceived: 'manager_up', delhiveryMarkRefunded: 'manager_up'
 };
 
 function getAuthRequirement(act) {
@@ -3059,6 +3059,19 @@ export default {
           return json({ ok: true });
         }
 
+        // ── Refund case (RFD): refund given → case closed. Only after the
+        //   parcel has been marked received.
+        if (act === 'delhiveryMarkRefunded') {
+          await ensureDelhiveryTable(env.DB);
+          const oid = String(body.order_id || '').trim();
+          if (!oid) return json({ ok: false, error: 'order_id required' }, 400);
+          const r = await env.DB.prepare(
+            "UPDATE delhivery_orders SET refunded_at = COALESCE(refunded_at, datetime('now')) WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1 AND received_at IS NOT NULL"
+          ).bind(oid).run();
+          if (!r.meta || !r.meta.changes) return json({ ok: false, error: 'Mark the parcel received first' }, 400);
+          return json({ ok: true });
+        }
+
         // ── EKART — create a forward order (same inputs as delhiveryCreateOrder).
         if (act === 'ekartCreateOrder') {
           await ensureDelhiveryTable(env.DB);
@@ -3837,7 +3850,9 @@ async function ensureDelhiveryTable(DB) {
   for (const col of ['rtd_at TEXT', 'track_stage TEXT', 'track_status TEXT', 'reattempts INTEGER DEFAULT 0', 'tracked_at TEXT', "courier TEXT DEFAULT 'Delhivery'", "direction TEXT DEFAULT 'forward'",
                      // received_at — reverse pickup marked received at our warehouse (manual, wins over tracking)
                      // linked_order_id — reverse ↔ its send-back forward order
-                     'received_at TEXT', 'linked_order_id TEXT']) {
+                     'received_at TEXT', 'linked_order_id TEXT',
+                     // refunded_at — Refund case: refund given → case closed
+                     'refunded_at TEXT']) {
     try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN ${col}`).run(); } catch (e) { /* column already exists */ }
   }
 }
@@ -4058,9 +4073,9 @@ async function refreshEkartStages(env, force) {
 // people book at the exact same moment, Delhivery rejects the second
 // as a duplicate and the form bumps the serial and retries itself.
 // Forward: FRPR (repaired, sent back), FRPL (replacement), FOC.
-// Reverse pickups: RPR (repair), RPL (replacement). Each prefix has its
-// own daily serial.
-const DELHIVERY_ORDER_PREFIXES = ['FRPR', 'FRPL', 'FOC', 'RPR', 'RPL'];
+// Reverse pickups: RPR (repair), RPL (replacement), RFD (refund — closed
+// once the refund is given, no send-back). Each prefix has its own daily serial.
+const DELHIVERY_ORDER_PREFIXES = ['FRPR', 'FRPL', 'FOC', 'RPR', 'RPL', 'RFD'];
 
 async function nextDelhiveryOrderId(DB, prefix) {
   const ist = new Date(Date.now() + 330 * 60 * 1000); // UTC+5:30
