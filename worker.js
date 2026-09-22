@@ -1597,6 +1597,12 @@ export default {
         //   Worker-side testing before any frontend exists) ──────
         if (action === 'delhiveryListOrders') {
           await ensureDelhiveryTable(env.DB);
+          // Refresh live tracking stages first (see refreshDelhiveryStages);
+          // &refresh=1 (the ↻ Refresh link) ignores the 10-minute freshness
+          // window. A tracking failure never blocks the list itself.
+          try {
+            await refreshDelhiveryStages(env, url.searchParams.get('refresh') === '1');
+          } catch (e) { console.error('delhivery stage refresh failed:', e.message); }
           const rows = await env.DB.prepare(
             'SELECT * FROM delhivery_orders ORDER BY created_at DESC LIMIT 100'
           ).all();
@@ -1631,6 +1637,11 @@ export default {
           if (url.searchParams.get('file') === '1') {
             const pdfResp = await fetch(pdfUrl);
             if (!pdfResp.ok) return json({ ok: false, error: 'Label PDF download failed: ' + pdfResp.status }, 502);
+            // First label download = packed, waiting for pickup → RTD stage.
+            await ensureDelhiveryTable(env.DB);
+            await env.DB.prepare(
+              "UPDATE delhivery_orders SET rtd_at = COALESCE(rtd_at, datetime('now')) WHERE waybill = ? AND delhivery_ok = 1"
+            ).bind(wb).run();
             return new Response(pdfResp.body, {
               status: 200,
               headers: Object.assign({}, CORS, {
@@ -3510,6 +3521,86 @@ async function ensureDelhiveryTable(DB) {
   // Migration for tables created before remark existed (internal note
   // from the Create-Pickup form — stored here only, not sent to Delhivery).
   try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN remark TEXT`).run(); } catch (e) { /* column already exists */ }
+  // Live-status columns (Create-Pickup Recent orders Status badge):
+  //   rtd_at       — first label download (= packed, Ready To Dispatch)
+  //   track_stage  — Created / In Transit / At Last Mile / Out For Delivery /
+  //                  Delivered / RTO / Cancelled / Lost (from Delhivery)
+  //   track_status — Delhivery's own raw status text, for the popup
+  //   reattempts   — delivery reattempts so far (0 = none)
+  //   tracked_at   — when tracking was last pulled
+  for (const col of ['rtd_at TEXT', 'track_stage TEXT', 'track_status TEXT', 'reattempts INTEGER DEFAULT 0', 'tracked_at TEXT']) {
+    try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN ${col}`).run(); } catch (e) { /* column already exists */ }
+  }
+}
+
+// ── DELHIVERY — live stage for the Recent orders Status badge ──────────
+// Pulls tracking for created orders in batches of 50 waybills (one
+// Delhivery call per batch) and stores a simplified stage per order.
+// Skips orders already in a final stage, and orders tracked in the last
+// 10 minutes unless force=true.
+const DELHIVERY_FINAL_STAGES = ['Delivered', 'RTO', 'Cancelled', 'Lost'];
+
+async function refreshDelhiveryStages(env, force) {
+  if (!env.DELHIVERY_API_TOKEN) return;
+  const rows = await env.DB.prepare(`
+    SELECT waybill FROM delhivery_orders
+    WHERE delhivery_ok = 1 AND waybill IS NOT NULL AND waybill != ''
+      AND (track_stage IS NULL OR track_stage NOT IN ('Delivered','RTO','Cancelled','Lost'))
+      ${force ? '' : "AND (tracked_at IS NULL OR tracked_at < datetime('now', '-10 minutes'))"}
+    ORDER BY created_at DESC LIMIT 100
+  `).all();
+  const wbs = [...new Set((rows.results || []).map(r => String(r.waybill)))];
+  const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
+  for (let i = 0; i < wbs.length; i += 50) {
+    const batch = wbs.slice(i, i + 50);
+    const resp = await fetch(base + '/api/v1/packages/json/?waybill=' + batch.join(','), {
+      headers: { 'Authorization': 'Token ' + env.DELHIVERY_API_TOKEN }
+    });
+    let data;
+    try { data = await resp.json(); } catch (e) { continue; }
+    const stmts = [];
+    ((data && data.ShipmentData) || []).forEach(sd => {
+      const s = sd && sd.Shipment;
+      if (!s || !s.AWB) return;
+      const d = deriveDelhiveryStage(s);
+      stmts.push(env.DB.prepare(
+        "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now') WHERE waybill = ?"
+      ).bind(d.stage, d.rawStatus, d.reattempts, String(s.AWB)));
+    });
+    if (stmts.length) await env.DB.batch(stmts);
+  }
+}
+
+// Maps one Delhivery Shipment object to our stage names.
+//   Delhivery Status.Status values seen: Manifested / Not Picked / Open /
+//   Scheduled (not yet picked), In Transit, Pending (at destination hub,
+//   waiting to go out), Dispatched (out for delivery), Delivered, RTO,
+//   Returned, Cancelled, Lost. StatusType: UD (forward), DL (delivered),
+//   RT (return), CN (cancelled).
+// Reattempts = "Dispatched" (out for delivery) scans beyond the first,
+// or at least 1 if Delhivery's note mentions a reattempt.
+function deriveDelhiveryStage(s) {
+  const st = s.Status || {};
+  const raw = String(st.Status || '');
+  const status = raw.toLowerCase();
+  const type = String(st.StatusType || '').toUpperCase();
+  const instr = String(st.Instructions || '').toLowerCase();
+  const scans = (s.Scans || []).map(x => x.ScanDetail || x);
+  const ofdScans = scans.filter(d => /dispatched|out for delivery/i.test(String(d.Scan || '') + ' ' + String(d.Instructions || ''))).length;
+  let reattempts = Math.max(0, ofdScans - 1);
+  if (reattempts === 0 && scans.some(d => /re-?attempt/i.test(String(d.Instructions || '')))) reattempts = 1;
+
+  let stage;
+  if (type === 'DL' && !/rto|return/.test(status)) stage = 'Delivered';
+  else if (type === 'RT' || /rto|returned/.test(status)) stage = 'RTO';
+  else if (type === 'CN' || /cancel/.test(status)) stage = 'Cancelled';
+  else if (/lost/.test(status)) stage = 'Lost';
+  else if (status === 'delivered') stage = 'Delivered';
+  else if (status === 'dispatched' || /out for delivery/.test(instr)) stage = 'Out For Delivery';
+  else if (status === 'pending' || /destination|delivery centre|delivery center|last mile/.test(instr)) stage = 'At Last Mile';
+  else if (status === 'in transit' || /in transit|picked up|shipment picked/.test(instr)) stage = 'In Transit';
+  else stage = 'Created'; // Manifested / Not Picked / Open / Scheduled
+  return { stage, rawStatus: raw, reattempts };
 }
 
 // ── DELHIVERY — daily Order ID serial ────────────────────────────────

@@ -188,6 +188,22 @@ table.log-table tr:last-child td { border-bottom: none; }
 .badge { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px; text-transform: uppercase; letter-spacing: .03em; }
 .badge.created { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
 .badge.failed  { background: color-mix(in srgb, var(--red) 15%, transparent); color: var(--red); }
+/* Journey stages — Delivered reuses .created (green), RTO/Cancelled/Lost reuse .failed (red) */
+.badge { white-space: nowrap; }
+.badge.st-created  { background: color-mix(in srgb, var(--text2) 18%, transparent); color: var(--text2); }
+.badge.st-rtd      { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.badge.st-transit  { background: color-mix(in srgb, #60a5fa 18%, transparent); color: #60a5fa; }
+.badge.st-lastmile { background: color-mix(in srgb, #a78bfa 18%, transparent); color: #a78bfa; }
+.badge.st-ofd      { background: color-mix(in srgb, #fb923c 18%, transparent); color: #fb923c; }
+html[data-theme="light"] .badge.st-transit  { color: #2563eb; }
+html[data-theme="light"] .badge.st-lastmile { color: #7c3aed; }
+html[data-theme="light"] .badge.st-ofd      { color: #ea580c; }
+td.status-cell { white-space: nowrap; }
+.reattempt-ico {
+  display: inline-flex; align-items: center; justify-content: center; margin-left: 5px; min-width: 18px; height: 18px;
+  padding: 0 4px; border-radius: 9px; font-size: 10.5px; font-weight: 700; vertical-align: middle; cursor: help;
+  background: color-mix(in srgb, var(--red) 15%, transparent); color: var(--red);
+}
 .mono { font-family: monospace; font-size: 11.5px; }
 .details-toggle { cursor: pointer; color: var(--accent); font-size: 11px; user-select: none; }
 .log-consignee { font-size: 11.5px; color: var(--text); margin: 2px 0 1px; }
@@ -1193,16 +1209,40 @@ function initDelhiveryApp() {
     return res.json();
   }
 
-  async function fetchLog() {
+  // force=true (↻ Refresh) makes the Worker re-pull live tracking now
+  // instead of using statuses up to 10 minutes old.
+  async function fetchLog(force) {
     var session = window.TM_getSession();
     var headers = {};
     if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
     try {
-      var res = await fetch(window.TM_WORKER + '?action=delhiveryListOrders', { headers: headers }).then(function (r) { return r.json(); });
+      var res = await fetch(window.TM_WORKER + '?action=delhiveryListOrders' + (force === true ? '&refresh=1' : ''), { headers: headers }).then(function (r) { return r.json(); });
       renderLog((res && res.orders) || []);
     } catch (e) {
       renderLog([]);
     }
+  }
+
+  // ── Status badge — journey Created → RTD → In Transit → At Last Mile →
+  // Out For Delivery → Delivered. RTD comes from our own label download
+  // (rtd_at); every later stage comes from Delhivery tracking
+  // (track_stage, refreshed by the Worker when this list loads).
+  var STAGE_CLASS = {
+    'Failed': 'failed', 'Created': 'st-created', 'RTD': 'st-rtd', 'In Transit': 'st-transit',
+    'At Last Mile': 'st-lastmile', 'Out For Delivery': 'st-ofd', 'Delivered': 'created',
+    'RTO': 'failed', 'Cancelled': 'failed', 'Lost': 'failed'
+  };
+  function orderStage(o) {
+    if (!o.delhivery_ok) return 'Failed';
+    var st = o.track_stage || 'Created';
+    if (st === 'Created' && o.rtd_at) return 'RTD';
+    return st;
+  }
+  function stageBadgeHtml(o) {
+    var st = orderStage(o);
+    var n = parseInt(o.reattempts, 10) || 0;
+    return '<span class="badge ' + (STAGE_CLASS[st] || 'st-created') + '">' + escapeHtml(st) + '</span>' +
+      (n > 0 ? '<span class="reattempt-ico" title="Reattempt ×' + n + '">&#8635;' + (n > 1 ? n : '') + '</span>' : '');
   }
 
   function renderLog(orders) {
@@ -1213,7 +1253,6 @@ function initDelhiveryApp() {
     empty.hidden = true;
     orders.forEach(function (o, idx) {
       var tr = document.createElement('tr');
-      var statusClass = o.delhivery_ok ? 'created' : 'failed';
       // Consignee name isn't its own column in D1 — read it back out of
       // the payload that was sent to Delhivery.
       var consignee = '';
@@ -1231,7 +1270,7 @@ function initDelhiveryApp() {
         '<td>' + (o.job_type ? escapeHtml(o.job_type) : '&#8212;') + '</td>' +
         '<td>' + (o.created_by ? escapeHtml(o.created_by) : '&#8212;') + '</td>' +
         '<td>' + fmtWhen(o.created_at) + '</td>' +
-        '<td><span class="badge ' + statusClass + '">' + (o.delhivery_ok ? 'Created' : 'Failed') + '</span></td>';
+        '<td class="status-cell">' + stageBadgeHtml(o) + '</td>';
       tbody.appendChild(tr);
 
       var dlBtn = tr.querySelector('.label-dl-btn');
@@ -1272,6 +1311,7 @@ function initDelhiveryApp() {
       document.body.appendChild(a);
       a.click();
       setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      if (!o.rtd_at) { o.rtd_at = 'now'; fetchLog(); } // label downloaded → RTD
     } catch (e) {
       alert("Couldn't download the label: " + e.message);
     }
@@ -1352,8 +1392,7 @@ function initDelhiveryApp() {
       ? sh.shipment_length + ' × ' + sh.shipment_width + ' × ' + sh.shipment_height + ' cm' : '';
     var place = [sh.city, sh.state].filter(Boolean).join(', ');
 
-    document.getElementById('order-modal-title').innerHTML = escapeHtml(o.order_id || '') +
-      ' <span class="badge ' + (o.delhivery_ok ? 'created' : 'failed') + '">' + (o.delhivery_ok ? 'Created' : 'Failed') + '</span>';
+    document.getElementById('order-modal-title').innerHTML = escapeHtml(o.order_id || '') + ' ' + stageBadgeHtml(o);
     document.getElementById('order-modal-sub').textContent =
       [o.job_type, 'by ' + (o.created_by || '—'), fmtWhen(o.created_at)].filter(Boolean).join(' · ');
 
@@ -1362,7 +1401,7 @@ function initDelhiveryApp() {
         omField('Waybill (AWB)', o.waybill, { mono: true }),
         omField('Courier', 'Delhivery'),
         omField('Sort code', pkg.sort_code, { mono: true }),
-        omField('Delhivery status', pkg.status || (o.delhivery_ok ? 'Success' : 'Failed'), { bad: !o.delhivery_ok }),
+        omField('Delhivery status', o.track_status || pkg.status || (o.delhivery_ok ? 'Success' : 'Failed'), { bad: !o.delhivery_ok }),
         omField('Payment', sh.payment_mode),
         omField('COD amount', sh.payment_mode === 'COD' ? '₹' + (sh.cod_amount || 0) : ''),
         remarks ? omField('Delhivery remarks', remarks, { wide: true, bad: !o.delhivery_ok }) : ''
@@ -1396,7 +1435,7 @@ function initDelhiveryApp() {
     orderModal.hidden = false;
   }
 
-  document.getElementById('log-refresh-btn').addEventListener('click', fetchLog);
+  document.getElementById('log-refresh-btn').addEventListener('click', function () { fetchLog(true); });
 
   var confirmBox = document.getElementById('confirm-box');
   var confirmAmount = document.getElementById('confirm-amount');
