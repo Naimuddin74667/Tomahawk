@@ -823,6 +823,38 @@ function fmtWhen(iso) {
   } catch (e) { return iso; }
 }
 
+// ── 4×6 label conversion ─────────────────────────────────────────────
+// Delhivery serves the packing slip on an A4 page regardless of the
+// pdf_size we ask for, but the warehouse prints on a 4×6 inch thermal
+// printer. This rescales every page onto a 4×6 page (288×432 pt),
+// keeping the aspect ratio and centring it. pdf-lib is loaded from the
+// CDN only the first time a label is downloaded.
+var PDF_LIB_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js';
+function loadPdfLib() {
+  if (window.PDFLib) return Promise.resolve(window.PDFLib);
+  return new Promise(function (resolve, reject) {
+    var sc = document.createElement('script');
+    sc.src = PDF_LIB_URL;
+    sc.onload = function () { resolve(window.PDFLib); };
+    sc.onerror = function () { reject(new Error("couldn't load the PDF tool")); };
+    document.head.appendChild(sc);
+  });
+}
+async function to4x6Pdf(bytes) {
+  var PDFLib = await loadPdfLib();
+  var W = 288, H = 432, M = 4; // 4×6 inch in points, small safety margin
+  var src = await PDFLib.PDFDocument.load(bytes);
+  var out = await PDFLib.PDFDocument.create();
+  var pages = await out.embedPages(src.getPages());
+  pages.forEach(function (pg) {
+    var page = out.addPage([W, H]);
+    var scale = Math.min((W - 2 * M) / pg.width, (H - 2 * M) / pg.height);
+    var w = pg.width * scale, h = pg.height * scale;
+    page.drawPage(pg, { x: (W - w) / 2, y: (H - h) / 2, width: w, height: h });
+  });
+  return new Blob([await out.save()], { type: 'application/pdf' });
+}
+
 function initDelhiveryApp() {
   var submitBtn = document.getElementById('submit-btn');
   var resultBox = document.getElementById('result-box');
@@ -1118,7 +1150,7 @@ function initDelhiveryApp() {
             try { err = await resp.json(); } catch (e2) {}
             throw new Error(err.error || ('HTTP ' + resp.status));
           }
-          var blob = await resp.blob();
+          var blob = await to4x6Pdf(await resp.arrayBuffer());
           var a = document.createElement('a');
           a.href = URL.createObjectURL(blob);
           a.download = String(o.order_id || 'label').replace(/[^A-Za-z0-9_-]/g, '_') + '_' + o.waybill + '.pdf';
