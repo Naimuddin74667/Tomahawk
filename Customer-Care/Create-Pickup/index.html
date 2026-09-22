@@ -862,34 +862,84 @@ function fmtWhen(iso) {
 }
 
 // ── 4×6 label conversion ─────────────────────────────────────────────
-// Delhivery serves the packing slip on an A4 page regardless of the
-// pdf_size we ask for, but the warehouse prints on a 4×6 inch thermal
-// printer. This rescales every page onto a 4×6 page (288×432 pt),
-// keeping the aspect ratio and centring it. pdf-lib is loaded from the
-// CDN only the first time a label is downloaded.
+// Delhivery's label PDF sits on a page with lots of empty white space
+// around it. For the 4×6 thermal printer we:
+//   1. render each page with PDF.js and find the box around everything
+//      that isn't white (the label's outer border),
+//   2. crop the page to exactly that box with pdf-lib,
+//   3. scale the crop to fill a 4×6 inch page (288×432 pt), no margin.
+// Both libraries load from the CDN only the first time a label is
+// downloaded.
 var PDF_LIB_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js';
-function loadPdfLib() {
-  if (window.PDFLib) return Promise.resolve(window.PDFLib);
+var PDFJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+var PDFJS_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+function loadScriptOnce(src, globalName) {
+  if (window[globalName]) return Promise.resolve(window[globalName]);
   return new Promise(function (resolve, reject) {
     var sc = document.createElement('script');
-    sc.src = PDF_LIB_URL;
-    sc.onload = function () { resolve(window.PDFLib); };
-    sc.onerror = function () { reject(new Error("couldn't load the PDF tool")); };
+    sc.src = src;
+    sc.onload = function () { resolve(window[globalName]); };
+    sc.onerror = function () { reject(new Error("couldn't load the PDF tools")); };
     document.head.appendChild(sc);
   });
 }
+
+// Returns the non-white content box of each page, in PDF points with a
+// bottom-left origin (what pdf-lib expects): [{left, bottom, right, top}].
+async function findContentBoxes(bytes) {
+  var pdfjsLib = await loadScriptOnce(PDFJS_URL, 'pdfjsLib');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+  var doc = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+  var boxes = [];
+  for (var n = 1; n <= doc.numPages; n++) {
+    var page = await doc.getPage(n);
+    var scale = 3; // ~216 dpi — enough to find the border precisely
+    var vp = page.getViewport({ scale: scale });
+    var canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    var px = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    var minX = canvas.width, minY = canvas.height, maxX = -1, maxY = -1;
+    for (var y = 0; y < canvas.height; y++) {
+      for (var x = 0; x < canvas.width; x++) {
+        var i = (y * canvas.width + x) * 4;
+        if (px[i] < 235 || px[i + 1] < 235 || px[i + 2] < 235) { // anything not near-white
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+      }
+    }
+    var view = page.view; // [x0, y0, x1, y1] in PDF points
+    var pageH = view[3] - view[1];
+    if (maxX < 0) { boxes.push(null); continue; } // blank page — leave as is
+    var pad = 1; // 1pt so the border line itself isn't shaved off
+    boxes.push({
+      left:   view[0] + minX / scale - pad,
+      right:  view[0] + (maxX + 1) / scale + pad,
+      top:    view[1] + pageH - minY / scale + pad,
+      bottom: view[1] + pageH - (maxY + 1) / scale - pad
+    });
+  }
+  return boxes;
+}
+
 async function to4x6Pdf(bytes) {
-  var PDFLib = await loadPdfLib();
-  var W = 288, H = 432, M = 4; // 4×6 inch in points, small safety margin
+  var PDFLib = await loadScriptOnce(PDF_LIB_URL, 'PDFLib');
+  var W = 288, H = 432; // 4×6 inch in points
+  var boxes = [];
+  try { boxes = await findContentBoxes(bytes); } catch (e) { boxes = []; } // fall back to whole page
   var src = await PDFLib.PDFDocument.load(bytes);
   var out = await PDFLib.PDFDocument.create();
-  var pages = await out.embedPages(src.getPages());
-  pages.forEach(function (pg) {
+  var srcPages = src.getPages();
+  for (var i = 0; i < srcPages.length; i++) {
+    var emb = boxes[i] ? await out.embedPage(srcPages[i], boxes[i]) : await out.embedPage(srcPages[i]);
     var page = out.addPage([W, H]);
-    var scale = Math.min((W - 2 * M) / pg.width, (H - 2 * M) / pg.height);
-    var w = pg.width * scale, h = pg.height * scale;
-    page.drawPage(pg, { x: (W - w) / 2, y: (H - h) / 2, width: w, height: h });
-  });
+    var scale = Math.min(W / emb.width, H / emb.height);
+    var w = emb.width * scale, h = emb.height * scale;
+    page.drawPage(emb, { x: (W - w) / 2, y: (H - h) / 2, width: w, height: h });
+  }
   return new Blob([await out.save()], { type: 'application/pdf' });
 }
 
