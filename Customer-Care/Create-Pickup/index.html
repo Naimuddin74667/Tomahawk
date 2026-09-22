@@ -195,6 +195,13 @@ table.log-table tr:last-child td { border-bottom: none; }
 .badge.st-created  { background: color-mix(in srgb, var(--text2) 18%, transparent); color: var(--text2); }
 #log-table td.oid-cell { white-space: nowrap; }
 #log-table .status-cell .badge { white-space: nowrap; }
+.row-act {
+  display: inline-block; margin: 4px 4px 0 0; padding: 3px 9px; border-radius: 6px; font-size: 10.5px; font-weight: 700;
+  border: 1px solid var(--accent); background: transparent; color: var(--accent); cursor: pointer; white-space: nowrap;
+}
+.row-act:hover { background: var(--accent); color: #111; }
+.row-act.busy { opacity: .5; cursor: progress; }
+.link-note { font-size: 10.5px; color: var(--text2); margin-top: 3px; white-space: nowrap; }
 .badge.st-rtd      { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 .badge.st-transit  { background: color-mix(in srgb, #60a5fa 18%, transparent); color: #60a5fa; }
 .badge.st-lastmile { background: color-mix(in srgb, #a78bfa 18%, transparent); color: #a78bfa; }
@@ -1091,6 +1098,7 @@ function initDelhiveryApp() {
   window.setPickupMode = function (m) {
     if (m !== 'forward' && m !== 'reverse') return;
     pickupMode = m;
+    sendBackFrom = null;
     var t = MODE_TEXT[m];
     document.getElementById('form-title').textContent = t.title;
     document.getElementById('lbl-name').textContent = t.name;
@@ -1405,12 +1413,13 @@ function initDelhiveryApp() {
   // (track_stage, refreshed by the Worker when this list loads).
   var STAGE_CLASS = {
     'Failed': 'failed', 'Created': 'st-created', 'RTD': 'st-rtd', 'In Transit': 'st-transit',
-    'At Last Mile': 'st-lastmile', 'Out For Delivery': 'st-ofd', 'Delivered': 'created',
+    'At Last Mile': 'st-lastmile', 'Out For Delivery': 'st-ofd', 'Delivered': 'created', 'Received': 'created',
     'RTO': 'failed', 'Cancelled': 'failed', 'Lost': 'failed'
   };
   function orderStage(o) {
     if (!o.delhivery_ok) return 'Failed';
     var st = o.track_stage || 'Created';
+    if (o.direction === 'reverse' && o.received_at) return 'Received'; // marked received by us — wins over tracking
     if (st === 'Created' && o.rtd_at) return 'RTD';
     return st;
   }
@@ -1422,6 +1431,72 @@ function initDelhiveryApp() {
       : { 'RTD': 'Ready To Dispatch' };
     return '<span class="badge ' + (STAGE_CLASS[st] || 'st-created') + '">' + escapeHtml(STAGE_LABEL[st] || st) + '</span>' +
       (n > 0 ? '<span class="reattempt-ico" title="Reattempt ×' + n + '">&#8635;' + (n > 1 ? n : '') + '</span>' : '');
+  }
+
+  // ── Reverse pickup row actions ────────────────────────────────────
+  //   booked, not received → [Mark received]
+  //   received, not sent   → [Send back]  (pre-fills the Forward form)
+  //   sent back            → "Sent back as FRPR-…"
+  function reverseActionsHtml(o) {
+    if (o.direction !== 'reverse' || !o.delhivery_ok) return '';
+    if (o.linked_order_id) return '<div class="link-note">Sent back as ' + escapeHtml(o.linked_order_id) + '</div>';
+    if (!o.received_at) return '<div><button type="button" class="row-act" data-act="recv">Mark received</button></div>';
+    return '<div><button type="button" class="row-act" data-act="sendback">Send back &#8594;</button></div>';
+  }
+
+  async function markReceived(o, btn) {
+    if (!confirm('Mark ' + o.order_id + ' as received at the warehouse?')) return;
+    btn.classList.add('busy');
+    try {
+      var res = await callWorker('delhiveryMarkReceived', { order_id: o.order_id });
+      if (!res.ok) throw new Error(res.error || 'failed');
+      fetchLog(true);
+    } catch (e) {
+      alert("Couldn't mark it received: " + e.message);
+      btn.classList.remove('busy');
+    }
+  }
+
+  // Send back: switch to the Forward tab and fill the form from the
+  // reverse pickup (same customer/address/product/package). The person
+  // checks it, gets the estimate and confirms as usual. The new order is
+  // linked to the pickup (sendBackFrom → linked_order_id).
+  var sendBackFrom = null;
+  function startSendBack(o) {
+    var sh = (safeJson(o.payload_json).shipments || [])[0] || {};
+    switchPickupTab('forward');           // resets the form into forward mode
+    sendBackFrom = o.order_id;
+    document.getElementById('f-name').value = sh.name || '';
+    document.getElementById('f-phone').value = String(sh.phone || '').replace(/\D/g, '').slice(-10);
+    document.getElementById('f-add').value = sh.add || '';
+    pinField.value = sh.pin || '';
+    courierField.value = o.courier === 'Ekart' ? 'Ekart' : 'Delhivery';
+    updateCourierMode();
+    pinField.dispatchEvent(new Event('blur'));     // fills City/State + serviceability
+    typeField.value = o.job_type === 'Replacement' ? 'Replacement' : 'Repaired';
+    refreshOrderId();                               // FRPR / FRPL
+    // Product: "Repair - SKU" → SKU; a UC SKU is picked as-is, anything else goes to Other.
+    var desc = String(sh.products_desc || '').replace(/^(Repair|Replacement)\s*-\s*/i, '').trim();
+    if (ucSkus.indexOf(desc) !== -1) {
+      selectedProduct = desc; productSearch.value = desc;
+      productOtherWrap.style.display = 'none'; productOtherField.value = '';
+    } else {
+      selectedProduct = OTHER; productSearch.value = 'Other';
+      productOtherWrap.style.display = ''; productOtherField.value = desc;
+    }
+    productHint.className = 'field-hint ok';
+    productHint.textContent = '✓ Filled from reverse pickup ' + o.order_id + ' — check the values before booking.';
+    // Package + value exactly as on the pickup (no listing re-fetch).
+    amountField.value = sh.total_amount || '';
+    qtyField.value = sh.quantity || '1';
+    document.getElementById('f-hsn').value = sh.hsn_code || '8467';
+    document.getElementById('f-weight').value = sh.weight || DEFAULT_WEIGHT_G;
+    setDims(sh.shipment_length || DEFAULT_DIM_CM, sh.shipment_width || DEFAULT_DIM_CM, sh.shipment_height || DEFAULT_DIM_CM);
+    document.getElementById('f-remark').value = o.remark || '';
+    resultBox.className = 'result-box show success';
+    resultTitle.textContent = 'Sending back ' + o.order_id;
+    resultBody.textContent = 'Form filled from the reverse pickup — check the details, then Create Order.';
+    document.getElementById('f-name').scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
   var lastOrders = [];
@@ -1447,14 +1522,22 @@ function initDelhiveryApp() {
           '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>' +
         '</button></td>' +
         '<td class="mono oid-cell">' + escapeHtml(o.order_id) +
+          (!isReverse && o.linked_order_id ? '<div class="link-note">Return of ' + escapeHtml(o.linked_order_id) + '</div>' : '') +
           (consignee ? '<div class="log-consignee">' + escapeHtml(consignee) + '</div>' : '') +
         '</td>' +
         '<td class="mono">' + (o.waybill ? escapeHtml(o.waybill) : '&#8212;') +
           '<div class="log-consignee">' + escapeHtml(o.courier || 'Delhivery') + '</div></td>' +
         '<td>' + (o.job_type ? escapeHtml(o.job_type) : '&#8212;') + '</td>' +
         '<td>' + (o.created_by ? escapeHtml(o.created_by) : '&#8212;') + '</td>' +
-        '<td class="status-cell">' + stageBadgeHtml(o) + '</td>';
+        '<td class="status-cell">' + stageBadgeHtml(o) + reverseActionsHtml(o) + '</td>';
       tbody.appendChild(tr);
+      tr.querySelectorAll('.row-act').forEach(function (b) {
+        b.addEventListener('click', function (e) {
+          e.stopPropagation(); // don't open the details popup
+          if (b.dataset.act === 'recv') markReceived(o, b);
+          if (b.dataset.act === 'sendback') startSendBack(o);
+        });
+      });
 
       var dlBtn = tr.querySelector('.label-dl-btn');
       if (canDownload) dlBtn.addEventListener('click', function () { downloadLabel(o, dlBtn); });
@@ -1464,7 +1547,7 @@ function initDelhiveryApp() {
       tr.className = 'log-row';
       tr.title = 'Click to view details';
       tr.addEventListener('click', function (e) {
-        if (e.target.closest('.label-dl-btn')) return;
+        if (e.target.closest('.label-dl-btn') || e.target.closest('.row-act')) return;
         openOrderModal(o);
       });
     });
@@ -1668,6 +1751,7 @@ function initDelhiveryApp() {
     var rawDesc = selectedProduct === OTHER ? productOtherField.value.trim() : selectedProduct;
     return {
       order: orderIdField.value.trim(),
+      linked_order_id: pickupMode === 'forward' && sendBackFrom ? sendBackFrom : undefined,
       name: document.getElementById('f-name').value.trim(),
       phone: document.getElementById('f-phone').value.trim(),
       add: document.getElementById('f-add').value.trim(),
@@ -1856,6 +1940,7 @@ function initDelhiveryApp() {
             : order.courier === 'Ekart'
             ? '<div style="margin-top:6px;color:var(--text2);">Pickup: Ekart schedules it automatically for booked shipments.</div>'
             : pickupNoteHtml(res.pickup));
+        sendBackFrom = null;
         resetFormFields();
         pinStatus.textContent = '';
         pinStatus.className = 'field-hint';
