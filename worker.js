@@ -298,7 +298,9 @@ const ACTION_TIERS = {
   delhiveryTrack: 'viewer_read',
   // — Ekart forward orders (same flow as Delhivery above). —
   ekartCreateOrder: 'manager_up', ekartCheckPincode: 'viewer_read', ekartEstimateCharge: 'viewer_read',
-  ekartGetLabel: 'viewer_read', ekartTrack: 'viewer_read'
+  ekartGetLabel: 'viewer_read', ekartTrack: 'viewer_read',
+  // — Reverse pickup: mark a parcel as received at the warehouse. —
+  delhiveryMarkReceived: 'manager_up'
 };
 
 function getAuthRequirement(act) {
@@ -3043,6 +3045,20 @@ export default {
         // Requires DELHIVERY_API_TOKEN, DELHIVERY_PICKUP_LOCATION, and
         // DELHIVERY_SELLER_GST to be set as Worker secrets/vars — see
         // createDelhiveryOrder() above for exactly what each does.
+        // ── Reverse pickup → mark received at our warehouse (manual). Once set,
+        //   the Recent list shows "Received" whatever Delhivery tracking says,
+        //   and the "Send back" button becomes available.
+        if (act === 'delhiveryMarkReceived') {
+          await ensureDelhiveryTable(env.DB);
+          const oid = String(body.order_id || '').trim();
+          if (!oid) return json({ ok: false, error: 'order_id required' }, 400);
+          const r = await env.DB.prepare(
+            "UPDATE delhivery_orders SET received_at = COALESCE(received_at, datetime('now')) WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1"
+          ).bind(oid).run();
+          if (!r.meta || !r.meta.changes) return json({ ok: false, error: 'No booked reverse pickup with that Order ID' }, 404);
+          return json({ ok: true });
+        }
+
         // ── EKART — create a forward order (same inputs as delhiveryCreateOrder).
         if (act === 'ekartCreateOrder') {
           await ensureDelhiveryTable(env.DB);
@@ -3068,6 +3084,7 @@ export default {
             (sessionUser && sessionUser.username) || 'unauthenticated', o.job_type || '',
             String(o.remark || '').trim()
           ).run();
+          if (result.success && o.linked_order_id) await linkSendBack(env.DB, o.order, o.linked_order_id);
           return json({ ok: result.success, waybill: result.trackingId, response: result.response, error: result.success ? undefined : result.error }, result.success ? 200 : 502);
         }
 
@@ -3102,6 +3119,7 @@ export default {
             (sessionUser && sessionUser.username) || 'unauthenticated', o.job_type || '',
             String(o.remark || '').trim(), isReverse ? 'reverse' : 'forward'
           ).run();
+          if (result.success && !isReverse && o.linked_order_id) await linkSendBack(env.DB, o.order, o.linked_order_id);
 
           // Make sure a pickup request exists (today or the earliest date possible).
           // Never blocks the order — any failure is just reported back.
@@ -3781,6 +3799,15 @@ async function ensureDelhiveryPickup(env, trigger) {
   return { ok: false, error: String(lastErr || 'No pickup date accepted') };
 }
 
+// Links a send-back forward order to the reverse pickup it came from
+// (both rows get linked_order_id pointing at the other).
+async function linkSendBack(DB, forwardId, reverseId) {
+  await DB.batch([
+    DB.prepare("UPDATE delhivery_orders SET linked_order_id = ? WHERE order_id = ? AND direction = 'reverse'").bind(forwardId, reverseId),
+    DB.prepare("UPDATE delhivery_orders SET linked_order_id = ? WHERE order_id = ? AND COALESCE(direction, 'forward') = 'forward' AND delhivery_ok = 1").bind(reverseId, forwardId)
+  ]);
+}
+
 async function ensureDelhiveryTable(DB) {
   await DB.prepare(`CREATE TABLE IF NOT EXISTS delhivery_orders (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3807,7 +3834,10 @@ async function ensureDelhiveryTable(DB) {
   //   reattempts   — delivery reattempts so far (0 = none)
   //   tracked_at   — when tracking was last pulled
   // courier — 'Delhivery' (default, incl. all older rows) or 'Ekart'.
-  for (const col of ['rtd_at TEXT', 'track_stage TEXT', 'track_status TEXT', 'reattempts INTEGER DEFAULT 0', 'tracked_at TEXT', "courier TEXT DEFAULT 'Delhivery'", "direction TEXT DEFAULT 'forward'"]) {
+  for (const col of ['rtd_at TEXT', 'track_stage TEXT', 'track_status TEXT', 'reattempts INTEGER DEFAULT 0', 'tracked_at TEXT', "courier TEXT DEFAULT 'Delhivery'", "direction TEXT DEFAULT 'forward'",
+                     // received_at — reverse pickup marked received at our warehouse (manual, wins over tracking)
+                     // linked_order_id — reverse ↔ its send-back forward order
+                     'received_at TEXT', 'linked_order_id TEXT']) {
     try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN ${col}`).run(); } catch (e) { /* column already exists */ }
   }
 }
