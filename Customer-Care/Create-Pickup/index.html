@@ -1272,9 +1272,42 @@ function initDelhiveryApp() {
   var selectedProduct = '';    // '' | UC SKU | OTHER
   var autoUnitPrice = null;    // Amazon price for the picked SKU, for qty changes
 
+  // Live list of ENABLED SKUs straight from UC_ItemMaster (UC API sheet,
+  // auto-synced from Unicommerce), so a SKU disabled in UC drops out
+  // right away. Falls back to the hub's saved list (ucsku_getList) only
+  // if the sheet can't be read.
+  var UC_ITEMMASTER_CSV = 'https://docs.google.com/spreadsheets/d/17gMjH2tqTRKyyRXf8pvMtZXaj0MfyUFRWtFKODGHIlw/gviz/tq?tqx=out:csv&sheet=UC_ItemMaster';
+  function csvLine(line) {
+    var out = [], cur = '', q = false;
+    for (var i = 0; i < line.length; i++) {
+      var ch = line[i];
+      if (q) { if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') q = false; else cur += ch; }
+      else if (ch === '"') q = true; else if (ch === ',') { out.push(cur); cur = ''; } else cur += ch;
+    }
+    out.push(cur);
+    return out;
+  }
+  async function loadEnabledSkusLive() {
+    var text = await fetch(UC_ITEMMASTER_CSV).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); });
+    if (text.trim().charAt(0) === '<') throw new Error('sheet not readable');
+    var lines = text.split(/\r?\n/).filter(function (l) { return l.trim(); });
+    var head = csvLine(lines[0]).map(function (h) { return h.trim(); });
+    var si = head.indexOf('skuCode'), ei = head.indexOf('enabled');
+    if (si === -1 || ei === -1) throw new Error('columns missing');
+    var seen = {}, out = [];
+    for (var i = 1; i < lines.length; i++) {
+      var c = csvLine(lines[i]), sku = (c[si] || '').trim(), en = (c[ei] || '').trim().toUpperCase();
+      if (sku && !seen[sku] && (en === 'TRUE' || en === '1')) { seen[sku] = 1; out.push(sku); }
+    }
+    if (!out.length) throw new Error('no enabled SKUs parsed');
+    return out;
+  }
+
   async function loadProductSources() {
     try {
-      var res = await workerGet('ucsku_getList');
+      var live = null;
+      try { live = await loadEnabledSkusLive(); } catch (e0) { console.warn('Live SKU list failed, using saved list:', e0.message); }
+      var res = live ? { skus: live } : await workerGet('ucsku_getList');
       ucSkus = ((res && res.skus) || []).slice().sort();
       productSearch.placeholder = ucSkus.length ? 'Search ' + ucSkus.length + ' enabled UC SKUs, or pick Other…' : 'SKU list is empty — type to pick Other';
     } catch (e) {
