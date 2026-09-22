@@ -291,7 +291,9 @@ const ACTION_TIERS = {
   delhiveryCheckPincode: 'viewer_read', delhiveryEstimateCharge: 'viewer_read',
   // — Create-Pickup form helpers: next daily Order ID (RPR/REP/FOC) and
   //   Amazon listing price/weight/dimensions per UC SKU. Read-only. —
-  delhiveryNextOrderId: 'viewer_read', delhiveryAmzProductInfo: 'viewer_read'
+  delhiveryNextOrderId: 'viewer_read', delhiveryAmzProductInfo: 'viewer_read',
+  // — Shipping-label PDF link for a created waybill (Recent orders ⬇ button). —
+  delhiveryGetLabel: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -1597,6 +1599,31 @@ export default {
             'SELECT * FROM delhivery_orders ORDER BY created_at DESC LIMIT 100'
           ).all();
           return json({ ok: true, orders: rows.results || [] });
+        }
+
+        // ── DELHIVERY — shipping label (packing slip) PDF for a waybill.
+        //   Delhivery's Packing Slip API with pdf=true returns a short-
+        //   lived S3 link per package (pdf_download_link); 4R = 4x6 inch,
+        //   the thermal-label size. The browser opens the link directly.
+        if (action === 'delhiveryGetLabel') {
+          const wb = String(url.searchParams.get('waybill') || '').trim();
+          if (!/^\d{6,20}$/.test(wb)) return json({ ok: false, error: 'Valid waybill required' }, 400);
+          if (!env.DELHIVERY_API_TOKEN) return json({ ok: false, error: 'DELHIVERY_API_TOKEN is not set in Worker secrets' }, 500);
+          const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
+          let lJson;
+          try {
+            const lResp = await fetch(base + '/api/p/packing_slip?wbns=' + wb + '&pdf=true&pdf_size=4R', {
+              headers: { 'Authorization': 'Token ' + env.DELHIVERY_API_TOKEN }
+            });
+            const lText = await lResp.text();
+            try { lJson = JSON.parse(lText); } catch (e) { lJson = { raw: lText.slice(0, 500) }; }
+          } catch (e) {
+            return json({ ok: false, error: 'Delhivery label request failed: ' + e.message }, 502);
+          }
+          const pkg = (lJson && lJson.packages && lJson.packages[0]) || {};
+          const pdfUrl = pkg.pdf_download_link || pkg.pdf_url || '';
+          if (!pdfUrl) return json({ ok: false, error: 'Delhivery returned no PDF link for this waybill', response: lJson }, 502);
+          return json({ ok: true, pdfUrl });
         }
 
         // ── DELHIVERY — next Order ID for the Create-Pickup form.

@@ -190,6 +190,17 @@ table.log-table tr:last-child td { border-bottom: none; }
 .badge.failed  { background: color-mix(in srgb, var(--red) 15%, transparent); color: var(--red); }
 .mono { font-family: monospace; font-size: 11.5px; }
 .details-toggle { cursor: pointer; color: var(--accent); font-size: 11px; user-select: none; }
+.log-consignee { font-size: 11.5px; color: var(--text); margin: 2px 0 1px; }
+/* Shipping-label download button in the Recent orders table */
+.label-dl-btn {
+  width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface2);
+  color: var(--accent); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  transition: border-color .15s, opacity .15s;
+}
+.label-dl-btn:hover:not(:disabled) { border-color: var(--accent); }
+.label-dl-btn:disabled { color: var(--text2); opacity: .35; cursor: not-allowed; }
+.label-dl-btn.busy { opacity: .6; cursor: progress; }
+table.log-table td.dl-cell { width: 38px; padding-right: 0; }
 .details-json {
   display: none; margin-top: 6px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
   padding: 8px; font-family: monospace; font-size: 10.5px; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto;
@@ -505,12 +516,13 @@ table.log-table tr:last-child td { border-bottom: none; }
         <table class="log-table" id="log-table">
           <thead>
             <tr>
+              <th></th>
               <th>Order ID</th>
               <th>Waybill</th>
               <th>Type</th>
-              <th>Status</th>
               <th>By</th>
               <th>When</th>
+              <th>Status</th>
             </tr>
           </thead>
           <tbody id="log-tbody"></tbody>
@@ -1064,17 +1076,49 @@ function initDelhiveryApp() {
     orders.forEach(function (o, idx) {
       var tr = document.createElement('tr');
       var statusClass = o.delhivery_ok ? 'created' : 'failed';
+      // Consignee name isn't its own column in D1 — read it back out of
+      // the payload that was sent to Delhivery.
+      var consignee = '';
+      try { consignee = ((JSON.parse(o.payload_json || '{}').shipments || [])[0] || {}).name || ''; } catch (e) {}
+      var canDownload = !!(o.delhivery_ok && o.waybill);
       tr.innerHTML =
+        '<td class="dl-cell"><button type="button" class="label-dl-btn"' + (canDownload ? '' : ' disabled') +
+          ' title="' + (canDownload ? 'Download shipping label (PDF)' : 'No label — order was not created') + '">' +
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>' +
+        '</button></td>' +
         '<td class="mono">' + escapeHtml(o.order_id) +
+          (consignee ? '<div class="log-consignee">' + escapeHtml(consignee) + '</div>' : '') +
           '<div class="details-toggle" data-idx="' + idx + '">view details</div>' +
           '<div class="details-json" id="details-' + idx + '"></div>' +
         '</td>' +
         '<td class="mono">' + (o.waybill ? escapeHtml(o.waybill) : '&#8212;') + '</td>' +
         '<td>' + (o.job_type ? escapeHtml(o.job_type) : '&#8212;') + '</td>' +
-        '<td><span class="badge ' + statusClass + '">' + (o.delhivery_ok ? 'Created' : 'Failed') + '</span></td>' +
-        '<td>' + escapeHtml(o.created_by || '&#8212;') + '</td>' +
-        '<td>' + fmtWhen(o.created_at) + '</td>';
+        '<td>' + (o.created_by ? escapeHtml(o.created_by) : '&#8212;') + '</td>' +
+        '<td>' + fmtWhen(o.created_at) + '</td>' +
+        '<td><span class="badge ' + statusClass + '">' + (o.delhivery_ok ? 'Created' : 'Failed') + '</span></td>';
       tbody.appendChild(tr);
+
+      // Label download — asks the Worker for Delhivery's packing-slip PDF
+      // link for this waybill, then opens it in a new tab.
+      var dlBtn = tr.querySelector('.label-dl-btn');
+      if (canDownload) dlBtn.addEventListener('click', async function () {
+        if (dlBtn.classList.contains('busy')) return;
+        dlBtn.classList.add('busy');
+        var tab = window.open('', '_blank'); // opened now so pop-up blockers allow it
+        try {
+          var res = await workerGet('delhiveryGetLabel&waybill=' + encodeURIComponent(o.waybill));
+          if (res && res.ok && res.pdfUrl) {
+            if (tab) tab.location.href = res.pdfUrl; else window.location.href = res.pdfUrl;
+          } else {
+            if (tab) tab.close();
+            alert("Couldn't get the label: " + ((res && res.error) || 'unknown error'));
+          }
+        } catch (e) {
+          if (tab) tab.close();
+          alert("Couldn't get the label: " + e.message);
+        }
+        dlBtn.classList.remove('busy');
+      });
 
       var toggle = tr.querySelector('.details-toggle');
       var jsonBox = tr.querySelector('.details-json');
