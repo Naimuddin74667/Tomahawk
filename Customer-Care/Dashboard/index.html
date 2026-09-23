@@ -457,17 +457,17 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
         <select id="f-kind">
           <option value="">All types</option>
           <option value="Repair">Repair</option>
-          <option value="Replacement">Replacement</option>
+          <option value="Replace">Replace</option>
           <option value="Refund">Refund</option>
-          <option value="forward">Forward only</option>
+          <option value="Free Of Cost">Free Of Cost</option>
         </select>
         <span class="log-refresh" id="refresh-btn">&#8635; Refresh</span>
       </div>
     </div>
     <div class="table-wrap">
       <table class="case-table">
-        <thead><tr><th>Case</th><th>Customer</th><th>Product</th><th>Status</th></tr></thead>
-        <tbody id="case-body"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+        <thead><tr><th>Case</th><th>Customer</th><th>Product</th><th>Type</th><th>Status</th></tr></thead>
+        <tbody id="case-body"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
       </table>
     </div>
     <!-- Pagination footer (hidden when everything fits on one page) -->
@@ -687,6 +687,20 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
   ];
   function tileTest(key) { for (var i = 0; i < TILES.length; i++) if (TILES[i].key === key) return TILES[i].test; return TILES[0].test; }
 
+  // Type column: Repair / Replace / Refund / Free Of Cost. From job_type,
+  // falling back to the Order ID prefix for older orders saved without one
+  // (RPR/FRPR = Repair, REP/RPL/FRPL = Replace, RFD = Refund, FOC).
+  function caseType(c) {
+    var lead = c.reverse || c.forward;
+    var jt = String(lead.job_type || '').toLowerCase();
+    if (/^repair/.test(jt)) return 'Repair';
+    if (/^replace/.test(jt)) return 'Replace';
+    if (jt === 'refund') return 'Refund';
+    if (jt === 'foc') return 'Free Of Cost';
+    var pre = String(lead.order_id || '').split('-')[0].toUpperCase();
+    return { RPR: 'Repair', FRPR: 'Repair', REP: 'Replace', RPL: 'Replace', FRPL: 'Replace', RFD: 'Refund', FOC: 'Free Of Cost' }[pre] || '—';
+  }
+
   function buildCases(orders) {
     var byId = {};
     orders.forEach(function (o) { if (o.order_id) byId[o.order_id] = byId[o.order_id] || o; });
@@ -708,6 +722,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
       c.city = [sh.city, sh.state].filter(Boolean).join(', ');
       c.product = String(sh.products_desc || '').replace(/^(Repair|Replacement|Refund|Repaired|FOC)\s*-\s*/i, '');
       c.kind = c.reverse ? (c.reverse.job_type || 'Reverse') : 'forward';
+      c.type = caseType(c);
       c.search = [c.id, c.forward && c.forward.order_id, c.reverse && c.reverse.waybill, c.forward && c.forward.waybill, c.customer, c.product, sh.phone].join(' ').toLowerCase();
     });
     // Failed bookings and cancelled shipments aren't shown at all.
@@ -734,10 +749,10 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     var q = document.getElementById('q').value.trim().toLowerCase();
     var kind = document.getElementById('f-kind').value;
     var rows = cases.filter(function (c) {
-      return tileTest(tileFilter)(c) && (!kind || c.kind === kind) && (!q || c.search.indexOf(q) !== -1);
+      return tileTest(tileFilter)(c) && (!kind || c.type === kind) && (!q || c.search.indexOf(q) !== -1);
     });
     var body = document.getElementById('case-body');
-    if (!rows.length) { body.innerHTML = '<tr><td colspan="4" class="muted">No cases match.</td></tr>'; renderPager(0, 1); return; }
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="5" class="muted">No cases match.</td></tr>'; renderPager(0, 1); return; }
     var totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
     if (page > totalPages) page = totalPages;
     if (page < 1) page = 1;
@@ -755,6 +770,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
         '<td>' + ids + '<div class="sub">' + kindLabel + '</div></td>' +
         '<td>' + esc(c.customer || '—') + (c.city ? '<div class="sub">' + esc(c.city) + '</div>' : '') + '</td>' +
         '<td>' + esc(c.product || '—') + '</td>' +
+        '<td>' + esc(c.type) + '</td>' +
         '<td>' + badgeHtml(c.st) + '</td>';
       tr.addEventListener('click', function () { openCase(c); });
       body.appendChild(tr);
@@ -765,7 +781,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
       for (var i = rows.length; i < PAGE_SIZE; i++) {
         var pad = document.createElement('tr');
         pad.setAttribute('aria-hidden', 'true');
-        pad.innerHTML = '<td colspan="4">&nbsp;<div class="sub">&nbsp;</div></td>';
+        pad.innerHTML = '<td colspan="5">&nbsp;<div class="sub">&nbsp;</div></td>';
         body.appendChild(pad);
       }
     }
@@ -928,7 +944,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
       cases = buildCases(res.orders || []);
       renderTiles(); renderTable();
     } catch (e) {
-      document.getElementById('case-body').innerHTML = '<tr><td colspan="4" class="muted">Couldn\'t load cases: ' + esc(e.message) + '</td></tr>';
+      document.getElementById('case-body').innerHTML = '<tr><td colspan="5" class="muted">Couldn\'t load cases: ' + esc(e.message) + '</td></tr>';
     }
   }
   document.getElementById('q').addEventListener('input', function () { page = 1; renderTable(); });
