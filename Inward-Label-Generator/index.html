@@ -2111,15 +2111,13 @@ function renderItemsTable(ctx) {
         `readonly style="${W}background:var(--surface);cursor:default;color:var(--text2);" title="UC SKU from gate pass — not editable"`} style="${W}"></td>
       <td>${categoryCell}</td>
       <td>${boxesCell}</td>
-      <td>${(mapped && !isFactory)
-        ? `<input type="number" value="${it.qtyPerBox}" readonly
-             style="${W}background:var(--surface);cursor:default;color:var(--text2);"
-             title="Edit via SKU Mapping tab">`
-        : `<input type="number" value="${it.qtyPerBox||''}" min="1" placeholder="${isFactory?'—':'Required'}"
+      <!-- Qty/Box: always editable. For mapped SKUs this is a per-transfer override only —
+           the saved SKU mapping is NOT changed (edit that in the Mapped SKUs tab). -->
+      <td><input type="number" value="${it.qtyPerBox||''}" min="1" placeholder="${isFactory?'—':'Required'}"
              oninput="getItems('${ctx}')[${i}].qtyPerBox=+this.value;recalcQty('${ctx}',${i})"
-             style="${W}${(!it.qtyPerBox&&!isFactory)?'border-color:var(--accent2);':''}">`
-      }</td>
-      <td><input type="number" value="${it.qty||''}" readonly style="${W}background:var(--surface);cursor:default;color:var(--text2);" title="Total qty from gate pass">
+             style="${W}${(!it.qtyPerBox&&!isFactory)?'border-color:var(--accent2);':''}"
+             title="${mapped&&!isFactory?'Override for this transfer only — mapping unchanged':''}"></td>
+      <td><input type="number" class="total-qty-input" value="${it.qty||''}" readonly style="${W}background:var(--surface);cursor:default;color:var(--text2);" title="Total qty from gate pass">
           <div id="qty-err-${ctx}-${i}" style="display:none;font-size:9px;color:var(--accent2);margin-top:2px;"></div></td>
       <td><button class="btn btn-ghost" style="padding:4px 8px;" onclick="removeItem('${ctx}',${i})">✕</button></td>
       ${!isFactory ? `<td style="vertical-align:top;padding-top:6px;">${actionBtn}</td>` : ''}
@@ -2239,7 +2237,7 @@ function recalcQty(ctx, i) {
   const calc = (it.boxes||0)*(it.qtyPerBox||0);
   const row  = document.querySelector(`#${ctx}-tbody tr:nth-child(${i+1})`);
   if (!row) return;
-  const totalInput = row.querySelector('td:nth-child(6) input');
+  const totalInput = row.querySelector('.total-qty-input'); // class, not column index — Stock Transfer has an extra # column
   const errEl      = document.getElementById(`qty-err-${ctx}-${i}`);
   if (ctx === 'factory') {
     it.qty = calc;
