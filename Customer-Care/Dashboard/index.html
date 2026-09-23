@@ -384,6 +384,10 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .sb-chip.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .sb-chip.off { cursor: not-allowed; opacity: .6; }
 .sb-chip.off span { color: #f87171; }
+/* Label download button — same as Create Parcel Pickup's Recent orders */
+.label-dl-btn { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface2); color: var(--accent); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: border-color .15s, opacity .15s; }
+.label-dl-btn:hover:not(:disabled) { border-color: var(--accent); }
+.label-dl-btn.busy { opacity: .6; cursor: progress; }
 .copy-btn { background: none; border: none; color: var(--text2); cursor: pointer; padding: 0 0 0 6px; vertical-align: middle; line-height: 1; font-size: 12px; }
 .copy-btn:hover { color: var(--accent); }
 .copy-btn.copied { color: #22c55e; }
@@ -603,6 +607,292 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     localStorage.setItem('tm_theme', isLight ? 'dark' : 'light');
   };
 })();
+</script>
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+// SHIPPING LABEL HELPERS — copied from Create-Pickup/index.html so the
+// Dashboard's ⬇ button produces the exact same label. Keep the two in
+// sync if the label design changes.
+// ══════════════════════════════════════════════════════════════════
+// ── 4×6 label conversion ─────────────────────────────────────────────
+// Delhivery's label PDF sits on a page with lots of empty white space
+// around it. For the 4×6 thermal printer we:
+//   1. render each page with PDF.js and find the box around everything
+//      that isn't white (the label's outer border),
+//   2. crop the page to exactly that box with pdf-lib,
+//   3. scale the crop to fill a 4×6 inch page (288×432 pt), no margin.
+// Both libraries load from the CDN only the first time a label is
+// downloaded.
+var PDF_LIB_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js';
+var PDFJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+var PDFJS_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+function loadScriptOnce(src, globalName) {
+  if (window[globalName]) return Promise.resolve(window[globalName]);
+  return new Promise(function (resolve, reject) {
+    var sc = document.createElement('script');
+    sc.src = src;
+    sc.onload = function () { resolve(window[globalName]); };
+    sc.onerror = function () { reject(new Error("couldn't load the PDF tools")); };
+    document.head.appendChild(sc);
+  });
+}
+
+// Returns the non-white content box of each page, in PDF points with a
+// bottom-left origin (what pdf-lib expects): [{left, bottom, right, top}].
+async function findContentBoxes(bytes) {
+  var pdfjsLib = await loadScriptOnce(PDFJS_URL, 'pdfjsLib');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+  var doc = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+  var boxes = [];
+  for (var n = 1; n <= doc.numPages; n++) {
+    var page = await doc.getPage(n);
+    var scale = 3; // ~216 dpi — enough to find the border precisely
+    var vp = page.getViewport({ scale: scale });
+    var canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    var px = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    var minX = canvas.width, minY = canvas.height, maxX = -1, maxY = -1;
+    for (var y = 0; y < canvas.height; y++) {
+      for (var x = 0; x < canvas.width; x++) {
+        var i = (y * canvas.width + x) * 4;
+        if (px[i] < 235 || px[i + 1] < 235 || px[i + 2] < 235) { // anything not near-white
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+      }
+    }
+    var view = page.view; // [x0, y0, x1, y1] in PDF points
+    var pageH = view[3] - view[1];
+    if (maxX < 0) { boxes.push(null); continue; } // blank page — leave as is
+    var pad = 1; // 1pt so the border line itself isn't shaved off
+    boxes.push({
+      left:   view[0] + minX / scale - pad,
+      right:  view[0] + (maxX + 1) / scale + pad,
+      top:    view[1] + pageH - minY / scale + pad,
+      bottom: view[1] + pageH - (maxY + 1) / scale - pad
+    });
+  }
+  return boxes;
+}
+
+// ── Shipping label — drawn to match the Delhivery One portal label ─────
+// Delhivery's API only gives an older label design, so we draw the portal
+// one ourselves: A6 page, same positions/fonts/lines as the label you get
+// from one.delhivery.com. Helvetica = same metrics as the portal's
+// Liberation Sans. Data: Delhivery packing-slip JSON (via the Worker) with
+// the order's own log row as fallback for every field.
+var JSPDF_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+var JSBARCODE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js';
+var DELHIVERY_LOGO_PNG = 'data:image/png;base64,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';
+// Our pickup location's details as they print on the portal label — used
+// only if Delhivery's packing-slip data doesn't include them.
+var LABEL_DEFAULTS = {
+  sellerName: 'INDUTRIAL TOOLS CORPORATION', // spelled as registered on Delhivery
+  sellerAddr: 'Industrial Tools Corporation, Block E3,Unit No.3 and 4 ,Parasnath Complex Near Pipeline,Valpada Bhiwandi-- 421302.',
+  returnAddr: 'Industrial Tools Corporation, Block E3,Unit No.3 and 4 ,Parasnath Complex Near Pipeline,Valpada Bhiwandi-- 421302. Maharashtra'
+};
+
+function firstVal() {
+  for (var i = 0; i < arguments.length; i++) {
+    var v = arguments[i];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+  }
+  return '';
+}
+
+// "22-Sep-2026 | 11:29 AM" in IST. Accepts ISO strings or D1's
+// "YYYY-MM-DD HH:MM:SS" (UTC).
+function labelDate(raw) {
+  var d = null;
+  if (raw) {
+    var s = String(raw);
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) s = s.replace(' ', 'T') + 'Z';
+    d = new Date(s);
+    if (isNaN(d)) d = null;
+  }
+  if (!d) d = new Date();
+  var ist = new Date(d.getTime() + 330 * 60000);
+  var mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][ist.getUTCMonth()];
+  var h = ist.getUTCHours(), ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12;
+  var p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+  return p2(ist.getUTCDate()) + '-' + mon + '-' + ist.getUTCFullYear() + ' | ' + p2(h) + ':' + p2(ist.getUTCMinutes()) + ' ' + ap;
+}
+
+// Merge Delhivery's packing-slip data (pkg) with our own log row (o).
+function labelDataFor(o, pkg) {
+  pkg = pkg || {};
+  var sh = (safeJsonTop(o.payload_json).shipments || [])[0] || {};
+  var resp = safeJsonTop(o.response_json);
+  var rPkg = (resp.packages || [])[0] || {};
+  var state = firstVal(pkg.state, sh.state);
+  var city = firstVal(pkg.city, sh.city);
+  var addr = firstVal(pkg.address, pkg.add, sh.add);
+  var country = firstVal(pkg.country, 'IN');
+  var amount = firstVal(pkg.rs, pkg.total_amount, sh.total_amount, '0');
+  var qty = firstVal(pkg.qty, pkg.quantity, sh.quantity, '1');
+  var pay = firstVal(pkg.pt, sh.payment_mode, 'Pre-paid');
+  if (/^pre-?paid$/i.test(pay)) pay = 'Pre-paid';
+  var mode = firstVal(pkg.mot === 'E' ? 'Express' : pkg.mot === 'S' ? 'Surface' : pkg.mot, sh.shipping_mode, 'Surface');
+  var ret = firstVal(pkg.radd, pkg.return_address);
+  var retState = firstVal(pkg.rst, pkg.return_state);
+  if (ret && retState && ret.indexOf(retState) === -1) ret += ' ' + retState;
+  var price = Number(amount) && Number(qty) ? String(Math.round(Number(amount) / Number(qty) * 100) / 100) : amount;
+  return {
+    awb: firstVal(pkg.wbn, pkg.waybill, o.waybill),
+    orderId: firstVal(pkg.oid, pkg.order, o.order_id, sh.order),
+    name: firstVal(pkg.name, sh.name),
+    address: [addr, state, country].filter(Boolean).join(', '),
+    destCenter: firstVal(pkg.destination, pkg.dest, pkg.destination_center,
+      city ? city + (state ? ' (' + state + ')' : '') : ''),
+    pin: firstVal(pkg.pin, sh.pin),
+    sortCode: firstVal(pkg.sort_code, rPkg.sort_code),
+    payLine: pay + ' - ' + mode,
+    amount: 'INR ' + amount,
+    dateStr: labelDate(firstVal(pkg.cd, pkg.created_at, o.created_at)),
+    sellerName: firstVal(pkg.snm, pkg.seller_name, LABEL_DEFAULTS.sellerName),
+    sellerAddr: firstVal(pkg.sadd, pkg.seller_address, LABEL_DEFAULTS.sellerAddr),
+    product: firstVal(pkg.prd, pkg.products_desc, sh.products_desc),
+    remark: String(o.remark || '').trim(),   // printed as-is under the product
+    qty: qty,
+    price: price,
+    total: amount,
+    returnAddr: firstVal(ret, LABEL_DEFAULTS.returnAddr)
+  };
+}
+function safeJsonTop(str) { try { return JSON.parse(str || '{}'); } catch (e) { return {}; } }
+
+// Code128 barcode as a PNG data URL (no human-readable text, no margin).
+function barcodePng(value) {
+  var c = document.createElement('canvas');
+  window.JsBarcode(c, String(value), { format: 'CODE128', displayValue: false, margin: 0, width: 4, height: 200, background: '#ffffff' });
+  return c.toDataURL('image/png');
+}
+
+async function buildPortalLabelPdf(d) {
+  await loadScriptOnce(JSPDF_URL, 'jspdf');
+  await loadScriptOnce(JSBARCODE_URL, 'JsBarcode');
+  var doc = new window.jspdf.jsPDF({ unit: 'pt', format: 'a6' });
+  var L = 26.7, R = 270;                           // content left / right edge
+  var ASC = 0.905;                                 // font ascent — y below is glyph TOP
+  // Sizes below are as measured from the portal PDF's text boxes; the
+  // glyphs actually render ~5% smaller than that, so scale when drawing.
+  var FS = 0.95;
+  function font(style, size) { doc.setFont('helvetica', style); doc.setFontSize(size * FS); }
+  function text(str, x, top, size, style, align) {
+    font(style || 'normal', size);
+    doc.text(String(str), x, top + size * ASC, align ? { align: align } : undefined);
+  }
+  function width(str, size, style) { font(style || 'normal', size); return doc.getTextWidth(String(str)); }
+  function wrap(str, w, size, style) { font(style || 'normal', size); return doc.splitTextToSize(String(str || ''), w); }
+  function hline(y, x0, x1, grey, t) { doc.setFillColor(grey, grey, grey); doc.rect(x0, y, x1 - x0, t || 0.25, 'F'); }
+  function vline(x, y0, y1) { doc.setFillColor(217, 217, 217); doc.rect(x, y0, 0.4, y1 - y0, 'F'); }
+  // Clip to maxLines; if cut, end the last line with "..." like the portal.
+  function clampLines(lines, maxLines, w, size, style) {
+    if (lines.length <= maxLines) return lines;
+    var out = lines.slice(0, maxLines), last = out[maxLines - 1] + ' ' + lines[maxLines];
+    while (last.length && width(last + '...', size, style) > w) last = last.slice(0, -1);
+    out[maxLines - 1] = last.replace(/\s+$/, '') + '...';
+    return out;
+  }
+  doc.setTextColor(0, 0, 0);
+
+  // Outer border
+  doc.setDrawColor(17, 17, 17); doc.setLineWidth(0.8);
+  doc.rect(23.8, 13.9, 272.9 - 23.8, 400.4 - 13.9);
+
+  // ── Top: brand + Delhivery logo
+  ['INDUSTRIAL TOOLS', 'AND HARDWARE'].forEach(function (ln, i) { text(ln, L, 21.8 + i * 10.9, 7.9); });
+  doc.addImage(DELHIVERY_LOGO_PNG, 'PNG', 190, 22, 80, 17);
+  hline(48.6, L, R, 238);
+
+  // ── AWB + barcode
+  text('AWB# ' + d.awb, L, 56.7, 7.9);
+  doc.addImage(barcodePng(d.awb), 'PNG', 69, 69, 159, 40);
+  text(d.pin, L, 114.2, 6.1);
+  text('AWB# ' + d.awb, (L + R) / 2, 114.2, 6.1, 'bold', 'center');
+  if (d.sortCode) text(d.sortCode, R, 114.2, 6.1, 'normal', 'right');
+  hline(123.4, L, R, 238);
+
+  // ── Ship to (left) — every line flows down from the name
+  text('Ship to - ', L, 135.1, 8.8);
+  text(d.name, L + width('Ship to - ', 8.8), 135.1, 8.8, 'bold');
+  var y = 145.9;
+  wrap(d.address, 143, 6.1).slice(0, 4).forEach(function (ln) { text(ln, L, y, 6.1); y += 8.8; });
+  y += 1.2;
+  wrap(d.destCenter, 143, 8.8, 'bold').slice(0, 2).forEach(function (ln) { text(ln, L, y, 8.8, 'bold'); y += 10.8; });
+  y += 1.5;
+  text('PIN - ' + d.pin, L, y, 7.9, 'bold');
+  // Payment / amount / date (right)
+  vline(172.5, 134.5, 186.1);
+  text(d.payLine, 174.9, 142.0, 6.1, 'bold');
+  text(d.amount, 174.9, 151.1, 7.9, 'bold');
+  hline(162.4, 175, 272.1, 217, 0.4);
+  text('Date', 174.9, 166.6, 6.1, 'bold');
+  text(d.dateStr, 174.9, 174.5, 5.3);
+  var sectionTop = Math.max(197.4, y + 7.9 + 12.5); // grows only if the address is very long
+  hline(sectionTop, L, R, 238);
+
+  // ── Seller (left) + Order ID barcode (right)
+  var s0 = sectionTop - 197.4;
+  text('Seller:', L, 208.8 + s0, 6.1);
+  text(d.sellerName, L + width('Seller:', 6.1), 208.8 + s0, 6.1, 'bold');
+  // Portal cuts the seller address at 90 characters and adds "..."
+  var sa = d.sellerAddr.length > 90 ? d.sellerAddr.slice(0, 90) + '...' : d.sellerAddr;
+  clampLines(wrap(sa, 143, 6.1), 2, 143, 6.1).forEach(function (ln, i) { text(ln, L, 217.6 + s0 + i * 8.8, 6.1); });
+  vline(171.3, 202.7 + s0, 238.2 + s0);
+  text(d.orderId, 173.7, 203.2 + s0, 8.8);
+  doc.addImage(barcodePng(d.orderId), 'PNG', 174, 215 + s0, 96, 21);
+  hline(242.2 + s0, L, R, 238);
+
+  // ── Product table (columns right-aligned like the portal)
+  text('Product Name', 26.9, 247.2 + s0, 5.3, 'bold');
+  text('Qty.', 209.4, 247.2 + s0, 5.3, 'bold', 'right');
+  text('Price', 240.1, 247.2 + s0, 5.3, 'bold', 'right');
+  text('Total', 270.6, 247.2 + s0, 5.3, 'bold', 'right');
+  var py = 254.7 + s0;
+  var prodLines = wrap(d.product, 165, 6.1);
+  prodLines.forEach(function (ln, i) { text(ln, L, py + i * 8.8, 6.1); });
+  // Remark (if entered on the form) — printed exactly as typed, under the
+  // Type - Model line, wrapping within the product column.
+  if (d.remark) {
+    var ry = py + prodLines.length * 8.8 + 1;
+    wrap(d.remark, 165, 6.1).slice(0, 12).forEach(function (ln, i) { text(ln, L, ry + i * 8.8, 6.1); });
+  }
+  text(d.qty, 208.8, py, 6.1, 'normal', 'right');
+  text(d.price, 240, py, 6.1, 'normal', 'right');
+  text(d.total, 270.6, py, 6.1, 'normal', 'right');
+
+  // ── Footer: return address, anchored to the bottom of the box
+  var ret = wrap('Return Address: ' + d.returnAddr, 176, 5.3).slice(0, 3);
+  var fy = 394.0 - (ret.length - 1) * 6.5;
+  ret.forEach(function (ln, i) { text(ln, L, fy + i * 6.5, 5.3); });
+  text('Page 1 of 1', R, 394.0, 5.3, 'normal', 'right');
+
+  return doc.output('blob');
+}
+
+async function to4x6Pdf(bytes) {
+  var PDFLib = await loadScriptOnce(PDF_LIB_URL, 'PDFLib');
+  var W = 288, H = 432; // 4×6 inch in points
+  var boxes = [];
+  try { boxes = await findContentBoxes(bytes); } catch (e) { boxes = []; } // fall back to whole page
+  var src = await PDFLib.PDFDocument.load(bytes);
+  var out = await PDFLib.PDFDocument.create();
+  var srcPages = src.getPages();
+  for (var i = 0; i < srcPages.length; i++) {
+    var emb = boxes[i] ? await out.embedPage(srcPages[i], boxes[i]) : await out.embedPage(srcPages[i]);
+    var page = out.addPage([W, H]);
+    var scale = Math.min(W / emb.width, H / emb.height);
+    var w = emb.width * scale, h = emb.height * scale;
+    page.drawPage(emb, { x: (W - w) / 2, y: (H - h) / 2, width: w, height: h });
+  }
+  return new Blob([await out.save()], { type: 'application/pdf' });
+}
+
 </script>
 
 <script>
@@ -848,7 +1138,10 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     var raw = String(o.track_status || '');
     var showRaw = raw && raw.toLowerCase().replace(/l+/g, 'l') !== String(stLabel).toLowerCase().replace(/l+/g, 'l');
     var f = function (k, v, sub) { return '<div><div class="cm-k">' + k + '</div><div>' + (v || '&#8212;') + '</div>' + (sub ? '<div class="cm-muted">' + sub + '</div>' : '') + '</div>'; };
+    var canLabel = o.direction !== 'reverse' && o.delhivery_ok && o.waybill;
     return '<div class="cm-sec"><div class="cm-sec-title">' + esc(title) + ' &mdash; <span class="mono">' + esc(o.order_id) + '</span></div>' +
+        (canLabel ? '<button type="button" class="label-dl-btn" data-leg="' + idx + '" title="Download shipping label (PDF)">' +
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg></button>' : '') +
         '</div>' +
       '<div class="cm-grid">' +
         f('Courier', esc(o.courier || 'Delhivery')) +
@@ -1144,32 +1437,65 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     }).then(function (r) { return r.json(); });
   }
 
-  // Download the forward label (courier's own 4×6 PDF). The Worker stamps
-  // rtd_at on the first download → case moves to Ready To Dispatch.
-  async function downloadFwdLabel(c, btn) {
-    var f = c.forward;
-    btn.disabled = true; btn.textContent = 'Downloading…';
+  // ── Label download — same as Create Parcel Pickup's ⬇ button: draws the
+  // Delhivery One portal-style label (buildPortalLabelPdf) from Delhivery's
+  // packing-slip data, falling back to Delhivery's own PDF cropped to 4×6;
+  // Ekart uses Ekart's label. Saved as <OrderID>_<AWB>.pdf. The first
+  // download stamps rtd_at (Worker) → Ready To Dispatch.
+  async function downloadLabel(o, btn) {
+    if (btn.classList.contains('busy') || btn.disabled) return;
+    btn.classList.add('busy'); btn.disabled = true;
     try {
-      var s = window.TM_getSession(), h = {};
-      if (s && s.token) h['X-Tomahawk-Session'] = s.token;
-      var url = window.TM_WORKER + '?action=' + (f.courier === 'Ekart' ? 'ekartGetLabel&waybill=' : 'delhiveryGetLabel&file=1&waybill=') + encodeURIComponent(f.waybill);
-      var resp = await fetch(url, { headers: h });
-      if (!resp.ok || (resp.headers.get('Content-Type') || '').indexOf('application/pdf') === -1) {
-        var err = {}; try { err = await resp.json(); } catch (e2) {}
-        throw new Error(err.error || ('HTTP ' + resp.status));
+      var session = window.TM_getSession();
+      var headers = {};
+      if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
+      var blob = null;
+      if (o.courier === 'Ekart') {
+        var er = await fetch(window.TM_WORKER + '?action=ekartGetLabel&waybill=' + encodeURIComponent(o.waybill), { headers: headers });
+        if (!er.ok || (er.headers.get('Content-Type') || '').indexOf('application/pdf') === -1) {
+          var ee = {};
+          try { ee = await er.json(); } catch (e4) {}
+          throw new Error(ee.error || ('HTTP ' + er.status));
+        }
+        blob = await er.blob();
+      } else try {
+        var pkg = null;
+        try {
+          var dr = await fetch(window.TM_WORKER + '?action=delhiveryGetLabel&json=1&waybill=' + encodeURIComponent(o.waybill), { headers: headers });
+          var dj = await dr.json();
+          if (dj && dj.ok) pkg = dj.pkg;
+        } catch (e3) { /* no Delhivery data — draw from our log row */ }
+        blob = await buildPortalLabelPdf(labelDataFor(o, pkg));
+      } catch (drawErr) {
+        console.warn('Portal-style label failed, using Delhivery API PDF:', drawErr);
+        var resp = await fetch(window.TM_WORKER + '?action=delhiveryGetLabel&file=1&waybill=' + encodeURIComponent(o.waybill), { headers: headers });
+        var type = resp.headers.get('Content-Type') || '';
+        if (!resp.ok || type.indexOf('application/pdf') === -1) {
+          var err = {};
+          try { err = await resp.json(); } catch (e2) {}
+          throw new Error(err.error || ('HTTP ' + resp.status));
+        }
+        blob = await to4x6Pdf(await resp.arrayBuffer());
       }
-      var blob = await resp.blob(), a = document.createElement('a');
-      a.href = URL.createObjectURL(blob); a.download = f.order_id + '.pdf';
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
-      await load(false);
-      var fresh = cases.filter(function (x) { return x.id === c.id; })[0];
-      if (fresh) openCase(fresh);
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = String(o.order_id || 'label').replace(/[^A-Za-z0-9_-]/g, '_') + '_' + o.waybill + '.pdf';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      if (!o.rtd_at) {             // first print → Ready To Dispatch; refresh this case
+        var id = openCaseId;
+        await load(false);
+        var fresh = cases.filter(function (x) { return x.id === id; })[0];
+        if (fresh && !modal.hidden) openCase(fresh);
+        return;
+      }
     } catch (e) {
       alert("Couldn't download the label: " + e.message);
-      btn.disabled = false; btn.innerHTML = '&#11015; Download label';
     }
+    btn.classList.remove('busy'); btn.disabled = false;
   }
+
 
   var ACTS = {
     recv:    { worker: 'delhiveryMarkReceived',  ask: 'Confirm the parcel has physically arrived at the warehouse? It moves to In Process.' },
@@ -1199,7 +1525,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 
   async function caseAction(c, btn) {
     if (btn.dataset.act === 'sendback') return startSendBack(c, btn);
-    if (btn.dataset.act === 'label') return downloadFwdLabel(c, btn);
+    if (btn.dataset.act === 'label') return downloadLabel(c.forward, btn);
     var a = ACTS[btn.dataset.act];
     if (!a || !confirm(c.id + ': ' + a.ask)) return;
     btn.disabled = true;
@@ -1218,7 +1544,9 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     }
   }
 
+  var openCaseId = null;
   function openCase(c) {
+    openCaseId = c.id;
     var legs = [];
     if (c.reverse) legs.push([c.reverse, 'Reverse pickup']);
     if (c.forward) legs.push([c.forward, c.reverse ? 'Send-back shipment' : 'Forward shipment']);
@@ -1258,6 +1586,9 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
         var done = function () { var h = b.innerHTML; b.classList.add('copied'); b.innerHTML = '&#10003;'; setTimeout(function () { b.innerHTML = h; b.classList.remove('copied'); }, 1200); };
         if (navigator.clipboard) navigator.clipboard.writeText(b.dataset.copy).then(done, function () {});
       });
+    });
+    box.querySelectorAll('.label-dl-btn').forEach(function (b) {
+      b.addEventListener('click', function () { downloadLabel(legs[+b.dataset.leg][0], b); });
     });
     box.querySelectorAll('.track-btn').forEach(function (b) {
       b.addEventListener('click', function () { track(legs[+b.dataset.leg][0], b); });
