@@ -301,7 +301,7 @@ const ACTION_TIERS = {
   ekartGetLabel: 'viewer_read', ekartTrack: 'viewer_read',
   // — Reverse pickup: mark a parcel as received at the warehouse. —
   delhiveryMarkReceived: 'manager_up', delhiveryMarkRefunded: 'manager_up',
-  delhiveryMarkInProcess: 'manager_up'
+  delhiveryMarkInProcess: 'manager_up', delhiveryCancelCase: 'admin_only'
 };
 
 function getAuthRequirement(act) {
@@ -3062,6 +3062,27 @@ export default {
           return json({ ok: true });
         }
 
+        // ── Cancel a whole case (admin only) — our side ONLY, the booking
+        //   with Delhivery/Ekart is NOT cancelled. Body: { order_ids: [...] }
+        //   (every leg of the case). Sets cancelled_at + track_stage
+        //   'Cancelled' — a final stage, so the tracking refresh never
+        //   overwrites it — and the Dashboard hides the case.
+        if (act === 'delhiveryCancelCase') {
+          await ensureDelhiveryTable(env.DB);
+          const ids = (Array.isArray(body.order_ids) ? body.order_ids : [])
+            .map(x => String(x || '').trim()).filter(Boolean).slice(0, 5);
+          if (!ids.length) return json({ ok: false, error: 'order_ids required' }, 400);
+          const sessionUser = await resolveSession(request, env.DB);
+          const who = (sessionUser && sessionUser.username) || 'admin';
+          const stmts = ids.map(oid => env.DB.prepare(
+            "UPDATE delhivery_orders SET cancelled_at = COALESCE(cancelled_at, datetime('now')), track_stage = 'Cancelled', track_status = ?, tracked_at = datetime('now') WHERE order_id = ?"
+          ).bind('Cancelled in Tomahawk by ' + who, oid));
+          const res = await env.DB.batch(stmts);
+          const changed = res.reduce((n, r) => n + ((r.meta && r.meta.changes) || 0), 0);
+          if (!changed) return json({ ok: false, error: 'No matching orders' }, 404);
+          return json({ ok: true, cancelled: changed });
+        }
+
         // ── Reverse pickup → In Process (manual). Parcel checked in and now
         //   being repaired / replaced / assessed for refund. Only after it
         //   has been marked received.
@@ -3871,7 +3892,9 @@ async function ensureDelhiveryTable(DB) {
                      // refunded_at — Refund case: refund given → case closed
                      'refunded_at TEXT',
                      // in_process_at — reverse parcel checked in and being worked on (manual)
-                     'in_process_at TEXT']) {
+                     'in_process_at TEXT',
+                     // cancelled_at — case cancelled in Tomahawk by an admin (courier booking untouched)
+                     'cancelled_at TEXT']) {
     try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN ${col}`).run(); } catch (e) { /* column already exists */ }
   }
 }

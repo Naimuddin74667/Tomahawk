@@ -335,6 +335,8 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .case-act { font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--accent); background: transparent; color: var(--accent); cursor: pointer; text-decoration: none; }
 .case-act:hover, .case-act.primary { background: var(--accent); color: #111; }
 .case-act:disabled { opacity: .5; cursor: progress; }
+.case-act.danger { border-color: #f87171; color: #f87171; margin-left: auto; }
+.case-act.danger:hover { background: #f87171; color: #111; }
 /* popup */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: 50px 16px; overflow-y: auto; }
 .modal-backdrop[hidden] { display: none; }
@@ -598,6 +600,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
   //         'closed' (grey) | 'bad-in' / 'bad-out' (red, truck keeps its direction)
   function caseStatus(c) {
     var r = c.reverse, f = c.forward;
+    if ((r || f).cancelled_at) return null;          // cancelled by an admin → hidden
     var fs = f && f.delhivery_ok ? legStage(f) : '';
     var fwdLive = fs && fs !== 'Cancelled';        // a failed/cancelled send-back is ignored → back to In Process
     if (!r) {
@@ -791,6 +794,12 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
   //   Worker enforces the same). Send back itself is booked in Create
   //   Parcel Pickup, so that one is just a link.
   function actionsHtml(c) {
+    var html = nextStepHtml(c);
+    // Admin only: cancel the whole case (our side only — see cancelCase).
+    if (window.TM_ROLE === 'admin' && c.st.tone !== 'closed') html += '<button class="case-act danger" data-cancel="1">Cancel case</button>';
+    return html ? '<div class="case-acts">' + html + '</div>' : '';
+  }
+  function nextStepHtml(c) {
     var r = c.reverse;
     if (!r || !r.delhivery_ok || r.refunded_at || (window.TM_ROLE !== 'admin' && window.TM_ROLE !== 'manager')) return '';
     var fs = c.forward && c.forward.delhivery_ok ? legStage(c.forward) : '';
@@ -801,13 +810,34 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     else if (!r.in_process_at) html = btn('process', 'Start processing');
     else if (r.job_type === 'Refund') html = btn('refund', 'Refund given');
     else html = '<a class="case-act" href="../Create-Pickup/">Send back in Create Parcel Pickup &#8594;</a>';
-    return html ? '<div class="case-acts">' + html + '</div>' : '';
+    return html;
   }
   var ACTS = {
     recv:    { worker: 'delhiveryMarkReceived',  ask: 'Confirm the parcel has physically arrived at the warehouse?' },
     process: { worker: 'delhiveryMarkInProcess', ask: 'Start processing this case (repair / replacement / refund check)?' },
     refund:  { worker: 'delhiveryMarkRefunded',  ask: 'Refund given? This closes the case.' }
   };
+  // Marks every leg of the case cancelled in Tomahawk and hides it. Does
+  // NOT cancel the booking with the courier — do that in their panel.
+  async function cancelCase(c, btn) {
+    if (!confirm('Cancel ' + c.id + ' and remove it from the Dashboard?\n\nThis only marks it cancelled in Tomahawk — the courier booking itself is NOT cancelled.')) return;
+    var ids = [c.reverse && c.reverse.order_id, c.forward && c.forward.order_id].filter(Boolean);
+    btn.disabled = true;
+    try {
+      var s = window.TM_getSession(), h = { 'Content-Type': 'application/json' };
+      if (s && s.token) h['X-Tomahawk-Session'] = s.token;
+      var res = await fetch(window.TM_WORKER + '?action=delhiveryCancelCase', {
+        method: 'POST', headers: h, body: JSON.stringify({ action: 'delhiveryCancelCase', order_ids: ids })
+      }).then(function (r) { return r.json(); });
+      if (!res.ok) throw new Error(res.error || 'failed');
+      closeCase();
+      load(false);
+    } catch (e) {
+      alert("Couldn't cancel: " + e.message);
+      btn.disabled = false;
+    }
+  }
+
   async function caseAction(c, btn) {
     var a = ACTS[btn.dataset.act];
     if (!a || !confirm(c.id + ': ' + a.ask)) return;
@@ -838,6 +868,8 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     box.querySelectorAll('.case-act[data-act]').forEach(function (b) {
       b.addEventListener('click', function () { caseAction(c, b); });
     });
+    var cb = box.querySelector('.case-act[data-cancel]');
+    if (cb) cb.addEventListener('click', function () { cancelCase(c, cb); });
     box.querySelectorAll('.track-btn').forEach(function (b) {
       b.addEventListener('click', function () { track(legs[+b.dataset.leg][0], b); });
     });
