@@ -376,6 +376,9 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .cm-sec-title { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); font-family: 'DM Mono', monospace; }
 .cm-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 16px; font-size: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
 .cm-muted { font-size: 10.5px; color: var(--text2); margin-top: 1px; }
+.copy-btn { background: none; border: none; color: var(--text2); cursor: pointer; padding: 0 0 0 6px; vertical-align: middle; line-height: 1; font-size: 12px; }
+.copy-btn:hover { color: var(--accent); }
+.copy-btn.copied { color: #22c55e; }
 .cm-steps { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .cm-step { flex: 1; padding: 10px 12px; font-size: 11.5px; border-right: 1px solid var(--border); color: var(--text2); min-width: 0; }
 .cm-step:last-child { border-right: none; }
@@ -841,7 +844,9 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
         '</div>' +
       '<div class="cm-grid">' +
         f('Courier', esc(o.courier || 'Delhivery')) +
-        f('Waybill', o.waybill ? '<span class="mono">' + esc(o.waybill) + '</span>' : '') +
+        f('AWB Number', o.waybill ? '<span class="mono">' + esc(o.waybill) + '</span>' +
+          '<button class="copy-btn" data-copy="' + esc(o.waybill) + '" title="Copy AWB number" aria-label="Copy AWB number">' +
+          '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>' : '') +
         f('Courier status', esc(stLabel), showRaw ? esc(raw) : '') +
         f('Booked by', esc(o.created_by || ''), esc(fmtWhen(o.created_at))) +
       '</div><div class="track-box" id="track-' + idx + '" hidden></div>';
@@ -922,8 +927,10 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     var f = function (k, v, cls) { return '<div' + (cls ? ' class="' + cls + '"' : '') + '><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
     // Summary: name · number · type / product · status
     var summary = '<div class="cm-summary">' +
-      f('Customer', sh.name) + f('Number', sh.phone) + f('Type', c.type) +
+      f('Customer', sh.name) + f('Contact Number', sh.phone) + f('Type', c.type) +
       f('Product', c.product) +
+      f('Courier Partner', [c.reverse && (c.reverse.courier || 'Delhivery'), c.forward && (c.forward.courier || 'Delhivery')]
+        .filter(function (x, i, a) { return x && a.indexOf(x) === i; }).join(' / ')) +
       '<div><div class="cm-k">Status</div><div>' + badgeHtml(c.st) + '</div></div>' +
       '</div>';
     // Bottom row: next-step button(s), then Track now per leg on the right.
@@ -943,6 +950,13 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     });
     var cb = box.querySelector('.case-act[data-cancel]');
     if (cb) cb.addEventListener('click', function () { cancelCase(c, cb); });
+    // Copy AWB number — icon briefly turns into a green tick.
+    box.querySelectorAll('.copy-btn').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var done = function () { var h = b.innerHTML; b.classList.add('copied'); b.innerHTML = '&#10003;'; setTimeout(function () { b.innerHTML = h; b.classList.remove('copied'); }, 1200); };
+        if (navigator.clipboard) navigator.clipboard.writeText(b.dataset.copy).then(done, function () {});
+      });
+    });
     box.querySelectorAll('.track-btn').forEach(function (b) {
       b.addEventListener('click', function () { track(legs[+b.dataset.leg][0], b); });
     });
