@@ -369,7 +369,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 /* Case popup — same layout as the Blinkit RO Detail: summary strip,
    small accent section headers (with their button on the right), and
    the action buttons in one row at the bottom. */
-.cm-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 16px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; font-size: 12px; }
+.cm-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 16px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; font-size: 12px; }
 .cm-summary .span2 { grid-column: span 2; }
 .cm-k { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2px; }
 .cm-sec { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 18px 0 8px; }
@@ -838,7 +838,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     var showRaw = raw && raw.toLowerCase().replace(/l+/g, 'l') !== String(stLabel).toLowerCase().replace(/l+/g, 'l');
     var f = function (k, v, sub) { return '<div><div class="cm-k">' + k + '</div><div>' + (v || '&#8212;') + '</div>' + (sub ? '<div class="cm-muted">' + sub + '</div>' : '') + '</div>'; };
     return '<div class="cm-sec"><div class="cm-sec-title">' + esc(title) + ' &mdash; <span class="mono">' + esc(o.order_id) + '</span></div>' +
-        (o.delhivery_ok && o.waybill ? '<button class="track-btn" data-leg="' + idx + '">Track now</button>' : '') + '</div>' +
+        '</div>' +
       '<div class="cm-grid">' +
         f('Courier', esc(o.courier || 'Delhivery')) +
         f('Waybill', o.waybill ? '<span class="mono">' + esc(o.waybill) + '</span>' : '') +
@@ -847,38 +847,11 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
       '</div><div class="track-box" id="track-' + idx + '" hidden></div>';
   }
 
-  // Milestones for the case's path, each done (green) / current (amber) /
-  // pending (grey), with the date where we have one.
-  function stepsHtml(c) {
-    var r = c.reverse, f = c.forward && c.forward.delhivery_ok && legStage(c.forward) !== 'Cancelled' ? c.forward : null;
-    var fDone = f && legStage(f) === 'Delivered';
-    var steps;
-    if (!r) steps = [
-      ['Booked', f && f.created_at, !!f], ['Ready To Dispatch', f && f.rtd_at, !!(f && (f.rtd_at || ['In Transit', 'At Last Mile', 'Out For Delivery', 'Delivered'].indexOf(legStage(f)) !== -1))],
-      ['Delivered', '', fDone]];
-    else {
-      steps = [['Pickup booked', r.created_at, true], ['Delivered to us', '', !!r.received_at || legStage(r) === 'Delivered'],
-        ['Received', r.received_at, !!r.received_at], ['In Process', r.in_process_at, !!r.in_process_at]];
-      if (c.type === 'Refund') steps.push(['Refunded', r.refunded_at, !!r.refunded_at]);
-      else steps.push(['Send-back booked', f && f.created_at, !!f], ['Delivered', '', fDone]);
-    }
-    var nowIdx = -1;
-    for (var i = 0; i < steps.length; i++) if (!steps[i][2]) { nowIdx = i; break; }
-    return '<div class="cm-sec"><div class="cm-sec-title">Progress</div></div><div class="cm-steps">' +
-      steps.map(function (st, i) {
-        var cls = st[2] ? 'done' : (i === nowIdx ? 'now' : '');
-        return '<div class="cm-step ' + cls + '"><span class="dot"></span>' + esc(st[0]) +
-          '<div class="when">' + (st[1] ? esc(fmtWhen(st[1])) : (i === nowIdx ? 'Next' : '&nbsp;')) + '</div></div>';
-      }).join('') + '</div>';
-  }
-
   // ── Next-step button for reverse cases (admin / manager only; the
   //   Worker enforces the same). Send back itself is booked in Create
   //   Parcel Pickup, so that one is just a link.
   function actionsHtml(c) {
     var html = nextStepHtml(c);
-    // Admin only: cancel the whole case (our side only — see cancelCase).
-    if (window.TM_ROLE === 'admin' && c.st.tone !== 'closed') html += '<button class="case-act danger" data-cancel="1">Cancel case</button>';
     return html ? '<div class="case-acts">' + html + '</div>' : '';
   }
   function nextStepHtml(c) {
@@ -944,20 +917,25 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     if (c.reverse) legs.push([c.reverse, 'Reverse pickup']);
     if (c.forward) legs.push([c.forward, c.reverse ? 'Send-back shipment' : 'Forward shipment']);
     var lead = c.reverse || c.forward, sh = ship(lead);
-    document.getElementById('case-title').innerHTML = esc(c.id) + ' ' + badgeHtml(c.st);
-    document.getElementById('case-sub').textContent = [c.type, c.customer, c.city].filter(function (x) { return x && x !== '—'; }).join(' · ');
+    document.getElementById('case-title').textContent = c.id;
+    document.getElementById('case-sub').textContent = '';
     var f = function (k, v, cls) { return '<div' + (cls ? ' class="' + cls + '"' : '') + '><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
+    // Summary: name · number · type / product · status
     var summary = '<div class="cm-summary">' +
-      f('Customer', [sh.name, sh.phone].filter(Boolean).join(' · ')) +
-      f('Address', [sh.add, sh.city, sh.state, sh.pin].filter(Boolean).join(', '), 'span2') +
-      f('Type', c.type) +
+      f('Customer', sh.name) + f('Number', sh.phone) + f('Type', c.type) +
       f('Product', c.product) +
-      f('Value', sh.total_amount ? '₹' + sh.total_amount : '') +
-      f('Remark', lead.remark, 'span2') +
+      '<div><div class="cm-k">Status</div><div>' + badgeHtml(c.st) + '</div></div>' +
       '</div>';
-    var acts = actionsHtml(c);
+    // Bottom row: next-step button(s), then Track now per leg on the right.
+    var trackBtns = legs.map(function (l, i) {
+      var o = l[0];
+      if (!o.delhivery_ok || !o.waybill) return '';
+      var lbl = legs.length > 1 ? (o.direction === 'reverse' ? 'Track pickup' : 'Track send-back') : 'Track now';
+      return '<button class="track-btn" data-leg="' + i + '">' + lbl + '</button>';
+    }).join('');
+    var acts = actionsHtml(c) + (trackBtns ? '<span style="margin-left:auto;display:flex;gap:8px">' + trackBtns + '</span>' : '');
     var box = document.getElementById('case-body-modal');
-    box.innerHTML = summary + stepsHtml(c) +
+    box.innerHTML = summary +
       legs.map(function (l, i) { return legHtml(l[0], l[1], i); }).join('') +
       (acts ? '<div class="cm-acts">' + acts + '</div>' : '');
     box.querySelectorAll('.case-act[data-act]').forEach(function (b) {
