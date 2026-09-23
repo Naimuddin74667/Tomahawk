@@ -285,6 +285,23 @@ table.log-table tr:last-child td { border-bottom: none; }
 .log-refresh { font-size: 11px; color: var(--text2); cursor: pointer; white-space: nowrap; }
 .log-refresh:hover { color: var(--accent); }
 .table-wrap { overflow-x: auto; }
+/* Fit-to-screen layout — same template as Blinkit / Flipkart / Amazon:
+   the page fills the viewport (no page scroll), the cases panel takes
+   the remaining height, the table stretches to fill it (10 equal rows,
+   short pages padded), and the pager sits pinned at the panel bottom.
+   Short or narrow screens fall back to normal page scrolling. */
+@media (min-height: 640px) and (min-width: 761px) {
+  body.cc-fit { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  body.cc-fit .site-header { flex-shrink: 0; }
+  body.cc-fit .page { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; padding-bottom: 20px; }
+  body.cc-fit .page > .panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  body.cc-fit .page-head, body.cc-fit .tiles, body.cc-fit .panel-head-row { flex-shrink: 0; }
+  body.cc-fit .table-wrap { flex: 1; min-height: 0; overflow: auto; }
+  body.cc-fit .case-table { height: 100%; }
+  body.cc-fit .case-table td { vertical-align: middle; padding-top: 4px; padding-bottom: 4px; }
+  body.cc-fit .pager { flex-shrink: 0; }
+}
+.case-table thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
 /* Pagination footer — same pattern as the Blinkit RO Ledger */
 .pager { display: none; align-items: center; justify-content: center; gap: 1rem; padding: 12px 0 0; border-top: 1px solid var(--border); margin-top: 4px; }
 .pager-btn { padding: 5px 10px; font-size: 11px; font-weight: 600; border-radius: 5px; background: transparent; color: var(--text); border: 1px solid var(--border); cursor: pointer; font-family: inherit; }
@@ -362,7 +379,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 @media (max-width: 640px) { .tools input { width: 100%; } }
 </style>
 </head>
-<body>
+<body class="cc-fit">
 
 <div class="auth-gate" id="auth-gate">
   <div class="auth-card">
@@ -735,9 +752,9 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
       tr.addEventListener('click', function () { openCase(c); });
       body.appendChild(tr);
     });
-    // Pad a short last page with blank rows (only when there are several
-    // pages) so the Prev/Next footer stays in the same spot on every page.
-    if (totalPages > 1) {
+    // Pad a short page with blank rows so the table always has 10 equal
+    // rows — same shape on every page, pager never moves.
+    {
       for (var i = rows.length; i < PAGE_SIZE; i++) {
         var pad = document.createElement('tr');
         pad.setAttribute('aria-hidden', 'true');
