@@ -3988,10 +3988,18 @@ async function purgeUnwantedOrders(DB) {
   try {
     await DB.prepare('DELETE FROM delhivery_orders WHERE order_id IN (' + DELHIVERY_PURGE_IDS.map(() => '?').join(',') + ')')
       .bind(...DELHIVERY_PURGE_IDS).run();
-    // Test case RPR-22092603 (dummy): mark its send-back FRPR-23092601
-    // Delivered so the closed state can be checked. Delivered is a final
-    // stage, so the tracking refresh never overwrites it. Idempotent.
-    await DB.prepare("UPDATE delhivery_orders SET track_stage = 'Delivered', track_status = 'Delivered (test case — set manually)', tracked_at = datetime('now') WHERE order_id = 'FRPR-23092601' AND COALESCE(track_stage, '') != 'Delivered'").run();
+    // Dummy test case RPR-22092603 → reset to "Delivered to us" (parcel
+    // arrived, not yet marked Received). Runs ONCE ever (worker_migrations
+    // marker) so later testing progress is never undone. Its old send-back
+    // FRPR-23092601 is cancelled on our side and unlinked.
+    await DB.prepare("CREATE TABLE IF NOT EXISTS worker_migrations (name TEXT PRIMARY KEY, ran_at TEXT DEFAULT (datetime('now')))").run();
+    const m = await DB.prepare("INSERT OR IGNORE INTO worker_migrations (name) VALUES ('reset_test_RPR-22092603_v1')").run();
+    if (m.meta && m.meta.changes) {
+      await DB.batch([
+        DB.prepare("UPDATE delhivery_orders SET track_stage = 'Delivered', track_status = 'Delivered to us (test case — set manually)', tracked_at = datetime('now'), received_at = NULL, in_process_at = NULL, linked_order_id = NULL, resolution = NULL, refund_reason = NULL, refund_amount = NULL, refund_marked_by = NULL, refund_marked_at = NULL, refund_token_hash = NULL, refund_token_expires = NULL, refund_link_sent_at = NULL, refund_fail_count = 0, bank_submitted_at = NULL, refund_utr = NULL, refunded_by = NULL, refunded_at = NULL WHERE order_id = 'RPR-22092603' AND direction = 'reverse'"),
+        DB.prepare("UPDATE delhivery_orders SET cancelled_at = COALESCE(cancelled_at, datetime('now')), track_stage = 'Cancelled', track_status = 'Cancelled in Tomahawk (test reset)', linked_order_id = NULL WHERE order_id = 'FRPR-23092601'")
+      ]);
+    }
   } catch (e) { delhiveryPurgeDone = false; }
 }
 
