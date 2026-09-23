@@ -313,6 +313,18 @@ table.log-table tr:last-child td { border-bottom: none; }
 .badge { display: inline-flex; align-items: center; gap: 6px; }
 .b-ico { width: 18px; height: 12px; flex-shrink: 0; fill: currentColor; }
 .b-ico.flip { transform: scaleX(-1); }
+/* Stage text colour inside the badge (badge background + icon keep the
+   phase colour): white = not moved yet, blue = moving, amber = final step
+   happening now, green = done, red = problem. */
+.bt-white { color: var(--text); }
+.bt-blue  { color: #60a5fa; }
+.bt-amber { color: #ffc940; }
+.bt-green { color: #22c55e; }
+.bt-red   { color: #f87171; }
+html[data-theme="light"] .bt-blue  { color: #2563eb; }
+html[data-theme="light"] .bt-amber { color: #b45309; }
+html[data-theme="light"] .bt-green { color: #15803d; }
+html[data-theme="light"] .bt-red   { color: #dc2626; }
 .case-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
 .case-act { font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--accent); background: transparent; color: var(--accent); cursor: pointer; text-decoration: none; }
 .case-act:hover, .case-act.primary { background: var(--accent); color: #111; }
@@ -608,9 +620,17 @@ table.log-table tr:last-child td { border-bottom: none; }
     'bad-out': { cls: 'b-red',   icon: ICON_TRUCK },
     'closed':  { cls: 'b-gray',  icon: ICON_CHECK }
   };
+  // Text colour per stage (see .bt-* CSS). Problem badges are always red.
+  var STAGE_TEXT = {
+    'Booked': 'white', 'Ready To Dispatch': 'white', 'Received': 'white',
+    'Picked': 'blue', 'In Transit': 'blue', 'At Bhiwandi Hub': 'blue', 'Last Mile Hub': 'blue',
+    'Out For Pickup': 'amber', 'Out For Delivery': 'amber', 'In Process': 'amber',
+    'Delivered to us': 'green', 'Delivered': 'green', 'Refunded': 'green'
+  };
   function badgeHtml(st) {
     var t = TONE[st.tone] || TONE.closed;
-    return '<span class="badge ' + t.cls + '">' + esc(st.label) +
+    var txt = /^bad/.test(st.tone) ? 'red' : (STAGE_TEXT[st.label] || 'white');
+    return '<span class="badge ' + t.cls + '"><span class="bt-' + txt + '">' + esc(st.label) + '</span>' +
       '<svg class="b-ico' + (t.flip ? ' flip' : '') + '" viewBox="0 0 23 12" aria-hidden="true">' + t.icon + '</svg></span>';
   }
 
