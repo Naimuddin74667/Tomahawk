@@ -973,6 +973,9 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
         else if (!pr.serviceable || pr.prepaid === false) st.text = 'Not serviceable';
         else {
           st.ok = true; st.text = 'Serviceable';
+          // Each courier wants city/state in its own format (Delhivery
+          // gives "MH", Ekart needs "Maharashtra") — keep what it returned.
+          st.city = pr.city || ''; st.state = pr.state || '';
           try {
             var est = await api(ckey(name) + 'EstimateCharge&' + qs);
             if (est && est.ok && est.estimated && est.totalAmount != null) st.cost = '₹' + est.totalAmount;
@@ -1069,6 +1072,11 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
       if (!idRes || !idRes.ok || !idRes.orderId) throw new Error("Couldn't get the next Order ID — try again.");
       var order = Object.assign({}, o, { order: idRes.orderId });
       delete order._prefix; delete order._sku;
+      // City/State exactly as the chosen courier's PIN lookup returned them
+      // (same as Create Parcel Pickup); fall back to the pickup's values.
+      var cs = sb.sv[order.courier] || {};
+      if (cs.city) order.city = cs.city;
+      if (cs.state) order.state = cs.state;
       var res, attempts = 0;
       while (true) {                 // same duplicate-ID retry as Create Parcel Pickup
         res = await post(order.courier === 'Ekart' ? 'ekartCreateOrder' : 'delhiveryCreateOrder', { order: order });

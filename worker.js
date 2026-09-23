@@ -4086,7 +4086,11 @@ async function createEkartForwardOrder(env, o) {
   const eText = await eResp.text();
   let eJson; try { eJson = JSON.parse(eText); } catch (e) { eJson = { raw: eText.slice(0, 1000) }; }
   const success = !!(eResp.ok && eJson.status === true && eJson.tracking_id);
-  const error = success ? '' : (eJson.remark || eJson.message || eJson.description || eJson.raw || ('HTTP ' + eResp.status));
+  // Ekart's error codes (e.g. SWIFT_UN_PROCESSABLE_REQUEST_EXCEPTION) say
+  // little on their own — join every detail field they send back.
+  const errParts = [eJson.remark, eJson.message, eJson.description, eJson.error, eJson.errors && JSON.stringify(eJson.errors), eJson.raw]
+    .filter(Boolean).map(String).filter((v, i, a) => a.indexOf(v) === i);
+  const error = success ? '' : (errParts.join(' — ') || ('HTTP ' + eResp.status));
 
   // Stored in the same shape as Delhivery orders (shipments[0]) so the
   // Recent orders list, order popup and label code read it the same way.
