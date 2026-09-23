@@ -301,7 +301,11 @@ const ACTION_TIERS = {
   ekartGetLabel: 'viewer_read', ekartTrack: 'viewer_read',
   // — Reverse pickup: mark a parcel as received at the warehouse. —
   delhiveryMarkReceived: 'manager_up', delhiveryMarkRefunded: 'manager_up',
-  delhiveryMarkInProcess: 'manager_up', delhiveryCancelCase: 'admin_only'
+  delhiveryMarkInProcess: 'manager_up', delhiveryCancelCase: 'admin_only',
+  // Refund flow — customer bank-details form (NEFT). The two public actions
+  // are gated by a single-use, 7-day link token + phone last-4 check.
+  delhiveryStartRefund: 'manager_up', refundCreateLink: 'manager_up', refundGetBank: 'manager_up',
+  refundFormInfo: 'public', refundSubmitBank: 'public'
 };
 
 function getAuthRequirement(act) {
@@ -1617,7 +1621,19 @@ export default {
           const rows = await env.DB.prepare(
             'SELECT * FROM delhivery_orders ORDER BY created_at DESC LIMIT ?'
           ).bind(lim).all();
-          return json({ ok: true, orders: rows.results || [] });
+          const orders = (rows.results || []).map(r => { const o = Object.assign({}, r); delete o.refund_token_hash; return o; });
+          return json({ ok: true, orders });
+        }
+
+        // ── Refund form (public) — what the customer's link shows.
+        if (action === 'refundFormInfo') {
+          await ensureDelhiveryTable(env.DB);
+          const res = await refundRowForToken(env.DB, url.searchParams.get('t') || '');
+          if (res.error) return json({ ok: false, error: res.error });
+          const r = res.row, sh = shipOf(r);
+          return json({ ok: true, case_id: r.order_id,
+            product: String(sh.products_desc || '').replace(/^(Repair|Replacement|Refund)\s*-\s*/i, ''),
+            amount: r.refund_amount, first_name: String(sh.name || '').trim().split(/\s+/)[0] || '' });
         }
 
         // ── DELHIVERY — shipping label (packing slip) PDF for a waybill.
@@ -3098,16 +3114,111 @@ export default {
           return json({ ok: true });
         }
 
-        // ── Refund case (RFD): refund given → case closed. Only after the
-        //   parcel has been marked received.
+        // ── Start a refund — Refund cases, or a Repair/Replace that ends in a
+        //   refund instead of a send-back ("Refund instead"). Needs the parcel
+        //   received and no live send-back (it must be cancelled first).
+        //   Body: { order_id, reason, amount }.
+        if (act === 'delhiveryStartRefund') {
+          await ensureDelhiveryTable(env.DB);
+          const oid = String(body.order_id || '').trim();
+          const amount = Number(body.amount);
+          const r = await env.DB.prepare("SELECT * FROM delhivery_orders WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1").bind(oid).first();
+          if (!r) return json({ ok: false, error: 'Pickup not found' }, 404);
+          if (!r.received_at) return json({ ok: false, error: 'Mark the parcel received first' }, 400);
+          if (r.refunded_at) return json({ ok: false, error: 'Already refunded' }, 400);
+          if (!(amount > 0)) return json({ ok: false, error: 'Enter the refund amount' }, 400);
+          const isRefundCase = r.job_type === 'Refund';
+          const reason = String(body.reason || '').trim().slice(0, 300) || (isRefundCase ? 'Refund case' : '');
+          if (!reason) return json({ ok: false, error: 'Pick a reason' }, 400);
+          if (r.linked_order_id) {
+            const f = await env.DB.prepare("SELECT track_stage, cancelled_at FROM delhivery_orders WHERE order_id = ? AND delhivery_ok = 1").bind(r.linked_order_id).first();
+            if (f && f.track_stage !== 'Cancelled' && !f.cancelled_at)
+              return json({ ok: false, error: 'A send-back (' + r.linked_order_id + ') is already booked — cancel it with the courier first.' }, 400);
+          }
+          const who = ((await resolveSession(request, env.DB)) || {}).username || 'admin';
+          await env.DB.prepare(
+            "UPDATE delhivery_orders SET resolution = 'refund', refund_reason = ?, refund_amount = ?, refund_marked_by = ?, refund_marked_at = datetime('now'), in_process_at = COALESCE(in_process_at, datetime('now')) WHERE order_id = ? AND direction = 'reverse'"
+          ).bind(reason, amount, who, oid).run();
+          return json({ ok: true });
+        }
+
+        // ── Customer bank-details link. Makes a new single-use token (7 days);
+        //   any older link for the case stops working. Returns the raw token
+        //   once — only its SHA-256 is stored.
+        if (act === 'refundCreateLink') {
+          await ensureDelhiveryTable(env.DB);
+          const oid = String(body.order_id || '').trim();
+          const r = await env.DB.prepare("SELECT resolution, bank_submitted_at, refunded_at FROM delhivery_orders WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1").bind(oid).first();
+          if (!r || r.resolution !== 'refund') return json({ ok: false, error: 'Start the refund first' }, 400);
+          if (r.refunded_at) return json({ ok: false, error: 'Already refunded' }, 400);
+          if (r.bank_submitted_at) return json({ ok: false, error: 'Bank details already received' }, 400);
+          const token = randomToken();
+          await env.DB.prepare(
+            "UPDATE delhivery_orders SET refund_token_hash = ?, refund_token_expires = datetime('now', '+7 days'), refund_link_sent_at = datetime('now'), refund_fail_count = 0 WHERE order_id = ? AND direction = 'reverse'"
+          ).bind(await sha256Hex(token), oid).run();
+          return json({ ok: true, token });
+        }
+
+        // ── Customer submits bank details (public, token + phone last-4).
+        if (act === 'refundSubmitBank') {
+          await ensureDelhiveryTable(env.DB);
+          const res = await refundRowForToken(env.DB, String(body.t || ''));
+          if (res.error) return json({ ok: false, error: res.error });
+          const r = res.row, sh = shipOf(r);
+          const phone = String(sh.phone || '').replace(/\D/g, '');
+          if (!phone || String(body.last4 || '') !== phone.slice(-4)) {
+            await env.DB.prepare('UPDATE delhivery_orders SET refund_fail_count = COALESCE(refund_fail_count, 0) + 1 WHERE order_id = ?').bind(r.order_id).run();
+            const left = Math.max(0, 4 - (r.refund_fail_count || 0));
+            return json({ ok: false, error: "The phone digits don't match our records. " + (left ? left + ' attempt' + (left === 1 ? '' : 's') + ' left.' : 'Please ask customer care for a new link.') });
+          }
+          const holder = String(body.holder_name || '').trim().replace(/\s+/g, ' ');
+          const acct = String(body.account_number || '').replace(/\s/g, '');
+          const ifsc = String(body.ifsc || '').trim().toUpperCase();
+          if (holder.length < 2 || holder.length > 80) return json({ ok: false, error: 'Enter the account holder name.' });
+          if (!/^\d{9,18}$/.test(acct)) return json({ ok: false, error: 'Account number should be 9–18 digits.' });
+          if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) return json({ ok: false, error: 'Enter a valid 11-character IFSC code.' });
+          if (body.consent !== true) return json({ ok: false, error: 'Please tick the consent box.' });
+          await env.DB.batch([
+            env.DB.prepare("INSERT OR REPLACE INTO refund_bank_details (order_id, holder_name, account_number, ifsc, bank_name, branch, consent_at, submitted_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))")
+              .bind(r.order_id, holder, acct, ifsc, String(body.bank_name || '').slice(0, 100), String(body.branch || '').slice(0, 150)),
+            env.DB.prepare("UPDATE delhivery_orders SET bank_submitted_at = datetime('now'), refund_token_hash = NULL WHERE order_id = ?").bind(r.order_id)
+          ]);
+          return json({ ok: true });
+        }
+
+        // ── Team reads the bank details. ALWAYS needs a logged-in admin /
+        //   manager (checked here, not only via the soft-launch tier flag).
+        //   Account number masked unless reveal:true — each reveal is logged.
+        if (act === 'refundGetBank') {
+          await ensureDelhiveryTable(env.DB);
+          const u = await resolveSession(request, env.DB);
+          if (!u || (u.role !== 'admin' && u.role !== 'manager')) return json({ ok: false, error: 'Admin or manager login required' }, 403);
+          const oid = String(body.order_id || '').trim();
+          const b = await env.DB.prepare('SELECT * FROM refund_bank_details WHERE order_id = ?').bind(oid).first();
+          if (!b) return json({ ok: false, error: 'No bank details on file' }, 404);
+          const reveal = body.reveal === true;
+          if (reveal) await env.DB.prepare("INSERT INTO refund_access_log (order_id, username, action) VALUES (?, ?, 'reveal')").bind(oid, u.username).run();
+          return json({ ok: true, holder_name: b.holder_name, account_number: reveal ? b.account_number : maskAcct(b.account_number),
+            ifsc: b.ifsc, bank_name: b.bank_name, branch: b.branch, submitted_at: b.submitted_at, revealed: reveal });
+        }
+
+        // ── Refund given → case closed. Needs the parcel received. When bank
+        //   details came in through the form, the NEFT UTR is required.
+        //   Body: { order_id, utr }. Bank details are deleted 30 days later.
         if (act === 'delhiveryMarkRefunded') {
           await ensureDelhiveryTable(env.DB);
           const oid = String(body.order_id || '').trim();
           if (!oid) return json({ ok: false, error: 'order_id required' }, 400);
-          const r = await env.DB.prepare(
-            "UPDATE delhivery_orders SET refunded_at = COALESCE(refunded_at, datetime('now')) WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1 AND received_at IS NOT NULL"
-          ).bind(oid).run();
-          if (!r.meta || !r.meta.changes) return json({ ok: false, error: 'Mark the parcel received first' }, 400);
+          const row = await env.DB.prepare("SELECT received_at, bank_submitted_at FROM delhivery_orders WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1").bind(oid).first();
+          if (!row || !row.received_at) return json({ ok: false, error: 'Mark the parcel received first' }, 400);
+          const utr = String(body.utr || '').trim().slice(0, 40);
+          if (row.bank_submitted_at && !utr) return json({ ok: false, error: 'Enter the NEFT UTR / reference number' }, 400);
+          const who = ((await resolveSession(request, env.DB)) || {}).username || '';
+          await env.DB.batch([
+            env.DB.prepare("UPDATE delhivery_orders SET refunded_at = COALESCE(refunded_at, datetime('now')), refund_utr = COALESCE(?, refund_utr), refunded_by = ?, refund_token_hash = NULL WHERE order_id = ? AND direction = 'reverse'")
+              .bind(utr || null, who, oid),
+            env.DB.prepare("UPDATE refund_bank_details SET purge_after = datetime('now', '+30 days') WHERE order_id = ?").bind(oid)
+          ]);
           return json({ ok: true });
         }
 
@@ -3909,11 +4020,73 @@ async function ensureDelhiveryTable(DB) {
                      // in_process_at — reverse parcel checked in and being worked on (manual)
                      'in_process_at TEXT',
                      // cancelled_at — case cancelled in Tomahawk by an admin (courier booking untouched)
-                     'cancelled_at TEXT']) {
+                     'cancelled_at TEXT',
+                     // Refund flow (Refund cases + Repair/Replace converted to refund)
+                     'resolution TEXT',            // 'refund' once a refund is started
+                     'refund_reason TEXT', 'refund_amount REAL',
+                     'refund_marked_by TEXT', 'refund_marked_at TEXT',
+                     'refund_token_hash TEXT',     // SHA-256 of the customer link token (raw token never stored)
+                     'refund_token_expires TEXT', 'refund_link_sent_at TEXT',
+                     'refund_fail_count INTEGER DEFAULT 0',
+                     'bank_submitted_at TEXT', 'refund_utr TEXT', 'refunded_by TEXT']) {
     try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN ${col}`).run(); } catch (e) { /* column already exists */ }
   }
   await purgeUnwantedOrders(DB);
+  await ensureRefundTables(DB);
 }
+
+// ── Refund bank details (NEFT) — kept apart from delhivery_orders so the
+// order list never carries them. Readable only by a logged-in admin /
+// manager (refundGetBank). Each row is deleted 30 days after the refund is
+// marked given (purge_after) — only what's needed, only as long as needed.
+let refundTablesReady = false;
+async function ensureRefundTables(DB) {
+  if (refundTablesReady) return;
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS refund_bank_details (
+    order_id       TEXT PRIMARY KEY,
+    holder_name    TEXT,
+    account_number TEXT,
+    ifsc           TEXT,
+    bank_name      TEXT,
+    branch         TEXT,
+    consent_at     TEXT,
+    submitted_at   TEXT DEFAULT (datetime('now')),
+    purge_after    TEXT
+  )`).run();
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS refund_access_log (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id TEXT, username TEXT, action TEXT,
+    at       TEXT DEFAULT (datetime('now'))
+  )`).run();
+  await DB.prepare("DELETE FROM refund_bank_details WHERE purge_after IS NOT NULL AND purge_after < datetime('now')").run();
+  refundTablesReady = true;
+}
+
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function randomToken() {
+  const b = crypto.getRandomValues(new Uint8Array(24));
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function shipOf(row) {
+  try { const p = JSON.parse(row.payload_json || '{}'); return (p.shipments && p.shipments[0]) || p || {}; } catch (e) { return {}; }
+}
+// Row for a live customer link token, or an { error } object.
+async function refundRowForToken(DB, token) {
+  if (!token || token.length < 20) return { error: 'This link is not valid.' };
+  const row = await DB.prepare("SELECT * FROM delhivery_orders WHERE refund_token_hash = ? AND direction = 'reverse' LIMIT 1")
+    .bind(await sha256Hex(token)).first();
+  if (!row) return { error: 'This link is not valid or has already been used.' };
+  if (row.refunded_at) return { error: 'This refund is already completed.' };
+  if (row.bank_submitted_at) return { error: 'Bank details were already submitted for this refund.' };
+  if (!row.refund_token_expires || new Date(String(row.refund_token_expires).replace(' ', 'T') + 'Z') < new Date()) return { error: 'This link has expired. Please ask our customer care team for a new one.' };
+  if ((row.refund_fail_count || 0) >= 5) return { error: 'Too many incorrect attempts. Please ask our customer care team for a new link.' };
+  return { row };
+}
+function maskAcct(a) { a = String(a || ''); return a.length > 4 ? 'X'.repeat(a.length - 4) + a.slice(-4) : a; }
+
 
 // ── DELHIVERY — live stage for the Recent orders Status badge ──────────
 // Pulls tracking for created orders in batches of 50 waybills (one

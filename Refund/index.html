@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Refund bank details — TOMAHAWK Tools</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!--
+  ══════════════════════════════════════════════════════════════════
+  REFUND BANK DETAILS — public page for customers (no login).
+  Opened from the single-use link the Customer Care Dashboard makes
+  (…/Refund/?t=TOKEN). The Worker checks the token (7 days, single use,
+  5 wrong attempts max) and the last 4 digits of the customer's phone.
+  NEFT only (no UPI). IFSC → bank/branch via ifsc.razorpay.com (public).
+  Worker actions: refundFormInfo (GET), refundSubmitBank (POST).
+  ══════════════════════════════════════════════════════════════════
+-->
+<style>
+:root { --bg:#0b0b10; --surface:#14141c; --surface2:#1b1b25; --border:#2a2a36; --text:#e8e8f0; --text2:#9a9aab; --accent:#F5A800; --red:#f87171; --green:#22c55e; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 15px; }
+header { padding: 18px 20px; border-bottom: 1px solid var(--border); color: var(--accent); display: flex; justify-content: center; }
+main { max-width: 520px; margin: 0 auto; padding: 24px 18px 48px; }
+h1 { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 24px; margin: 0 0 6px; }
+.sub { color: var(--text2); font-size: 14px; margin-bottom: 20px; line-height: 1.5; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+.facts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.k { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text2); margin-bottom: 3px; }
+.v { font-weight: 600; }
+.amt { color: var(--accent); font-size: 20px; font-weight: 700; }
+label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 6px; }
+label:first-child { margin-top: 0; }
+input[type=text], input[type=tel], input[type=password] { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 12px; font: inherit; font-size: 16px; }
+input:focus { outline: none; border-color: var(--accent); }
+.hint { font-size: 12px; color: var(--text2); margin-top: 5px; }
+.hint.ok { color: var(--green); } .hint.bad { color: var(--red); }
+.consent { font-weight: 400; display: flex; gap: 10px; align-items: flex-start; font-size: 13px; color: var(--text2); line-height: 1.5; margin-top: 16px; }
+.consent input { margin-top: 3px; width: 18px; height: 18px; accent-color: var(--accent); flex-shrink: 0; }
+button { width: 100%; margin-top: 18px; padding: 14px; border: none; border-radius: 10px; background: var(--accent); color: #111; font: inherit; font-weight: 700; font-size: 16px; cursor: pointer; }
+button:disabled { opacity: .5; cursor: progress; }
+.err { background: color-mix(in srgb, var(--red) 12%, transparent); border: 1px solid color-mix(in srgb, var(--red) 40%, transparent); color: var(--red); border-radius: 8px; padding: 10px 12px; font-size: 14px; margin-top: 14px; }
+.state { text-align: center; padding: 30px 18px; }
+.state .big { font-size: 44px; margin-bottom: 10px; }
+.secure { text-align: center; font-size: 12px; color: var(--text2); margin-top: 18px; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header><svg xmlns="http://www.w3.org/2000/svg" viewBox="474 509 6803 1270" style="height:40px;width:auto;display:block;fill:currentColor;">
+        <path d="M796.6 803.57l625.42 0c4.17,0.55 6.71,2.65 7.48,6.14l-84.8 151.21 -181.47 0c-16.1,25.18 -100.16,178.13 -252.2,458.77l-203.52 0 -0.67 -3.08c109.72,-202.64 190.86,-354.55 243.59,-455.69l-240.46 0 -0.77 -3.7c47.6,-91.52 76.61,-142.78 87.4,-153.65zm-14.19 821.74l-287.36 153.05 187.35 -278.86 1362.49 0 -8.53 5.99 -1253.95 119.82zm6102.31 -1005.2l131.69 -113.42 0 215.51 -960.53 0 8.48 -6 820.36 -96.09zm-574.92 183.46l298.9 0 1.32 6.14c-45.66,84.33 -70.46,131.58 -74.1,141.4 160.29,-96.44 243.35,-144.55 249.31,-144.55l224.51 0 1.32 6.11c-3.09,0.39 -163.87,96.95 -482.4,289.8l215.31 314.14 -5.44 3.08 -212.81 0c-5.17,-3.62 -50.38,-70.48 -135.48,-200.49l-3.14 0c-57.01,115.32 -92.82,182.15 -107.4,200.49l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.77,-24.7l-1.96 -9.09c-2.91,-13.47 -17.46,-33.95 -43.92,-61.58l5.47 -2.99zm-900.24 0.38l295.21 0 0.67 3.13 -177.4 332.67 0.7 3.15 3.15 0 281.78 -191.3c5.47,6.84 8.72,12.09 9.42,15.42l50.56 191.26 2.97 0c-0.06,-5.07 62.84,-123.21 188.62,-354.33l199.85 0 7 3.13c-2.97,8.9 -110.79,213.14 -323.65,612.64l-212.28 0c-4.01,0 -6.55,-2.09 -7.43,-6.09l-8.67 -40.1c-6.4,-29.71 -17.38,-75.75 -32.99,-138.44l-289.68 184.63 -221.52 0 -0.69 -3.12 276.81 -529.56 -3.98 -18.37c-2.88,-13.46 -17.46,-33.93 -43.89,-61.59l5.44 -3.13zm-792.78 -0.38l758.24 0 0.66 2.99c-195.43,377.28 -303.39,581.65 -323.9,613.13l-197.37 0c-4.22,0 -6.58,-2.06 -7.45,-6.06 5.76,-4.89 46.12,-79.83 121.01,-225.06l-249.55 0c-5.54,7.52 -48.45,84.55 -128.62,231.12l-203.51 0 -0.67 -3.08c178.19,-329 269.43,-500.66 273.89,-514.68 2.75,-6.83 3.49,-17.15 2.64,-30.81 -2.41,-11.19 -17.16,-31.67 -44.05,-61.41l-1.32 -6.14zm185.18 228.04l249.02 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.73 0c-2.8,0 -16.07,23.62 -40.03,70.69zm-991.54 -228.04l298.86 0 1.32 6.14 -118.16 221.9 0.69 3.15 249.5 0c81.88,-151.73 124.55,-228.88 128.62,-231.19l191.28 0c4.13,0.55 6.7,2.65 7.45,6.14 -213.25,402.5 -322.44,606 -327.72,609.98l-196.86 0 -0.67 -3.08 112.7 -218.93 -252.85 0c-6.07,5.96 -41.47,70.68 -105.58,194.4 -11.11,18.37 -17.29,27.61 -18.72,27.61l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.79,-24.7l-1.98 -9.09c-2.9,-13.47 -17.45,-33.95 -43.92,-61.58l5.51 -2.99zm-792.75 0l758.27 0 0.64 2.99c-195.44,377.28 -303.38,581.65 -323.89,613.13l-197.37 0c-4.24,0 -6.6,-2.06 -7.45,-6.06 5.75,-4.89 46.12,-79.83 120.97,-225.06l-249.51 0c-5.56,7.52 -48.47,84.55 -128.62,231.12l-203.49 0 -0.69 -3.08c178.16,-329 269.38,-500.66 273.91,-514.68 2.71,-6.83 3.45,-17.15 2.6,-30.81 -2.39,-11.19 -17.15,-31.67 -44.05,-61.41l-1.32 -6.14zm185.2 228.04l249 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.72 0c-2.81,0 -16.06,23.62 -40.02,70.69zm-1103.91 -228.04l298.89 0c4.16,0.55 6.74,2.81 7.57,6.66l9.27 43.04c6.44,29.76 17.44,75.82 32.88,138.45 190.96,-123.03 291.13,-185.84 300.97,-188.15l206.5 0c4.3,0.55 6.73,2.81 7.55,6.66 -212.8,402.15 -321.84,605.48 -327.27,609.46l-203.52 0 -0.69 -3.08 175.45 -329.54 -0.68 -3.15 -2.97 0 -282.28 191.28c-5.52,-6.84 -8.76,-12.07 -9.47,-15.4l-50.55 -191.26 -2.98 0c-112.09,216.6 -175.21,333.7 -189.29,351.15l-202.99 0 -0.71 -3.08 274.04 -514.16c2.58,-7.52 2.71,-15.74 0.78,-24.65l-1.95 -9.11c-2.91,-13.47 -17.46,-33.95 -43.93,-61.59l5.38 -3.53zm-496.95 0l400.37 0c23.26,0 40.99,20.47 53.34,61.46 5.96,27.63 -9.61,69.81 -46.53,126.69 -44.77,80.33 -115.53,214.7 -211.82,403.33 -9.73,16.45 -24.43,24.64 -43.84,24.64l-517.82 0c-14.01,-8.19 -22.34,-17.45 -24.49,-27.61 -6.2,-28.7 27.81,-103.76 102.25,-225.02 91.52,-179.21 152.8,-290.15 184.01,-332.87 24.3,-20.48 59.21,-30.62 104.53,-30.62zm-137.63 461.82l203.51 0c1.89,-7.52 54.92,-107.99 159.41,-301.53l-0.63 -2.94 -196.86 0c-5.24,4 -60.32,105.51 -165.43,304.47z"/>
+        <path d="M7160.73 529.99c52.95,0 95.89,42.94 95.89,95.95 0,52.95 -42.94,95.89 -95.89,95.89 -53,0 -95.97,-42.94 -95.97,-95.89 0,-53.01 42.97,-95.95 95.97,-95.95zm-42.35 149.95l0 -110.28 46.91 0c11.77,0 20.35,1.01 25.65,3.01 5.34,1.97 9.65,5.52 12.86,10.57 3.22,5.05 4.8,10.81 4.8,17.39 0,8.2 -2.44,15.09 -7.3,20.45 -4.85,5.38 -12.16,8.8 -21.83,10.2 4.84,2.81 8.84,5.9 11.95,9.27 3.13,3.36 7.34,9.3 12.66,17.89l13.46 21.5 -26.6 0 -16.09 -23.99c-5.74,-8.56 -9.67,-13.99 -11.76,-16.2 -2.1,-2.26 -4.33,-3.73 -6.7,-4.58 -2.37,-0.83 -6.08,-1.25 -11.2,-1.25l-4.5 0 0 46.02 -22.31 0zm22.31 -63.65l16.45 0c10.69,0 17.35,-0.44 20.02,-1.32 2.65,-0.87 4.74,-2.48 6.23,-4.68 1.53,-2.18 2.3,-4.96 2.3,-8.25 0,-3.76 -1.01,-6.69 -3,-8.99 -1.97,-2.32 -4.75,-3.73 -8.39,-4.34 -1.8,-0.25 -7.21,-0.37 -16.25,-0.37l-17.36 0 0 27.95zm20.04 -72.89c45.53,0 82.45,36.94 82.45,82.54 0,45.52 -36.92,82.49 -82.45,82.49 -45.59,0 -82.53,-36.97 -82.53,-82.49 0,-45.6 36.94,-82.54 82.53,-82.54z"/>
+      </svg></header>
+<main>
+  <div id="loading" class="card state"><div class="sub">Loading…</div></div>
+
+  <div id="message" class="card state" hidden>
+    <div class="big" id="msg-icon">⚠</div>
+    <h1 id="msg-title">Link not valid</h1>
+    <div class="sub" id="msg-text"></div>
+  </div>
+
+  <div id="form-wrap" hidden>
+    <h1>Refund bank details</h1>
+    <div class="sub">Hi <span id="first-name"></span>, please share the bank account where you'd like to receive your refund by NEFT.</div>
+    <div class="card facts">
+      <div><div class="k">Case</div><div class="v" id="case-id"></div></div>
+      <div><div class="k">Refund amount</div><div class="amt" id="amount"></div></div>
+      <div style="grid-column:span 2"><div class="k">Product</div><div class="v" id="product"></div></div>
+    </div>
+
+    <div class="card">
+      <label for="last4">Last 4 digits of your registered mobile number</label>
+      <input type="tel" id="last4" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="XXXX">
+
+      <label for="holder">Account holder name</label>
+      <input type="text" id="holder" maxlength="80" autocomplete="name" placeholder="As printed on your passbook">
+
+      <label for="acct">Account number</label>
+      <input type="password" id="acct" inputmode="numeric" maxlength="18" autocomplete="off" placeholder="9–18 digits">
+
+      <label for="acct2">Re-enter account number</label>
+      <input type="text" id="acct2" inputmode="numeric" maxlength="18" autocomplete="off">
+      <div class="hint" id="acct-hint"></div>
+
+      <label for="ifsc">IFSC code</label>
+      <input type="text" id="ifsc" maxlength="11" autocomplete="off" placeholder="e.g. SBIN0001234" style="text-transform:uppercase">
+      <div class="hint" id="ifsc-hint">11 characters — printed on your cheque book / passbook.</div>
+
+      <label class="consent"><input type="checkbox" id="consent">
+        <span>I confirm these are my bank details and I agree to TOMAHAWK Tools (Industrial Tools and Hardware) using them only to send this refund. They are deleted 30 days after the refund is made.</span></label>
+
+      <div class="err" id="err" hidden></div>
+      <button id="submit">Submit bank details</button>
+    </div>
+    <div class="secure">🔒 Sent securely. We will never ask for your OTP, PIN, card number or password.</div>
+  </div>
+</main>
+
+<script>
+(function () {
+  var WORKER = 'https://tomahawk-returns.naimuddin.workers.dev';
+  var token = new URLSearchParams(location.search).get('t') || '';
+  var bank = { name: '', branch: '', ok: false };
+  var $ = function (id) { return document.getElementById(id); };
+
+  function show(id) { ['loading', 'message', 'form-wrap'].forEach(function (x) { $(x).hidden = x !== id; }); }
+  function message(icon, title, text) { $('msg-icon').textContent = icon; $('msg-title').textContent = title; $('msg-text').textContent = text; show('message'); }
+  function money(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 }); }
+
+  async function init() {
+    if (!token) return message('⚠', 'Link not valid', 'Please open the full link sent to you by our customer care team.');
+    try {
+      var res = await fetch(WORKER + '?action=refundFormInfo&t=' + encodeURIComponent(token)).then(function (r) { return r.json(); });
+      if (!res.ok) return message('⚠', 'Link not available', res.error || 'Please contact our customer care team.');
+      $('first-name').textContent = res.first_name || 'there';
+      $('case-id').textContent = res.case_id;
+      $('amount').textContent = money(res.amount);
+      $('product').textContent = res.product || '—';
+      show('form-wrap');
+    } catch (e) {
+      message('⚠', 'Something went wrong', 'Please check your internet connection and open the link again.');
+    }
+  }
+
+  // Account number match hint
+  function checkAcct() {
+    var a = $('acct').value.replace(/\s/g, ''), b = $('acct2').value.replace(/\s/g, ''), h = $('acct-hint');
+    if (!b) { h.textContent = ''; h.className = 'hint'; return; }
+    var same = a === b;
+    h.textContent = same ? '✓ Account numbers match' : 'Account numbers don’t match';
+    h.className = 'hint ' + (same ? 'ok' : 'bad');
+  }
+  $('acct').addEventListener('input', checkAcct);
+  $('acct2').addEventListener('input', checkAcct);
+
+  // IFSC → bank + branch (public Razorpay IFSC directory)
+  var ifscSeq = 0;
+  $('ifsc').addEventListener('input', async function () {
+    var v = this.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    this.value = v;
+    var h = $('ifsc-hint'), seq = ++ifscSeq;
+    bank = { name: '', branch: '', ok: false };
+    if (v.length < 11) { h.textContent = '11 characters — printed on your cheque book / passbook.'; h.className = 'hint'; return; }
+    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(v)) { h.textContent = 'This doesn’t look like a valid IFSC code.'; h.className = 'hint bad'; return; }
+    h.textContent = 'Checking…'; h.className = 'hint';
+    try {
+      var r = await fetch('https://ifsc.razorpay.com/' + v);
+      if (seq !== ifscSeq) return;
+      if (!r.ok) { h.textContent = 'IFSC code not found — please check it.'; h.className = 'hint bad'; return; }
+      var d = await r.json();
+      bank = { name: d.BANK || '', branch: [d.BRANCH, d.CITY].filter(Boolean).join(', '), ok: true };
+      h.textContent = '✓ ' + bank.name + (bank.branch ? ' — ' + bank.branch : ''); h.className = 'hint ok';
+    } catch (e) {
+      if (seq !== ifscSeq) return;
+      bank.ok = true;   // lookup unavailable — let the team verify the IFSC
+      h.textContent = 'Couldn’t verify the IFSC right now — please double-check it.'; h.className = 'hint';
+    }
+  });
+
+  function fail(msg) { var e = $('err'); e.textContent = msg; e.hidden = false; }
+
+  $('submit').addEventListener('click', async function () {
+    $('err').hidden = true;
+    var last4 = $('last4').value.replace(/\D/g, '');
+    var holder = $('holder').value.trim();
+    var acct = $('acct').value.replace(/\s/g, ''), acct2 = $('acct2').value.replace(/\s/g, '');
+    var ifsc = $('ifsc').value.trim().toUpperCase();
+    if (last4.length !== 4) return fail('Enter the last 4 digits of your mobile number.');
+    if (holder.length < 2) return fail('Enter the account holder name.');
+    if (!/^\d{9,18}$/.test(acct)) return fail('Account number should be 9–18 digits.');
+    if (acct !== acct2) return fail('The two account numbers don’t match.');
+    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) return fail('Enter a valid 11-character IFSC code.');
+    if (!bank.ok) return fail('Please check the IFSC code — we couldn’t find that branch.');
+    if (!$('consent').checked) return fail('Please tick the consent box.');
+    var btn = this;
+    btn.disabled = true; btn.textContent = 'Submitting…';
+    try {
+      var res = await fetch(WORKER + '?action=refundSubmitBank', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'refundSubmitBank', t: token, last4: last4, holder_name: holder,
+          account_number: acct, ifsc: ifsc, bank_name: bank.name, branch: bank.branch, consent: true })
+      }).then(function (r) { return r.json(); });
+      if (!res.ok) { fail(res.error || 'Couldn’t submit — please try again.'); btn.disabled = false; btn.textContent = 'Submit bank details'; return; }
+      message('✅', 'Thank you!', 'We’ve received your bank details. Your refund will be sent by NEFT and usually reaches your account within 2–3 working days.');
+    } catch (e) {
+      fail('Network problem — please try again.'); btn.disabled = false; btn.textContent = 'Submit bank details';
+    }
+  });
+
+  init();
+})();
+</script>
+</body>
+</html>

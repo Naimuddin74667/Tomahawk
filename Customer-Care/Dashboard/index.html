@@ -958,6 +958,9 @@ async function to4x6Pdf(bytes) {
     if (rs === 'Cancelled' && !r.received_at) return null;
     if (r.refunded_at) return { label: 'Refunded', tone: 'closed' };
     if (fwdLive) return dispatchStatus(fs);
+    if (r.resolution === 'refund') {       // refund started (Refund case or "Refund instead")
+      return r.bank_submitted_at ? { label: 'Refund Pending', tone: 'house' } : { label: 'Awaiting Bank Details', tone: 'house' };
+    }
     if (r.in_process_at || r.received_at) return { label: 'In Process', tone: 'house' }; // Received = In Process
     if (rs === 'RTO' || rs === 'Lost') return { label: 'Pickup ' + rs, tone: 'bad-in' };
     if (rs === 'Delivered') return { label: PICKUP_LABEL.Delivered, tone: 'in', attn: true }; // needs Verify received
@@ -987,6 +990,7 @@ async function to4x6Pdf(bytes) {
     'Booked': 'white', 'Ready To Dispatch': 'white', 'Received': 'white',
     'Picked': 'blue', 'In Transit': 'blue', 'At Bhiwandi Hub': 'blue', 'Last Mile Hub': 'blue',
     'Out For Pickup': 'amber', 'Out For Delivery': 'amber', 'In Process': 'amber',
+    'Awaiting Bank Details': 'white', 'Refund Pending': 'amber',
     'Delivered to us': 'green', 'Delivered': 'green', 'Refunded': 'green'
   };
   function badgeHtml(st) {
@@ -1013,6 +1017,12 @@ async function to4x6Pdf(bytes) {
   // falling back to the Order ID prefix for older orders saved without one
   // (RPR/FRPR = Repair, REP/RPL/FRPL = Replace, RFD = Refund, FOC).
   function caseType(c) {
+    var t = baseType(c);
+    // Repair / Replace that ended in a refund → "Repair → Refund"
+    if (c.reverse && c.reverse.resolution === 'refund' && t !== 'Refund') return t + ' \u2192 Refund';
+    return t;
+  }
+  function baseType(c) {
     var lead = c.reverse || c.forward;
     var jt = String(lead.job_type || '').toLowerCase();
     if (/^repair/.test(jt)) return 'Repair';
@@ -1071,7 +1081,7 @@ async function to4x6Pdf(bytes) {
     var q = document.getElementById('q').value.trim().toLowerCase();
     var kind = document.getElementById('f-kind').value;
     var rows = cases.filter(function (c) {
-      return tileTest(tileFilter)(c) && (!kind || c.type === kind) && (!q || c.search.indexOf(q) !== -1);
+      return tileTest(tileFilter)(c) && (!kind || c.type === kind || (kind === 'Refund' && / Refund$/.test(c.type))) && (!q || c.search.indexOf(q) !== -1);
     });
     var body = document.getElementById('case-body');
     if (!rows.length) { body.innerHTML = '<tr><td colspan="5" class="muted">No cases match.</td></tr>'; renderPager(0, 1); return; }
@@ -1165,8 +1175,13 @@ async function to4x6Pdf(bytes) {
     if (!r || !r.delhivery_ok || r.refunded_at) return '';
     if (fs && fs !== 'Cancelled') return '';
     if (!r.received_at) return legStage(r) === 'Delivered' ? btn('recv', 'Received') : '';
-    if (r.job_type === 'Refund') return btn('refund', 'Refund given');
-    return btn('sendback', 'Send back &#8594;');
+    // Refund path: start (reason + amount) → customer link → bank details → Refund given (UTR)
+    if (r.resolution === 'refund') {
+      if (r.bank_submitted_at) return btn('bank', 'View bank details') + btn('refund', 'Refund given');
+      return btn('link', r.refund_link_sent_at ? 'Send bank details link again' : 'Send bank details link');
+    }
+    if (r.job_type === 'Refund') return btn('startrefund', 'Start refund');
+    return btn('sendback', 'Send back &#8594;') + '<button class="case-act" data-act="startrefund">Refund instead</button>';
   }
 
   // ══ SEND BACK — one click books the forward shipment to the exact same
@@ -1491,6 +1506,155 @@ async function to4x6Pdf(bytes) {
   }
 
 
+  // ══ REFUND FLOW ═════════════════════════════════════════════════════
+  //   Start refund / Refund instead (reason + amount)
+  //   → Send bank details link (customer fills /Refund/ form, NEFT only)
+  //   → View bank details (masked; Reveal is logged) → Refund given (UTR)
+  //   Panels open in the popup's confirm area (#cm-confirm).
+  var REFUND_REASONS = ['Not repairable', 'Replacement out of stock', 'Customer asked for refund', 'Other'];
+  var REFUND_PAGE = 'https://naimuddin74667.github.io/Tomahawk/Refund/';
+
+  async function reopenCase(id) {
+    await load(false);
+    var fresh = cases.filter(function (x) { return x.id === id; })[0];
+    if (fresh && !modal.hidden) openCase(fresh); else closeCase();
+  }
+  function showPanel(html) {
+    var panel = document.getElementById('cm-confirm');
+    panel.innerHTML = html; panel.hidden = false;
+    var acts = document.getElementById('cm-main-acts');
+    if (acts) acts.style.display = 'none';            // one task at a time
+    return panel;
+  }
+  function panelCancel(panel) {
+    panel.querySelector('[data-x]').addEventListener('click', function () {
+      panel.hidden = true; panel.innerHTML = '';
+      var acts = document.getElementById('cm-main-acts');
+      if (acts) acts.style.display = '';
+    });
+  }
+
+  function refundStartPanel(c) {
+    var r = c.reverse, isRefundCase = r.job_type === 'Refund';
+    var amt = ship(r).total_amount || '';
+    var panel = showPanel(
+      '<div class="cm-sec-title" style="margin-bottom:8px">' + (isRefundCase ? 'Start refund' : 'Refund instead of ' + (c.type === 'Replace' ? 'replacement' : 'repair')) + '</div>' +
+      '<div class="cm-summary">' +
+        '<div class="span2"><div class="cm-k">Reason' + (isRefundCase ? ' (optional)' : '') + '</div>' +
+          '<select class="sb-input" id="rf-reason"><option value="">' + (isRefundCase ? 'Refund case' : '— Pick a reason —') + '</option>' +
+          REFUND_REASONS.map(function (x) { return '<option>' + esc(x) + '</option>'; }).join('') + '</select>' +
+          '<input class="sb-input" id="rf-other" placeholder="Describe the reason" style="display:none;margin-top:6px"></div>' +
+        '<div><div class="cm-k">Refund amount (₹)</div><input class="sb-input" id="rf-amount" type="number" min="1" step="0.01" value="' + esc(amt) + '"></div>' +
+      '</div>' +
+      '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
+        '<button class="case-act primary" id="rf-yes">Start refund</button><button class="case-act" data-x>Cancel</button>' +
+        (isRefundCase ? '' : '<span class="cm-muted" style="margin-left:auto">No send-back will be made — the customer gets a refund instead.</span>') +
+      '</div>');
+    panelCancel(panel);
+    var sel = document.getElementById('rf-reason'), other = document.getElementById('rf-other');
+    sel.addEventListener('change', function () { other.style.display = sel.value === 'Other' ? '' : 'none'; });
+    document.getElementById('rf-yes').addEventListener('click', async function () {
+      var reason = sel.value === 'Other' ? other.value.trim() : sel.value;
+      if (!isRefundCase && !reason) { alert('Pick a reason.'); return; }
+      var amount = parseFloat(document.getElementById('rf-amount').value);
+      if (!(amount > 0)) { alert('Enter the refund amount.'); return; }
+      this.disabled = true; this.textContent = 'Saving…';
+      try {
+        var res = await post('delhiveryStartRefund', { order_id: r.order_id, reason: reason, amount: amount });
+        if (!res.ok) throw new Error(res.error || 'failed');
+        await reopenCase(c.id);
+      } catch (e) { alert("Couldn't start the refund: " + e.message); this.disabled = false; this.textContent = 'Start refund'; }
+    });
+  }
+
+  async function refundLinkPanel(c, btn) {
+    var r = c.reverse, sh = ship(r);
+    if (r.refund_link_sent_at && !confirm('Make a new link? The link sent earlier will stop working.')) return;
+    btn.disabled = true;
+    try {
+      var res = await post('refundCreateLink', { order_id: r.order_id });
+      if (!res.ok) throw new Error(res.error || 'failed');
+      var link = REFUND_PAGE + '?t=' + encodeURIComponent(res.token);
+      var first = String(sh.name || '').trim().split(/\s+/)[0] || 'there';
+      var msg = 'Hello ' + first + ', this is TOMAHAWK Tools customer care. For your refund of ₹' + r.refund_amount +
+        ' (case ' + r.order_id + '), please share your bank account details securely here: ' + link + '\n\nThe link is valid for 7 days.';
+      var phone = String(sh.phone || '').replace(/\D/g, '').slice(-10);
+      var panel = showPanel(
+        '<div class="cm-sec-title" style="margin-bottom:8px">Bank details link — valid 7 days, single use</div>' +
+        '<div class="cm-summary" style="grid-template-columns:1fr">' +
+          '<div><div class="cm-k">Link</div><div class="mono" style="word-break:break-all">' + esc(link) + '</div></div>' +
+          '<div><div class="cm-k">Message</div><textarea class="sb-input" id="rf-msg" rows="4">' + esc(msg) + '</textarea></div>' +
+        '</div>' +
+        '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
+          (phone ? '<a class="case-act primary" id="rf-wa" target="_blank" rel="noopener">Share on WhatsApp</a>' : '') +
+          '<button class="case-act" id="rf-copy">Copy message</button><button class="case-act" data-x>Done</button>' +
+          '<span class="cm-muted" style="margin-left:auto">The customer confirms the last 4 digits of ' + (phone ? 'XXXXXX' + esc(phone.slice(-4)) : 'their phone') + '.</span>' +
+        '</div>');
+      panel.querySelector('[data-x]').addEventListener('click', function () { reopenCase(c.id); });
+      var wa = document.getElementById('rf-wa');
+      if (wa) {
+        var setWa = function () { wa.href = 'https://wa.me/91' + phone + '?text=' + encodeURIComponent(document.getElementById('rf-msg').value); };
+        setWa(); document.getElementById('rf-msg').addEventListener('input', setWa);
+      }
+      document.getElementById('rf-copy').addEventListener('click', function () {
+        var b = this; navigator.clipboard.writeText(document.getElementById('rf-msg').value).then(function () { b.textContent = 'Copied ✓'; });
+      });
+    } catch (e) { alert("Couldn't make the link: " + e.message); btn.disabled = false; }
+  }
+
+  async function refundBankPanel(c, reveal) {
+    try {
+      var res = await post('refundGetBank', { order_id: c.reverse.order_id, reveal: reveal });
+      if (!res.ok) throw new Error(res.error || 'failed');
+      var f = function (k, v, cls) { return '<div' + (cls ? ' class="' + cls + '"' : '') + '><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
+      var panel = showPanel(
+        '<div class="cm-sec-title" style="margin-bottom:8px">Customer bank details (NEFT)</div>' +
+        '<div class="cm-summary">' +
+          f('Account holder', res.holder_name) +
+          '<div><div class="cm-k">Account number</div><div class="mono">' + esc(res.account_number) +
+            (res.revealed ? ' <button class="copy-btn" id="rf-cp-acct" title="Copy">&#10697;</button>' : '') + '</div></div>' +
+          '<div><div class="cm-k">IFSC</div><div class="mono">' + esc(res.ifsc) + ' <button class="copy-btn" id="rf-cp-ifsc" title="Copy">&#10697;</button></div></div>' +
+          f('Bank', res.bank_name) + f('Branch', res.branch) + f('Submitted', fmtWhen(res.submitted_at)) +
+          f('Refund amount', '₹' + c.reverse.refund_amount) +
+        '</div>' +
+        '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
+          (res.revealed ? '' : '<button class="case-act" id="rf-reveal">Reveal account number</button>') +
+          '<button class="case-act primary" id="rf-given">Refund given</button><button class="case-act" data-x>Close</button>' +
+          '<span class="cm-muted" style="margin-left:auto">Reveals are logged. Details are deleted 30 days after the refund.</span>' +
+        '</div>');
+      panelCancel(panel);
+      var rv = document.getElementById('rf-reveal');
+      if (rv) rv.addEventListener('click', function () { refundBankPanel(c, true); });
+      var cpA = document.getElementById('rf-cp-acct');
+      if (cpA) cpA.addEventListener('click', function () { navigator.clipboard.writeText(res.account_number); cpA.innerHTML = '&#10003;'; });
+      document.getElementById('rf-cp-ifsc').addEventListener('click', function () { navigator.clipboard.writeText(res.ifsc); this.innerHTML = '&#10003;'; });
+      document.getElementById('rf-given').addEventListener('click', function () { refundGivenPanel(c); });
+    } catch (e) { alert("Couldn't load the bank details: " + e.message); }
+  }
+
+  function refundGivenPanel(c) {
+    var panel = showPanel(
+      '<div class="cm-sec-title" style="margin-bottom:8px">Refund given</div>' +
+      '<div class="cm-summary">' +
+        '<div class="span2"><div class="cm-k">NEFT UTR / reference number</div><input class="sb-input" id="rf-utr" maxlength="40" autocomplete="off"></div>' +
+        '<div><div class="cm-k">Amount</div><div>₹' + esc(c.reverse.refund_amount) + '</div></div>' +
+      '</div>' +
+      '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
+        '<button class="case-act primary" id="rf-done">Close case as Refunded</button><button class="case-act" data-x>Cancel</button>' +
+      '</div>');
+    panelCancel(panel);
+    document.getElementById('rf-done').addEventListener('click', async function () {
+      var utr = document.getElementById('rf-utr').value.trim();
+      if (!utr) { alert('Enter the NEFT UTR / reference number.'); return; }
+      this.disabled = true; this.textContent = 'Saving…';
+      try {
+        var res = await post('delhiveryMarkRefunded', { order_id: c.reverse.order_id, utr: utr });
+        if (!res.ok) throw new Error(res.error || 'failed');
+        await reopenCase(c.id);
+      } catch (e) { alert("Couldn't close it: " + e.message); this.disabled = false; this.textContent = 'Close case as Refunded'; }
+    });
+  }
+
   var ACTS = {
     recv:    { worker: 'delhiveryMarkReceived',  ask: 'Confirm the parcel has physically arrived at the warehouse? It moves to In Process.' },
     process: { worker: 'delhiveryMarkInProcess', ask: 'Start processing this case (repair / replacement / refund check)?' },
@@ -1519,6 +1683,10 @@ async function to4x6Pdf(bytes) {
 
   async function caseAction(c, btn) {
     if (btn.dataset.act === 'sendback') return startSendBack(c, btn);
+    if (btn.dataset.act === 'startrefund') return refundStartPanel(c);
+    if (btn.dataset.act === 'link') return refundLinkPanel(c, btn);
+    if (btn.dataset.act === 'bank') return refundBankPanel(c, false);
+    if (btn.dataset.act === 'refund' && c.reverse.bank_submitted_at) return refundGivenPanel(c);
     if (btn.dataset.act === 'label') return downloadLabel(c.forward, btn);
     var a = ACTS[btn.dataset.act];
     if (!a || !confirm(c.id + ': ' + a.ask)) return;
@@ -1536,6 +1704,19 @@ async function to4x6Pdf(bytes) {
       alert("Couldn't update: " + e.message);
       btn.disabled = false;
     }
+  }
+
+  // Refund facts for the popup (only once a refund has been started).
+  function refundInfoHtml(c) {
+    var r = c.reverse;
+    if (!r || r.resolution !== 'refund') return '';
+    var f = function (k, v) { return '<div><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
+    return '<div class="cm-sec"><div class="cm-sec-title">Refund</div></div><div class="cm-grid">' +
+      f('Amount', r.refund_amount ? '₹' + r.refund_amount : '') + f('Reason', r.refund_reason) +
+      f('Started by', [r.refund_marked_by, fmtWhen(r.refund_marked_at)].filter(Boolean).join(' · ')) +
+      f('Bank details', r.bank_submitted_at ? 'Received ' + fmtWhen(r.bank_submitted_at) : (r.refund_link_sent_at ? 'Link sent ' + fmtWhen(r.refund_link_sent_at) : 'Link not sent yet')) +
+      (r.refunded_at ? f('UTR', r.refund_utr) + f('Refunded', [fmtWhen(r.refunded_at), r.refunded_by].filter(Boolean).join(' · ')) : '') +
+      '</div>';
   }
 
   var openCaseId = null;
@@ -1572,8 +1753,9 @@ async function to4x6Pdf(bytes) {
     var box = document.getElementById('case-body-modal');
     box.innerHTML = summary +
       legs.map(function (l, i) { return legHtml(l[0], l[1], i); }).join('') +
+      refundInfoHtml(c) +
       '<div id="cm-confirm" style="margin-top:18px" hidden></div>' +
-      (acts ? '<div class="cm-acts">' + acts + '</div>' : '');
+      (acts ? '<div class="cm-acts" id="cm-main-acts">' + acts + '</div>' : '');
     box.querySelectorAll('.case-act[data-act]').forEach(function (b) {
       b.addEventListener('click', function () { caseAction(c, b); });
     });
