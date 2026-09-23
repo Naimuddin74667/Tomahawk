@@ -860,18 +860,159 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     return html ? '<div class="case-acts">' + html + '</div>' : '';
   }
   function nextStepHtml(c) {
-    var r = c.reverse;
-    if (!r || !r.delhivery_ok || r.refunded_at || (window.TM_ROLE !== 'admin' && window.TM_ROLE !== 'manager')) return '';
-    var fs = c.forward && c.forward.delhivery_ok ? legStage(c.forward) : '';
-    if (fs && fs !== 'Cancelled') return '';
+    if (window.TM_ROLE !== 'admin' && window.TM_ROLE !== 'manager') return '';
+    var r = c.reverse, f = c.forward;
     var btn = function (act, label) { return '<button class="case-act primary" data-act="' + act + '">' + label + '</button>'; };
-    var html = '';
-    if (!r.received_at) { if (legStage(r) === 'Delivered') html = btn('recv', 'Verify received'); }
-    else if (!r.in_process_at) html = btn('process', 'Start processing');
-    else if (r.job_type === 'Refund') html = btn('refund', 'Refund given');
-    else html = '<a class="case-act" href="../Create-Pickup/">Send back in Create Parcel Pickup &#8594;</a>';
-    return html;
+    var fs = f && f.delhivery_ok ? legStage(f) : '';
+    // Forward shipment booked but label not printed yet → Download label
+    // (printing it is what moves the case to Ready To Dispatch).
+    if (fs === 'Created' && f.waybill && !f.rtd_at) return btn('label', '&#11015; Download label');
+    if (!r || !r.delhivery_ok || r.refunded_at) return '';
+    if (fs && fs !== 'Cancelled') return '';
+    if (!r.received_at) return legStage(r) === 'Delivered' ? btn('recv', 'Verify received') : '';
+    if (!r.in_process_at) return btn('process', 'Start processing');
+    if (r.job_type === 'Refund') return btn('refund', 'Refund given');
+    return btn('sendback', 'Send back &#8594;');
   }
+
+  // ══ SEND BACK — one click books the forward shipment to the exact same
+  // customer (name / number / address), same product, package and courier
+  // as the reverse pickup. Steps: build order → check the PIN is
+  // serviceable for forward delivery → show estimate + details → on
+  // confirm, get the next FRPR/FRPL Order ID and create it, linked to
+  // the pickup. Create Parcel Pickup's own "Send back →" (pre-filled
+  // form) stays as the fallback when anything needs editing.
+  var SEND_BACK_TYPE = { Repair: { job: 'Repaired', prefix: 'FRPR' }, Replacement: { job: 'Replacement', prefix: 'FRPL' } };
+
+  function sendBackOrder(r) {
+    var sh = ship(r), t = SEND_BACK_TYPE[r.job_type] || SEND_BACK_TYPE.Repair;
+    var sku = String(sh.products_desc || '').replace(/^(Repair|Replacement)\s*-\s*/i, '').trim();
+    return {
+      linked_order_id: r.order_id,
+      name: sh.name || '', phone: String(sh.phone || '').replace(/\D/g, '').slice(-10),
+      add: sh.add || '', pin: String(sh.pin || ''), city: sh.city || '', state: sh.state || '',
+      products_desc: t.job + ' - ' + sku, job_type: t.job, remark: r.remark || '',
+      direction: 'forward', payment_mode: 'Prepaid',
+      quantity: sh.quantity || '1', total_amount: sh.total_amount || '', hsn_code: sh.hsn_code || '8467',
+      weight: sh.weight || undefined,
+      length: sh.shipment_length || undefined, width: sh.shipment_width || undefined, height: sh.shipment_height || undefined,
+      courier: r.courier === 'Ekart' ? 'Ekart' : 'Delhivery',
+      _prefix: t.prefix, _sku: sku
+    };
+  }
+  function courierKey(o) { return o.courier === 'Ekart' ? 'ekart' : 'delhivery'; }
+
+  async function startSendBack(c, btn) {
+    var o = sendBackOrder(c.reverse);
+    var panel = document.getElementById('cm-confirm');
+    btn.disabled = true; btn.textContent = 'Checking…';
+    try {
+      if (!o.name || !o.phone || !o.add || !/^\d{6}$/.test(o.pin)) throw new Error('The pickup is missing the name, number, address or PIN — use Create Parcel Pickup to send it back.');
+      var pinRes = await api(courierKey(o) + 'CheckPincode&pin=' + o.pin);
+      if (pinRes && pinRes.ok && (!pinRes.serviceable || pinRes.prepaid === false))
+        throw new Error(o.courier + ' does not deliver (prepaid) to PIN ' + o.pin + '. Send it back from Create Parcel Pickup with another courier.');
+      var qs = new URLSearchParams({ pin: o.pin, weight: o.weight || '500', payment_mode: 'Prepaid',
+        length: o.length || '5', width: o.width || '5', height: o.height || '5',
+        invoice_amount: o.total_amount || '0', direction: 'forward' });
+      var est = null;
+      try { est = await api(courierKey(o) + 'EstimateCharge&' + qs.toString()); } catch (e) {}
+      var cost = est && est.ok && est.estimated && est.totalAmount != null ? '₹' + est.totalAmount : 'Unavailable';
+      panel.innerHTML =
+        '<div class="cm-sec-title" style="margin-bottom:8px">Confirm send back</div>' +
+        '<div class="cm-summary">' +
+          '<div><div class="cm-k">Deliver to</div><div>' + esc(o.name) + '</div></div>' +
+          '<div><div class="cm-k">Contact Number</div><div>' + esc(o.phone) + '</div></div>' +
+          '<div><div class="cm-k">Estimated charge</div><div style="font-weight:700;color:var(--accent)">' + esc(cost) + '</div></div>' +
+          '<div class="span2"><div class="cm-k">Address</div><div>' + esc([o.add, o.city, o.state, o.pin].filter(Boolean).join(', ')) + '</div></div>' +
+          '<div><div class="cm-k">Courier</div><div>' + esc(o.courier) + ' · Prepaid</div></div>' +
+          '<div class="span2"><div class="cm-k">Product</div><div>' + esc(o.products_desc) + '</div></div>' +
+          '<div><div class="cm-k">Value</div><div>' + (o.total_amount ? '₹' + esc(o.total_amount) : '&#8212;') + '</div></div>' +
+        '</div>' +
+        '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
+          '<button class="case-act primary" id="sb-yes">Book send back</button>' +
+          '<button class="case-act" id="sb-no">Cancel</button>' +
+          '<span class="cm-muted" style="margin-left:auto">Estimate from ' + esc(o.courier) + ' — nothing is booked until you confirm.</span>' +
+        '</div>';
+      panel.hidden = false;
+      btn.style.display = 'none';
+      document.getElementById('sb-no').addEventListener('click', function () {
+        panel.hidden = true; panel.innerHTML = ''; btn.style.display = ''; btn.disabled = false; btn.innerHTML = 'Send back &#8594;';
+      });
+      document.getElementById('sb-yes').addEventListener('click', function () { bookSendBack(c, o, this); });
+    } catch (e) {
+      alert(e.message);
+      btn.disabled = false; btn.innerHTML = 'Send back &#8594;';
+    }
+  }
+
+  async function bookSendBack(c, o, yesBtn) {
+    yesBtn.disabled = true; yesBtn.textContent = 'Booking…';
+    try {
+      var idRes = await api('delhiveryNextOrderId&prefix=' + o._prefix);
+      if (!idRes || !idRes.ok || !idRes.orderId) throw new Error("Couldn't get the next Order ID — try again.");
+      var order = Object.assign({}, o, { order: idRes.orderId });
+      delete order._prefix; delete order._sku;
+      var res, attempts = 0;
+      while (true) {                 // same duplicate-ID retry as Create Parcel Pickup
+        res = await post(order.courier === 'Ekart' ? 'ekartCreateOrder' : 'delhiveryCreateOrder', { order: order });
+        if (res.ok) break;
+        var pkg = res.response && res.response.packages && res.response.packages[0];
+        var remarks = [res.error].concat(pkg && pkg.remarks ? [].concat(pkg.remarks) : []);
+        if (!remarks.some(function (x) { return /duplicate|already exists/i.test(String(x || '')); }) || ++attempts >= 5) break;
+        var m = /^([A-Z]+-\d{6})(\d+)$/.exec(order.order);
+        if (!m) break;
+        order.order = m[1] + String(parseInt(m[2], 10) + 1).padStart(2, '0');
+      }
+      if (!res.ok) {
+        var p = res.response && res.response.packages && res.response.packages[0];
+        throw new Error(res.error || (p && [].concat(p.remarks || []).join(', ')) || 'booking failed');
+      }
+      // Reload and reopen this case — it now shows the green Booked badge
+      // and the Download label button.
+      await load(false);
+      var fresh = cases.filter(function (x) { return x.id === c.id; })[0];
+      if (fresh) openCase(fresh); else closeCase();
+    } catch (e) {
+      alert("Couldn't book the send back: " + e.message);
+      yesBtn.disabled = false; yesBtn.textContent = 'Book send back';
+    }
+  }
+
+  function post(action, body) {
+    var s = window.TM_getSession(), h = { 'Content-Type': 'application/json' };
+    if (s && s.token) h['X-Tomahawk-Session'] = s.token;
+    return fetch(window.TM_WORKER + '?action=' + action, {
+      method: 'POST', headers: h, body: JSON.stringify(Object.assign({ action: action }, body))
+    }).then(function (r) { return r.json(); });
+  }
+
+  // Download the forward label (courier's own 4×6 PDF). The Worker stamps
+  // rtd_at on the first download → case moves to Ready To Dispatch.
+  async function downloadFwdLabel(c, btn) {
+    var f = c.forward;
+    btn.disabled = true; btn.textContent = 'Downloading…';
+    try {
+      var s = window.TM_getSession(), h = {};
+      if (s && s.token) h['X-Tomahawk-Session'] = s.token;
+      var url = window.TM_WORKER + '?action=' + (f.courier === 'Ekart' ? 'ekartGetLabel&waybill=' : 'delhiveryGetLabel&file=1&waybill=') + encodeURIComponent(f.waybill);
+      var resp = await fetch(url, { headers: h });
+      if (!resp.ok || (resp.headers.get('Content-Type') || '').indexOf('application/pdf') === -1) {
+        var err = {}; try { err = await resp.json(); } catch (e2) {}
+        throw new Error(err.error || ('HTTP ' + resp.status));
+      }
+      var blob = await resp.blob(), a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = f.order_id + '.pdf';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+      await load(false);
+      var fresh = cases.filter(function (x) { return x.id === c.id; })[0];
+      if (fresh) openCase(fresh);
+    } catch (e) {
+      alert("Couldn't download the label: " + e.message);
+      btn.disabled = false; btn.innerHTML = '&#11015; Download label';
+    }
+  }
+
   var ACTS = {
     recv:    { worker: 'delhiveryMarkReceived',  ask: 'Confirm the parcel has physically arrived at the warehouse?' },
     process: { worker: 'delhiveryMarkInProcess', ask: 'Start processing this case (repair / replacement / refund check)?' },
@@ -899,6 +1040,8 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
   }
 
   async function caseAction(c, btn) {
+    if (btn.dataset.act === 'sendback') return startSendBack(c, btn);
+    if (btn.dataset.act === 'label') return downloadFwdLabel(c, btn);
     var a = ACTS[btn.dataset.act];
     if (!a || !confirm(c.id + ': ' + a.ask)) return;
     btn.disabled = true;
@@ -944,6 +1087,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     var box = document.getElementById('case-body-modal');
     box.innerHTML = summary +
       legs.map(function (l, i) { return legHtml(l[0], l[1], i); }).join('') +
+      '<div id="cm-confirm" style="margin-top:18px" hidden></div>' +
       (acts ? '<div class="cm-acts">' + acts + '</div>' : '');
     box.querySelectorAll('.case-act[data-act]').forEach(function (b) {
       b.addEventListener('click', function () { caseAction(c, b); });
