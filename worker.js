@@ -3982,6 +3982,10 @@ async function purgeUnwantedOrders(DB) {
   try {
     await DB.prepare('DELETE FROM delhivery_orders WHERE order_id IN (' + DELHIVERY_PURGE_IDS.map(() => '?').join(',') + ')')
       .bind(...DELHIVERY_PURGE_IDS).run();
+    // Test case RPR-22092603 (dummy): mark its send-back FRPR-23092601
+    // Delivered so the closed state can be checked. Delivered is a final
+    // stage, so the tracking refresh never overwrites it. Idempotent.
+    await DB.prepare("UPDATE delhivery_orders SET track_stage = 'Delivered', track_status = 'Delivered (test case — set manually)', tracked_at = datetime('now') WHERE order_id = 'FRPR-23092601' AND COALESCE(track_stage, '') != 'Delivered'").run();
   } catch (e) { delhiveryPurgeDone = false; }
 }
 
