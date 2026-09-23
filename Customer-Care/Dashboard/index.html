@@ -356,7 +356,7 @@ html[data-theme="light"] .bt-blue  { color: #2563eb; }
 html[data-theme="light"] .bt-amber { color: #b45309; }
 html[data-theme="light"] .bt-green { color: #15803d; }
 html[data-theme="light"] .bt-red   { color: #dc2626; }
-.case-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.case-acts { display: contents; }
 .case-act { font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--accent); background: transparent; color: var(--accent); cursor: pointer; text-decoration: none; }
 .case-act:hover, .case-act.primary { background: var(--accent); color: #111; }
 .case-act:disabled { opacity: .5; cursor: progress; }
@@ -365,7 +365,28 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 /* popup */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: 50px 16px; overflow-y: auto; }
 .modal-backdrop[hidden] { display: none; }
-.modal { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; width: 100%; max-width: 720px; padding: 22px; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; width: 100%; max-width: 900px; padding: 22px; }
+/* Case popup — same layout as the Blinkit RO Detail: summary strip,
+   small accent section headers (with their button on the right), and
+   the action buttons in one row at the bottom. */
+.cm-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 16px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; font-size: 12px; }
+.cm-summary .span2 { grid-column: span 2; }
+.cm-k { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2px; }
+.cm-sec { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 18px 0 8px; }
+.cm-sec-title { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); font-family: 'DM Mono', monospace; }
+.cm-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 16px; font-size: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+.cm-muted { font-size: 10.5px; color: var(--text2); margin-top: 1px; }
+.cm-steps { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.cm-step { flex: 1; padding: 10px 12px; font-size: 11.5px; border-right: 1px solid var(--border); color: var(--text2); min-width: 0; }
+.cm-step:last-child { border-right: none; }
+.cm-step .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--border); margin-right: 6px; }
+.cm-step.done { color: var(--text); }
+.cm-step.done .dot { background: #22c55e; }
+.cm-step.now { color: var(--text); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.cm-step.now .dot { background: var(--accent); }
+.cm-step .when { font-size: 10.5px; color: var(--text2); margin-top: 3px; padding-left: 14px; }
+.cm-acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+@media (max-width: 700px) { .cm-summary, .cm-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cm-steps { flex-direction: column; } .cm-step { border-right: none; border-bottom: 1px solid var(--border); } }
 .modal-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
 .modal-title { font-family: var(--font-display); font-weight: 800; font-size: 17px; }
 .modal-sub { font-size: 12px; color: var(--text2); margin-top: 3px; }
@@ -808,26 +829,47 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
   modal.addEventListener('click', function (e) { if (e.target === modal) closeCase(); });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !modal.hidden) closeCase(); });
 
+  // One courier leg: section header (+ Track now) and courier facts only.
+  // Customer/product details live once in the summary strip above.
   function legHtml(o, title, idx) {
-    var sh = ship(o), st = legStage(o);
+    var st = legStage(o);
     var stLabel = (o.direction === 'reverse' ? PICKUP_LABEL[st] : DISPATCH_LABEL[st]) || st;
-    var f = function (k, v) { return '<div><div class="k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
-    var extra = [];
-    if (o.received_at) extra.push(f('Verified received', fmtWhen(o.received_at)));
-    if (o.in_process_at) extra.push(f('In process since', fmtWhen(o.in_process_at)));
-    if (o.refunded_at) extra.push(f('Refunded', fmtWhen(o.refunded_at)));
-    if (o.rtd_at && o.direction !== 'reverse') extra.push(f('Label printed', fmtWhen(o.rtd_at)));
-    return '<div class="leg">' +
-      '<div class="leg-head"><div class="leg-title">' + esc(title) + ' — <span class="mono">' + esc(o.order_id) + '</span></div>' +
+    var raw = String(o.track_status || '');
+    var showRaw = raw && raw.toLowerCase().replace(/l+/g, 'l') !== String(stLabel).toLowerCase().replace(/l+/g, 'l');
+    var f = function (k, v, sub) { return '<div><div class="cm-k">' + k + '</div><div>' + (v || '&#8212;') + '</div>' + (sub ? '<div class="cm-muted">' + sub + '</div>' : '') + '</div>'; };
+    return '<div class="cm-sec"><div class="cm-sec-title">' + esc(title) + ' &mdash; <span class="mono">' + esc(o.order_id) + '</span></div>' +
         (o.delhivery_ok && o.waybill ? '<button class="track-btn" data-leg="' + idx + '">Track now</button>' : '') + '</div>' +
-      '<div class="leg-grid">' +
-        f('Courier', o.courier || 'Delhivery') + f('Waybill', o.waybill) + f('Courier status', stLabel + (o.track_status ? ' (' + o.track_status + ')' : '')) +
-        f('Booked', fmtWhen(o.created_at) + (o.created_by ? ' by ' + o.created_by : '')) +
-        f(o.direction === 'reverse' ? 'Pickup from' : 'Deliver to', [sh.name, sh.phone].filter(Boolean).join(' · ')) +
-        f('Address', [sh.add, sh.city, sh.state, sh.pin].filter(Boolean).join(', ')) +
-        f('Product', sh.products_desc) + f('Value', sh.total_amount ? '₹' + sh.total_amount : '') +
-        (o.remark ? f('Remark', o.remark) : '') + extra.join('') +
-      '</div><div class="track-box" id="track-' + idx + '" hidden></div></div>';
+      '<div class="cm-grid">' +
+        f('Courier', esc(o.courier || 'Delhivery')) +
+        f('Waybill', o.waybill ? '<span class="mono">' + esc(o.waybill) + '</span>' : '') +
+        f('Courier status', esc(stLabel), showRaw ? esc(raw) : '') +
+        f('Booked by', esc(o.created_by || ''), esc(fmtWhen(o.created_at))) +
+      '</div><div class="track-box" id="track-' + idx + '" hidden></div>';
+  }
+
+  // Milestones for the case's path, each done (green) / current (amber) /
+  // pending (grey), with the date where we have one.
+  function stepsHtml(c) {
+    var r = c.reverse, f = c.forward && c.forward.delhivery_ok && legStage(c.forward) !== 'Cancelled' ? c.forward : null;
+    var fDone = f && legStage(f) === 'Delivered';
+    var steps;
+    if (!r) steps = [
+      ['Booked', f && f.created_at, !!f], ['Ready To Dispatch', f && f.rtd_at, !!(f && (f.rtd_at || ['In Transit', 'At Last Mile', 'Out For Delivery', 'Delivered'].indexOf(legStage(f)) !== -1))],
+      ['Delivered', '', fDone]];
+    else {
+      steps = [['Pickup booked', r.created_at, true], ['Delivered to us', '', !!r.received_at || legStage(r) === 'Delivered'],
+        ['Received', r.received_at, !!r.received_at], ['In Process', r.in_process_at, !!r.in_process_at]];
+      if (c.type === 'Refund') steps.push(['Refunded', r.refunded_at, !!r.refunded_at]);
+      else steps.push(['Send-back booked', f && f.created_at, !!f], ['Delivered', '', fDone]);
+    }
+    var nowIdx = -1;
+    for (var i = 0; i < steps.length; i++) if (!steps[i][2]) { nowIdx = i; break; }
+    return '<div class="cm-sec"><div class="cm-sec-title">Progress</div></div><div class="cm-steps">' +
+      steps.map(function (st, i) {
+        var cls = st[2] ? 'done' : (i === nowIdx ? 'now' : '');
+        return '<div class="cm-step ' + cls + '"><span class="dot"></span>' + esc(st[0]) +
+          '<div class="when">' + (st[1] ? esc(fmtWhen(st[1])) : (i === nowIdx ? 'Next' : '&nbsp;')) + '</div></div>';
+      }).join('') + '</div>';
   }
 
   // ── Next-step button for reverse cases (admin / manager only; the
@@ -899,12 +941,25 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 
   function openCase(c) {
     var legs = [];
-    if (c.reverse) legs.push([c.reverse, 'Reverse pickup (' + (c.reverse.job_type || '') + ')']);
+    if (c.reverse) legs.push([c.reverse, 'Reverse pickup']);
     if (c.forward) legs.push([c.forward, c.reverse ? 'Send-back shipment' : 'Forward shipment']);
+    var lead = c.reverse || c.forward, sh = ship(lead);
     document.getElementById('case-title').innerHTML = esc(c.id) + ' ' + badgeHtml(c.st);
-    document.getElementById('case-sub').textContent = [c.customer, c.city].filter(Boolean).join(' · ');
+    document.getElementById('case-sub').textContent = [c.type, c.customer, c.city].filter(function (x) { return x && x !== '—'; }).join(' · ');
+    var f = function (k, v, cls) { return '<div' + (cls ? ' class="' + cls + '"' : '') + '><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
+    var summary = '<div class="cm-summary">' +
+      f('Customer', [sh.name, sh.phone].filter(Boolean).join(' · ')) +
+      f('Address', [sh.add, sh.city, sh.state, sh.pin].filter(Boolean).join(', '), 'span2') +
+      f('Type', c.type) +
+      f('Product', c.product) +
+      f('Value', sh.total_amount ? '₹' + sh.total_amount : '') +
+      f('Remark', lead.remark, 'span2') +
+      '</div>';
+    var acts = actionsHtml(c);
     var box = document.getElementById('case-body-modal');
-    box.innerHTML = actionsHtml(c) + legs.map(function (l, i) { return legHtml(l[0], l[1], i); }).join('');
+    box.innerHTML = summary + stepsHtml(c) +
+      legs.map(function (l, i) { return legHtml(l[0], l[1], i); }).join('') +
+      (acts ? '<div class="cm-acts">' + acts + '</div>' : '');
     box.querySelectorAll('.case-act[data-act]').forEach(function (b) {
       b.addEventListener('click', function () { caseAction(c, b); });
     });
