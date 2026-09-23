@@ -285,6 +285,12 @@ table.log-table tr:last-child td { border-bottom: none; }
 .log-refresh { font-size: 11px; color: var(--text2); cursor: pointer; white-space: nowrap; }
 .log-refresh:hover { color: var(--accent); }
 .table-wrap { overflow-x: auto; }
+/* Pagination footer — same pattern as the Blinkit RO Ledger */
+.pager { display: none; align-items: center; justify-content: center; gap: 1rem; padding: 12px 0 0; border-top: 1px solid var(--border); margin-top: 4px; }
+.pager-btn { padding: 5px 10px; font-size: 11px; font-weight: 600; border-radius: 5px; background: transparent; color: var(--text); border: 1px solid var(--border); cursor: pointer; font-family: inherit; }
+.pager-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.pager-btn:disabled { opacity: .4; cursor: not-allowed; }
+.pager-ind { font-size: 11px; color: var(--text2); font-family: 'DM Mono', monospace; white-space: nowrap; }
 .case-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .case-table th { text-align: left; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--text2); padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .case-table td { padding: 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
@@ -438,6 +444,12 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
         <tbody id="case-body"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
       </table>
     </div>
+    <!-- Pagination footer (hidden when everything fits on one page) -->
+    <div class="pager" id="pager">
+      <button class="pager-btn" id="pager-prev">&#8592; Prev</button>
+      <span class="pager-ind" id="pager-ind"></span>
+      <button class="pager-btn" id="pager-next">Next &#8594;</button>
+    </div>
   </div>
 </div>
 
@@ -545,6 +557,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 // ══════════════════════════════════════════════════════════════════
 (function () {
   var cases = [], tileFilter = '';
+  var page = 1, PAGE_SIZE = 10;   // pagination — same 10-per-page as the Blinkit RO Ledger
 
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function safeJson(s) { try { return JSON.parse(s || '{}'); } catch (e) { return {}; } }
@@ -686,7 +699,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
         (verify ? ' <span class="tile-flag">' + verify + ' to verify</span>' : '') + '</div></button>';
     }).join('');
     el.querySelectorAll('.tile').forEach(function (t) {
-      t.addEventListener('click', function () { tileFilter = t.dataset.f; renderTiles(); renderTable(); });
+      t.addEventListener('click', function () { tileFilter = t.dataset.f; page = 1; renderTiles(); renderTable(); });
     });
   }
 
@@ -697,7 +710,12 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
       return tileTest(tileFilter)(c) && (!kind || c.kind === kind) && (!q || c.search.indexOf(q) !== -1);
     });
     var body = document.getElementById('case-body');
-    if (!rows.length) { body.innerHTML = '<tr><td colspan="4" class="muted">No cases match.</td></tr>'; return; }
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="4" class="muted">No cases match.</td></tr>'; renderPager(0, 1); return; }
+    var totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+    if (page > totalPages) page = totalPages;
+    if (page < 1) page = 1;
+    var total = rows.length;
+    rows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
     body.innerHTML = '';
     rows.forEach(function (c) {
       var tr = document.createElement('tr');
@@ -714,7 +732,31 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
       tr.addEventListener('click', function () { openCase(c); });
       body.appendChild(tr);
     });
+    // Pad a short last page with blank rows (only when there are several
+    // pages) so the Prev/Next footer stays in the same spot on every page.
+    if (totalPages > 1) {
+      for (var i = rows.length; i < PAGE_SIZE; i++) {
+        var pad = document.createElement('tr');
+        pad.setAttribute('aria-hidden', 'true');
+        pad.innerHTML = '<td colspan="4">&nbsp;<div class="sub">&nbsp;</div></td>';
+        body.appendChild(pad);
+      }
+    }
+    renderPager(total, totalPages);
   }
+
+  function renderPager(total, totalPages) {
+    var wrap = document.getElementById('pager');
+    if (total <= PAGE_SIZE) { wrap.style.display = 'none'; return; } // single page — nothing to paginate
+    wrap.style.display = 'flex';
+    document.getElementById('pager-ind').textContent =
+      ((page - 1) * PAGE_SIZE + 1) + '\u2013' + Math.min(page * PAGE_SIZE, total) + ' of ' + total + ' \u00b7 Page ' + page + ' of ' + totalPages;
+    document.getElementById('pager-prev').disabled = page <= 1;
+    document.getElementById('pager-next').disabled = page >= totalPages;
+  }
+  function goToPage(p) { page = p; renderTable(); }
+  document.getElementById('pager-prev').addEventListener('click', function () { goToPage(page - 1); });
+  document.getElementById('pager-next').addEventListener('click', function () { goToPage(page + 1); });
 
   // ── Case popup: both legs + live tracking per leg ──
   var modal = document.getElementById('case-modal');
@@ -833,8 +875,8 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
       document.getElementById('case-body').innerHTML = '<tr><td colspan="4" class="muted">Couldn\'t load cases: ' + esc(e.message) + '</td></tr>';
     }
   }
-  document.getElementById('q').addEventListener('input', renderTable);
-  document.getElementById('f-kind').addEventListener('change', renderTable);
+  document.getElementById('q').addEventListener('input', function () { page = 1; renderTable(); });
+  document.getElementById('f-kind').addEventListener('change', function () { page = 1; renderTable(); });
   document.getElementById('refresh-btn').addEventListener('click', function () { load(true); });
   load(false);
 })();
