@@ -376,6 +376,14 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .cm-sec-title { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); font-family: 'DM Mono', monospace; }
 .cm-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 16px; font-size: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
 .cm-muted { font-size: 10.5px; color: var(--text2); margin-top: 1px; }
+.sb-input { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px 9px; font: inherit; font-size: 12px; margin-top: 2px; }
+.sb-input:focus { outline: none; border-color: var(--accent); }
+.sb-chips { display: flex; gap: 10px; flex-wrap: wrap; }
+.sb-chip { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 200px; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; font: inherit; font-size: 12px; text-align: left; }
+.sb-chip span { font-size: 11px; color: #22c55e; }
+.sb-chip.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.sb-chip.off { cursor: not-allowed; opacity: .6; }
+.sb-chip.off span { color: #f87171; }
 .copy-btn { background: none; border: none; color: var(--text2); cursor: pointer; padding: 0 0 0 6px; vertical-align: middle; line-height: 1; font-size: 12px; }
 .copy-btn:hover { color: var(--accent); }
 .copy-btn.copied { color: #22c55e; }
@@ -898,84 +906,169 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
       _prefix: t.prefix, _sku: sku
     };
   }
-  function courierKey(o) { return o.courier === 'Ekart' ? 'ekart' : 'delhivery'; }
-  function otherCourier(name) { return name === 'Ekart' ? 'Delhivery' : 'Ekart'; }
+  var COURIERS = ['Delhivery', 'Ekart'];
+  function ckey(name) { return name === 'Ekart' ? 'ekart' : 'delhivery'; }
 
-  // Courier choice: the pickup's courier first; if its pincode check says
-  // it can't deliver (prepaid) there, the other one (Delhivery ⇄ Ekart).
-  // skip = a courier that already refused this PIN at booking time.
-  async function pickCourier(o, skip) {
-    var order = [o.courier, otherCourier(o.courier)].filter(function (x) { return x !== skip; });
-    for (var i = 0; i < order.length; i++) {
-      try {
-        var res = await api((order[i] === 'Ekart' ? 'ekart' : 'delhivery') + 'CheckPincode&pin=' + o.pin);
-        if (res && res.ok && res.serviceable && res.prepaid !== false) return order[i];
-      } catch (e) { /* treat as not serviceable, try the next one */ }
-    }
+  // ── Send-back confirm panel (editable) ─────────────────────────────
+  //   Product — defaults to the pickup's SKU; pick/type another if a
+  //             different item goes out. A known SKU also refreshes value,
+  //             weight and size from the listing data.
+  //   Value   — editable.
+  //   Courier — Delhivery / Ekart chips, each showing its serviceability
+  //             for the PIN and estimate; click to switch. Starts on the
+  //             pickup's courier, or the other one if it can't deliver.
+  var sb = null;          // current panel state
+  var skuList = null, skuInfo = null;   // loaded once, on first use
+
+  async function loadSkuSources() {
+    if (skuList) return;
+    skuList = [];
+    try {
+      var r = await api('ucsku_getList');
+      skuList = ((r && r.skus) || []).slice().sort();
+    } catch (e) {}
+    try {
+      var info = await api('delhiveryAmzProductInfo');
+      if (info && info.ok && info.products) skuInfo = info.products;
+    } catch (e) {}
+  }
+  function skuKey(x) { return String(x || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+  function lookupSku(sku) {
+    if (!skuInfo) return null;
+    if (skuInfo[sku]) return skuInfo[sku];
+    var want = skuKey(sku);
+    for (var k in skuInfo) if (skuKey(k) === want) return skuInfo[k];
     return null;
   }
 
   async function startSendBack(c, btn) {
     var o = sendBackOrder(c.reverse);
-    var panel = document.getElementById('cm-confirm');
+    if (!o.name || !o.phone || !o.add || !/^\d{6}$/.test(o.pin)) {
+      alert('The pickup is missing the name, number, address or PIN — use Create Parcel Pickup to send it back.');
+      return;
+    }
     btn.disabled = true; btn.textContent = 'Checking…';
-    try {
-      if (!o.name || !o.phone || !o.add || !/^\d{6}$/.test(o.pin)) throw new Error('The pickup is missing the name, number, address or PIN — use Create Parcel Pickup to send it back.');
-      await showSendBackConfirm(c, o, btn, null, '');
-    } catch (e) {
-      alert(e.message);
-      btn.disabled = false; btn.innerHTML = 'Send back &#8594;';
+    sb = { c: c, o: o, btn: btn, sv: {}, refused: {}, note: '' };
+    await Promise.all([loadSkuSources(), checkCouriers()]);
+    // Start on the pickup's courier if it can deliver, else the other.
+    if (!sb.sv[o.courier] || !sb.sv[o.courier].ok) {
+      var alt = COURIERS.filter(function (x) { return x !== o.courier && sb.sv[x] && sb.sv[x].ok; })[0];
+      if (alt) { sb.note = o.courier + " can't deliver to " + o.pin + ' — using ' + alt + '.'; o.courier = alt; }
     }
+    btn.style.display = 'none';
+    renderSendBack();
   }
 
-  // Picks the courier (with fallback), gets its estimate and shows the
-  // confirm panel. note = why the courier changed (shown in the panel).
-  async function showSendBackConfirm(c, o, btn, skip, note) {
-    var panel = document.getElementById('cm-confirm');
-    var want = o.courier;
-    var chosen = await pickCourier(o, skip);
-    if (!chosen) throw new Error('Neither Delhivery nor Ekart delivers (prepaid) to PIN ' + o.pin + '. Send it back another way.');
-    o.courier = chosen;
-    if (chosen !== want && !note) note = want + " doesn't deliver to " + o.pin + ' — switched to ' + chosen + '.';
-    {
-      var qs = new URLSearchParams({ pin: o.pin, weight: o.weight || '500', payment_mode: 'Prepaid',
-        length: o.length || '5', width: o.width || '5', height: o.height || '5',
-        invoice_amount: o.total_amount || '0', direction: 'forward' });
-      var est = null;
-      try { est = await api(courierKey(o) + 'EstimateCharge&' + qs.toString()); } catch (e) {}
-      var cost = est && est.ok && est.estimated && est.totalAmount != null ? '₹' + est.totalAmount : 'Unavailable';
-      panel.innerHTML =
-        '<div class="cm-sec-title" style="margin-bottom:8px">Confirm send back</div>' +
-        '<div class="cm-summary">' +
-          '<div><div class="cm-k">Deliver to</div><div>' + esc(o.name) + '</div></div>' +
-          '<div><div class="cm-k">Contact Number</div><div>' + esc(o.phone) + '</div></div>' +
-          '<div><div class="cm-k">Estimated charge</div><div style="font-weight:700;color:var(--accent)">' + esc(cost) + '</div></div>' +
-          '<div class="span2"><div class="cm-k">Address</div><div>' + esc([o.add, o.city, o.state, o.pin].filter(Boolean).join(', ')) + '</div></div>' +
-          '<div><div class="cm-k">Courier</div><div>' + esc(o.courier) + ' · Prepaid</div></div>' +
-          '<div class="span2"><div class="cm-k">Product</div><div>' + esc(o.products_desc) + '</div></div>' +
-          '<div><div class="cm-k">Value</div><div>' + (o.total_amount ? '₹' + esc(o.total_amount) : '&#8212;') + '</div></div>' +
-        '</div>' +
-        '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
-          '<button class="case-act primary" id="sb-yes">Book send back</button>' +
-          '<button class="case-act" id="sb-no">Cancel</button>' +
-          '<span class="cm-muted" style="margin-left:auto">' + (note ? '<b style="color:var(--accent)">' + esc(note) + '</b> ' : '') + 'Estimate from ' + esc(o.courier) + ' — nothing is booked until you confirm.</span>' +
-        '</div>';
-      panel.hidden = false;
-      btn.style.display = 'none';
-      document.getElementById('sb-no').addEventListener('click', function () {
-        panel.hidden = true; panel.innerHTML = ''; btn.style.display = ''; btn.disabled = false; btn.innerHTML = 'Send back &#8594;';
-      });
-      document.getElementById('sb-yes').addEventListener('click', function () { bookSendBack(c, o, this, btn); });
-    }
+  // Serviceability + estimate for both couriers (in parallel).
+  async function checkCouriers() {
+    var o = sb.o;
+    var qs = new URLSearchParams({ pin: o.pin, weight: o.weight || '500', payment_mode: 'Prepaid',
+      length: o.length || '5', width: o.width || '5', height: o.height || '5',
+      invoice_amount: o.total_amount || '0', direction: 'forward' }).toString();
+    await Promise.all(COURIERS.map(async function (name) {
+      var st = { ok: false, text: 'Checking…', cost: '' };
+      try {
+        var pr = await api(ckey(name) + 'CheckPincode&pin=' + o.pin);
+        if (!pr || !pr.ok) st.text = 'Couldn\u2019t check';
+        else if (!pr.serviceable || pr.prepaid === false) st.text = 'Not serviceable';
+        else {
+          st.ok = true; st.text = 'Serviceable';
+          try {
+            var est = await api(ckey(name) + 'EstimateCharge&' + qs);
+            if (est && est.ok && est.estimated && est.totalAmount != null) st.cost = '₹' + est.totalAmount;
+          } catch (e) {}
+        }
+      } catch (e) { st.text = 'Couldn\u2019t check'; }
+      if (sb.refused[name]) { st.ok = false; st.text = 'Refused this PIN'; }
+      sb.sv[name] = st;
+    }));
   }
 
-  async function bookSendBack(c, o, yesBtn, sendBtn) {
+  function renderSendBack() {
+    var o = sb.o, panel = document.getElementById('cm-confirm');
+    var anyOk = COURIERS.some(function (x) { return sb.sv[x] && sb.sv[x].ok; });
+    var chips = COURIERS.map(function (name) {
+      var st = sb.sv[name] || { text: '…' };
+      return '<button type="button" class="sb-chip' + (o.courier === name ? ' on' : '') + (st.ok ? '' : ' off') + '" data-courier="' + name + '"' + (st.ok ? '' : ' disabled') + '>' +
+        '<b>' + name + '</b><span>' + (st.ok ? '&#10003; ' : '&#10007; ') + esc(st.text) + (st.cost ? ' · ' + esc(st.cost) : '') + '</span></button>';
+    }).join('');
+    panel.innerHTML =
+      '<div class="cm-sec-title" style="margin-bottom:8px">Confirm send back</div>' +
+      '<div class="cm-summary">' +
+        '<div><div class="cm-k">Deliver to</div><div>' + esc(o.name) + '</div></div>' +
+        '<div><div class="cm-k">Contact Number</div><div>' + esc(o.phone) + '</div></div>' +
+        '<div><div class="cm-k">PIN</div><div>' + esc(o.pin) + '</div></div>' +
+        '<div class="span2"><div class="cm-k">Address</div><div>' + esc([o.add, o.city, o.state].filter(Boolean).join(', ')) + '</div></div>' +
+        '<div><div class="cm-k">Payment</div><div>Prepaid</div></div>' +
+        '<div class="span2"><div class="cm-k">Product (change if sending a different item)</div>' +
+          '<input class="sb-input" id="sb-product" list="sb-skus" value="' + esc(o._sku) + '" autocomplete="off">' +
+          '<datalist id="sb-skus">' + (skuList || []).map(function (x) { return '<option value="' + esc(x) + '">'; }).join('') + '</datalist></div>' +
+        '<div><div class="cm-k">Value (₹)</div><input class="sb-input" id="sb-value" type="number" min="1" value="' + esc(o.total_amount) + '"></div>' +
+      '</div>' +
+      '<div class="cm-k" style="margin:12px 0 6px">Courier partner &amp; serviceability for ' + esc(o.pin) + '</div>' +
+      '<div class="sb-chips">' + chips + '</div>' +
+      '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
+        '<button class="case-act primary" id="sb-yes"' + (anyOk ? '' : ' disabled') + '>Book send back</button>' +
+        '<button class="case-act" id="sb-no">Cancel</button>' +
+        '<span class="cm-muted" style="margin-left:auto">' + (sb.note ? '<b style="color:var(--accent)">' + esc(sb.note) + '</b> ' : '') +
+          (anyOk ? 'Nothing is booked until you confirm.' : 'Neither courier delivers here — send it another way.') + '</span>' +
+      '</div>';
+    panel.hidden = false;
+
+    panel.querySelectorAll('.sb-chip').forEach(function (ch) {
+      ch.addEventListener('click', function () { o.courier = ch.dataset.courier; sb.note = ''; readInputs(); renderSendBack(); });
+    });
+    // Product / value change → refresh package from listing data and re-check estimates.
+    var t = null;
+    function changed(e) {
+      clearTimeout(t);
+      t = setTimeout(async function () {
+        var prevSku = o._sku;
+        readInputs();
+        if (e && e.target.id === 'sb-product' && o._sku !== prevSku) {
+          var info = lookupSku(o._sku);
+          if (info) {
+            // Same rules as Create Parcel Pickup: listing price × qty,
+            // weight = 50% of the listing weight (rounded up).
+            if (info.price) o.total_amount = String(+(info.price * (parseInt(o.quantity, 10) || 1)).toFixed(2));
+            if (info.weight) o.weight = Math.ceil(Number(info.weight) * 0.5);
+            if (info.length && info.width && info.height) { o.length = Math.ceil(info.length); o.width = Math.ceil(info.width); o.height = Math.ceil(info.height); }
+          }
+        }
+        await checkCouriers();
+        if (!sb.sv[o.courier] || !sb.sv[o.courier].ok) {
+          var alt = COURIERS.filter(function (x) { return sb.sv[x] && sb.sv[x].ok; })[0];
+          if (alt) o.courier = alt;
+        }
+        renderSendBack();
+      }, 600);
+    }
+    document.getElementById('sb-product').addEventListener('change', changed);
+    document.getElementById('sb-value').addEventListener('change', changed);
+    document.getElementById('sb-no').addEventListener('click', function () {
+      panel.hidden = true; panel.innerHTML = '';
+      sb.btn.style.display = ''; sb.btn.disabled = false; sb.btn.innerHTML = 'Send back &#8594;';
+      sb = null;
+    });
+    document.getElementById('sb-yes').addEventListener('click', function () { readInputs(); bookSendBack(this); });
+  }
+
+  function readInputs() {
+    var p = document.getElementById('sb-product'), v = document.getElementById('sb-value');
+    if (p) sb.o._sku = p.value.trim() || sb.o._sku;
+    if (v && v.value) sb.o.total_amount = v.value;
+    sb.o.products_desc = sb.o.job_type + ' - ' + sb.o._sku;
+  }
+
+  async function bookSendBack(yesBtn) {
+    var c = sb.c, o = sb.o;
+    if (!o._sku) { alert('Enter the product being sent.'); return; }
     yesBtn.disabled = true; yesBtn.textContent = 'Booking…';
     try {
       var idRes = await api('delhiveryNextOrderId&prefix=' + o._prefix);
       if (!idRes || !idRes.ok || !idRes.orderId) throw new Error("Couldn't get the next Order ID — try again.");
       var order = Object.assign({}, o, { order: idRes.orderId });
-      delete order._prefix; delete order._sku; delete order._triedOther;
+      delete order._prefix; delete order._sku;
       var res, attempts = 0;
       while (true) {                 // same duplicate-ID retry as Create Parcel Pickup
         res = await post(order.courier === 'Ekart' ? 'ekartCreateOrder' : 'delhiveryCreateOrder', { order: order });
@@ -991,18 +1084,22 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
         var p = res.response && res.response.packages && res.response.packages[0];
         var msg = res.error || (p && [].concat(p.remarks || []).join(', ')) || 'booking failed';
         // Courier refused the PIN at booking time (its pincode check can't
-        // know e.g. same-area-as-warehouse) → offer the other courier.
-        if (/serviceable|not service|pincode/i.test(msg) && !o._triedOther) {
-          var refused = order.courier;
-          o._triedOther = true;
-          yesBtn.textContent = 'Trying ' + otherCourier(refused) + '…';
-          await showSendBackConfirm(c, o, sendBtn, refused, refused + ' refused PIN ' + o.pin + ' — switched to ' + otherCourier(refused) + '.');
+        // know e.g. same area as our warehouse) → mark it refused and move
+        // the selection to the other courier for a fresh confirm.
+        if (/serviceable|not service|pincode/i.test(msg)) {
+          sb.refused[order.courier] = true;
+          sb.sv[order.courier] = { ok: false, text: 'Refused this PIN' };
+          var alt = COURIERS.filter(function (x) { return sb.sv[x] && sb.sv[x].ok; })[0];
+          sb.note = order.courier + ' refused PIN ' + o.pin + (alt ? ' — switched to ' + alt + '.' : '.');
+          if (alt) o.courier = alt;
+          renderSendBack();
           return;
         }
         throw new Error(msg);
       }
       // Reload and reopen this case — it now shows the green Booked badge
       // and the Download label button.
+      sb = null;
       await load(false);
       var fresh = cases.filter(function (x) { return x.id === c.id; })[0];
       if (fresh) openCase(fresh); else closeCase();
