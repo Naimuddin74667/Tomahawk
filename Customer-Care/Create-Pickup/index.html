@@ -1080,16 +1080,13 @@ function initDelhiveryApp() {
   // <prefix>CheckPincode / EstimateCharge / CreateOrder.
   var LIVE_COURIERS = { Delhivery: 'delhivery', Ekart: 'ekart' };
   function courierPrefix() {
-    // Reverse pickup: Delhivery only for now (Ekart reverse comes next).
-    if (pickupMode === 'reverse' && courierField.value !== 'Delhivery') return '';
+    // Delhivery and Ekart both book forward orders AND reverse pickups.
     return LIVE_COURIERS[courierField.value] || '';
   }
   function updateCourierMode() {
     var live = !!courierPrefix();
     courierHint.style.display = live ? 'none' : '';
-    courierHint.textContent = pickupMode === 'reverse'
-      ? 'Reverse pickup is Delhivery-only for now — Ekart is coming next.'
-      : "Booking via this courier isn't live yet — use Delhivery or Ekart.";
+    courierHint.textContent = "Booking via this courier isn't live yet — use Delhivery or Ekart.";
     submitBtn.disabled = !live;
     submitBtn.textContent = live ? 'Create Order' : 'Create Order (' + courierField.value + ' coming soon)';
     confirmBox.className = 'confirm-box'; // an open estimate was for the other courier
@@ -1101,7 +1098,7 @@ function initDelhiveryApp() {
       addPh: 'Full address, house/flat no., street, area', log: 'Recent orders',
       options: [['', '— Select type —'], ['Repaired', 'Repaired'], ['Replacement', 'Replacement'], ['FOC', 'FOC']] },
     reverse: { title: 'New reverse pickup', name: 'Customer Name', add: 'Pickup Address (customer)', type: 'Return Reason',
-      addPh: 'Where Delhivery collects the parcel from — house/flat no., street, area', log: 'Recent reverse pickups',
+      addPh: 'Where the courier collects the parcel from — house/flat no., street, area', log: 'Recent reverse pickups',
       options: [['', '— Select reason —'], ['Repair', 'Repair'], ['Replacement', 'Replacement'], ['Refund', 'Refund']] }
   };
   window.setPickupMode = function (m) {
@@ -1372,7 +1369,7 @@ function initDelhiveryApp() {
       }
       if (pickupMode === 'reverse' && res.pickupAvailable === false) {
         pinStatus.className = 'field-hint bad';
-        pinStatus.textContent = "✗ Delhivery doesn't do reverse pickup from this pincode.";
+        pinStatus.textContent = '✗ ' + courier + " doesn't do reverse pickup from this pincode.";
         cityField.value = res.city || ''; stateField.value = res.state || '';
         return;
       }
@@ -1581,7 +1578,7 @@ function initDelhiveryApp() {
       var canDownload = !!(o.delhivery_ok && o.waybill) && !isReverse;
       tr.innerHTML =
         '<td class="dl-cell"><button type="button" class="label-dl-btn"' + (canDownload ? '' : ' disabled') +
-          ' title="' + (canDownload ? 'Download shipping label (PDF)' : isReverse ? 'No label needed — Delhivery collects from the customer' : 'No label — order was not created') + '">' +
+          ' title="' + (canDownload ? 'Download shipping label (PDF)' : isReverse ? 'No label needed — the courier collects from the customer' : 'No label — order was not created') + '">' +
           '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>' +
         '</button></td>' +
         '<td class="mono oid-cell">' + escapeHtml(o.order_id) +

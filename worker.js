@@ -1828,7 +1828,10 @@ export default {
           }
           if (!eJson || eJson.status !== true) return json({ ok: true, serviceable: false, remark: eJson && eJson.remark });
           const d = eJson.details || {};
-          return json({ ok: true, serviceable: true, cod: !!d.cod, prepaid: true, reversePickup: !!d.reverse_pickup, city: d.city || '', state: d.state || '' });
+          // pickupAvailable = reverse pickup from the customer at this PIN
+          // (same field name Delhivery's check returns; Create-Pickup reads it).
+          return json({ ok: true, serviceable: true, cod: !!d.cod, prepaid: d.forward_drop !== false,
+            reversePickup: !!d.reverse_pickup, pickupAvailable: !!d.reverse_pickup, city: d.city || '', state: d.state || '' });
         }
 
         // Charge estimate before booking (Ekart /data/pricing/estimate,
@@ -1846,7 +1849,7 @@ export default {
               headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 billingClientType: 'EXISTING_CLIENT',   // ITH is an onboarded account
-                shippingDirection: 'FORWARD',
+                shippingDirection: url.searchParams.get('direction') === 'reverse' ? 'REVERSE' : 'FORWARD',
                 serviceType: 'SURFACE',
                 pickupPincode: Number(env.EKART_PICKUP_PIN || 421302),
                 dropPincode: Number(pin),
@@ -1912,8 +1915,9 @@ export default {
           }
           const tr = tJson && tJson.track;
           if (!tr) return json({ ok: false, error: 'No tracking data found for this shipment yet', response: tJson }, 502);
-          const d = deriveEkartStage(tr);
           await ensureDelhiveryTable(env.DB);
+          const dirRow = await env.DB.prepare('SELECT direction FROM delhivery_orders WHERE waybill = ? LIMIT 1').bind(tid).first();
+          const d = deriveEkartStage(tr, dirRow && dirRow.direction);
           await env.DB.prepare(
             "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now') WHERE waybill = ?"
           ).bind(d.stage, d.rawStatus, d.reattempts, tid).run();
@@ -3226,6 +3230,8 @@ export default {
         if (act === 'ekartCreateOrder') {
           await ensureDelhiveryTable(env.DB);
           const o = body.order || {};
+          const isReverse = o.direction === 'reverse';
+          if (isReverse) o.payment_mode = 'Pickup';
           const required = ['name', 'add', 'pin', 'city', 'state', 'phone', 'order', 'payment_mode', 'products_desc', 'quantity', 'total_amount'];
           const missing = required.filter(f => o[f] === undefined || o[f] === null || o[f] === '');
           if (missing.length) return json({ ok: false, error: 'Missing required field(s): ' + missing.join(', ') }, 400);
@@ -3239,15 +3245,15 @@ export default {
           }
           const sessionUser = await resolveSession(request, env.DB);
           await env.DB.prepare(`
-            INSERT INTO delhivery_orders (order_id, waybill, status, delhivery_ok, payload_json, response_json, created_by, job_type, remark, courier, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Ekart', datetime('now'))
+            INSERT INTO delhivery_orders (order_id, waybill, status, delhivery_ok, payload_json, response_json, created_by, job_type, remark, courier, direction, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Ekart', ?, datetime('now'))
           `).bind(
             o.order, result.trackingId, result.success ? 'created' : 'failed',
             result.success ? 1 : 0, JSON.stringify(result.logPayload), JSON.stringify(result.response),
             (sessionUser && sessionUser.username) || 'unauthenticated', o.job_type || '',
-            String(o.remark || '').trim()
+            String(o.remark || '').trim(), isReverse ? 'reverse' : 'forward'
           ).run();
-          if (result.success && o.linked_order_id) await linkSendBack(env.DB, o.order, o.linked_order_id);
+          if (result.success && !isReverse && o.linked_order_id) await linkSendBack(env.DB, o.order, o.linked_order_id);
           return json({ ok: result.success, waybill: result.trackingId, response: result.response, error: result.success ? undefined : result.error }, result.success ? 200 : 502);
         }
 
@@ -4222,9 +4228,16 @@ async function getEkartToken(env) {
 //   none is given we send our support number instead.
 const EKART_SUPPORT_PHONE = '8928949415';
 
+// Creates an Ekart shipment — forward (warehouse → customer) or REVERSE
+// pickup (customer → warehouse). Per Ekart's API spec, reverse uses the
+// same endpoint with payment_mode "Pickup" and a return_reason; the
+// customer still goes in drop_location and our warehouse in
+// pickup_location (Ekart: "semantically opposite to what happens on the
+// ground"). Name kept for existing callers.
 async function createEkartForwardOrder(env, o) {
+  const reverse = o.direction === 'reverse';
   const total = Number(o.total_amount) || 0;
-  const cod = String(o.payment_mode).toUpperCase() === 'COD';
+  const cod = !reverse && String(o.payment_mode).toUpperCase() === 'COD';
   const phone = String(o.phone).replace(/\D/g, '').slice(-10);
   let alt = String(o.alt_phone || '').replace(/\D/g, '').slice(-10);
   if (!alt || alt === phone) alt = EKART_SUPPORT_PHONE;
@@ -4240,7 +4253,9 @@ async function createEkartForwardOrder(env, o) {
     invoice_date: todayIst,
     consignee_name: o.name,
     consignee_alternate_phone: alt,
-    payment_mode: cod ? 'COD' : 'Prepaid',
+    payment_mode: reverse ? 'Pickup' : (cod ? 'COD' : 'Prepaid'),
+    // Reverse only: why we're collecting it (Repair / Replacement / Refund + remark)
+    return_reason: reverse ? ([o.job_type || 'Return', String(o.remark || '').trim()].filter(Boolean).join(' - ').slice(0, 200)) : undefined,
     category_of_goods: o.category_of_goods || 'Tools & Hardware',
     hsn_code: o.hsn_code || undefined,
     products_desc: o.products_desc,
@@ -4289,11 +4304,27 @@ async function createEkartForwardOrder(env, o) {
 }
 
 // Maps Ekart's track object to our stage names (same set as Delhivery).
-function deriveEkartStage(tr) {
+// direction 'reverse' (pickup from customer) uses the same stage names as
+// Delhivery reverse: Out For Pickup → Picked → In Transit → Out For
+// Delivery (to us) → Delivered; a cancelled/failed pickup → Cancelled.
+function deriveEkartStage(tr, direction) {
   const raw = String((tr && tr.status) || '');
   const s = raw.toLowerCase();
   const reattempts = Math.max(0, (Number(tr && tr.attempts) || 0) - 1);
   let stage;
+  if (direction === 'reverse') {
+    if (/^rto|rto /.test(s)) stage = 'RTO';
+    else if (/cancel/.test(s)) stage = 'Cancelled';
+    else if (/lost|damaged/.test(s)) stage = 'Lost';
+    else if (s === 'delivered') stage = 'Delivered';
+    else if (/out for delivery/.test(s)) stage = 'Out For Delivery';
+    else if (/undelivered/.test(s)) stage = 'At Last Mile';
+    else if (/out for pickup/.test(s)) stage = 'Out For Pickup';
+    else if (/picked up/.test(s)) stage = 'Picked';
+    else if (/in transit|shipment delayed/.test(s)) stage = 'In Transit';
+    else stage = 'Created'; // Order Placed / Pickup Pending / Scheduled / Not Picked
+    return { stage, rawStatus: raw, reattempts };
+  }
   if (/^rto|rto /.test(s)) stage = 'RTO';
   else if (/cancel/.test(s)) stage = 'Cancelled';
   else if (/lost|damaged/.test(s)) stage = 'Lost';
@@ -4309,7 +4340,7 @@ function deriveEkartStage(tr) {
 // max 30 per list load; skips ones tracked in the last 10 min unless forced).
 async function refreshEkartStages(env, force) {
   const rows = await env.DB.prepare(`
-    SELECT waybill FROM delhivery_orders
+    SELECT waybill, direction FROM delhivery_orders
     WHERE delhivery_ok = 1 AND waybill IS NOT NULL AND waybill != '' AND courier = 'Ekart'
       AND (track_stage IS NULL OR track_stage NOT IN ('Delivered','RTO','Cancelled','Lost'))
       ${force ? '' : "AND (tracked_at IS NULL OR tracked_at < datetime('now', '-10 minutes'))"}
@@ -4321,7 +4352,7 @@ async function refreshEkartStages(env, force) {
       const resp = await fetch(ekartBase(env) + '/api/v1/track/' + encodeURIComponent(r.waybill));
       const j = await resp.json();
       if (!j || !j.track) return;
-      const d = deriveEkartStage(j.track);
+      const d = deriveEkartStage(j.track, r.direction);
       stmts.push(env.DB.prepare(
         "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now') WHERE waybill = ?"
       ).bind(d.stage, d.rawStatus, d.reattempts, String(r.waybill)));
