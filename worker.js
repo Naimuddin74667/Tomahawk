@@ -300,7 +300,8 @@ const ACTION_TIERS = {
   ekartCreateOrder: 'manager_up', ekartCheckPincode: 'viewer_read', ekartEstimateCharge: 'viewer_read',
   ekartGetLabel: 'viewer_read', ekartTrack: 'viewer_read',
   // — Reverse pickup: mark a parcel as received at the warehouse. —
-  delhiveryMarkReceived: 'manager_up', delhiveryMarkRefunded: 'manager_up'
+  delhiveryMarkReceived: 'manager_up', delhiveryMarkRefunded: 'manager_up',
+  delhiveryMarkInProcess: 'manager_up'
 };
 
 function getAuthRequirement(act) {
@@ -3061,6 +3062,20 @@ export default {
           return json({ ok: true });
         }
 
+        // ── Reverse pickup → In Process (manual). Parcel checked in and now
+        //   being repaired / replaced / assessed for refund. Only after it
+        //   has been marked received.
+        if (act === 'delhiveryMarkInProcess') {
+          await ensureDelhiveryTable(env.DB);
+          const oid = String(body.order_id || '').trim();
+          if (!oid) return json({ ok: false, error: 'order_id required' }, 400);
+          const r = await env.DB.prepare(
+            "UPDATE delhivery_orders SET in_process_at = COALESCE(in_process_at, datetime('now')) WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1 AND received_at IS NOT NULL"
+          ).bind(oid).run();
+          if (!r.meta || !r.meta.changes) return json({ ok: false, error: 'Mark the parcel received first' }, 400);
+          return json({ ok: true });
+        }
+
         // ── Refund case (RFD): refund given → case closed. Only after the
         //   parcel has been marked received.
         if (act === 'delhiveryMarkRefunded') {
@@ -3854,7 +3869,9 @@ async function ensureDelhiveryTable(DB) {
                      // linked_order_id — reverse ↔ its send-back forward order
                      'received_at TEXT', 'linked_order_id TEXT',
                      // refunded_at — Refund case: refund given → case closed
-                     'refunded_at TEXT']) {
+                     'refunded_at TEXT',
+                     // in_process_at — reverse parcel checked in and being worked on (manual)
+                     'in_process_at TEXT']) {
     try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN ${col}`).run(); } catch (e) { /* column already exists */ }
   }
 }
@@ -3869,7 +3886,7 @@ const DELHIVERY_FINAL_STAGES = ['Delivered', 'RTO', 'Cancelled', 'Lost'];
 async function refreshDelhiveryStages(env, force) {
   if (!env.DELHIVERY_API_TOKEN) return;
   const rows = await env.DB.prepare(`
-    SELECT waybill FROM delhivery_orders
+    SELECT waybill, direction FROM delhivery_orders
     WHERE delhivery_ok = 1 AND waybill IS NOT NULL AND waybill != ''
       AND COALESCE(courier, 'Delhivery') = 'Delhivery'
       AND (track_stage IS NULL OR track_stage NOT IN ('Delivered','RTO','Cancelled','Lost'))
@@ -3877,6 +3894,9 @@ async function refreshDelhiveryStages(env, force) {
     ORDER BY created_at DESC LIMIT 100
   `).all();
   const wbs = [...new Set((rows.results || []).map(r => String(r.waybill)))];
+  // waybill → 'reverse' | 'forward' (reverse pickups read their stages differently)
+  const dirOf = {};
+  (rows.results || []).forEach(r => { dirOf[String(r.waybill)] = r.direction || 'forward'; });
   const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
   for (let i = 0; i < wbs.length; i += 50) {
     const batch = wbs.slice(i, i + 50);
@@ -3889,7 +3909,7 @@ async function refreshDelhiveryStages(env, force) {
     ((data && data.ShipmentData) || []).forEach(sd => {
       const s = sd && sd.Shipment;
       if (!s || !s.AWB) return;
-      const d = deriveDelhiveryStage(s);
+      const d = deriveDelhiveryStage(s, dirOf[String(s.AWB)]);
       stmts.push(env.DB.prepare(
         "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now') WHERE waybill = ?"
       ).bind(d.stage, d.rawStatus, d.reattempts, String(s.AWB)));
@@ -3906,7 +3926,13 @@ async function refreshDelhiveryStages(env, force) {
 //   RT (return), CN (cancelled).
 // Reattempts = "Dispatched" (out for delivery) scans beyond the first,
 // or at least 1 if Delhivery's note mentions a reattempt.
-function deriveDelhiveryStage(s) {
+// Reverse pickups (direction = 'reverse') add two stages before In Transit:
+//   Out For Pickup — Delhivery's "Dispatched" scan BEFORE the parcel is
+//                    picked (the rider is on the way to the customer)
+//   Picked         — picked up from the customer, not yet moving
+// and after pickup, "Dispatched" means out for delivery to OUR warehouse.
+// Picked-up is detected from StatusType PU or a "picked up" scan.
+function deriveDelhiveryStage(s, direction) {
   const st = s.Status || {};
   const raw = String(st.Status || '');
   const status = raw.toLowerCase();
@@ -3916,6 +3942,8 @@ function deriveDelhiveryStage(s) {
   const ofdScans = scans.filter(d => /dispatched|out for delivery/i.test(String(d.Scan || '') + ' ' + String(d.Instructions || ''))).length;
   let reattempts = Math.max(0, ofdScans - 1);
   if (reattempts === 0 && scans.some(d => /re-?attempt/i.test(String(d.Instructions || '')))) reattempts = 1;
+
+  if (direction === 'reverse') return { stage: deriveReverseStage(status, type, instr, scans), rawStatus: raw, reattempts };
 
   let stage;
   if (type === 'DL' && !/rto|return/.test(status)) stage = 'Delivered';
@@ -3930,6 +3958,26 @@ function deriveDelhiveryStage(s) {
   return { stage, rawStatus: raw, reattempts };
 }
 
+
+// Reverse-pickup stage from the same Delhivery fields (see note above
+// deriveDelhiveryStage). Order matters: finished states first.
+function deriveReverseStage(status, type, instr, scans) {
+  const scanText = d => (String(d.Scan || '') + ' ' + String(d.Instructions || '')).toLowerCase();
+  const pickedUp = type === 'PU' || type === 'DL' ||
+    /picked/.test(status) || scans.some(d => /picked up|pickup completed|shipment picked/.test(scanText(d)));
+  if (type === 'DL' || status === 'delivered' || status === 'dto') return 'Delivered';
+  if (type === 'RT' || /rto|returned/.test(status)) return 'RTO';
+  if (type === 'CN' || /cancel/.test(status)) return 'Cancelled';
+  if (/lost/.test(status)) return 'Lost';
+  if (!pickedUp) {
+    if (status === 'dispatched' || /out for pickup/.test(instr)) return 'Out For Pickup';
+    return 'Created'; // Open / Scheduled / Not Picked
+  }
+  if (status === 'dispatched' || /out for delivery/.test(instr)) return 'Out For Delivery';
+  if (status === 'pending' || /destination|delivery centre|delivery center|last mile/.test(instr)) return 'At Last Mile';
+  if (status === 'in transit' && !/picked up|pickup completed/.test(instr)) return 'In Transit';
+  return 'Picked';
+}
 
 // ══ EKART — forward-order helpers ═════════════════════════════════════
 // Ekart Elite API (https://app.elite.ekartlogistics.in). Auth: POST

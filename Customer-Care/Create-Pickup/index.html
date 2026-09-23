@@ -1423,12 +1423,14 @@ function initDelhiveryApp() {
   var STAGE_CLASS = {
     'Failed': 'failed', 'Created': 'st-created', 'RTD': 'st-rtd', 'In Transit': 'st-transit',
     'At Last Mile': 'st-lastmile', 'Out For Delivery': 'st-ofd', 'Delivered': 'created', 'Received': 'created', 'Closed': 'created',
+    'Out For Pickup': 'st-ofd', 'Picked': 'st-transit', 'In Process': 'st-rtd',
     'RTO': 'failed', 'Cancelled': 'failed', 'Lost': 'failed'
   };
   function orderStage(o) {
     if (!o.delhivery_ok) return 'Failed';
     var st = o.track_stage || 'Created';
     if (o.direction === 'reverse' && o.refunded_at) return 'Closed';   // Refund case: refund given
+    if (o.direction === 'reverse' && o.in_process_at) return 'In Process'; // being repaired / replaced / refund check
     if (o.direction === 'reverse' && o.received_at) return 'Received'; // marked received by us — wins over tracking
     if (st === 'Created' && o.rtd_at) return 'RTD';
     return st;
@@ -1437,7 +1439,7 @@ function initDelhiveryApp() {
     var st = orderStage(o);
     var n = parseInt(o.reattempts, 10) || 0;
     var STAGE_LABEL = o.direction === 'reverse'
-      ? { 'Created': 'Pickup Scheduled', 'In Transit': 'Picked Up', 'Delivered': 'Delivered' }
+      ? { 'Created': 'Pickup Scheduled', 'Picked': 'Picked Up', 'At Last Mile': 'At Bhiwandi Hub', 'Delivered': 'Delivered' }
       : { 'RTD': 'Ready To Dispatch' };
     return '<span class="badge ' + (STAGE_CLASS[st] || 'st-created') + '">' + escapeHtml(STAGE_LABEL[st] || st) + '</span>' +
       (n > 0 ? '<span class="reattempt-ico" title="Reattempt ×' + n + '">&#8635;' + (n > 1 ? n : '') + '</span>' : '');
@@ -1445,7 +1447,9 @@ function initDelhiveryApp() {
 
   // ── Reverse pickup row actions ────────────────────────────────────
   //   booked, not received → [Mark received]
-  //   received, not sent   → [Send back]  (pre-fills the Forward form)
+  //   received             → [Start processing]  (→ In Process)
+  //   in process, not sent → [Send back]  (pre-fills the Forward form)
+  //                          or [Refund given] for Refund cases
   //   sent back            → "Sent back as FRPR-…"
   function reverseActionsHtml(o) {
     if (o.direction !== 'reverse' || !o.delhivery_ok) return '';
@@ -1457,6 +1461,7 @@ function initDelhiveryApp() {
         ? '<div><button type="button" class="row-act verify" data-act="recv">Verify received</button></div>'
         : '';
     }
+    if (!o.in_process_at) return '<div><button type="button" class="row-act" data-act="process">Start processing</button></div>';
     // Refund case: checked → refund given → Closed (no send-back).
     if (o.job_type === 'Refund') {
       return o.refunded_at
@@ -1481,6 +1486,19 @@ function initDelhiveryApp() {
       fetchLog(true);
     } catch (e) {
       alert("Couldn't mark it received: " + e.message);
+      btn.classList.remove('busy');
+    }
+  }
+
+  async function markInProcess(o, btn) {
+    if (!confirm('Start processing ' + o.order_id + ' (repair / replacement / refund check)?')) return;
+    btn.classList.add('busy');
+    try {
+      var res = await callWorker('delhiveryMarkInProcess', { order_id: o.order_id });
+      if (!res.ok) throw new Error(res.error || 'failed');
+      fetchLog(true);
+    } catch (e) {
+      alert("Couldn't update it: " + e.message);
       btn.classList.remove('busy');
     }
   }
@@ -1583,6 +1601,7 @@ function initDelhiveryApp() {
           if (b.dataset.act === 'recv') markReceived(o, b);
           if (b.dataset.act === 'sendback') startSendBack(o);
           if (b.dataset.act === 'refund') markRefunded(o, b);
+          if (b.dataset.act === 'process') markInProcess(o, b);
         });
       });
 
