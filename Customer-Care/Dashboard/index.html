@@ -987,6 +987,13 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     }));
   }
 
+  // City/State shown under the address — from the selected courier's PIN
+  // lookup when available (that's what gets booked), else the pickup's.
+  function cityState() {
+    var st = sb.sv[sb.o.courier] || {};
+    return [st.city || sb.o.city, st.state || sb.o.state].filter(Boolean).join(', ');
+  }
+
   function renderSendBack() {
     var o = sb.o, panel = document.getElementById('cm-confirm');
     var anyOk = COURIERS.some(function (x) { return sb.sv[x] && sb.sv[x].ok; });
@@ -1000,11 +1007,11 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
       '<div class="cm-summary">' +
         '<div><div class="cm-k">Deliver to</div><div>' + esc(o.name) + '</div></div>' +
         '<div><div class="cm-k">Contact Number</div><div>' + esc(o.phone) + '</div></div>' +
-        '<div><div class="cm-k">PIN</div><div>' + esc(o.pin) + '</div></div>' +
+        '<div><div class="cm-k">Payment</div><div>Prepaid</div></div>' +
         '<div class="span2"><div class="cm-k">Address (edit if the customer gave a corrected one)</div>' +
           '<input class="sb-input" id="sb-address" value="' + esc(o.add) + '" autocomplete="off">' +
-          '<div class="cm-muted">' + esc([o.city, o.state].filter(Boolean).join(', ')) + '</div></div>' +
-        '<div><div class="cm-k">Payment</div><div>Prepaid</div></div>' +
+          '<div class="cm-muted">' + esc(cityState()) + '</div></div>' +
+        '<div><div class="cm-k">PIN</div><input class="sb-input" id="sb-pin" inputmode="numeric" maxlength="6" value="' + esc(o.pin) + '"></div>' +
         '<div class="span2"><div class="cm-k">Product (change if sending a different item)</div>' +
           '<input class="sb-input" id="sb-product" list="sb-skus" value="' + esc(o._sku) + '" autocomplete="off">' +
           '<datalist id="sb-skus">' + (skuList || []).map(function (x) { return '<option value="' + esc(x) + '">'; }).join('') + '</datalist></div>' +
@@ -1050,6 +1057,13 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     }
     document.getElementById('sb-product').addEventListener('change', changed);
     document.getElementById('sb-value').addEventListener('change', changed);
+    document.getElementById('sb-pin').addEventListener('change', function (e) {
+      var v = e.target.value.replace(/\D/g, '');
+      if (!/^\d{6}$/.test(v)) { alert('Enter a valid 6-digit PIN.'); e.target.value = o.pin; return; }
+      if (v === o.pin) return;
+      o.pin = v; sb.refused = {}; sb.note = '';   // new PIN → both couriers get a fresh chance
+      changed(e);
+    });
     document.getElementById('sb-no').addEventListener('click', function () {
       panel.hidden = true; panel.innerHTML = '';
       sb.btn.style.display = ''; sb.btn.disabled = false; sb.btn.innerHTML = 'Send back &#8594;';
