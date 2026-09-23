@@ -3056,7 +3056,8 @@ export default {
           const oid = String(body.order_id || '').trim();
           if (!oid) return json({ ok: false, error: 'order_id required' }, 400);
           const r = await env.DB.prepare(
-            "UPDATE delhivery_orders SET received_at = COALESCE(received_at, datetime('now')) WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1"
+            // Received = straight into In Process (no separate "Received" stage)
+            "UPDATE delhivery_orders SET received_at = COALESCE(received_at, datetime('now')), in_process_at = COALESCE(in_process_at, datetime('now')) WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1"
           ).bind(oid).run();
           if (!r.meta || !r.meta.changes) return json({ ok: false, error: 'No booked reverse pickup with that Order ID' }, 404);
           return json({ ok: true });

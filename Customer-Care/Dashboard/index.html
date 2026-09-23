@@ -660,8 +660,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     if (rs === 'Cancelled' && !r.received_at) return null;
     if (r.refunded_at) return { label: 'Refunded', tone: 'closed' };
     if (fwdLive) return dispatchStatus(fs);
-    if (r.in_process_at) return { label: 'In Process', tone: 'house' };
-    if (r.received_at) return { label: 'Received', tone: 'house' };
+    if (r.in_process_at || r.received_at) return { label: 'In Process', tone: 'house' }; // Received = In Process
     if (rs === 'RTO' || rs === 'Lost') return { label: 'Pickup ' + rs, tone: 'bad-in' };
     if (rs === 'Delivered') return { label: PICKUP_LABEL.Delivered, tone: 'in', attn: true }; // needs Verify received
     return { label: PICKUP_LABEL[rs] || rs, tone: 'in' };
@@ -869,8 +868,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     if (fs === 'Created' && f.waybill && !f.rtd_at) return btn('label', '&#11015; Download label');
     if (!r || !r.delhivery_ok || r.refunded_at) return '';
     if (fs && fs !== 'Cancelled') return '';
-    if (!r.received_at) return legStage(r) === 'Delivered' ? btn('recv', 'Verify received') : '';
-    if (!r.in_process_at) return btn('process', 'Start processing');
+    if (!r.received_at) return legStage(r) === 'Delivered' ? btn('recv', 'Received') : '';
     if (r.job_type === 'Refund') return btn('refund', 'Refund given');
     return btn('sendback', 'Send back &#8594;');
   }
@@ -901,6 +899,21 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     };
   }
   function courierKey(o) { return o.courier === 'Ekart' ? 'ekart' : 'delhivery'; }
+  function otherCourier(name) { return name === 'Ekart' ? 'Delhivery' : 'Ekart'; }
+
+  // Courier choice: the pickup's courier first; if its pincode check says
+  // it can't deliver (prepaid) there, the other one (Delhivery ⇄ Ekart).
+  // skip = a courier that already refused this PIN at booking time.
+  async function pickCourier(o, skip) {
+    var order = [o.courier, otherCourier(o.courier)].filter(function (x) { return x !== skip; });
+    for (var i = 0; i < order.length; i++) {
+      try {
+        var res = await api((order[i] === 'Ekart' ? 'ekart' : 'delhivery') + 'CheckPincode&pin=' + o.pin);
+        if (res && res.ok && res.serviceable && res.prepaid !== false) return order[i];
+      } catch (e) { /* treat as not serviceable, try the next one */ }
+    }
+    return null;
+  }
 
   async function startSendBack(c, btn) {
     var o = sendBackOrder(c.reverse);
@@ -908,9 +921,23 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     btn.disabled = true; btn.textContent = 'Checking…';
     try {
       if (!o.name || !o.phone || !o.add || !/^\d{6}$/.test(o.pin)) throw new Error('The pickup is missing the name, number, address or PIN — use Create Parcel Pickup to send it back.');
-      var pinRes = await api(courierKey(o) + 'CheckPincode&pin=' + o.pin);
-      if (pinRes && pinRes.ok && (!pinRes.serviceable || pinRes.prepaid === false))
-        throw new Error(o.courier + ' does not deliver (prepaid) to PIN ' + o.pin + '. Send it back from Create Parcel Pickup with another courier.');
+      await showSendBackConfirm(c, o, btn, null, '');
+    } catch (e) {
+      alert(e.message);
+      btn.disabled = false; btn.innerHTML = 'Send back &#8594;';
+    }
+  }
+
+  // Picks the courier (with fallback), gets its estimate and shows the
+  // confirm panel. note = why the courier changed (shown in the panel).
+  async function showSendBackConfirm(c, o, btn, skip, note) {
+    var panel = document.getElementById('cm-confirm');
+    var want = o.courier;
+    var chosen = await pickCourier(o, skip);
+    if (!chosen) throw new Error('Neither Delhivery nor Ekart delivers (prepaid) to PIN ' + o.pin + '. Send it back another way.');
+    o.courier = chosen;
+    if (chosen !== want && !note) note = want + " doesn't deliver to " + o.pin + ' — switched to ' + chosen + '.';
+    {
       var qs = new URLSearchParams({ pin: o.pin, weight: o.weight || '500', payment_mode: 'Prepaid',
         length: o.length || '5', width: o.width || '5', height: o.height || '5',
         invoice_amount: o.total_amount || '0', direction: 'forward' });
@@ -931,27 +958,24 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
         '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
           '<button class="case-act primary" id="sb-yes">Book send back</button>' +
           '<button class="case-act" id="sb-no">Cancel</button>' +
-          '<span class="cm-muted" style="margin-left:auto">Estimate from ' + esc(o.courier) + ' — nothing is booked until you confirm.</span>' +
+          '<span class="cm-muted" style="margin-left:auto">' + (note ? '<b style="color:var(--accent)">' + esc(note) + '</b> ' : '') + 'Estimate from ' + esc(o.courier) + ' — nothing is booked until you confirm.</span>' +
         '</div>';
       panel.hidden = false;
       btn.style.display = 'none';
       document.getElementById('sb-no').addEventListener('click', function () {
         panel.hidden = true; panel.innerHTML = ''; btn.style.display = ''; btn.disabled = false; btn.innerHTML = 'Send back &#8594;';
       });
-      document.getElementById('sb-yes').addEventListener('click', function () { bookSendBack(c, o, this); });
-    } catch (e) {
-      alert(e.message);
-      btn.disabled = false; btn.innerHTML = 'Send back &#8594;';
+      document.getElementById('sb-yes').addEventListener('click', function () { bookSendBack(c, o, this, btn); });
     }
   }
 
-  async function bookSendBack(c, o, yesBtn) {
+  async function bookSendBack(c, o, yesBtn, sendBtn) {
     yesBtn.disabled = true; yesBtn.textContent = 'Booking…';
     try {
       var idRes = await api('delhiveryNextOrderId&prefix=' + o._prefix);
       if (!idRes || !idRes.ok || !idRes.orderId) throw new Error("Couldn't get the next Order ID — try again.");
       var order = Object.assign({}, o, { order: idRes.orderId });
-      delete order._prefix; delete order._sku;
+      delete order._prefix; delete order._sku; delete order._triedOther;
       var res, attempts = 0;
       while (true) {                 // same duplicate-ID retry as Create Parcel Pickup
         res = await post(order.courier === 'Ekart' ? 'ekartCreateOrder' : 'delhiveryCreateOrder', { order: order });
@@ -965,7 +989,17 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
       }
       if (!res.ok) {
         var p = res.response && res.response.packages && res.response.packages[0];
-        throw new Error(res.error || (p && [].concat(p.remarks || []).join(', ')) || 'booking failed');
+        var msg = res.error || (p && [].concat(p.remarks || []).join(', ')) || 'booking failed';
+        // Courier refused the PIN at booking time (its pincode check can't
+        // know e.g. same-area-as-warehouse) → offer the other courier.
+        if (/serviceable|not service|pincode/i.test(msg) && !o._triedOther) {
+          var refused = order.courier;
+          o._triedOther = true;
+          yesBtn.textContent = 'Trying ' + otherCourier(refused) + '…';
+          await showSendBackConfirm(c, o, sendBtn, refused, refused + ' refused PIN ' + o.pin + ' — switched to ' + otherCourier(refused) + '.');
+          return;
+        }
+        throw new Error(msg);
       }
       // Reload and reopen this case — it now shows the green Booked badge
       // and the Download label button.
@@ -1014,7 +1048,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
   }
 
   var ACTS = {
-    recv:    { worker: 'delhiveryMarkReceived',  ask: 'Confirm the parcel has physically arrived at the warehouse?' },
+    recv:    { worker: 'delhiveryMarkReceived',  ask: 'Confirm the parcel has physically arrived at the warehouse? It moves to In Process.' },
     process: { worker: 'delhiveryMarkInProcess', ask: 'Start processing this case (repair / replacement / refund check)?' },
     refund:  { worker: 'delhiveryMarkRefunded',  ask: 'Refund given? This closes the case.' }
   };
