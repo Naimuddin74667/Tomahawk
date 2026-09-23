@@ -1138,10 +1138,7 @@ async function to4x6Pdf(bytes) {
     var raw = String(o.track_status || '');
     var showRaw = raw && raw.toLowerCase().replace(/l+/g, 'l') !== String(stLabel).toLowerCase().replace(/l+/g, 'l');
     var f = function (k, v, sub) { return '<div><div class="cm-k">' + k + '</div><div>' + (v || '&#8212;') + '</div>' + (sub ? '<div class="cm-muted">' + sub + '</div>' : '') + '</div>'; };
-    var canLabel = o.direction !== 'reverse' && o.delhivery_ok && o.waybill;
     return '<div class="cm-sec"><div class="cm-sec-title">' + esc(title) + ' &mdash; <span class="mono">' + esc(o.order_id) + '</span></div>' +
-        (canLabel ? '<button type="button" class="label-dl-btn" data-leg="' + idx + '" title="Download shipping label (PDF)">' +
-          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg></button>' : '') +
         '</div>' +
       '<div class="cm-grid">' +
         f('Courier', esc(o.courier || 'Delhivery')) +
@@ -1165,9 +1162,6 @@ async function to4x6Pdf(bytes) {
     var r = c.reverse, f = c.forward;
     var btn = function (act, label) { return '<button class="case-act primary" data-act="' + act + '">' + label + '</button>'; };
     var fs = f && f.delhivery_ok ? legStage(f) : '';
-    // Forward shipment booked but label not printed yet → Download label
-    // (printing it is what moves the case to Ready To Dispatch).
-    if (fs === 'Created' && f.waybill && !f.rtd_at) return btn('label', '&#11015; Download label');
     if (!r || !r.delhivery_ok || r.refunded_at) return '';
     if (fs && fs !== 'Cancelled') return '';
     if (!r.received_at) return legStage(r) === 'Delivered' ? btn('recv', 'Received') : '';
@@ -1569,7 +1563,12 @@ async function to4x6Pdf(bytes) {
       var lbl = legs.length > 1 ? (o.direction === 'reverse' ? 'Track pickup' : 'Track send-back') : 'Track now';
       return '<button class="track-btn" data-leg="' + i + '">' + lbl + '</button>';
     }).join('');
-    var acts = actionsHtml(c) + (trackBtns ? '<span style="margin-left:auto;display:flex;gap:8px">' + trackBtns + '</span>' : '');
+    // Download Label — bottom-left, whenever the forward/send-back shipment
+    // has an AWB (first download → Ready To Dispatch; later ones = reprint).
+    var fl = c.forward;
+    var labelBtn = fl && fl.delhivery_ok && fl.waybill && legStage(fl) !== 'Cancelled'
+      ? '<button class="case-act primary" data-act="label">&#11015; Download Label</button>' : '';
+    var acts = labelBtn + actionsHtml(c) + (trackBtns ? '<span style="margin-left:auto;display:flex;gap:8px">' + trackBtns + '</span>' : '');
     var box = document.getElementById('case-body-modal');
     box.innerHTML = summary +
       legs.map(function (l, i) { return legHtml(l[0], l[1], i); }).join('') +
@@ -1586,9 +1585,6 @@ async function to4x6Pdf(bytes) {
         var done = function () { var h = b.innerHTML; b.classList.add('copied'); b.innerHTML = '&#10003;'; setTimeout(function () { b.innerHTML = h; b.classList.remove('copied'); }, 1200); };
         if (navigator.clipboard) navigator.clipboard.writeText(b.dataset.copy).then(done, function () {});
       });
-    });
-    box.querySelectorAll('.label-dl-btn').forEach(function (b) {
-      b.addEventListener('click', function () { downloadLabel(legs[+b.dataset.leg][0], b); });
     });
     box.querySelectorAll('.track-btn').forEach(function (b) {
       b.addEventListener('click', function () { track(legs[+b.dataset.leg][0], b); });
