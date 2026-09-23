@@ -3860,6 +3860,20 @@ async function linkSendBack(DB, forwardId, reverseId) {
   ]);
 }
 
+// One-time cleanup (23-Sep-2026, requested by admin): permanently delete
+// three unwanted test/duplicate orders. Idempotent — once the rows are gone
+// this DELETE matches nothing. Safe to remove this block later.
+const DELHIVERY_PURGE_IDS = ['9984069707', 'TH-TEST-20260825-1447', 'TEST-ORDER-003'];
+let delhiveryPurgeDone = false;
+async function purgeUnwantedOrders(DB) {
+  if (delhiveryPurgeDone) return;
+  delhiveryPurgeDone = true;
+  try {
+    await DB.prepare('DELETE FROM delhivery_orders WHERE order_id IN (' + DELHIVERY_PURGE_IDS.map(() => '?').join(',') + ')')
+      .bind(...DELHIVERY_PURGE_IDS).run();
+  } catch (e) { delhiveryPurgeDone = false; }
+}
+
 async function ensureDelhiveryTable(DB) {
   await DB.prepare(`CREATE TABLE IF NOT EXISTS delhivery_orders (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3898,6 +3912,7 @@ async function ensureDelhiveryTable(DB) {
                      'cancelled_at TEXT']) {
     try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN ${col}`).run(); } catch (e) { /* column already exists */ }
   }
+  await purgeUnwantedOrders(DB);
 }
 
 // ── DELHIVERY — live stage for the Recent orders Status badge ──────────
