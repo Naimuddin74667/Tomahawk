@@ -335,6 +335,12 @@ body.view-only .needs-edit{display:none!important}
 .detail-table td{padding:6px 8px;border-bottom:1px solid var(--border)}
 .detail-table .tr{text-align:right}.detail-table .tc{text-align:center}
 .inv-item{background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:.6rem .75rem;display:grid;grid-template-columns:1fr 84px;gap:.2rem .6rem;align-items:center}
+.inv-item.with-rm{grid-template-columns:1fr 84px 30px}
+.inv-item.removed{opacity:.45}
+.inv-item.removed .t{text-decoration:line-through}
+.rm-btn{width:30px;height:30px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--muted);cursor:pointer;font-size:13px;line-height:1}
+.rm-btn:hover{border-color:#e05555;color:#e05555}
+.inv-item.removed .rm-btn:hover{border-color:var(--accent);color:var(--accent)}
 .inv-item .t{font-size:12px;font-weight:600}
 .inv-item .s{font-size:10.5px;color:var(--muted);font-family:'DM Mono',monospace}
 .inv-item input{padding:5px 8px;text-align:center;font-size:12px}
@@ -1535,15 +1541,31 @@ function invTotals() {
   Object.keys(t).forEach(function (k) { t[k] = r2(t[k]); });
   return t;
 }
+// Instamart POs are often shipped partially (by stock availability), so each
+// line can be removed from this invoice (✕) and brought back (↺). A removed
+// line is simply invoiced at qty 0 and left off the invoice.
 function invRenderItems() {
   document.getElementById('invItems').innerHTML = _inv.items.map(function (it, i) {
     var lib = S.lib[it.item_code];
-    return '<div class="inv-item"><div><div class="t">' + esc(it.description) + '</div>' +
+    return '<div class="inv-item with-rm' + (it.removed ? ' removed' : '') + '"><div><div class="t">' + esc(it.description) + '</div>' +
       '<div class="s">' + esc(it.item_code) + ' \u00b7 HSN ' + esc(it.hsn) + ' \u00b7 \u20b9' + fmt(it.taxable / it.po_qty) + '/pc + ' + it.gst_rate + '% \u00b7 PO qty ' + it.po_qty +
-      (lib ? ' \u00b7 ' + esc(lib.model) : '') + '</div></div>' +
-      '<input type="number" min="0" max="' + it.po_qty + '" value="' + it.qty + '" oninput="invSetQty(' + i + ',this)"></div>';
+      (lib ? ' \u00b7 ' + esc(lib.model) : '') + (it.removed ? ' \u00b7 <span style="color:#e05555">not shipping</span>' : '') + '</div></div>' +
+      '<input type="number" min="0" max="' + it.po_qty + '" value="' + it.qty + '" oninput="invSetQty(' + i + ',this)"' + (it.removed ? ' disabled' : '') + '>' +
+      '<button class="rm-btn" onclick="invToggleRemove(' + i + ')" title="' + (it.removed ? 'Add back to this invoice' : 'Remove from this invoice') + '">' + (it.removed ? '\u21ba' : '\u2715') + '</button></div>';
   }).join('');
   invRenderTotals();
+}
+function invToggleRemove(i) {
+  var it = _inv.items[i];
+  if (!it.removed) {
+    var left = _inv.items.filter(function (x, j) { return j !== i && !x.removed && x.qty > 0; }).length;
+    if (!left) { toast('At least one line must stay on the invoice', 'err'); return; }
+    it.keepQty = it.qty || it.po_qty; it.qty = 0; it.removed = true;
+  } else {
+    it.qty = it.keepQty || it.po_qty; it.removed = false;
+  }
+  invRenderItems();
+  document.getElementById('invPreviewContent').style.display = 'none'; document.getElementById('invPreviewEmpty').style.display = 'flex';
 }
 function invSetQty(i, el) {
   var it = _inv.items[i], v = parseInt(el.value);
