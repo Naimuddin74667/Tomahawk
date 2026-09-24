@@ -196,6 +196,13 @@ const ACTION_TIERS = {
   blinkitSetRoStatus: 'manager_up',
   blinkitBulkSetAppointments: 'manager_up',
 
+  // — Instamart (Marketplace-Shipments/Instamart/) — PO upload-based, own
+  //   instamart_* tables. Same tiers as Blinkit: viewer reads, manager edits. —
+  imLoadAll: 'viewer_read', imGetInvSeq: 'viewer_read', imGetInvHtml: 'viewer_read',
+  imGetCnHtml: 'viewer_read', imLibLoad: 'viewer_read', imGetGatepass: 'viewer_read',
+  imSavePO: 'manager_up', imUpdatePO: 'manager_up', imDeletePO: 'manager_up',
+  imSaveInv: 'manager_up', imSaveCN: 'manager_up', imLibSave: 'manager_up',
+
   // — Amazon FC Appointment Confirmation email watcher (Gmail
   //   integration) — same mailbox/creds as Blinkit's watcher, filtered
   //   to the "Amazon" Gmail label instead. Same manager_up/viewer_read
@@ -761,6 +768,10 @@ export default {
       }
 
       // ── GET routes ────────────────────────────────────────
+      // ── INSTAMART — all im* actions (see handleInstamart at file end) ──
+      const imResponse = await handleInstamart(request.method, act, url, body, env);
+      if (imResponse) return imResponse;
+
       if (request.method === 'GET') {
 
         // ── LABEL GENERATOR — live GSheet SKU lookup ─────────
@@ -2514,9 +2525,14 @@ export default {
             warehouse || '', inv_date || '', inv_html || '',
             sku_count || 0, total_qty || 0, items_json || '[]'
           ).run();
+          // Shared ITH/2526 series with Instamart: only ever move the
+          // counter forward, so an older Blinkit seq can't rewind past an
+          // Instamart invoice saved in between.
           await env.DB.prepare(`
             INSERT INTO blinkit_meta (key, value) VALUES ('inv_seq', ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ON CONFLICT(key) DO UPDATE SET value = CASE
+              WHEN CAST(blinkit_meta.value AS INTEGER) >= CAST(excluded.value AS INTEGER) THEN blinkit_meta.value
+              ELSE excluded.value END
           `).bind(String(seq || 1)).run();
           return json({ ok: true });
         }
@@ -5821,4 +5837,303 @@ function rowToReturn(row) {
     createdAt: row.created_at||'', processedAt: row.processed_at||'',
     resolvedAt: row.resolved_at||''
   };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// INSTAMART — Marketplace-Shipments/Instamart/
+// Self-contained: every Instamart action is handled here and nowhere
+// else. Uses its own instamart_* tables. The ONLY shared state with
+// Blinkit is the invoice counter (blinkit_meta.inv_seq) — both apps
+// draw from one ITH/2526/NNN series, by decision (24-Sep-2026).
+// Called once from fetch() right after auth; returns null for any
+// action that isn't an Instamart one so normal routing continues.
+// ══════════════════════════════════════════════════════════════════
+const IM_INV_PREFIX = 'ITH/2526/'; // must match Blinkit's invGetNextNumber() FY string
+
+async function ensureInstamartTables(DB) {
+  await DB.batch([
+    // One row per uploaded PO. items_json = parsed PO lines.
+    // Ledger state (appointment / manual status / received qty / note)
+    // lives here too, so it exists before an invoice is raised.
+    DB.prepare(`CREATE TABLE IF NOT EXISTS instamart_po (
+      po_number         TEXT PRIMARY KEY,
+      po_date           TEXT DEFAULT '',
+      expected_date     TEXT DEFAULT '',
+      expiry_date       TEXT DEFAULT '',
+      pod_name          TEXT DEFAULT '',
+      bill_name         TEXT DEFAULT '',
+      bill_addr         TEXT DEFAULT '',
+      bill_gstin        TEXT DEFAULT '',
+      ship_name         TEXT DEFAULT '',
+      ship_addr         TEXT DEFAULT '',
+      ship_gstin        TEXT DEFAULT '',
+      items_json        TEXT DEFAULT '[]',
+      sku_count         INTEGER DEFAULT 0,
+      total_qty         INTEGER DEFAULT 0,
+      grand_total       REAL DEFAULT 0,
+      file_name         TEXT DEFAULT '',
+      appointment_date  TEXT DEFAULT '',
+      manual_status     TEXT DEFAULT '',
+      received_qty      INTEGER DEFAULT NULL,
+      status_note       TEXT DEFAULT '',
+      created_at        TEXT DEFAULT (datetime('now')),
+      updated_at        TEXT DEFAULT (datetime('now'))
+    )`),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS instamart_invoices (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      po_number    TEXT UNIQUE NOT NULL,
+      inv_number   TEXT UNIQUE NOT NULL,
+      seq          INTEGER DEFAULT 0,
+      inv_date     TEXT DEFAULT '',
+      pod_name     TEXT DEFAULT '',
+      sku_count    INTEGER DEFAULT 0,
+      total_qty    INTEGER DEFAULT 0,
+      grand_total  REAL DEFAULT 0,
+      items_json   TEXT DEFAULT '[]',
+      inv_html     TEXT DEFAULT '',
+      created_at   TEXT DEFAULT (datetime('now'))
+    )`),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS instamart_credit_notes (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      cn_number   TEXT UNIQUE NOT NULL,
+      inv_number  TEXT NOT NULL,
+      po_number   TEXT DEFAULT '',
+      reason      TEXT DEFAULT '',
+      items_json  TEXT DEFAULT '[]',
+      total_qty   INTEGER DEFAULT 0,
+      amount      REAL DEFAULT 0,
+      cn_html     TEXT DEFAULT '',
+      created_at  TEXT DEFAULT (datetime('now'))
+    )`),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS instamart_meta (
+      key   TEXT PRIMARY KEY,
+      value TEXT DEFAULT ''
+    )`)
+  ]);
+}
+
+// Highest invoice sequence already used anywhere in the shared series:
+// the Blinkit counter, every Blinkit invoice row, every Instamart row.
+// Taking the max of all three means a stale counter can never hand out
+// a number that's already on a saved invoice.
+async function imMaxSharedSeq(DB) {
+  await ensureBlinkitTables(DB); // blinkit_meta / blinkit_invoices must exist before we read them
+  const meta = await DB.prepare("SELECT value FROM blinkit_meta WHERE key = 'inv_seq' LIMIT 1").first();
+  const bk   = await DB.prepare('SELECT MAX(seq) AS m FROM blinkit_invoices').first();
+  const im   = await DB.prepare('SELECT MAX(seq) AS m FROM instamart_invoices').first();
+  return Math.max(
+    parseInt((meta && meta.value) || '0') || 0,
+    (bk && bk.m) || 0,
+    (im && im.m) || 0
+  );
+}
+
+function imInvNumber(seq) { return IM_INV_PREFIX + String(seq).padStart(3, '0'); }
+
+async function handleInstamart(method, act, url, body, env) {
+  if (!act || !/^im[A-Z]/.test(act)) return null;
+  const DB = env.DB;
+  await ensureInstamartTables(DB);
+
+  // ── GET ─────────────────────────────────────────────────────────
+  if (method === 'GET') {
+
+    // Everything the ledger needs in one round-trip (HTML blobs excluded).
+    if (act === 'imLoadAll') {
+      const [pos, invs, cns] = await Promise.all([
+        DB.prepare('SELECT * FROM instamart_po ORDER BY po_date DESC, created_at DESC').all(),
+        DB.prepare('SELECT id, po_number, inv_number, seq, inv_date, pod_name, sku_count, total_qty, grand_total, items_json, created_at FROM instamart_invoices ORDER BY id DESC').all(),
+        DB.prepare('SELECT id, cn_number, inv_number, po_number, reason, items_json, total_qty, amount, created_at FROM instamart_credit_notes ORDER BY id DESC').all()
+      ]);
+      return json({ ok: true, pos: pos.results || [], invoices: invs.results || [], creditNotes: cns.results || [] });
+    }
+
+    // Provisional next number, for the form/preview only. The real
+    // number is assigned inside imSaveInv at confirm time.
+    if (act === 'imGetInvSeq') {
+      const max = await imMaxSharedSeq(DB);
+      return json({ ok: true, seq: max, next: imInvNumber(max + 1) });
+    }
+
+    if (act === 'imGetInvHtml') {
+      const inv = url.searchParams.get('inv');
+      if (!inv) return json({ ok: false, error: 'missing inv' }, 400);
+      const row = await DB.prepare('SELECT inv_html FROM instamart_invoices WHERE inv_number = ? LIMIT 1').bind(inv).first();
+      return json({ ok: true, inv_html: row ? (row.inv_html || '') : '' });
+    }
+
+    if (act === 'imGetCnHtml') {
+      const cn = url.searchParams.get('cn');
+      if (!cn) return json({ ok: false, error: 'missing cn' }, 400);
+      const row = await DB.prepare('SELECT cn_html FROM instamart_credit_notes WHERE cn_number = ? LIMIT 1').bind(cn).first();
+      return json({ ok: true, cn_html: row ? (row.cn_html || '') : '' });
+    }
+
+    if (act === 'imLibLoad') {
+      const row = await DB.prepare("SELECT value FROM instamart_meta WHERE key = 'sku_lib' LIMIT 1").first();
+      return json({ ok: true, data: row ? (row.value || '{}') : '{}' });
+    }
+
+    // UC gatepasses with toPartyCode = "Instamart", via the same GAS bridge
+    // Blinkit uses (route ?type=instamartGatepass). Edge-cached 5 min.
+    if (act === 'imGetGatepass') {
+      const cache = caches.default;
+      const cacheKey = new Request('https://cache.internal/instamart-gatepass-v1');
+      const cached = await cache.match(cacheKey);
+      if (cached) return new Response(await cached.text(), { headers: { ...CORS, 'X-Cache': 'HIT' } });
+      const res = await fetch(SA_UC_GAS_URL + '?type=instamartGatepass');
+      if (!res.ok) return json({ ok: false, error: 'GAS fetch failed: ' + res.status, records: [] }, 502);
+      const text = await res.text();
+      // GAS returns an HTML error page (not JSON) if the route isn't deployed
+      // yet — don't cache that, just report it so the ledger shows "—".
+      try { JSON.parse(text); } catch (e) { return json({ ok: false, error: 'Gatepass route not available yet', records: [] }); }
+      const response = new Response(text, { headers: { ...CORS, 'Cache-Control': 'public, max-age=300', 'X-Cache': 'MISS' } });
+      await cache.put(cacheKey, response.clone());
+      return response;
+    }
+
+    return null;
+  }
+
+  // ── POST ────────────────────────────────────────────────────────
+  if (method === 'POST') {
+    const b = body || {};
+
+    // Insert or refresh a parsed PO. Ledger state (appointment, status,
+    // received, note) is never touched here, so re-uploading the same PDF
+    // is safe. Once invoiced, the PO's lines are frozen.
+    if (act === 'imSavePO') {
+      const p = b.po || {};
+      if (!p.po_number) return json({ ok: false, error: 'po_number required' }, 400);
+      const inv = await DB.prepare('SELECT inv_number FROM instamart_invoices WHERE po_number = ? LIMIT 1').bind(p.po_number).first();
+      const existing = await DB.prepare('SELECT po_number FROM instamart_po WHERE po_number = ? LIMIT 1').bind(p.po_number).first();
+      if (existing && inv) return json({ ok: true, status: 'invoiced', inv_number: inv.inv_number });
+      await DB.prepare(`
+        INSERT INTO instamart_po (po_number, po_date, expected_date, expiry_date, pod_name,
+          bill_name, bill_addr, bill_gstin, ship_name, ship_addr, ship_gstin,
+          items_json, sku_count, total_qty, grand_total, file_name)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(po_number) DO UPDATE SET
+          po_date = excluded.po_date, expected_date = excluded.expected_date,
+          expiry_date = excluded.expiry_date, pod_name = excluded.pod_name,
+          bill_name = excluded.bill_name, bill_addr = excluded.bill_addr, bill_gstin = excluded.bill_gstin,
+          ship_name = excluded.ship_name, ship_addr = excluded.ship_addr, ship_gstin = excluded.ship_gstin,
+          items_json = excluded.items_json, sku_count = excluded.sku_count,
+          total_qty = excluded.total_qty, grand_total = excluded.grand_total,
+          file_name = excluded.file_name, updated_at = datetime('now')
+      `).bind(
+        p.po_number, p.po_date || '', p.expected_date || '', p.expiry_date || '', p.pod_name || '',
+        p.bill_name || '', p.bill_addr || '', p.bill_gstin || '',
+        p.ship_name || '', p.ship_addr || '', p.ship_gstin || '',
+        typeof p.items_json === 'string' ? p.items_json : JSON.stringify(p.items || []),
+        p.sku_count || 0, p.total_qty || 0, p.grand_total || 0, p.file_name || ''
+      ).run();
+      return json({ ok: true, status: existing ? 'updated' : 'created' });
+    }
+
+    // Ledger edits: appointment_date, manual_status ('', 'picked_up',
+    // 'cancelled'), received_qty, status_note. Only the keys sent change.
+    if (act === 'imUpdatePO') {
+      const po = b.po_number;
+      if (!po) return json({ ok: false, error: 'po_number required' }, 400);
+      const allowed = ['appointment_date', 'manual_status', 'received_qty', 'status_note'];
+      const sets = [], vals = [];
+      allowed.forEach(k => {
+        if (b.fields && Object.prototype.hasOwnProperty.call(b.fields, k)) {
+          let v = b.fields[k];
+          if (k === 'received_qty') v = (v === '' || v == null) ? null : parseInt(v);
+          if (k === 'manual_status' && !['', 'picked_up', 'cancelled'].includes(v)) v = '';
+          sets.push(k + ' = ?'); vals.push(v);
+        }
+      });
+      if (!sets.length) return json({ ok: false, error: 'nothing to update' }, 400);
+      await DB.prepare('UPDATE instamart_po SET ' + sets.join(', ') + ", updated_at = datetime('now') WHERE po_number = ?")
+        .bind(...vals, po).run();
+      return json({ ok: true });
+    }
+
+    // Remove a PO that was uploaded by mistake. Refused once invoiced —
+    // an invoice number in the shared series must never be orphaned.
+    if (act === 'imDeletePO') {
+      const po = b.po_number;
+      if (!po) return json({ ok: false, error: 'po_number required' }, 400);
+      const inv = await DB.prepare('SELECT inv_number FROM instamart_invoices WHERE po_number = ? LIMIT 1').bind(po).first();
+      if (inv) return json({ ok: false, error: 'PO already invoiced as ' + inv.inv_number + ' — cannot delete' });
+      await DB.prepare('DELETE FROM instamart_po WHERE po_number = ?').bind(po).run();
+      return json({ ok: true });
+    }
+
+    // Assign the next number in the shared ITH/2526 series and save.
+    // The browser sends the invoice HTML with the token {{INV_NO}} in
+    // place of the number; it's filled in here, after allocation, so the
+    // stored PDF always matches the ledger. UNIQUE(inv_number) + the
+    // cross-check against blinkit_invoices guard against a clash if a
+    // Blinkit invoice is being saved at the same moment; we retry.
+    if (act === 'imSaveInv') {
+      const d = b;
+      if (!d.po_number) return json({ ok: false, error: 'po_number required' }, 400);
+      if (!d.inv_html_template || d.inv_html_template.indexOf('{{INV_NO}}') === -1)
+        return json({ ok: false, error: 'inv_html_template with {{INV_NO}} required' }, 400);
+
+      const dup = await DB.prepare('SELECT inv_number FROM instamart_invoices WHERE po_number = ? LIMIT 1').bind(d.po_number).first();
+      if (dup) return json({ ok: false, duplicate: true, inv_number: dup.inv_number, error: 'PO already invoiced as ' + dup.inv_number });
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const seq = (await imMaxSharedSeq(DB)) + 1 + attempt;
+        const invNo = imInvNumber(seq);
+        const clash = await DB.prepare('SELECT 1 FROM blinkit_invoices WHERE inv_number = ? LIMIT 1').bind(invNo).first();
+        if (clash) continue;
+        const html = d.inv_html_template.split('{{INV_NO}}').join(invNo);
+        try {
+          await DB.prepare(`
+            INSERT INTO instamart_invoices (po_number, inv_number, seq, inv_date, pod_name, sku_count, total_qty, grand_total, items_json, inv_html)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).bind(d.po_number, invNo, seq, d.inv_date || '', d.pod_name || '',
+                  d.sku_count || 0, d.total_qty || 0, d.grand_total || 0,
+                  d.items_json || '[]', html).run();
+        } catch (e) {
+          const again = await DB.prepare('SELECT inv_number FROM instamart_invoices WHERE po_number = ? LIMIT 1').bind(d.po_number).first();
+          if (again) return json({ ok: false, duplicate: true, inv_number: again.inv_number, error: 'PO already invoiced as ' + again.inv_number });
+          continue; // inv_number taken by a concurrent save — try the next one
+        }
+        // Advance the shared counter (never backwards) so Blinkit's next
+        // invGetNextNumber() starts after this one.
+        await DB.prepare(`
+          INSERT INTO blinkit_meta (key, value) VALUES ('inv_seq', ?)
+          ON CONFLICT(key) DO UPDATE SET value = CASE
+            WHEN CAST(blinkit_meta.value AS INTEGER) >= CAST(excluded.value AS INTEGER) THEN blinkit_meta.value
+            ELSE excluded.value END
+        `).bind(String(seq)).run();
+        return json({ ok: true, inv_number: invNo, seq, inv_html: html });
+      }
+      return json({ ok: false, error: 'Could not allocate an invoice number — please retry' }, 409);
+    }
+
+    // One credit note per invoice: CN/2526/NNN mirrors the invoice suffix
+    // (same convention as Blinkit), so CN <-> invoice is unambiguous.
+    if (act === 'imSaveCN') {
+      const c = b;
+      if (!c.cn_number || !c.inv_number) return json({ ok: false, error: 'cn_number and inv_number required' }, 400);
+      const exists = await DB.prepare('SELECT cn_number FROM instamart_credit_notes WHERE cn_number = ? LIMIT 1').bind(c.cn_number).first();
+      if (exists) return json({ ok: false, duplicate: true, error: 'Credit note ' + c.cn_number + ' already exists' });
+      await DB.prepare(`
+        INSERT INTO instamart_credit_notes (cn_number, inv_number, po_number, reason, items_json, total_qty, amount, cn_html)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(c.cn_number, c.inv_number, c.po_number || '', c.reason || '',
+              c.items_json || '[]', c.total_qty || 0, c.amount || 0, c.cn_html || '').run();
+      return json({ ok: true });
+    }
+
+    if (act === 'imLibSave') {
+      if (typeof b.data !== 'string') return json({ ok: false, error: 'data must be a JSON string' }, 400);
+      await DB.prepare(`
+        INSERT INTO instamart_meta (key, value) VALUES ('sku_lib', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `).bind(b.data).run();
+      return json({ ok: true });
+    }
+
+    return null;
+  }
+  return null;
 }
