@@ -312,7 +312,12 @@ const ACTION_TIERS = {
   // Refund flow — customer bank-details form (NEFT). The two public actions
   // are gated by a single-use, 7-day link token + phone last-4 check.
   delhiveryStartRefund: 'manager_up', refundCreateLink: 'manager_up', refundGetBank: 'manager_up',
-  refundFormInfo: 'public', refundSubmitBank: 'public'
+  refundFormInfo: 'public', refundSubmitBank: 'public',
+
+  // — Returns Verifier (/Returns-Verifier/): handwritten returns slip
+  //   typed in against enabled UC SKUs. Saving a slip is a write, so
+  //   manager_up like Returns Manager; history list is viewer_read. —
+  saveReturnsSlip: 'manager_up', listReturnsSlips: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -976,6 +981,16 @@ export default {
             piecesPerCarton: ppcRow ? JSON.parse(ppcRow.value || '{}') : {},
             updatedAt: row ? row.updated_at : null
           });
+        }
+
+        // ── RETURNS VERIFIER — list submitted slips (newest first) ─────
+        if (action === 'listReturnsSlips') {
+          await ensureReturnsSlipsTable(env.DB);
+          const limit = Math.min(parseInt(url.searchParams.get('limit') || '300', 10) || 300, 1000);
+          const rows = await env.DB.prepare(
+            'SELECT id, slip_date, items_json, line_count, total_qty, created_by, created_at FROM returns_slips ORDER BY id DESC LIMIT ?'
+          ).bind(limit).all();
+          return json({ ok: true, slips: rows.results || [] });
         }
 
         // ── GATE PASS — box counter snapshot ──────────────────
@@ -2429,6 +2444,33 @@ export default {
             `).bind(JSON.stringify(piecesPerCarton)).run();
           }
           return json({ ok: true, count: skus.length, ppcCount });
+        }
+
+        // ── RETURNS VERIFIER — save one verified slip ─────────────────────
+        // items = [{ sku, qty }] already merged by SKU on the frontend;
+        // re-merged here anyway so the stored slip is always clean.
+        if (act === 'saveReturnsSlip') {
+          await ensureReturnsSlipsTable(env.DB);
+          const slipDate = String(body.slip_date || '').slice(0, 10);
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(slipDate)) return json({ ok: false, error: 'slip_date (YYYY-MM-DD) required' }, 400);
+          if (!Array.isArray(body.items) || !body.items.length) return json({ ok: false, error: 'items required' }, 400);
+          const merged = {}; const order = [];
+          for (const it of body.items) {
+            const sku = String((it && it.sku) || '').trim();
+            const qty = parseInt(it && it.qty, 10);
+            if (!sku || !(qty > 0)) return json({ ok: false, error: 'Every line needs a SKU and a qty above 0' }, 400);
+            if (!(sku in merged)) { merged[sku] = 0; order.push(sku); }
+            merged[sku] += qty;
+          }
+          const items = order.map(sku => ({ sku, qty: merged[sku] }));
+          const totalQty = items.reduce((a, i) => a + i.qty, 0);
+          const lineCount = parseInt(body.line_count, 10) || items.length;
+          const sessionUser = await resolveSession(request, env.DB);
+          const who = (sessionUser && (sessionUser.display_name || sessionUser.username)) || 'unauthenticated';
+          const res = await env.DB.prepare(
+            'INSERT INTO returns_slips (slip_date, items_json, line_count, total_qty, created_by) VALUES (?, ?, ?, ?, ?)'
+          ).bind(slipDate, JSON.stringify(items), lineCount, totalQty, who).run();
+          return json({ ok: true, id: res.meta && res.meta.last_row_id, total_qty: totalQty, sku_count: items.length });
         }
 
         // ── OPS CHATBOT — natural-language stock lookup ───────────────────
@@ -5575,6 +5617,23 @@ async function ensureUcSkuCacheTable(DB) {
     key        TEXT PRIMARY KEY,
     value      TEXT DEFAULT '[]',
     updated_at TEXT DEFAULT (datetime('now'))
+  )`).run();
+}
+
+// ══════════════════════════════════════════════════════════════════
+// RETURNS VERIFIER — Table Bootstrap
+// One row per submitted returns slip. items_json = [{ sku, qty }] with
+// repeated SKUs already merged (that's exactly what the CSV contains).
+// ══════════════════════════════════════════════════════════════════
+async function ensureReturnsSlipsTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS returns_slips (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    slip_date  TEXT NOT NULL,
+    items_json TEXT NOT NULL DEFAULT '[]',
+    line_count INTEGER DEFAULT 0,
+    total_qty  INTEGER DEFAULT 0,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
   )`).run();
 }
 

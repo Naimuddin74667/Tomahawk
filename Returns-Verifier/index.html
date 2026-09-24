@@ -1,0 +1,1003 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%231a1a1a'/%3E%3Ctext x='32' y='48' font-family='Arial Black,sans-serif' font-weight='900' font-size='52' text-anchor='middle' fill='%23F5A800'%3ET%3C/text%3E%3C/svg%3E">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Returns Verifier — Tomahawk Operations</title>
+<!--
+  Returns Verifier v1.0 — /Returns-Verifier/
+  Photo of a handwritten Returns Slip on the left, manual line entry on
+  the right. SKU boxes only accept enabled UC SKUs (uc_sku_cache in D1,
+  refreshed by admin via the hub). Submit saves the slip to D1
+  (returns_slips via saveReturnsSlip) and downloads "UC SKU,Qty" CSV with
+  repeated SKUs merged. History tab lists past slips (listReturnsSlips).
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-base:           #0c0c14;
+  --bg-surface:        #13131e;
+  --bg-raised:         #1a1a28;
+  --bg-hover:          #1f1f30;
+  --border-subtle:     #1f1f2e;
+  --border-default:    #2a2a38;
+  --border-strong:     #55556a;
+
+  --text-primary:      #e8e8f0;
+  --text-secondary:    #888899;
+  --text-muted:        #44445a;
+  --text-faint:        #2a2a40;
+
+  --accent:            #F5A800;
+  --accent-dim:        #F5A80018;
+  --accent-border:     #F5A80044;
+
+  --c-blue:            #60a5fa;
+  --c-blue-dim:        #60a5fa15;
+  --c-blue-border:     #60a5fa40;
+
+  --c-green:           #4ade80;
+  --c-green-dim:       #4ade8015;
+  --c-green-border:    #4ade8040;
+
+  --c-purple:          #a78bfa;
+  --c-purple-dim:      #a78bfa15;
+  --c-purple-border:   #a78bfa40;
+
+  --c-orange:          #fb923c;
+  --c-orange-dim:      #fb923c15;
+  --c-orange-border:   #fb923c40;
+
+  --radius-sm:  6px;
+  --radius-md:  10px;
+  --radius-lg:  14px;
+  --radius-xl:  20px;
+
+  --font-display: 'Syne', sans-serif;
+  --font-body:    'DM Sans', sans-serif;
+  --font-slab:    'Roboto Slab', serif;
+}
+
+html[data-theme="light"] {
+  --bg-base:           #f4f4f7;
+  --bg-surface:        #ffffff;
+  --bg-raised:         #ededf3;
+  --bg-hover:          #e4e4ee;
+  --border-subtle:     #e0e0ea;
+  --border-default:    #d0d0dd;
+  --border-strong:     #9999b0;
+
+  --text-primary:      #111118;
+  --text-secondary:    #555566;
+  --text-muted:        #888899;
+  --text-faint:        #bbbbcc;
+
+  --accent:            #c98a00;
+  --accent-dim:        #F5A80014;
+  --accent-border:     #F5A80055;
+
+  --c-blue:            #2563eb;
+  --c-blue-dim:        #2563eb12;
+  --c-blue-border:     #2563eb40;
+
+  --c-green:           #16a34a;
+  --c-green-dim:       #16a34a12;
+  --c-green-border:    #16a34a40;
+
+  --c-purple:          #7c3aed;
+  --c-purple-dim:      #7c3aed12;
+  --c-purple-border:   #7c3aed40;
+
+  --c-orange:          #ea580c;
+  --c-orange-dim:      #ea580c12;
+  --c-orange-border:   #ea580c40;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  transition: background .2s ease, color .2s ease;
+}
+</style>
+<style>
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  height: 62px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  padding: 0 36px;
+  justify-content: space-between;
+  gap: 20px;
+  transition: background .2s ease, border-color .2s ease;
+}
+
+.header-logo { display: flex; align-items: center; gap: 14px; text-decoration: none; flex-shrink: 0; }
+.logo-svg-wrap { display: flex; align-items: center; color: var(--accent); }
+.logo-divider { width: 2px; height: 36px; background: rgba(255,255,255,0.5); border-radius: 2px; }
+html[data-theme="light"] .logo-divider { background: rgba(0,0,0,0.25); }
+.logo-tagline { font-size: 16px; font-weight: 600; color: var(--text-secondary); letter-spacing: .04em; }
+
+.header-right { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
+
+.sys-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-green); flex-shrink: 0; animation: pulse 2.5s ease-in-out infinite; }
+.status-dot.is-error { background: #f87171; animation: none; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+
+.theme-toggle {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--bg-raised); border: 1px solid var(--border-default);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted); transition: background .15s, border-color .15s, color .15s;
+  flex-shrink: 0;
+}
+.theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.theme-toggle svg { display: block; }
+html:not([data-theme="light"]) .icon-sun  { display: none; }
+html[data-theme="light"]       .icon-moon { display: none; }
+
+.header-user {
+  display: flex; align-items: center; gap: 9px;
+  background: var(--bg-raised); border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl); padding: 6px 14px 6px 6px;
+  cursor: pointer; transition: background .15s, border-color .15s;
+}
+.header-user:hover { border-color: var(--border-default); background: var(--bg-hover); }
+.user-avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #111; }
+.user-name { font-size: 13px; color: var(--text-secondary); }
+
+@media (max-width: 640px) {
+  .site-header { height: auto; padding: 14px 16px; flex-wrap: wrap; gap: 12px; }
+  .header-logo { gap: 10px; }
+  .logo-svg-wrap svg { height: 32px !important; }
+  .logo-divider { height: 16px; }
+  .logo-tagline { font-size: 11px; }
+  .header-right { gap: 10px; }
+  .sys-status span { display: none; }
+  .status-dot { width: 9px; height: 9px; }
+  .user-name { display: none; }
+  .header-user { padding: 5px; }
+  .theme-toggle { width: 32px; height: 32px; }
+}
+@media (min-width: 641px) and (max-width: 900px) {
+  .site-header { padding: 0 20px; height: 54px; }
+  .logo-svg-wrap svg { height: 40px !important; }
+  .sys-status { font-size: 11px; }
+}
+</style>
+<style>
+/* — Auth gate + header auth controls — shared pattern across all Tomahawk apps — */
+.auth-gate{position:fixed;inset:0;z-index:500;background:var(--bg-base);display:flex;align-items:center;justify-content:center;padding:20px}
+.auth-gate[hidden]{display:none}
+.auth-card{width:100%;max-width:340px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:14px;padding:32px 28px 28px}
+.auth-logo-row{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+.auth-logo-mark{width:34px;height:34px;border-radius:8px;background:var(--accent);color:#111;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-weight:800;font-size:16px;flex-shrink:0}
+.auth-title{font-weight:700;font-size:16px;color:var(--text-primary)}
+.auth-sub{font-size:11px;color:var(--text-muted);margin-top:1px}
+.header-logout-btn{width:34px;height:34px;border-radius:50%;background:var(--bg-raised);border:1px solid var(--border-default);color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:border-color .15s,color .15s;flex-shrink:0}
+.header-logout-btn:hover{border-color:#f87171;color:#f87171}
+.header-logout-btn[hidden]{display:none}
+.header-user[hidden]{display:none}
+.role-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:20px;background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent-border);margin-left:2px}
+.access-denied-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:'DM Sans',sans-serif;color:var(--text-primary);background:var(--bg-base);text-align:center;padding:20px}
+</style>
+<!-- ============================================================
+     BLOCK 3 — RETURNS VERIFIER LAYOUT
+============================================================ -->
+<style>
+.site-body { max-width: 1480px; margin: 0 auto; padding: 22px 36px 60px; }
+
+.page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+.page-title { font-family: var(--font-display); font-weight: 800; font-size: 24px; letter-spacing: -.01em; }
+.page-sub { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+
+.tabs { display: flex; gap: 4px; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 4px; }
+.tab-btn { background: none; border: 0; color: var(--text-secondary); font: 600 13px var(--font-body); padding: 7px 16px; border-radius: var(--radius-sm); cursor: pointer; }
+.tab-btn:hover { color: var(--text-primary); }
+.tab-btn.is-active { background: var(--accent); color: #111; }
+.tab-btn:focus-visible, .btn:focus-visible, .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.rsv-layout { display: grid; grid-template-columns: minmax(320px, 5fr) 7fr; gap: 20px; align-items: start; }
+.panel { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); }
+
+/* — Photo panel (left, sticky so the slip stays beside the table) — */
+.photo-panel { position: sticky; top: 78px; display: flex; flex-direction: column; height: calc(100vh - 100px); min-height: 420px; overflow: hidden; }
+.photo-bar { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap; }
+.photo-name { font-size: 12px; color: var(--text-secondary); flex: 1; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.photo-stage { flex: 1; overflow: auto; background: var(--bg-base); position: relative; }
+.photo-stage img { display: block; max-width: none; user-select: none; }
+.photo-empty { position: absolute; inset: 14px; border: 2px dashed var(--border-default); border-radius: var(--radius-md); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; color: var(--text-secondary); font-size: 13px; padding: 20px; cursor: pointer; }
+.photo-empty:hover, .photo-empty.is-drag { border-color: var(--accent); color: var(--text-primary); }
+.photo-empty strong { font-family: var(--font-display); font-size: 16px; color: var(--text-primary); }
+
+/* — Buttons — */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; font: 600 13px var(--font-body); padding: 8px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-default); background: var(--bg-raised); color: var(--text-primary); cursor: pointer; white-space: nowrap; }
+.btn:hover { border-color: var(--border-strong); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #111; }
+.btn-primary:hover { filter: brightness(1.06); border-color: var(--accent); }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+.icon-btn { width: 30px; height: 30px; border-radius: var(--radius-sm); border: 1px solid var(--border-default); background: var(--bg-raised); color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font: 700 14px var(--font-body); }
+.icon-btn:hover { color: var(--text-primary); border-color: var(--border-strong); }
+.zoom-label { font-size: 12px; color: var(--text-muted); min-width: 40px; text-align: center; }
+
+/* — Entry panel (right) — */
+.entry-top { display: flex; align-items: flex-end; gap: 18px; padding: 14px 16px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap; }
+.field label { display: block; font-size: 11.5px; color: var(--text-secondary); margin-bottom: 4px; }
+.input { font: 500 14px var(--font-body); color: var(--text-primary); background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 8px 10px; outline: none; }
+.input:focus { border-color: var(--accent); }
+html[data-theme="light"] .input { color-scheme: light; }
+html:not([data-theme="light"]) .input { color-scheme: dark; }
+
+.tally { display: flex; gap: 22px; margin-left: auto; }
+.tally-item { text-align: right; }
+.tally-num { font-family: var(--font-display); font-weight: 800; font-size: 26px; line-height: 1; }
+.tally-lbl { font-size: 11.5px; color: var(--text-secondary); margin-top: 4px; }
+.tally-item.is-warn .tally-num { color: #f87171; }
+
+.lines { padding: 6px 0; }
+.line-head, .line-row { display: grid; grid-template-columns: 36px 1fr 96px 34px; gap: 10px; align-items: center; padding: 0 16px; }
+.line-head { font-size: 11.5px; color: var(--text-muted); padding-top: 6px; padding-bottom: 6px; }
+.line-row { padding-top: 6px; padding-bottom: 6px; border-top: 1px solid var(--border-subtle); }
+.line-row:first-of-type { border-top: 0; }
+.line-num { font-size: 13px; color: var(--text-muted); text-align: right; font-variant-numeric: tabular-nums; }
+.line-sku-wrap { position: relative; }
+.line-sku { width: 100%; }
+.line-qty { width: 100%; text-align: right; font-variant-numeric: tabular-nums; }
+.line-note { font-size: 11.5px; margin-top: 3px; min-height: 0; }
+.line-note:empty { display: none; }
+.line-row.is-ok .line-sku { border-color: var(--c-green-border); }
+.line-row.is-bad .line-sku { border-color: #f8717188; }
+.line-row.is-bad .line-note { color: #f87171; }
+.line-row.is-dup .line-note { color: var(--c-orange); }
+.line-row.is-ok .line-num::before { content: '✓ '; color: var(--c-green); }
+.line-del { background: none; border: 0; color: var(--text-muted); font-size: 18px; cursor: pointer; border-radius: var(--radius-sm); height: 30px; }
+.line-del:hover { color: #f87171; background: var(--bg-raised); }
+
+/* — Autocomplete dropdown — */
+.ac-list { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 60; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: 0 12px 28px rgba(0,0,0,.35); max-height: 280px; overflow-y: auto; padding: 4px; }
+.ac-item { padding: 7px 10px; border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-item mark { background: var(--accent-dim); color: var(--accent); border-radius: 3px; padding: 0 1px; }
+.ac-item.is-active { background: var(--bg-hover); }
+.ac-empty { padding: 8px 10px; font-size: 12.5px; color: var(--text-muted); }
+
+.entry-foot { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; }
+.entry-hint { font-size: 12px; color: var(--text-muted); flex: 1; min-width: 180px; }
+.entry-hint kbd { font: 600 11px var(--font-body); background: var(--bg-raised); border: 1px solid var(--border-default); border-radius: 4px; padding: 1px 5px; color: var(--text-secondary); }
+
+/* — History — */
+.hist-wrap { overflow-x: auto; }
+.hist-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.hist-table th { text-align: left; font-weight: 600; font-size: 11.5px; color: var(--text-muted); padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; }
+.hist-table td { padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; }
+.hist-table td.num, .hist-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.hist-row { cursor: pointer; }
+.hist-row:hover td { background: var(--bg-hover); }
+.hist-detail td { background: var(--bg-base); white-space: normal; }
+.hist-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 20px; font-size: 12.5px; }
+.hist-items span b { font-variant-numeric: tabular-nums; margin-left: 6px; color: var(--accent); }
+.hist-empty { padding: 40px 16px; text-align: center; color: var(--text-secondary); font-size: 13px; }
+
+/* — Toast — */
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); opacity: 0; pointer-events: none; background: var(--bg-surface); border: 1px solid var(--border-default); border-left: 4px solid var(--c-green); color: var(--text-primary); padding: 11px 16px; border-radius: var(--radius-md); font-size: 13px; box-shadow: 0 10px 30px rgba(0,0,0,.35); transition: opacity .2s, transform .2s; z-index: 400; max-width: calc(100vw - 32px); }
+.toast.is-show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.is-err { border-left-color: #f87171; }
+
+[hidden] { display: none !important; }
+
+@media (max-width: 960px) {
+  .site-body { padding: 16px 14px 60px; }
+  .rsv-layout { grid-template-columns: 1fr; }
+  .photo-panel { position: relative; top: 0; height: 60vh; }
+  .tally { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .toast, .status-dot { transition: none; animation: none; } }
+</style>
+</head>
+<body>
+
+<div class="auth-gate" id="auth-gate">
+  <div class="auth-card">
+    <div class="auth-logo-row">
+      <div class="auth-logo-mark">T</div>
+      <div>
+        <div class="auth-title">Tomahawk Operations</div>
+        <div class="auth-sub">Sign in to continue</div>
+      </div>
+    </div>
+    <div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:14px;">
+      Login now happens once on the <a href="../index.html" style="color:var(--accent)">Tomahawk hub</a>. Redirecting you there&#8230;
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     HEADER  (identical component to other Tomahawk apps)
+============================================================ -->
+<header class="site-header">
+  <a href="/Tomahawk/" class="header-logo">
+    <div class="logo-svg-wrap">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="474 509 6803 1270" style="height:54px;width:auto;display:block;fill:currentColor;">
+        <path d="M796.6 803.57l625.42 0c4.17,0.55 6.71,2.65 7.48,6.14l-84.8 151.21 -181.47 0c-16.1,25.18 -100.16,178.13 -252.2,458.77l-203.52 0 -0.67 -3.08c109.72,-202.64 190.86,-354.55 243.59,-455.69l-240.46 0 -0.77 -3.7c47.6,-91.52 76.61,-142.78 87.4,-153.65zm-14.19 821.74l-287.36 153.05 187.35 -278.86 1362.49 0 -8.53 5.99 -1253.95 119.82zm6102.31 -1005.2l131.69 -113.42 0 215.51 -960.53 0 8.48 -6 820.36 -96.09zm-574.92 183.46l298.9 0 1.32 6.14c-45.66,84.33 -70.46,131.58 -74.1,141.4 160.29,-96.44 243.35,-144.55 249.31,-144.55l224.51 0 1.32 6.11c-3.09,0.39 -163.87,96.95 -482.4,289.8l215.31 314.14 -5.44 3.08 -212.81 0c-5.17,-3.62 -50.38,-70.48 -135.48,-200.49l-3.14 0c-57.01,115.32 -92.82,182.15 -107.4,200.49l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.77,-24.7l-1.96 -9.09c-2.91,-13.47 -17.46,-33.95 -43.92,-61.58l5.47 -2.99zm-900.24 0.38l295.21 0 0.67 3.13 -177.4 332.67 0.7 3.15 3.15 0 281.78 -191.3c5.47,6.84 8.72,12.09 9.42,15.42l50.56 191.26 2.97 0c-0.06,-5.07 62.84,-123.21 188.62,-354.33l199.85 0 7 3.13c-2.97,8.9 -110.79,213.14 -323.65,612.64l-212.28 0c-4.01,0 -6.55,-2.09 -7.43,-6.09l-8.67 -40.1c-6.4,-29.71 -17.38,-75.75 -32.99,-138.44l-289.68 184.63 -221.52 0 -0.69 -3.12 276.81 -529.56 -3.98 -18.37c-2.88,-13.46 -17.46,-33.93 -43.89,-61.59l5.44 -3.13zm-792.78 -0.38l758.24 0 0.66 2.99c-195.43,377.28 -303.39,581.65 -323.9,613.13l-197.37 0c-4.22,0 -6.58,-2.06 -7.45,-6.06 5.76,-4.89 46.12,-79.83 121.01,-225.06l-249.55 0c-5.54,7.52 -48.45,84.55 -128.62,231.12l-203.51 0 -0.67 -3.08c178.19,-329 269.43,-500.66 273.89,-514.68 2.75,-6.83 3.49,-17.15 2.64,-30.81 -2.41,-11.19 -17.16,-31.67 -44.05,-61.41l-1.32 -6.14zm185.18 228.04l249.02 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.73 0c-2.8,0 -16.07,23.62 -40.03,70.69zm-991.54 -228.04l298.86 0 1.32 6.14 -118.16 221.9 0.69 3.15 249.5 0c81.88,-151.73 124.55,-228.88 128.62,-231.19l191.28 0c4.13,0.55 6.7,2.65 7.45,6.14 -213.25,402.5 -322.44,606 -327.72,609.98l-196.86 0 -0.67 -3.08 112.7 -218.93 -252.85 0c-6.07,5.96 -41.47,70.68 -105.58,194.4 -11.11,18.37 -17.29,27.61 -18.72,27.61l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.79,-24.7l-1.98 -9.09c-2.9,-13.47 -17.45,-33.95 -43.92,-61.58l5.51 -2.99zm-792.75 0l758.27 0 0.64 2.99c-195.44,377.28 -303.38,581.65 -323.89,613.13l-197.37 0c-4.24,0 -6.6,-2.06 -7.45,-6.06 5.75,-4.89 46.12,-79.83 120.97,-225.06l-249.51 0c-5.56,7.52 -48.47,84.55 -128.62,231.12l-203.49 0 -0.69 -3.08c178.16,-329 269.38,-500.66 273.91,-514.68 2.71,-6.83 3.45,-17.15 2.6,-30.81 -2.39,-11.19 -17.15,-31.67 -44.05,-61.41l-1.32 -6.14zm185.2 228.04l249 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.72 0c-2.81,0 -16.06,23.62 -40.02,70.69zm-1103.91 -228.04l298.89 0c4.16,0.55 6.74,2.81 7.57,6.66l9.27 43.04c6.44,29.76 17.44,75.82 32.88,138.45 190.96,-123.03 291.13,-185.84 300.97,-188.15l206.5 0c4.3,0.55 6.73,2.81 7.55,6.66 -212.8,402.15 -321.84,605.48 -327.27,609.46l-203.52 0 -0.69 -3.08 175.45 -329.54 -0.68 -3.15 -2.97 0 -282.28 191.28c-5.52,-6.84 -8.76,-12.07 -9.47,-15.4l-50.55 -191.26 -2.98 0c-112.09,216.6 -175.21,333.7 -189.29,351.15l-202.99 0 -0.71 -3.08 274.04 -514.16c2.58,-7.52 2.71,-15.74 0.78,-24.65l-1.95 -9.11c-2.91,-13.47 -17.46,-33.95 -43.93,-61.59l5.38 -3.53zm-496.95 0l400.37 0c23.26,0 40.99,20.47 53.34,61.46 5.96,27.63 -9.61,69.81 -46.53,126.69 -44.77,80.33 -115.53,214.7 -211.82,403.33 -9.73,16.45 -24.43,24.64 -43.84,24.64l-517.82 0c-14.01,-8.19 -22.34,-17.45 -24.49,-27.61 -6.2,-28.7 27.81,-103.76 102.25,-225.02 91.52,-179.21 152.8,-290.15 184.01,-332.87 24.3,-20.48 59.21,-30.62 104.53,-30.62zm-137.63 461.82l203.51 0c1.89,-7.52 54.92,-107.99 159.41,-301.53l-0.63 -2.94 -196.86 0c-5.24,4 -60.32,105.51 -165.43,304.47z"/>
+        <path d="M7160.73 529.99c52.95,0 95.89,42.94 95.89,95.95 0,52.95 -42.94,95.89 -95.89,95.89 -53,0 -95.97,-42.94 -95.97,-95.89 0,-53.01 42.97,-95.95 95.97,-95.95zm-42.35 149.95l0 -110.28 46.91 0c11.77,0 20.35,1.01 25.65,3.01 5.34,1.97 9.65,5.52 12.86,10.57 3.22,5.05 4.8,10.81 4.8,17.39 0,8.2 -2.44,15.09 -7.3,20.45 -4.85,5.38 -12.16,8.8 -21.83,10.2 4.84,2.81 8.84,5.9 11.95,9.27 3.13,3.36 7.34,9.3 12.66,17.89l13.46 21.5 -26.6 0 -16.09 -23.99c-5.74,-8.56 -9.67,-13.99 -11.76,-16.2 -2.1,-2.26 -4.33,-3.73 -6.7,-4.58 -2.37,-0.83 -6.08,-1.25 -11.2,-1.25l-4.5 0 0 46.02 -22.31 0zm22.31 -63.65l16.45 0c10.69,0 17.35,-0.44 20.02,-1.32 2.65,-0.87 4.74,-2.48 6.23,-4.68 1.53,-2.18 2.3,-4.96 2.3,-8.25 0,-3.76 -1.01,-6.69 -3,-8.99 -1.97,-2.32 -4.75,-3.73 -8.39,-4.34 -1.8,-0.25 -7.21,-0.37 -16.25,-0.37l-17.36 0 0 27.95zm20.04 -72.89c45.53,0 82.45,36.94 82.45,82.54 0,45.52 -36.92,82.49 -82.45,82.49 -45.59,0 -82.53,-36.97 -82.53,-82.49 0,-45.6 36.94,-82.54 82.53,-82.54z"/>
+      </svg>
+    </div>
+    <div class="logo-divider"></div>
+    <span class="logo-tagline">Returns Verifier</span>
+  </a>
+
+  <div class="header-right">
+    <div class="sys-status">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="status-text">Loading UC SKU list…</span>
+    </div>
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle light/dark mode">
+      <svg class="icon-moon" width="18" height="18" viewBox="0 0 18 18" fill="none">
+        <path d="M15.5 10.5A7 7 0 017.5 2.5a7 7 0 000 13 7 7 0 008-5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+      </svg>
+      <svg class="icon-sun" width="18" height="18" viewBox="0 0 18 18" fill="none">
+        <circle cx="9" cy="9" r="3.5" stroke="currentColor" stroke-width="1.4"/>
+        <path d="M9 1v2M9 15v2M1 9h2M15 9h2M3.22 3.22l1.42 1.42M13.36 13.36l1.42 1.42M3.22 14.78l1.42-1.42M13.36 4.64l1.42-1.42" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <div class="header-user" id="header-user" hidden>
+      <div class="user-avatar" id="user-avatar">--</div>
+      <span class="user-name" id="user-name-display">&#8212;</span>
+      <span class="role-badge" id="user-role-badge">&#8212;</span>
+    </div>
+    <button class="header-logout-btn" id="header-logout-btn" hidden title="Log out">
+      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M8 17H4.5a1.5 1.5 0 01-1.5-1.5v-11A1.5 1.5 0 014.5 3H8M13.5 14l3.5-4-3.5-4M17 10H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+</header>
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+// AUTH — session comes from the Tomahawk hub (same pattern as Stock
+// Alert). admin/manager can submit slips; viewer can look up SKUs and
+// browse history but Submit is disabled. picker_packer has no access.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var TM_SESSION_KEY = 'tm_session_v1';
+  var TM_WORKER = 'https://tomahawk-returns.naimuddin.workers.dev';
+
+  function getSession() { try { return JSON.parse(localStorage.getItem(TM_SESSION_KEY) || 'null'); } catch (e) { return null; } }
+  function clearSession() { localStorage.removeItem(TM_SESSION_KEY); }
+  function goToHub() { window.location.href = '../index.html'; }
+
+  window.TM_ROLE = null;
+
+  // Attach the session header to every Worker call made by this page.
+  var _origFetch = window.fetch.bind(window);
+  window.fetch = function (url, opts) {
+    try {
+      var urlStr = typeof url === 'string' ? url : (url && url.url) || '';
+      if (urlStr.indexOf('tomahawk-returns.naimuddin.workers.dev') !== -1) {
+        var session = getSession();
+        opts = opts || {};
+        opts.headers = Object.assign({}, opts.headers || {}, (session && session.token) ? { 'X-Tomahawk-Session': session.token } : {});
+      }
+    } catch (e) {}
+    return _origFetch(url, opts);
+  };
+
+  function showApp(user) {
+    document.getElementById('auth-gate').hidden = true;
+    document.getElementById('header-user').hidden = false;
+    document.getElementById('header-logout-btn').hidden = false;
+    var label = user.display_name || user.username;
+    document.getElementById('user-avatar').textContent = label.slice(0, 2).toUpperCase();
+    document.getElementById('user-name-display').textContent = label;
+    var roleLabels = { admin: 'Admin', manager: 'Manager', viewer: 'Viewer', picker_packer: 'Picker & Packer' };
+    document.getElementById('user-role-badge').textContent = roleLabels[user.role] || user.role;
+    window.TM_ROLE = user.role;
+    if (typeof window.rsvOnRole === 'function') window.rsvOnRole(user.role);
+  }
+
+  function showAccessDenied() {
+    document.body.innerHTML =
+      '<div class="access-denied-screen">' +
+      '<div style="font-size:15px;font-weight:700;">You don\'t have access to this app</div>' +
+      '<div style="font-size:13px;color:var(--text-muted);max-width:320px;">Picker &amp; Packer accounts only have access to the Scanner App.</div>' +
+      '<a href="../index.html" style="margin-top:8px;color:var(--accent);font-size:13px;text-decoration:none;">&#8592; Back to Tomahawk Operations</a>' +
+      '</div>';
+  }
+
+  document.getElementById('header-logout-btn').addEventListener('click', async function () {
+    var session = getSession();
+    if (session && session.token) {
+      try {
+        await _origFetch(TM_WORKER + '?action=logout', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tomahawk-Session': session.token },
+          body: JSON.stringify({ action: 'logout' })
+        });
+      } catch (e) {}
+    }
+    clearSession();
+    goToHub();
+  });
+
+  (async function initAuth() {
+    var session = getSession();
+    if (!session || !session.token) { goToHub(); return; }
+    if (session.role !== 'admin' && session.role !== 'manager' && session.role !== 'viewer') { showAccessDenied(); return; }
+    showApp(session);
+    try {
+      var res = await _origFetch(TM_WORKER + '?action=validateSession', { headers: { 'X-Tomahawk-Session': session.token } }).then(function (r) { return r.json(); });
+      if (!res.ok || !res.user) { clearSession(); goToHub(); return; }
+      if (res.user.role !== 'admin' && res.user.role !== 'manager' && res.user.role !== 'viewer') { showAccessDenied(); return; }
+      localStorage.setItem(TM_SESSION_KEY, JSON.stringify({ token: session.token, username: res.user.username, role: res.user.role, display_name: res.user.display_name }));
+      showApp(res.user);
+    } catch (e) { /* network hiccup — keep the optimistic render */ }
+  })();
+})();
+</script>
+
+<div class="site-body">
+
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">Returns slip check</h1>
+      <div class="page-sub">Type each line from the slip photo. Only enabled UC SKUs can be picked.</div>
+    </div>
+    <div class="tabs" role="tablist">
+      <button class="tab-btn is-active" id="tab-verify" role="tab" aria-selected="true">Verify slip</button>
+      <button class="tab-btn" id="tab-history" role="tab" aria-selected="false">History</button>
+    </div>
+  </div>
+
+  <!-- ── VERIFY VIEW ─────────────────────────────────────────── -->
+  <div class="rsv-layout" id="view-verify">
+
+    <section class="panel photo-panel" aria-label="Slip photo">
+      <div class="photo-bar">
+        <button class="btn btn-sm" id="photo-pick-btn">Upload photo</button>
+        <span class="photo-name" id="photo-name">No photo yet</span>
+        <button class="icon-btn" id="zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
+        <span class="zoom-label" id="zoom-label">Fit</span>
+        <button class="icon-btn" id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+        <button class="icon-btn" id="zoom-fit" title="Fit to panel" aria-label="Fit to panel">⤢</button>
+        <button class="icon-btn" id="rotate-btn" title="Rotate 90°" aria-label="Rotate">↻</button>
+      </div>
+      <div class="photo-stage" id="photo-stage">
+        <div class="photo-empty" id="photo-empty">
+          <strong>Add the slip photo</strong>
+          <span>Click to upload, drop an image here, or paste with Ctrl+V</span>
+        </div>
+        <img id="photo-img" alt="Returns slip" hidden>
+      </div>
+      <input type="file" id="photo-input" accept="image/*" hidden>
+    </section>
+
+    <section class="panel" aria-label="Slip lines">
+      <div class="entry-top">
+        <div class="field">
+          <label for="slip-date">Slip date</label>
+          <input type="date" class="input" id="slip-date">
+        </div>
+        <div class="tally">
+          <div class="tally-item"><div class="tally-num" id="t-lines">0</div><div class="tally-lbl">Lines</div></div>
+          <div class="tally-item"><div class="tally-num" id="t-qty">0</div><div class="tally-lbl">Total qty</div></div>
+          <div class="tally-item" id="t-bad-wrap"><div class="tally-num" id="t-bad">0</div><div class="tally-lbl">To fix</div></div>
+        </div>
+      </div>
+
+      <div class="lines">
+        <div class="line-head"><span style="text-align:right">#</span><span>UC SKU</span><span style="text-align:right">Qty</span><span></span></div>
+        <div id="line-list"></div>
+      </div>
+
+      <div class="entry-foot">
+        <button class="btn btn-sm" id="add-line-btn">+ Add line</button>
+        <button class="btn btn-sm" id="clear-btn">Clear slip</button>
+        <span class="entry-hint">Type 2–3 letters, pick with <kbd>↑</kbd><kbd>↓</kbd> <kbd>Enter</kbd>. <kbd>Enter</kbd> on Qty adds the next line.</span>
+        <button class="btn btn-primary" id="submit-btn">Submit and download CSV</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- ── HISTORY VIEW ────────────────────────────────────────── -->
+  <section class="panel" id="view-history" hidden aria-label="Submitted slips">
+    <div class="hist-wrap">
+      <table class="hist-table">
+        <thead><tr>
+          <th>Slip date</th><th class="num">SKUs</th><th class="num">Total qty</th><th>Submitted by</th><th>Submitted at</th><th></th>
+        </tr></thead>
+        <tbody id="hist-body"><tr><td colspan="6" class="hist-empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<!-- ============================================================
+     BLOCK 9 — APP JAVASCRIPT
+============================================================ -->
+<script>
+(function () {
+  var WORKER = 'https://tomahawk-returns.naimuddin.workers.dev';
+  var DRAFT_KEY = 'rsv_draft_v1';   // unsent slip, survives a page refresh
+
+  // ---- THEME (shared tm_theme key across all apps) --------------
+  var html = document.documentElement;
+  if (localStorage.getItem('tm_theme') === 'light') html.setAttribute('data-theme', 'light');
+  document.getElementById('theme-toggle').addEventListener('click', function () {
+    var isLight = html.getAttribute('data-theme') === 'light';
+    if (isLight) { html.removeAttribute('data-theme'); localStorage.setItem('tm_theme', 'dark'); }
+    else { html.setAttribute('data-theme', 'light'); localStorage.setItem('tm_theme', 'light'); }
+  });
+
+  // ---- HELPERS ---------------------------------------------------
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  // Normalise for matching: lowercase, drop spaces/dashes/dots/underscores
+  // so "tcd 18d", "TCD-18D" and "tcd18d" all compare equal.
+  function norm(s) { return String(s || '').toLowerCase().replace(/[\s\-_.\/]/g, ''); }
+  function todayISO() { var d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); }
+  function fmtDate(iso) { if (!iso) return '—'; var p = String(iso).slice(0, 10).split('-'); return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : iso; }
+  function fmtDateTime(s) {
+    if (!s) return '—';
+    var d = new Date(String(s).replace(' ', 'T') + (String(s).indexOf('Z') === -1 ? 'Z' : ''));
+    if (isNaN(d)) return s;
+    return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+
+  var toastTimer = null;
+  function toast(msg, type) {
+    var t = $('toast');
+    t.textContent = msg;
+    t.className = 'toast is-show' + (type === 'err' ? ' is-err' : '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.className = 'toast'; }, type === 'err' ? 5000 : 3000);
+  }
+
+  // ---- STATE -----------------------------------------------------
+  var ucSkus = [];          // enabled UC SKUs (strings), placeholders removed
+  var ucSet = {};           // exact-match lookup: sku -> true
+  var ucNorm = [];          // [{ sku, n }] pre-normalised for the dropdown
+  var lines = [];           // [{ id, sku, qty }]
+  var nextId = 1;
+  var canSubmit = true;     // false for viewer role
+
+  window.rsvOnRole = function (role) {
+    canSubmit = (role === 'admin' || role === 'manager');
+    refreshTotals();
+  };
+
+  // ---- UC SKU LIST -----------------------------------------------
+  // Snapshot of enabled UC_ItemMaster SKUs kept in D1 (uc_sku_cache),
+  // refreshed by an admin via the hub's "Refresh SKU List" button.
+  function isPlaceholder(sku) { return /^(block|unlinked)-/i.test(sku); }
+
+  async function loadUcList() {
+    var dot = $('status-dot'), txt = $('status-text');
+    try {
+      var res = await fetch(WORKER + '?action=ucsku_getList').then(function (r) { return r.json(); });
+      if (!res.ok) throw new Error(res.error || 'Load failed');
+      ucSkus = (res.skus || []).filter(function (s) { return s && !isPlaceholder(s); });
+      ucSet = {}; ucNorm = [];
+      ucSkus.forEach(function (s) { ucSet[s] = true; ucNorm.push({ sku: s, n: norm(s) }); });
+      if (!ucSkus.length) {
+        dot.classList.add('is-error');
+        txt.textContent = 'UC SKU list is empty — admin: click Refresh SKU List on the hub';
+      } else {
+        dot.classList.remove('is-error');
+        txt.textContent = ucSkus.length + ' UC SKUs · updated ' + fmtDateTime(res.updatedAt);
+      }
+    } catch (e) {
+      dot.classList.add('is-error');
+      txt.textContent = 'Could not load UC SKU list';
+      toast('Could not load the UC SKU list — check your connection and reload', 'err');
+    }
+    renderLines();
+  }
+
+  // Ranked matches for the dropdown. Exact > starts-with > contains;
+  // every space-separated word typed must appear somewhere in the SKU.
+  function findMatches(q, limit) {
+    var words = String(q || '').trim().split(/\s+/).map(norm).filter(Boolean);
+    if (!words.length) return [];
+    var whole = norm(q);
+    var out = [];
+    for (var i = 0; i < ucNorm.length; i++) {
+      var it = ucNorm[i], ok = true;
+      for (var w = 0; w < words.length; w++) { if (it.n.indexOf(words[w]) === -1) { ok = false; break; } }
+      if (!ok) continue;
+      var score = it.n === whole ? 0 : it.n.indexOf(whole) === 0 ? 1 : it.n.indexOf(whole) !== -1 ? 2 : 3;
+      out.push({ sku: it.sku, score: score, len: it.sku.length });
+    }
+    out.sort(function (a, b) { return a.score - b.score || a.len - b.len || (a.sku < b.sku ? -1 : 1); });
+    return out.slice(0, limit || 10).map(function (o) { return o.sku; });
+  }
+
+  // Highlight the first typed word inside a suggestion (display only).
+  function highlight(sku, q) {
+    var w = String(q || '').trim().split(/\s+/)[0] || '';
+    var i = w ? sku.toLowerCase().indexOf(w.toLowerCase()) : -1;
+    if (i === -1) return esc(sku);
+    return esc(sku.slice(0, i)) + '<mark>' + esc(sku.slice(i, i + w.length)) + '</mark>' + esc(sku.slice(i + w.length));
+  }
+
+  // ---- LINES -----------------------------------------------------
+  function newLine(sku, qty) { return { id: nextId++, sku: sku || '', qty: qty == null ? '' : qty }; }
+
+  function saveDraft() {
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ date: $('slip-date').value, lines: lines })); } catch (e) {}
+  }
+  function loadDraft() {
+    try {
+      var d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+      if (d && Array.isArray(d.lines) && d.lines.length) {
+        lines = d.lines.map(function (l) { return newLine(l.sku, l.qty); });
+        if (d.date) $('slip-date').value = d.date;
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  // Line state: empty | ok | bad (not an enabled UC SKU) ; dup flag separate
+  function lineStatus(l) {
+    if (!l.sku.trim()) return 'empty';
+    return ucSet[l.sku] ? 'ok' : 'bad';
+  }
+
+  // Returns { sku: [lineNumbers] } for SKUs that appear on 2+ lines.
+  function duplicates() {
+    var seen = {};
+    lines.forEach(function (l, i) { if (ucSet[l.sku]) (seen[l.sku] = seen[l.sku] || []).push(i + 1); });
+    Object.keys(seen).forEach(function (k) { if (seen[k].length < 2) delete seen[k]; });
+    return seen;
+  }
+
+  function renderLines() {
+    var list = $('line-list');
+    list.innerHTML = lines.map(function (l, i) {
+      return '<div class="line-row" data-id="' + l.id + '">' +
+        '<span class="line-num">' + (i + 1) + '</span>' +
+        '<div class="line-sku-wrap">' +
+          '<input class="input line-sku" type="text" autocomplete="off" spellcheck="false" placeholder="Type SKU…" value="' + esc(l.sku) + '" aria-label="UC SKU line ' + (i + 1) + '">' +
+          '<div class="line-note"></div>' +
+        '</div>' +
+        '<input class="input line-qty" type="number" min="1" step="1" inputmode="numeric" value="' + esc(l.qty) + '" aria-label="Qty line ' + (i + 1) + '">' +
+        '<button class="line-del" title="Remove line" aria-label="Remove line ' + (i + 1) + '">×</button>' +
+      '</div>';
+    }).join('');
+    refreshStates();
+  }
+
+  // Updates per-row colours/notes and the tally without re-rendering
+  // inputs (so focus and cursor position are never lost while typing).
+  function refreshStates() {
+    var dups = duplicates();
+    Array.prototype.forEach.call(document.querySelectorAll('.line-row'), function (row) {
+      var l = getLine(+row.dataset.id); if (!l) return;
+      var st = lineStatus(l);
+      // Don't shout "not enabled" while the person is still typing that SKU.
+      if (st === 'bad' && document.activeElement === row.querySelector('.line-sku')) st = 'typing';
+      var idx = lines.indexOf(l) + 1;
+      var note = '';
+      row.classList.toggle('is-ok', st === 'ok');
+      row.classList.toggle('is-bad', st === 'bad');
+      var dupOf = dups[l.sku] ? dups[l.sku].filter(function (n) { return n !== idx; }) : null;
+      row.classList.toggle('is-dup', !!(dupOf && dupOf.length) && st === 'ok');
+      if (st === 'bad') note = ucSkus.length ? 'Not an enabled UC SKU — pick one from the list' : 'UC SKU list not loaded';
+      else if (dupOf && dupOf.length) note = 'Also on line ' + dupOf.join(', ') + ' — will be merged in the CSV';
+      row.querySelector('.line-note').textContent = note;
+    });
+    refreshTotals();
+  }
+
+  function refreshTotals() {
+    var filled = lines.filter(function (l) { return l.sku.trim() || String(l.qty).trim(); });
+    var qty = filled.reduce(function (a, l) { return a + (parseInt(l.qty, 10) || 0); }, 0);
+    var bad = filled.filter(function (l) { return lineStatus(l) !== 'ok' || !(parseInt(l.qty, 10) > 0); }).length;
+    $('t-lines').textContent = filled.length;
+    $('t-qty').textContent = qty;
+    $('t-bad').textContent = bad;
+    $('t-bad-wrap').classList.toggle('is-warn', bad > 0);
+    var btn = $('submit-btn');
+    btn.disabled = !canSubmit || !filled.length || bad > 0;
+    btn.title = !canSubmit ? 'View only — you can\'t submit slips' : bad > 0 ? 'Fix the highlighted lines first' : '';
+  }
+
+  function getLine(id) { for (var i = 0; i < lines.length; i++) if (lines[i].id === id) return lines[i]; return null; }
+  function rowOf(el) { var r = el.closest('.line-row'); return r ? getLine(+r.dataset.id) : null; }
+  function focusSku(id) { var r = document.querySelector('.line-row[data-id="' + id + '"] .line-sku'); if (r) r.focus(); }
+
+  function addLineAfter(line) {
+    var nl = newLine();
+    var i = line ? lines.indexOf(line) : lines.length - 1;
+    lines.splice(i + 1, 0, nl);
+    renderLines(); saveDraft();
+    focusSku(nl.id);
+  }
+
+  // ---- AUTOCOMPLETE ------------------------------------------------
+  var ac = { el: null, input: null, items: [], active: 0 };
+
+  function closeAc() { if (ac.el) ac.el.remove(); ac.el = null; ac.input = null; ac.items = []; }
+
+  function openAc(input) {
+    var q = input.value;
+    if (q.trim().length < 2) { closeAc(); return; }
+    var items = findMatches(q, 12);
+    if (!ac.el || ac.input !== input) {
+      closeAc();
+      ac.el = document.createElement('div');
+      ac.el.className = 'ac-list';
+      ac.el.setAttribute('role', 'listbox');
+      input.parentNode.appendChild(ac.el);
+      ac.input = input;
+    }
+    ac.items = items; ac.active = 0;
+    // Exact typed match already selected — no need to show the list
+    if (items.length === 1 && items[0] === q) { closeAc(); return; }
+    ac.el.innerHTML = items.length
+      ? items.map(function (s, i) { return '<div class="ac-item' + (i === 0 ? ' is-active' : '') + '" data-i="' + i + '" role="option">' + highlight(s, q) + '</div>'; }).join('')
+      : '<div class="ac-empty">No enabled UC SKU matches “' + esc(q) + '”</div>';
+  }
+
+  function moveAc(delta) {
+    if (!ac.el || !ac.items.length) return;
+    ac.active = (ac.active + delta + ac.items.length) % ac.items.length;
+    Array.prototype.forEach.call(ac.el.querySelectorAll('.ac-item'), function (d, i) { d.classList.toggle('is-active', i === ac.active); });
+    var cur = ac.el.querySelector('.ac-item.is-active'); if (cur) cur.scrollIntoView({ block: 'nearest' });
+  }
+
+  // Put the chosen SKU in the line, then jump to its Qty box.
+  function pickAc(i) {
+    var input = ac.input; if (!input || !ac.items.length) return false;
+    var sku = ac.items[i == null ? ac.active : i];
+    var l = rowOf(input); if (!l) return false;
+    l.sku = sku; input.value = sku;
+    closeAc(); refreshStates(); saveDraft();
+    var q = input.closest('.line-row').querySelector('.line-qty'); q.focus(); q.select();
+    return true;
+  }
+
+  // ---- LINE EVENTS (delegated) -------------------------------------
+  var listEl = $('line-list');
+
+  listEl.addEventListener('input', function (e) {
+    var l = rowOf(e.target); if (!l) return;
+    if (e.target.classList.contains('line-sku')) { l.sku = e.target.value.trim(); openAc(e.target); }
+    if (e.target.classList.contains('line-qty')) l.qty = e.target.value;
+    refreshStates(); saveDraft();
+  });
+
+  listEl.addEventListener('keydown', function (e) {
+    var t = e.target, l = rowOf(t); if (!l) return;
+    if (t.classList.contains('line-sku')) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); if (!ac.el) openAc(t); else moveAc(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); moveAc(-1); }
+      else if (e.key === 'Enter') { e.preventDefault(); if (!pickAc()) { var q = t.closest('.line-row').querySelector('.line-qty'); q.focus(); } }
+      else if (e.key === 'Tab' && !e.shiftKey && ac.el && ac.items.length && !ucSet[l.sku]) { e.preventDefault(); pickAc(); }
+      else if (e.key === 'Escape') closeAc();
+    }
+    if (t.classList.contains('line-qty') && e.key === 'Enter') {
+      e.preventDefault();
+      var i = lines.indexOf(l);
+      // Enter on the last line adds a new one; otherwise go to the next line.
+      if (i === lines.length - 1) addLineAfter(l); else focusSku(lines[i + 1].id);
+    }
+  });
+
+  listEl.addEventListener('mousedown', function (e) {
+    var item = e.target.closest('.ac-item');
+    if (item) { e.preventDefault(); pickAc(+item.dataset.i); }
+  });
+
+  listEl.addEventListener('click', function (e) {
+    if (!e.target.classList.contains('line-del')) return;
+    var l = rowOf(e.target); if (!l) return;
+    lines.splice(lines.indexOf(l), 1);
+    if (!lines.length) lines.push(newLine());
+    renderLines(); saveDraft();
+  });
+
+  listEl.addEventListener('focusout', function (e) {
+    if (e.target.classList.contains('line-sku')) {
+      // "tcd 18d" typed exactly but in different case/punctuation → snap
+      // to the real UC SKU, as long as exactly one SKU matches.
+      var l = rowOf(e.target);
+      if (l && l.sku && !ucSet[l.sku]) {
+        var n = norm(l.sku), hits = ucNorm.filter(function (it) { return it.n === n; });
+        if (hits.length === 1) { l.sku = hits[0].sku; e.target.value = l.sku; refreshStates(); saveDraft(); }
+      }
+    }
+    if (e.target.classList.contains('line-sku')) setTimeout(refreshStates, 0);
+    if (e.target.classList.contains('line-sku')) setTimeout(function () { if (ac.input === e.target && document.activeElement !== e.target) closeAc(); }, 120);
+  });
+
+  $('add-line-btn').addEventListener('click', function () { addLineAfter(lines[lines.length - 1]); });
+  $('clear-btn').addEventListener('click', function () {
+    if (!confirm('Clear all lines on this slip?')) return;
+    lines = [newLine()]; renderLines(); saveDraft(); focusSku(lines[0].id);
+  });
+  $('slip-date').addEventListener('change', saveDraft);
+
+  // ---- CSV ---------------------------------------------------------
+  // Repeated SKUs are merged here (qty summed), in first-seen order.
+  function mergedItems(src) {
+    var map = {}, order = [];
+    src.forEach(function (l) {
+      var q = parseInt(l.qty, 10) || 0;
+      if (!l.sku || q <= 0) return;
+      if (!(l.sku in map)) { map[l.sku] = 0; order.push(l.sku); }
+      map[l.sku] += q;
+    });
+    return order.map(function (s) { return { sku: s, qty: map[s] }; });
+  }
+  function csvCell(v) { v = String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+  function downloadCsv(items, slipDate, id) {
+    var rows = ['UC SKU,Qty'].concat(items.map(function (it) { return csvCell(it.sku) + ',' + it.qty; }));
+    var blob = new Blob([rows.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'Returns_Slip_' + fmtDate(slipDate) + (id ? '_' + id : '') + '.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+  }
+
+  // ---- SUBMIT: save to D1, then download the CSV -------------------
+  $('submit-btn').addEventListener('click', async function () {
+    var btn = this;
+    var filled = lines.filter(function (l) { return l.sku.trim() || String(l.qty).trim(); });
+    var slipDate = $('slip-date').value;
+    if (!slipDate) { toast('Pick the slip date first', 'err'); $('slip-date').focus(); return; }
+    if (!filled.length) return;
+    var items = mergedItems(filled);
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      var res = await fetch(WORKER + '?action=saveReturnsSlip', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'saveReturnsSlip', slip_date: slipDate, items: items, line_count: filled.length })
+      }).then(function (r) { return r.json(); });
+      if (!res.ok) throw new Error(res.error || 'Save failed');
+      downloadCsv(items, slipDate, res.id);
+      toast('Slip saved · CSV downloaded (' + items.length + ' SKUs, ' + items.reduce(function (a, i) { return a + i.qty; }, 0) + ' qty)');
+      localStorage.removeItem(DRAFT_KEY);
+      lines = [newLine()]; $('slip-date').value = todayISO();
+      renderLines(); focusSku(lines[0].id);
+      histLoaded = false;
+    } catch (e) {
+      toast('Not saved: ' + e.message + '. Nothing was downloaded — try again.', 'err');
+    } finally {
+      btn.textContent = 'Submit and download CSV';
+      refreshTotals();
+    }
+  });
+
+  // ---- PHOTO VIEWER ------------------------------------------------
+  var img = $('photo-img'), stage = $('photo-stage');
+  var zoom = 0;   // 0 = fit to panel width, otherwise a scale factor
+
+  function currentScale() { return zoom === 0 ? (stage.clientWidth - 2) / img.naturalWidth : zoom; }
+  function applyZoom() {
+    if (img.hidden || !img.naturalWidth) return;
+    img.style.width = Math.round(img.naturalWidth * currentScale()) + 'px';
+    $('zoom-label').textContent = zoom === 0 ? 'Fit' : Math.round(zoom * 100) + '%';
+  }
+
+  function loadPhoto(file) {
+    if (!file || !/^image\//.test(file.type)) { toast('That file is not an image', 'err'); return; }
+    img.onload = function () { $('photo-empty').hidden = true; img.hidden = false; zoom = 0; applyZoom(); stage.scrollTo(0, 0); };
+    img.src = URL.createObjectURL(file);
+    $('photo-name').textContent = file.name || 'Pasted image';
+  }
+
+  // Rotate 90° clockwise by redrawing the image on a canvas — simpler and
+  // more reliable than CSS rotation inside a scrolling panel.
+  function rotatePhoto() {
+    if (img.hidden || !img.naturalWidth) return;
+    var c = document.createElement('canvas');
+    c.width = img.naturalHeight; c.height = img.naturalWidth;
+    var ctx = c.getContext('2d');
+    ctx.translate(c.width, 0); ctx.rotate(Math.PI / 2);
+    ctx.drawImage(img, 0, 0);
+    img.onload = function () { applyZoom(); };
+    img.src = c.toDataURL('image/jpeg', 0.92);
+  }
+
+  $('photo-pick-btn').addEventListener('click', function () { $('photo-input').click(); });
+  $('photo-empty').addEventListener('click', function () { $('photo-input').click(); });
+  $('photo-input').addEventListener('change', function () { if (this.files[0]) loadPhoto(this.files[0]); this.value = ''; });
+  ['dragenter', 'dragover'].forEach(function (ev) { stage.addEventListener(ev, function (e) { e.preventDefault(); $('photo-empty').classList.add('is-drag'); }); });
+  ['dragleave', 'drop'].forEach(function (ev) { stage.addEventListener(ev, function () { $('photo-empty').classList.remove('is-drag'); }); });
+  stage.addEventListener('drop', function (e) { e.preventDefault(); if (e.dataTransfer.files[0]) loadPhoto(e.dataTransfer.files[0]); });
+  document.addEventListener('paste', function (e) {
+    var items = (e.clipboardData && e.clipboardData.items) || [];
+    for (var i = 0; i < items.length; i++) if (items[i].type.indexOf('image') === 0) { loadPhoto(items[i].getAsFile()); e.preventDefault(); return; }
+  });
+
+  $('zoom-in').addEventListener('click', function () { zoom = Math.min(6, currentScale() * 1.25); applyZoom(); });
+  $('zoom-out').addEventListener('click', function () { zoom = Math.max(0.1, currentScale() / 1.25); applyZoom(); });
+  $('zoom-fit').addEventListener('click', function () { zoom = 0; applyZoom(); });
+  $('rotate-btn').addEventListener('click', rotatePhoto);
+  window.addEventListener('resize', function () { if (zoom === 0) applyZoom(); });
+
+  // ---- HISTORY -----------------------------------------------------
+  var histLoaded = false, histRows = [];
+
+  async function loadHistory() {
+    var body = $('hist-body');
+    body.innerHTML = '<tr><td colspan="6" class="hist-empty">Loading…</td></tr>';
+    try {
+      var res = await fetch(WORKER + '?action=listReturnsSlips').then(function (r) { return r.json(); });
+      if (!res.ok) throw new Error(res.error || 'Load failed');
+      histRows = res.slips || [];
+      histLoaded = true;
+      renderHistory();
+    } catch (e) {
+      body.innerHTML = '<tr><td colspan="6" class="hist-empty">Could not load history: ' + esc(e.message) + '</td></tr>';
+    }
+  }
+
+  function slipItems(r) { try { return JSON.parse(r.items_json || '[]'); } catch (e) { return []; } }
+
+  function renderHistory() {
+    var body = $('hist-body');
+    if (!histRows.length) { body.innerHTML = '<tr><td colspan="6" class="hist-empty">No slips submitted yet. Submitted slips show up here.</td></tr>'; return; }
+    body.innerHTML = histRows.map(function (r) {
+      return '<tr class="hist-row" data-id="' + r.id + '">' +
+        '<td>' + esc(fmtDate(r.slip_date)) + '</td>' +
+        '<td class="num">' + slipItems(r).length + '</td>' +
+        '<td class="num">' + esc(r.total_qty) + '</td>' +
+        '<td>' + esc(r.created_by || '—') + '</td>' +
+        '<td>' + esc(fmtDateTime(r.created_at)) + '</td>' +
+        '<td class="num"><button class="btn btn-sm" data-csv="' + r.id + '">Download CSV</button></td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  $('hist-body').addEventListener('click', function (e) {
+    var csvBtn = e.target.closest('[data-csv]');
+    var row = e.target.closest('.hist-row');
+    if (!row) return;
+    var r = histRows.filter(function (x) { return String(x.id) === row.dataset.id; })[0]; if (!r) return;
+    if (csvBtn) { e.stopPropagation(); downloadCsv(slipItems(r), r.slip_date, r.id); return; }
+    // Toggle an inline detail row listing the slip's SKUs
+    var next = row.nextElementSibling;
+    if (next && next.classList.contains('hist-detail')) { next.remove(); return; }
+    var tr = document.createElement('tr');
+    tr.className = 'hist-detail';
+    tr.innerHTML = '<td colspan="6"><div class="hist-items">' + slipItems(r).map(function (it) { return '<span>' + esc(it.sku) + '<b>' + esc(it.qty) + '</b></span>'; }).join('') + '</div></td>';
+    row.after(tr);
+  });
+
+  function showTab(which) {
+    var hist = which === 'history';
+    $('view-verify').hidden = hist; $('view-history').hidden = !hist;
+    $('tab-verify').classList.toggle('is-active', !hist); $('tab-history').classList.toggle('is-active', hist);
+    $('tab-verify').setAttribute('aria-selected', String(!hist)); $('tab-history').setAttribute('aria-selected', String(hist));
+    if (hist && !histLoaded) loadHistory();
+    if (!hist) applyZoom();
+  }
+  $('tab-verify').addEventListener('click', function () { showTab('verify'); });
+  $('tab-history').addEventListener('click', function () { showTab('history'); });
+
+  // ---- INIT --------------------------------------------------------
+  $('slip-date').value = todayISO();
+  if (!loadDraft()) lines = [newLine()];
+  renderLines();
+  loadUcList();
+})();
+</script>
+</body>
+</html>
