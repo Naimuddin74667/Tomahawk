@@ -475,7 +475,10 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
 .detail-table td, .detail-table th { padding: 4px 18px 4px 0; border: 0; text-align: left; }
 .detail-table th { color: var(--text-muted); font-weight: 600; font-size: 11.5px; }
 .detail-table td.num, .detail-table th.num { text-align: right; }
-.fail-msg { color: #f87171; font-size: 12px; margin-top: 6px; }
+.fail-msg { color: #f87171; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; }
+.err-row td { border-bottom: 1px solid var(--border-subtle); padding-top: 0 !important; }
+.hist-row + .err-row td { padding-top: 0; }
+.push-table tr.hist-row:has(+ .err-row) td { border-bottom: 0; }
 .push-btn { min-width: 110px; }
 </style>
 
@@ -491,10 +494,8 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
   <section class="panel">
     <div class="filter-bar">
       <div class="tabs" role="tablist">
-        <button class="tab-btn is-active" data-f="ready">To push<span class="count-badge" id="c-ready"></span></button>
-        <button class="tab-btn" data-f="queued">Queued<span class="count-badge" id="c-queued"></span></button>
+        <button class="tab-btn is-active" data-f="pending">Pending push<span class="count-badge" id="c-pending"></span></button>
         <button class="tab-btn" data-f="pushed">Pushed<span class="count-badge" id="c-pushed"></span></button>
-        <button class="tab-btn" data-f="all">All<span class="count-badge" id="c-all"></span></button>
       </div>
     </div>
     <div class="hist-wrap">
@@ -546,13 +547,13 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
   var canPush = true;
   window.rsvOnRole = function (role) { canPush = (role === 'admin' || role === 'manager'); render(); };
 
-  var rows = [], filter = 'ready', openId = null;
+  var rows = [], filter = 'pending', openId = null;
   function items(r) { try { return JSON.parse(r.items_json || '[]'); } catch (e) { return []; } }
+  // Two tabs only: Pushed = successfully in UC; Pending push = everything
+  // else (not pushed yet, waiting for the push, or failed with an error).
   function inFilter(r) {
-    var st = r.uc_status || 'pending';
-    if (filter === 'ready') return st === 'pending' || st === 'failed';
-    if (filter === 'all') return true;
-    return st === filter;
+    var pushed = (r.uc_status === 'pushed');
+    return filter === 'pushed' ? pushed : !pushed;
   }
 
   async function load(quiet) {
@@ -572,8 +573,8 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
 
   function actionCell(r) {
     var st = r.uc_status || 'pending';
-    if (st === 'queued') return '<span class="status-pill st-queued" title="Requested by ' + esc(r.uc_requested_by || '') + ' · ' + esc(fmtDateTime(r.uc_requested_at)) + '">Queued</span>';
-    if (st === 'pushed') return '<span class="status-pill st-pushed" title="' + esc(fmtDateTime(r.uc_pushed_at)) + '">Pushed</span>';
+    if (st === 'queued') return '<span class="status-pill st-queued" title="Requested by ' + esc(r.uc_requested_by || '') + ' · ' + esc(fmtDateTime(r.uc_requested_at)) + '">Pushing…</span>';
+    if (st === 'pushed') return '<span class="status-pill st-pushed">Pushed ' + esc(fmtDateTime(r.uc_pushed_at)) + '</span>';
     var label = st === 'failed' ? 'Retry push' : 'Push to UC';
     return (st === 'failed' ? '<span class="status-pill st-failed" style="margin-right:8px">Failed</span>' : '') +
       '<button class="btn btn-sm btn-primary push-btn" data-push="' + r.id + '"' + (canPush ? '' : ' disabled title="View only"') + '>' + label + '</button>';
@@ -587,22 +588,17 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
       '<table class="detail-table"><thead><tr><th class="num">#</th><th>UC SKU</th><th class="num">Qty</th></tr></thead><tbody>' +
       its.map(function (it, i) { return '<tr><td class="num">' + (i + 1) + '</td><td>' + esc(it.sku) + '</td><td class="num">' + esc(it.qty) + '</td></tr>'; }).join('') +
       '</tbody></table>' +
-      (r.uc_status === 'failed' && r.uc_message ? '<div class="fail-msg">UC said: ' + esc(r.uc_message) + '</div>' : '') +
       '</td></tr>';
   }
 
   function render() {
-    var counts = { ready: 0, queued: 0, pushed: 0, all: rows.length };
-    rows.forEach(function (r) {
-      var st = r.uc_status || 'pending';
-      if (st === 'pending' || st === 'failed') counts.ready++;
-      else if (counts[st] != null) counts[st]++;
-    });
+    var counts = { pending: 0, pushed: 0 };
+    rows.forEach(function (r) { if (r.uc_status === 'pushed') counts.pushed++; else counts.pending++; });
     Object.keys(counts).forEach(function (k) { $('c-' + k).textContent = counts[k] ? '(' + counts[k] + ')' : ''; });
 
     var list = rows.filter(inFilter);
     if (!list.length) {
-      var msg = filter === 'ready' ? 'Nothing to push — every verified return has been sent.' : 'No returns here yet.';
+      var msg = filter === 'pending' ? 'Nothing pending — every verified return is in UC.' : 'No returns pushed yet.';
       $('push-body').innerHTML = '<tr><td colspan="5" class="hist-empty">' + msg + '</td></tr>'; return;
     }
     $('push-body').innerHTML = list.map(function (r, i) {
@@ -613,7 +609,9 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
         '<td class="num">' + its.length + '</td>' +
         '<td class="num">' + esc(r.total_qty) + '</td>' +
         '<td class="num">' + actionCell(r) + '</td>' +
-      '</tr>' + (openId === r.id ? detailRow(r) : '');
+      '</tr>' +
+      (r.uc_status === 'failed' ? '<tr class="err-row"><td></td><td colspan="4"><div class="fail-msg">UC error: ' + esc(r.uc_message || 'No error message returned') + '</div></td></tr>' : '') +
+      (openId === r.id ? detailRow(r) : '');
     }).join('');
   }
 
@@ -624,7 +622,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
       var id = +btn.dataset.push;
       var r = rows.filter(function (x) { return x.id === id; })[0]; if (!r) return;
       if (!confirm('Push ' + rtnNo(id) + ' to Unicommerce?\n\n' + items(r).length + ' SKUs · ' + r.total_qty + ' qty')) return;
-      btn.disabled = true; btn.textContent = 'Queuing…';
+      btn.disabled = true; btn.textContent = 'Sending…';
       try {
         var res = await fetch(WORKER + '?action=rsv_requestUcPush', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -632,7 +630,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
         }).then(function (x) { return x.json(); });
         if (!res.ok && !(res.slip && res.slip.uc_status)) throw new Error(res.error || 'Failed');
         if (res.slip) Object.assign(r, res.slip);
-        toast(res.ok ? rtnNo(id) + ' queued for UC push' : rtnNo(id) + ' is ' + r.uc_status + ' already', res.ok ? '' : 'err');
+        toast(res.ok ? rtnNo(id) + ' sent for push to UC' : rtnNo(id) + ' is already ' + (r.uc_status === 'pushed' ? 'pushed' : 'being pushed'), res.ok ? '' : 'err');
       } catch (err) {
         toast('Could not queue ' + rtnNo(id) + ': ' + err.message, 'err');
       }
