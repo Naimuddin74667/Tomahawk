@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Returns Verifier — Tomahawk Operations</title>
 <!--
-  Returns Verifier v1.0 — /Returns-Verifier/
+  Returns Verifier v1.1 — /Returns-Verifier/  (v1.1: auto-scan via Cloudflare Workers AI)
   Photo of a handwritten Returns Slip on the left, manual line entry on
   the right. SKU boxes only accept enabled UC SKUs (uc_sku_cache in D1,
   refreshed by admin via the hub). Submit saves the slip to D1
@@ -218,6 +218,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
 .photo-bar { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap; }
 .photo-name { font-size: 12px; color: var(--text-secondary); flex: 1; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .photo-stage { flex: 1; overflow: auto; background: var(--bg-base); position: relative; }
+.photo-panel { position: sticky; }
 .photo-stage img { display: block; max-width: none; user-select: none; }
 .photo-empty { position: absolute; inset: 14px; border: 2px dashed var(--border-default); border-radius: var(--radius-md); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; color: var(--text-secondary); font-size: 13px; padding: 20px; cursor: pointer; }
 .photo-empty:hover, .photo-empty.is-drag { border-color: var(--accent); color: var(--text-primary); }
@@ -244,9 +245,10 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
 
 .tally { display: flex; gap: 22px; margin-left: auto; }
 .tally-item { text-align: right; }
-.tally-num { font-family: var(--font-display); font-weight: 800; font-size: 26px; line-height: 1; }
+.tally-num { font-family: var(--font-body); font-weight: 700; font-size: 26px; line-height: 1; font-variant-numeric: tabular-nums; }
 .tally-lbl { font-size: 11.5px; color: var(--text-secondary); margin-top: 4px; }
 .tally-item.is-warn .tally-num { color: #f87171; }
+.tally-item.is-check .tally-num { color: var(--c-orange); }
 
 .lines { padding: 6px 0; }
 .line-head, .line-row { display: grid; grid-template-columns: 36px 1fr 96px 34px; gap: 10px; align-items: center; padding: 0 16px; }
@@ -264,6 +266,17 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
 .line-row.is-bad .line-note { color: #f87171; }
 .line-row.is-dup .line-note { color: var(--c-orange); }
 .line-row.is-ok .line-num::before { content: '✓ '; color: var(--c-green); }
+.line-row.is-check { background: var(--c-orange-dim); box-shadow: inset 3px 0 0 var(--c-orange); }
+.line-row.is-check.is-ok .line-num::before { content: '? '; color: var(--c-orange); }
+.line-read { font-size: 11.5px; color: var(--text-muted); margin-top: 3px; }
+.line-read:empty { display: none; }
+.sugg { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.sugg:empty { display: none; }
+.sugg-chip { font: 500 12px var(--font-body); background: var(--bg-raised); border: 1px solid var(--border-default); color: var(--text-primary); border-radius: 20px; padding: 3px 10px; cursor: pointer; }
+.sugg-chip:hover { border-color: var(--accent); color: var(--accent); }
+.scan-overlay { position: absolute; inset: 0; background: rgba(12,12,20,.72); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #fff; font-size: 14px; z-index: 5; text-align: center; padding: 20px; }
+.scan-spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(255,255,255,.25); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .line-del { background: none; border: 0; color: var(--text-muted); font-size: 18px; cursor: pointer; border-radius: var(--radius-sm); height: 30px; }
 .line-del:hover { color: #f87171; background: var(--bg-raised); }
 
@@ -451,7 +464,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
   <div class="page-head">
     <div>
       <h1 class="page-title">Returns slip check</h1>
-      <div class="page-sub">Type each line from the slip photo. Only enabled UC SKUs can be picked.</div>
+      <div class="page-sub">Upload the slip photo — lines are read automatically. Check every orange line against the photo, then submit.</div>
     </div>
     <div class="tabs" role="tablist">
       <button class="tab-btn is-active" id="tab-verify" role="tab" aria-selected="true">Verify slip</button>
@@ -471,6 +484,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
         <button class="icon-btn" id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
         <button class="icon-btn" id="zoom-fit" title="Fit to panel" aria-label="Fit to panel">⤢</button>
         <button class="icon-btn" id="rotate-btn" title="Rotate 90°" aria-label="Rotate">↻</button>
+        <button class="btn btn-sm btn-primary" id="scan-btn" disabled title="Read the lines from the photo">Scan slip</button>
       </div>
       <div class="photo-stage" id="photo-stage">
         <div class="photo-empty" id="photo-empty">
@@ -478,6 +492,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
           <span>Click to upload, drop an image here, or paste with Ctrl+V</span>
         </div>
         <img id="photo-img" alt="Returns slip" hidden>
+        <div class="scan-overlay" id="scan-overlay" hidden><div class="scan-spinner"></div><div>Reading the slip…<br><span style="opacity:.7;font-size:12px">usually 10–30 seconds</span></div></div>
       </div>
       <input type="file" id="photo-input" accept="image/*" hidden>
     </section>
@@ -491,6 +506,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
         <div class="tally">
           <div class="tally-item"><div class="tally-num" id="t-lines">0</div><div class="tally-lbl">Lines</div></div>
           <div class="tally-item"><div class="tally-num" id="t-qty">0</div><div class="tally-lbl">Total qty</div></div>
+          <div class="tally-item" id="t-check-wrap"><div class="tally-num" id="t-check">0</div><div class="tally-lbl">To check</div></div>
           <div class="tally-item" id="t-bad-wrap"><div class="tally-num" id="t-bad">0</div><div class="tally-lbl">To fix</div></div>
         </div>
       </div>
@@ -592,6 +608,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
       ucSkus = (res.skus || []).filter(function (s) { return s && !isPlaceholder(s); });
       ucSet = {}; ucNorm = [];
       ucSkus.forEach(function (s) { ucSet[s] = true; ucNorm.push({ sku: s, n: norm(s) }); });
+      ucCanon = null;
       if (!ucSkus.length) {
         dot.classList.add('is-error');
         txt.textContent = 'UC SKU list is empty — admin: click Refresh SKU List on the hub';
@@ -634,7 +651,13 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
   }
 
   // ---- LINES -----------------------------------------------------
-  function newLine(sku, qty) { return { id: nextId++, sku: sku || '', qty: qty == null ? '' : qty }; }
+  // raw/qtyRaw = what the scan read; check = needs a human look;
+  // sugg = up to 3 suggested UC SKUs shown as chips under the line.
+  function newLine(sku, qty, extra) {
+    var l = { id: nextId++, sku: sku || '', qty: qty == null ? '' : qty, raw: '', qtyRaw: '', check: false, sugg: [] };
+    if (extra) { l.raw = extra.raw || ''; l.qtyRaw = extra.qtyRaw || ''; l.check = !!extra.check; l.sugg = extra.sugg || []; }
+    return l;
+  }
 
   function saveDraft() {
     try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ date: $('slip-date').value, lines: lines })); } catch (e) {}
@@ -643,7 +666,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     try {
       var d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
       if (d && Array.isArray(d.lines) && d.lines.length) {
-        lines = d.lines.map(function (l) { return newLine(l.sku, l.qty); });
+        lines = d.lines.map(function (l) { return newLine(l.sku, l.qty, l); });
         if (d.date) $('slip-date').value = d.date;
         return true;
       }
@@ -673,6 +696,8 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
         '<div class="line-sku-wrap">' +
           '<input class="input line-sku" type="text" autocomplete="off" spellcheck="false" placeholder="Type SKU…" value="' + esc(l.sku) + '" aria-label="UC SKU line ' + (i + 1) + '">' +
           '<div class="line-note"></div>' +
+          '<div class="line-read">' + (l.raw ? 'Slip reads “' + esc(l.raw) + '”' + (l.qtyRaw && l.qtyRaw !== String(l.qty) ? ' · qty “' + esc(l.qtyRaw) + '”' : '') : '') + '</div>' +
+          '<div class="sugg">' + (l.check && l.sugg.length ? l.sugg.map(function (s) { return '<button class="sugg-chip" data-sku="' + esc(s) + '">' + esc(s) + '</button>'; }).join('') : '') + '</div>' +
         '</div>' +
         '<input class="input line-qty" type="number" min="1" step="1" inputmode="numeric" value="' + esc(l.qty) + '" aria-label="Qty line ' + (i + 1) + '">' +
         '<button class="line-del" title="Remove line" aria-label="Remove line ' + (i + 1) + '">×</button>' +
@@ -694,6 +719,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
       var note = '';
       row.classList.toggle('is-ok', st === 'ok');
       row.classList.toggle('is-bad', st === 'bad');
+      row.classList.toggle('is-check', !!l.check);
       var dupOf = dups[l.sku] ? dups[l.sku].filter(function (n) { return n !== idx; }) : null;
       row.classList.toggle('is-dup', !!(dupOf && dupOf.length) && st === 'ok');
       if (st === 'bad') note = ucSkus.length ? 'Not an enabled UC SKU — pick one from the list' : 'UC SKU list not loaded';
@@ -710,6 +736,9 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     $('t-lines').textContent = filled.length;
     $('t-qty').textContent = qty;
     $('t-bad').textContent = bad;
+    var chk = filled.filter(function (l) { return l.check; }).length;
+    $('t-check').textContent = chk;
+    $('t-check-wrap').classList.toggle('is-check', chk > 0);
     $('t-bad-wrap').classList.toggle('is-warn', bad > 0);
     var btn = $('submit-btn');
     btn.disabled = !canSubmit || !filled.length || bad > 0;
@@ -766,7 +795,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     var sku = ac.items[i == null ? ac.active : i];
     var l = rowOf(input); if (!l) return false;
     l.sku = sku; input.value = sku;
-    closeAc(); refreshStates(); saveDraft();
+    closeAc(); clearCheck(l, input); refreshStates(); saveDraft();
     var q = input.closest('.line-row').querySelector('.line-qty'); q.focus(); q.select();
     return true;
   }
@@ -777,7 +806,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
   listEl.addEventListener('input', function (e) {
     var l = rowOf(e.target); if (!l) return;
     if (e.target.classList.contains('line-sku')) { l.sku = e.target.value.trim(); openAc(e.target); }
-    if (e.target.classList.contains('line-qty')) l.qty = e.target.value;
+    if (e.target.classList.contains('line-qty')) { l.qty = e.target.value; clearCheck(l, e.target); }
     refreshStates(); saveDraft();
   });
 
@@ -792,13 +821,30 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     }
     if (t.classList.contains('line-qty') && e.key === 'Enter') {
       e.preventDefault();
+      if (lineStatus(l) === 'ok') { clearCheck(l, t); refreshStates(); saveDraft(); }
       var i = lines.indexOf(l);
       // Enter on the last line adds a new one; otherwise go to the next line.
       if (i === lines.length - 1) addLineAfter(l); else focusSku(lines[i + 1].id);
     }
   });
 
+  // Once a person has edited or picked on a scanned line, it's checked.
+  function clearCheck(l, el) {
+    if (!l.check) return;
+    l.check = false; l.sugg = [];
+    var row = el.closest('.line-row'); if (row) row.querySelector('.sugg').innerHTML = '';
+  }
+
   listEl.addEventListener('mousedown', function (e) {
+    var chip = e.target.closest('.sugg-chip');
+    if (chip) {
+      e.preventDefault();
+      var cl = rowOf(chip); if (!cl) return;
+      cl.sku = chip.dataset.sku;
+      var inp = chip.closest('.line-row').querySelector('.line-sku'); inp.value = cl.sku;
+      clearCheck(cl, chip); refreshStates(); saveDraft();
+      return;
+    }
     var item = e.target.closest('.ac-item');
     if (item) { e.preventDefault(); pickAc(+item.dataset.i); }
   });
@@ -884,6 +930,113 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     }
   });
 
+  // ---- SLIP MATCHING -------------------------------------------------
+  // The scan returns handwriting as text (e.g. "MGK 3000"). Here we find
+  // the enabled UC SKU it most likely means. Handwriting mix-ups (O/0,
+  // I/1, S/5, B/8, Z/2, G/6) are folded together on BOTH sides, and slip
+  // codes are usually the start of the full UC SKU, so we compare against
+  // the SKU's first few characters as well as the whole SKU.
+  function canon(s) {
+    return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+      .replace(/O/g, '0').replace(/[IL]/g, '1').replace(/S/g, '5')
+      .replace(/B/g, '8').replace(/Z/g, '2').replace(/G/g, '6');
+  }
+  function lev(a, b) {
+    var m = a.length, n = b.length, prev = [], cur = [], i, j;
+    for (j = 0; j <= n; j++) prev[j] = j;
+    for (i = 1; i <= m; i++) {
+      cur = [i];
+      for (j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+    return prev[n];
+  }
+  var ucCanon = null;   // built lazily: [{ sku, c }]
+  function rankSkus(raw) {
+    var r = canon(raw);
+    if (r.length < 2) return [];
+    if (!ucCanon) ucCanon = ucSkus.map(function (s) { return { sku: s, c: canon(s) }; });
+    var out = ucCanon.map(function (it) {
+      var d = Math.min(
+        lev(r, it.c.slice(0, r.length)),
+        lev(r, it.c.slice(0, r.length + 1)),
+        r.length > 1 ? lev(r, it.c.slice(0, r.length - 1)) : 99,
+        lev(r, it.c)
+      );
+      return { sku: it.sku, score: d / r.length };
+    });
+    out.sort(function (a, b) { return a.score - b.score || a.sku.length - b.sku.length; });
+    return out.slice(0, 3);
+  }
+  // "8+1" -> 9, "2" -> 2, "1l" -> 1 ; returns 0 if nothing usable.
+  function parseQty(q) {
+    var s = String(q || '').replace(/[lI|]/g, '1').replace(/[oO]/g, '0');
+    var parts = s.split('+').map(function (p) { return parseInt(p.replace(/[^0-9]/g, ''), 10) || 0; });
+    return parts.reduce(function (a, b) { return a + b; }, 0);
+  }
+  // Slip date like "24/09/26" or "24/09/126" -> "2026-09-24"
+  function parseSlipDate(d) {
+    var m = String(d || '').match(/(\d{1,2})\D+(\d{1,2})\D+(\d{2,4})/);
+    if (!m) return '';
+    var dd = +m[1], mm = +m[2], yy = m[3].slice(-2);
+    if (dd < 1 || dd > 31 || mm < 1 || mm > 12) return '';
+    return '20' + yy + '-' + String(mm).padStart(2, '0') + '-' + String(dd).padStart(2, '0');
+  }
+
+  function scannedToLine(sl) {
+    var qty = parseQty(sl.qty);
+    var top = rankSkus(sl.sku);
+    var best = top[0], second = top[1];
+    var qtyOdd = !/^\s*\d+\s*$/.test(sl.qty || '') || !(qty > 0);
+    // Only offer chips that are reasonably close — no random suggestions.
+    var sku = sl.sku, check = true, sugg = top.filter(function (t) { return t.score <= 0.6; }).map(function (t) { return t.sku; });
+    if (best && best.score <= 0.15 && (!second || second.score - best.score >= 0.1)) {
+      sku = best.sku; check = qtyOdd;            // clear, single match
+    } else if (best && best.score <= 0.4) {
+      sku = best.sku;                             // likely, but a person must confirm
+    }
+    return newLine(sku, qty > 0 ? qty : '', { raw: sl.sku, qtyRaw: sl.qty, check: check, sugg: check ? sugg : [] });
+  }
+
+  // ---- SCAN (Cloudflare Workers AI via the Worker) ------------------
+  // Shrinks the photo (as currently rotated) to max 1600px JPEG first.
+  function photoAsJpegBase64() {
+    var maxSide = 1600;
+    var k = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    var c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.85).split(',')[1];
+  }
+
+  var scanning = false;
+  async function scanSlip() {
+    if (scanning || img.hidden || !img.naturalWidth) return;
+    if (!canSubmit) { toast('View only — scanning needs Manager or Admin access', 'err'); return; }
+    if (!ucSkus.length) { toast('UC SKU list not loaded yet — try again in a moment', 'err'); return; }
+    var typed = lines.filter(function (l) { return l.sku.trim() || String(l.qty).trim(); }).length;
+    if (typed && !confirm('Replace the ' + typed + ' line(s) already on screen with what the scan reads?')) return;
+    scanning = true; $('scan-btn').disabled = true; $('scan-overlay').hidden = false;
+    try {
+      var res = await fetch(WORKER + '?action=readReturnsSlip', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'readReturnsSlip', image_base64: photoAsJpegBase64(), mime_type: 'image/jpeg' })
+      }).then(function (r) { return r.json(); });
+      if (!res.ok) throw new Error(res.error || 'Scan failed');
+      if (!res.lines || !res.lines.length) throw new Error('No lines found on the photo — try a straighter, closer photo');
+      lines = res.lines.map(scannedToLine);
+      var d = parseSlipDate(res.date); if (d) $('slip-date').value = d;
+      renderLines(); saveDraft();
+      var chk = lines.filter(function (l) { return l.check; }).length;
+      toast('Read ' + lines.length + ' lines · ' + chk + ' to check against the photo');
+    } catch (e) {
+      toast('Scan failed: ' + e.message + ' — you can still type the lines', 'err');
+    } finally {
+      scanning = false; $('scan-btn').disabled = false; $('scan-overlay').hidden = true;
+    }
+  }
+  $('scan-btn').addEventListener('click', scanSlip);
+
   // ---- PHOTO VIEWER ------------------------------------------------
   var img = $('photo-img'), stage = $('photo-stage');
   var zoom = 0;   // 0 = fit to panel width, otherwise a scale factor
@@ -897,7 +1050,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
 
   function loadPhoto(file) {
     if (!file || !/^image\//.test(file.type)) { toast('That file is not an image', 'err'); return; }
-    img.onload = function () { $('photo-empty').hidden = true; img.hidden = false; zoom = 0; applyZoom(); stage.scrollTo(0, 0); };
+    img.onload = function () { $('photo-empty').hidden = true; img.hidden = false; zoom = 0; applyZoom(); stage.scrollTo(0, 0); $('scan-btn').disabled = false; scanSlip(); };
     img.src = URL.createObjectURL(file);
     $('photo-name').textContent = file.name || 'Pasted image';
   }

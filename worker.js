@@ -317,7 +317,10 @@ const ACTION_TIERS = {
   // — Returns Verifier (/Returns-Verifier/): handwritten returns slip
   //   typed in against enabled UC SKUs. Saving a slip is a write, so
   //   manager_up like Returns Manager; history list is viewer_read. —
-  saveReturnsSlip: 'manager_up', listReturnsSlips: 'viewer_read'
+  saveReturnsSlip: 'manager_up', listReturnsSlips: 'viewer_read',
+  // Auto-read of the slip photo via Cloudflare Workers AI (free included
+  // usage, same AI binding as the Chatbot) — manager_up like Submit.
+  readReturnsSlip: 'manager_up'
 };
 
 function getAuthRequirement(act) {
@@ -2444,6 +2447,56 @@ export default {
             `).bind(JSON.stringify(piecesPerCarton)).run();
           }
           return json({ ok: true, count: skus.length, ppcCount });
+        }
+
+        // ── RETURNS VERIFIER — auto-read a slip photo (Workers AI) ────────
+        // The vision model ONLY transcribes the handwriting (row, SKU text,
+        // qty text). Matching each reading to an enabled UC SKU happens in
+        // the browser, so the model can never invent a SKU, and the prompt
+        // stays small (cheap on the free daily allowance). No Claude/Gemini.
+        if (act === 'readReturnsSlip') {
+          if (!env.AI) return json({ ok: false, error: 'Workers AI binding missing (check [ai] in wrangler.toml)' }, 500);
+          const imageB64 = String(body.image_base64 || '');
+          const mime = String(body.mime_type || 'image/jpeg');
+          if (!imageB64) return json({ ok: false, error: 'image_base64 required' }, 400);
+          const prompt =
+            'This is a photo of a handwritten TOMAHAWK "Returns Slip". It has a printed table with columns #, SKU and QTY ' +
+            '(rows numbered 1 to 25) and a handwritten Date near the top right.\n' +
+            'Transcribe EVERY filled row, top to bottom, including hard-to-read ones. Copy the SKU text exactly as written ' +
+            '(letters, digits, dashes). Ignore descriptive words written after the SKU such as "Laser Level" or "combo". ' +
+            'Copy the QTY exactly as written (e.g. "2" or "8+1").\n' +
+            'Reply with JSON only, no other text: ' +
+            '{"date":"date as written","lines":[{"row":1,"sku":"MGK-3000","qty":"6"}]}';
+          const dataUrl = 'data:' + mime + ';base64,' + imageB64;
+          const models = ['@cf/meta/llama-4-scout-17b-16e-instruct', '@cf/mistralai/mistral-small-3.1-24b-instruct'];
+          let lastErr = '';
+          for (const model of models) {
+            try {
+              const out = await env.AI.run(model, {
+                messages: [{ role: 'user', content: [
+                  { type: 'text', text: prompt },
+                  { type: 'image_url', image_url: { url: dataUrl } }
+                ] }],
+                max_tokens: 2048, temperature: 0
+              });
+              let resp = out && out.response;
+              let parsed = null;
+              if (resp && typeof resp === 'object') parsed = resp;
+              else {
+                const txt = String(resp || '').replace(/```json|```/g, '');
+                const a = txt.indexOf('{'), b = txt.lastIndexOf('}');
+                if (a !== -1 && b > a) parsed = JSON.parse(txt.slice(a, b + 1));
+              }
+              if (!parsed || !Array.isArray(parsed.lines)) { lastErr = model + ': no readable JSON'; continue; }
+              const lines = parsed.lines.map(l => ({
+                row: parseInt(l.row, 10) || null,
+                sku: String(l.sku || '').trim(),
+                qty: String(l.qty == null ? '' : l.qty).trim()
+              })).filter(l => l.sku || l.qty);
+              return json({ ok: true, model, date: String(parsed.date || ''), lines });
+            } catch (e) { lastErr = model + ': ' + e.message; }
+          }
+          return json({ ok: false, error: 'Auto-read failed — ' + lastErr }, 502);
         }
 
         // ── RETURNS VERIFIER — save one verified slip ─────────────────────
