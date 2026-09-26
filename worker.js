@@ -2639,7 +2639,8 @@ export default {
               mode: 'purchase_order',                          // PO -> GRN -> putaway (no direct adjustment)
               steps: ['vendor_mapping', 'po', 'grn', 'putaway'],
               po_number: returnNo,                             // PO number = return number
-              vendor_name: 'Returns (Adjustment)',
+              vendor_code: 'Adjustment',                      // UC Vendor Code — use this to find the vendor
+              vendor_name: 'Returns',                          // UC Vendor Name (shown as "Returns (Adjustment)")
               vendor_unit_price: 100,                          // every line, and for new vendor SKU mappings
               vendor_sku_rule: 'same_as_item_sku',             // Vendor SKU Code = Item Type SKU Code
               facility_code: 'industrialtoolsandhardware',     // E3 — always
