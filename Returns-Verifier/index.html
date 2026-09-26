@@ -587,7 +587,6 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
 
   // ---- STATE -----------------------------------------------------
   var ucSkus = [];          // enabled SIMPLE UC SKUs (placeholders + bundles removed)
-  var bundleCount = 0;      // how many enabled bundle SKUs were excluded
   var ucSet = {};           // exact-match lookup: sku -> true
   var ucNorm = [];          // [{ sku, n }] pre-normalised for the dropdown
   var lines = [];           // [{ id, sku, qty }]
@@ -607,27 +606,12 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
   async function loadUcList() {
     var dot = $('status-dot'), txt = $('status-text');
     try {
-      // Load the enabled SKU list and the bundle SKU list together.
-      var both = await Promise.all([
-        fetch(WORKER + '?action=ucsku_getList').then(function (r) { return r.json(); }),
-        fetch(WORKER + '?action=rsv_getBundleSkus').then(function (r) { return r.json(); }).catch(function () { return { ok: false }; })
-      ]);
-      var res = both[0], bres = both[1];
-      if (!res.ok) throw new Error(res.error || 'Load failed');
-      // Slips must always resolve to SIMPLE SKUs, never bundles. The live
-      // UC_BundleComposition list is the source of truth; if it can't be
-      // loaded, fall back to the SKU naming rule: "Bundle-*" or an
-      // underscore component suffix = bundle, except "_Bare-Tool" (simple).
-      var bundleSet = {}, bundlesLive = !!(bres && bres.ok && Array.isArray(bres.bundles));
-      if (bundlesLive) bres.bundles.forEach(function (b) { bundleSet[b] = true; });
-      function isBundle(sku) {
-        if (/^bundle-/i.test(sku)) return true;
-        if (bundlesLive) return !!bundleSet[sku];
-        return sku.indexOf('_') !== -1 && !/_Bare-Tool$/i.test(sku);
-      }
-      var allEnabled = (res.skus || []).filter(function (s) { return s && !isPlaceholder(s); });
-      ucSkus = allEnabled.filter(function (s) { return !isBundle(s); });
-      bundleCount = allEnabled.length - ucSkus.length;
+      // LIVE enabled SIMPLE SKUs straight from UC_ItemMaster (Worker does
+      // the bundle/placeholder filtering). Disabled SKUs never appear.
+      var res = await fetch(WORKER + '?action=rsv_getLiveSkus').then(function (r) { return r.json(); });
+      if (!res.ok) throw new Error(res.error || 'Live UC list unavailable');
+      ucSkus = res.skus || [];
+      res.updatedAt = res.fetchedAt;
       ucSet = {}; ucNorm = [];
       ucSkus.forEach(function (s) { ucSet[s] = true; ucNorm.push({ sku: s, n: norm(s) }); });
       ucCanon = null;
@@ -636,13 +620,13 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
         txt.textContent = 'UC SKU list is empty — admin: click Refresh SKU List on the hub';
       } else {
         dot.classList.remove('is-error');
-        txt.textContent = ucSkus.length + ' simple UC SKUs (' + bundleCount + ' bundles excluded) · updated ' + fmtDateTime(res.updatedAt);
-        if (!bundlesLive) toast('Bundle list unavailable — bundles excluded by SKU naming rule instead', 'err');
+        txt.textContent = ucSkus.length + ' enabled simple UC SKUs · live from UC';
+        if (res.bundleSource !== 'UC_BundleComposition') toast('Bundle list unavailable — bundles excluded by SKU naming rule instead', 'err');
       }
     } catch (e) {
       dot.classList.add('is-error');
       txt.textContent = 'Could not load UC SKU list';
-      toast('Could not load the UC SKU list — check your connection and reload', 'err');
+      toast('Could not load the live UC SKU list — scanning and submit are paused. Reload to retry.', 'err');
     }
     renderLines();
   }

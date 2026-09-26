@@ -61,6 +61,50 @@ function findSkuMatches(query, invRows) {
   ).slice(0, 8);
 }
 
+// ── Returns Verifier: LIVE enabled SIMPLE UC SKUs ──
+// Read straight from UC_ItemMaster on the UC API (Auto Sync) sheet (synced
+// from UC every ~2h), NOT the manual uc_sku_cache snapshot — so a SKU
+// disabled in UC drops out automatically. Bundles (UC_BundleComposition via
+// the GAS bridge), Block-*/Unlinked-*/Bundle-* placeholders are removed.
+// Edge-cached 10 min. Throws if the live sheet can't be read.
+const RSV_ITEMMASTER_CSV = 'https://docs.google.com/spreadsheets/d/17gMjH2tqTRKyyRXf8pvMtZXaj0MfyUFRWtFKODGHIlw/gviz/tq?tqx=out:csv&sheet=UC_ItemMaster';
+async function rsvLiveSimpleSkus() {
+  const cache = caches.default;
+  const key = new Request('https://cache.internal/rsv-live-simple-skus-v1');
+  const hit = await cache.match(key);
+  if (hit) return hit.json();
+  const res = await fetch(RSV_ITEMMASTER_CSV);
+  if (!res.ok) throw new Error('UC_ItemMaster fetch failed: HTTP ' + res.status);
+  const text = await res.text();
+  if (text.trim().startsWith('<')) throw new Error('UC_ItemMaster sheet is not publicly readable');
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  const header = (parseCSVRow(lines[0]) || []).map(h => h.trim());
+  const skuIdx = header.indexOf('skuCode'), enIdx = header.indexOf('enabled');
+  if (skuIdx === -1 || enIdx === -1) throw new Error('UC_ItemMaster is missing skuCode/enabled columns');
+  let bundles = new Set();
+  try {
+    const b = await fetchGasCached(SA_UC_GAS_URL + '?type=bundles', 'https://cache.internal/rsv-uc-bundles-v1');
+    bundles = new Set(Object.keys((b && b.bundles) || {}));
+  } catch (e) { /* fall back to naming rule below */ }
+  const useNamingRule = bundles.size === 0;
+  const seen = new Set(), skus = [];
+  for (let i = 1; i < lines.length; i++) {
+    const c = parseCSVRow(lines[i]) || [];
+    const sku = String(c[skuIdx] || '').trim();
+    const en = String(c[enIdx] || '').trim().toUpperCase();
+    if (!sku || seen.has(sku) || (en !== 'TRUE' && en !== '1')) continue;
+    if (/^(block|unlinked|bundle)-/i.test(sku)) continue;
+    if (bundles.has(sku)) continue;
+    if (useNamingRule && sku.indexOf('_') !== -1 && !/_Bare-Tool$/i.test(sku)) continue;
+    seen.add(sku); skus.push(sku);
+  }
+  skus.sort();
+  if (!skus.length) throw new Error('UC_ItemMaster returned 0 enabled SKUs');
+  const out = { skus, bundleSource: useNamingRule ? 'naming-rule' : 'UC_BundleComposition', fetchedAt: new Date().toISOString() };
+  await cache.put(key, new Response(JSON.stringify(out), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=600' } }));
+  return out;
+}
+
 // ── CSV row parser (handles quoted fields with commas inside) ──
 function parseCSVRow(row) {
   if (!row || !row.trim()) return null;
@@ -324,6 +368,7 @@ const ACTION_TIERS = {
   // Bundle (master) SKU codes from UC_BundleComposition — Returns Verifier
   // excludes these so slips always resolve to simple SKUs.
   rsv_getBundleSkus: 'viewer_read',
+  rsv_getLiveSkus: 'viewer_read',   // live enabled SIMPLE SKUs for Returns Verifier
   // UC Push Panel: "Push to UC" marks a verified slip as queued for SK's
   // UC push. Writes a status only (no UC call yet) — manager_up. —
   rsv_requestUcPush: 'manager_up',
@@ -1000,6 +1045,12 @@ export default {
             piecesPerCarton: ppcRow ? JSON.parse(ppcRow.value || '{}') : {},
             updatedAt: row ? row.updated_at : null
           });
+        }
+
+        // ── RETURNS VERIFIER — live enabled simple SKU list ────────────
+        if (action === 'rsv_getLiveSkus') {
+          try { return json(Object.assign({ ok: true }, await rsvLiveSimpleSkus())); }
+          catch (e) { return json({ ok: false, error: e.message }, 502); }
         }
 
         // ── RETURNS VERIFIER — bundle SKU codes to exclude ─────────────
@@ -2661,6 +2712,14 @@ export default {
             merged[sku] += qty;
           }
           const items = order.map(sku => ({ sku, qty: merged[sku] }));
+          // Hard rule: only ENABLED SIMPLE UC SKUs, checked against the live
+          // UC list at save time — disabled SKUs and bundles are refused.
+          let live;
+          try { live = await rsvLiveSimpleSkus(); }
+          catch (e) { return json({ ok: false, error: 'Could not check SKUs against live UC (' + e.message + ') — try again' }, 502); }
+          const liveSet = new Set(live.skus);
+          const bad = items.filter(i => !liveSet.has(i.sku)).map(i => i.sku);
+          if (bad.length) return json({ ok: false, error: 'Not enabled simple SKUs in UC: ' + bad.join(', '), bad_skus: bad }, 400);
           const totalQty = items.reduce((a, i) => a + i.qty, 0);
           const lineCount = parseInt(body.line_count, 10) || items.length;
           const sessionUser = await resolveSession(request, env.DB);
