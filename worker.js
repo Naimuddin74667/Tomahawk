@@ -2637,7 +2637,7 @@ export default {
               return_no: returnNo,
               slip_date: r.slip_date,
               mode: 'purchase_order',                          // PO -> GRN -> putaway (no direct adjustment)
-              steps: ['vendor_mapping', 'po', 'grn', 'putaway'],
+              steps: ['vendor_mapping', 'po', 'grn', 'qc', 'putaway'],   // GRN lands in QC PENDING — mark QC complete before putaway
               po_number: returnNo,                             // PO number = return number
               vendor_code: 'Adjustment',                      // UC Vendor Code — use this to find the vendor
               vendor_name: 'Returns',                          // UC Vendor Name (shown as "Returns (Adjustment)")
@@ -2674,11 +2674,13 @@ export default {
           // steps = { po, grn, putaway } each 'done' | 'failed' | 'manual'
           const stepsIn = (body.steps && typeof body.steps === 'object') ? body.steps : null;
           const clean = v => (['done', 'failed', 'manual'].includes(v) ? v : null);
-          const steps = stepsIn ? { po: clean(stepsIn.po), grn: clean(stepsIn.grn), putaway: clean(stepsIn.putaway) } : null;
+          const steps = stepsIn ? { po: clean(stepsIn.po), grn: clean(stepsIn.grn), qc: clean(stepsIn.qc), putaway: clean(stepsIn.putaway) } : null;
           let status;
           if (steps) {
             // PO flow: fully done = all three steps done, no rejected SKUs.
-            const allDone = steps.po === 'done' && steps.grn === 'done' && steps.putaway === 'done';
+            // qc is required once the script reports it (older reports had no qc step)
+            const allDone = steps.po === 'done' && steps.grn === 'done' && steps.putaway === 'done' &&
+                            (!('qc' in stepsIn) || steps.qc === 'done');
             if (allDone && !failed.length) status = 'pushed';
             else if (steps.po === 'done') status = 'partial';   // PO exists — finish the rest in UC
             else status = 'failed';
@@ -5946,7 +5948,7 @@ async function ensureReturnsSlipsTable(DB) {
     ["uc_claimed_at", "TEXT"],  // when SK's script picked it up ('pushing')
     ["uc_failed_json", "TEXT"], // [{ sku, qty, error }] SKUs UC rejected — to be added manually
     ["return_no", "TEXT"],      // RTN/MMYY/NNN (also the UC PO number); older slips: NULL -> RTN-00001 style
-    ["uc_steps_json", "TEXT"],  // { po, grn, putaway } each 'done' | 'failed' | 'manual'
+    ["uc_steps_json", "TEXT"],  // { po, grn, qc, putaway } each 'done' | 'failed' | 'manual'
     ["uc_po_code", "TEXT"]      // PO code as created in UC
   ];
   for (const [name, def] of add) {

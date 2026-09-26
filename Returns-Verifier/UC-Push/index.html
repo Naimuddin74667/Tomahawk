@@ -553,11 +553,12 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
   function retNo(r) { return (r && r.return_no) || rtnNo(r.id); }
   function retNoById(id) { var r = rows.filter(function (x) { return x.id === id; })[0]; return r ? retNo(r) : rtnNo(id); }
   function stepsOf(r) { try { return JSON.parse(r.uc_steps_json || 'null'); } catch (e) { return null; } }
-  var STEP_LABEL = { po: 'PO', grn: 'GRN', putaway: 'Putaway' };
+  var STEP_LABEL = { po: 'PO', grn: 'GRN', qc: 'QC', putaway: 'Putaway' };
   // "PO ✓ · GRN ✓ · Putaway — do in UC"
   function stepsLine(st) {
     if (!st) return '';
-    return ['po', 'grn', 'putaway'].map(function (k) {
+    // QC shows only when the script reports it (older returns had no QC step)
+    return ['po', 'grn', 'qc', 'putaway'].filter(function (k) { return k !== 'qc' || st.qc; }).map(function (k) {
       var v = st[k];
       var cls = v === 'done' ? 'ok' : (v === 'manual' ? 'man' : (v === 'failed' ? 'bad' : 'na'));
       var txt = v === 'done' ? '✓' : (v === 'manual' ? 'do in UC' : (v === 'failed' ? 'failed' : '—'));
@@ -631,7 +632,8 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     var f = failedItems(r), st = stepsOf(r);
     var head;
     if (st) {
-      var todo = ['grn', 'putaway'].filter(function (k) { return st[k] !== 'done'; }).map(function (k) { return STEP_LABEL[k]; });
+      var todo = ['grn', 'qc', 'putaway'].filter(function (k) { return (k !== 'qc' || st.qc) && st[k] !== 'done'; })
+        .map(function (k) { return k === 'qc' ? 'Mark QC Complete' : STEP_LABEL[k]; });
       head = r.uc_status === 'partial'
         ? 'PO ' + esc(r.uc_po_code || retNo(r)) + ' is in UC.' + (todo.length ? ' Finish ' + todo.join(' + ') + ' in UC.' : '') +
           (f.length ? ' These SKUs were rejected — add them by hand:' : '') + ' Then click Mark done.' +
