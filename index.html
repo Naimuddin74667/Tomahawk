@@ -1325,6 +1325,28 @@ html[data-theme="light"]       .icon-moon { display: none; }
   const nameEl     = document.getElementById('user-name-display');
   const roleBadge  = document.getElementById('user-role-badge');
 
+  // Per-user default app: these accounts are taken straight to their app
+  // when they open the portal (once per browser session, so the Tomahawk
+  // logo still brings them back to the hub afterwards). The app's card is
+  // also shown on their hub even if it isn't in TEAM_VISIBLE_APPS.
+  // Key = username or display name, lowercase.
+  var USER_DEFAULT_APP = {
+    shikhar: { slug: 'UC-Push-Panel', url: './Returns-Verifier/UC-Push/' }
+  };
+  function defaultAppFor(user) {
+    return USER_DEFAULT_APP[String(user.username || '').toLowerCase()] ||
+           USER_DEFAULT_APP[String(user.display_name || '').toLowerCase()] || null;
+  }
+  function goToDefaultApp(user) {
+    var d = defaultAppFor(user);
+    if (!d) return;
+    try {
+      if (sessionStorage.getItem('tm_default_app_done') === '1') return;
+      sessionStorage.setItem('tm_default_app_done', '1');
+    } catch (e) {}
+    window.location.href = d.url;
+  }
+
   function showApp(user) {
     gate.hidden = true;
     headerUser.hidden = false;
@@ -1367,8 +1389,10 @@ html[data-theme="light"]       .icon-moon { display: none; }
     // Custom users: their ticked apps (Manage Users → Apps) are the rule,
     // even for apps outside the 6 — applyAppVisibility() handles them.
     if (user.allowedApps) return;
+    var own = defaultAppFor(user);
     document.querySelectorAll('.app-card[data-app-slug]').forEach(function (card) {
       var slug = card.getAttribute('data-app-slug');
+      if (own && own.slug === slug) return; // their default app stays visible
       if (TEAM_VISIBLE_APPS.indexOf(slug) === -1) card.hidden = true;
     });
   }
@@ -1424,6 +1448,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
     if (res.ok && res.user) {
       setSession({ token: session.token, username: res.user.username, role: res.user.role, display_name: res.user.display_name, allowedApps: res.user.allowedApps || null });
       showApp(res.user);
+      goToDefaultApp(res.user);
     } else {
       clearSession();
       showGate();
@@ -1560,6 +1585,8 @@ html[data-theme="light"]       .icon-moon { display: none; }
       }
       setSession({ token: res.token, username: res.user.username, role: res.user.role, display_name: res.user.display_name, allowedApps: res.user.allowedApps || null });
       showApp(res.user);
+      try { sessionStorage.removeItem('tm_default_app_done'); } catch (e2) {} // fresh login → go to default app
+      goToDefaultApp(res.user);
     } catch (err) {
       errEl.textContent = 'Could not reach the server. Check your connection.';
     }
@@ -1569,6 +1596,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
 
   logoutBtn.addEventListener('click', async function () {
     try { await api('logout', { method: 'POST', body: {} }); } catch (e) {}
+    try { sessionStorage.removeItem('tm_default_app_done'); } catch (e) {}
     clearSession();
     location.reload();
   });
