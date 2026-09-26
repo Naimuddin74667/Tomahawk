@@ -467,6 +467,11 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
 .st-pushed  { color: var(--c-green); border-color: var(--c-green-border); background: var(--c-green-dim); }
 .st-failed  { color: #f87171; border-color: #f8717166; background: #f8717114; }
 .st-partial { color: var(--c-orange); border-color: var(--c-orange-border); background: var(--c-orange-dim); }
+.steps-line { font-size: 12.5px; margin-bottom: 4px; }
+.step { font-weight: 600; }
+.step.ok { color: var(--c-green); } .step.man { color: var(--c-orange); } .step.bad { color: #f87171; } .step.na { color: var(--text-secondary); }
+.step-sep { color: var(--text-secondary); margin: 0 6px; }
+.po-code { font-size: 12px; color: var(--text-secondary); font-weight: 500; margin-left: 6px; }
 .manual-list { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--text-primary); }
 .manual-list li { margin: 2px 0; }
 .manual-list .err { color: #f87171; }
@@ -539,6 +544,21 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
   }
   // Return number shown everywhere for a slip: RTN-00007 (from its D1 id)
   function rtnNo(id) { return 'RTN-' + String(id).padStart(5, '0'); }
+  // New slips carry return_no (RTN/MMYY/NNN = UC PO number); older ones fall back to RTN-00001.
+  function retNo(r) { return (r && r.return_no) || rtnNo(r.id); }
+  function retNoById(id) { var r = rows.filter(function (x) { return x.id === id; })[0]; return r ? retNo(r) : rtnNo(id); }
+  function stepsOf(r) { try { return JSON.parse(r.uc_steps_json || 'null'); } catch (e) { return null; } }
+  var STEP_LABEL = { po: 'PO', grn: 'GRN', putaway: 'Putaway' };
+  // "PO ✓ · GRN ✓ · Putaway — do in UC"
+  function stepsLine(st) {
+    if (!st) return '';
+    return ['po', 'grn', 'putaway'].map(function (k) {
+      var v = st[k];
+      var cls = v === 'done' ? 'ok' : (v === 'manual' ? 'man' : (v === 'failed' ? 'bad' : 'na'));
+      var txt = v === 'done' ? '✓' : (v === 'manual' ? 'do in UC' : (v === 'failed' ? 'failed' : '—'));
+      return '<span class="step ' + cls + '">' + STEP_LABEL[k] + ' ' + txt + '</span>';
+    }).join('<span class="step-sep">·</span>');
+  }
 
   var toastTimer = null;
   function toast(msg, type) {
@@ -603,14 +623,24 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
   function failedItems(r) { try { return JSON.parse(r.uc_failed_json || '[]'); } catch (e) { return []; } }
   // Red block under a partial/failed return: which SKUs to add by hand in UC and why.
   function failRow(r) {
-    var f = failedItems(r);
-    var head = r.uc_status === 'partial'
-      ? 'The other SKUs were added to UC. Add these by hand in UC (E3, good inventory), then click Mark done:'
-      : (f.length ? 'Nothing was added. Retry, or add these by hand in UC and click Mark done:' : 'UC error: ' + esc(r.uc_message || 'No error message returned'));
+    var f = failedItems(r), st = stepsOf(r);
+    var head;
+    if (st) {
+      var todo = ['grn', 'putaway'].filter(function (k) { return st[k] !== 'done'; }).map(function (k) { return STEP_LABEL[k]; });
+      head = r.uc_status === 'partial'
+        ? 'PO ' + esc(r.uc_po_code || retNo(r)) + ' is in UC.' + (todo.length ? ' Finish ' + todo.join(' + ') + ' in UC.' : '') +
+          (f.length ? ' These SKUs were rejected — add them by hand:' : '') + ' Then click Mark done.' +
+          (r.uc_message ? '<br>UC: ' + esc(r.uc_message) : '')
+        : 'PO was not created. UC error: ' + esc(r.uc_message || 'No error message returned');
+    } else {
+      head = r.uc_status === 'partial'
+        ? 'The other SKUs were added to UC. Add these by hand in UC (E3, good inventory), then click Mark done:'
+        : (f.length ? 'Nothing was added. Retry, or add these by hand in UC and click Mark done:' : 'UC error: ' + esc(r.uc_message || 'No error message returned'));
+    }
     var list = f.length ? '<ul class="manual-list">' + f.map(function (x) {
       return '<li><b>' + esc(x.sku) + '</b> × ' + esc(x.qty) + (x.error ? ' — <span class="err">' + esc(x.error) + '</span>' : '') + '</li>';
     }).join('') + '</ul>' : '';
-    return '<tr class="err-row"><td></td><td colspan="4"><div class="fail-msg">' + head + '</div>' + list + '</td></tr>';
+    return '<tr class="err-row"><td></td><td colspan="4">' + (st ? '<div class="steps-line">' + stepsLine(st) + '</div>' : '') + '<div class="fail-msg">' + head + '</div>' + list + '</td></tr>';
   }
 
   function detailRow(r) {
@@ -621,7 +651,8 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
       '<table class="detail-table"><thead><tr><th class="num">#</th><th>UC SKU</th><th class="num">Qty</th></tr></thead><tbody>' +
       its.map(function (it, i) { return '<tr><td class="num">' + (i + 1) + '</td><td>' + esc(it.sku) + '</td><td class="num">' + esc(it.qty) + '</td></tr>'; }).join('') +
       '</tbody></table>' +
-      (r.uc_status === 'pushed' && r.uc_message ? '<div class="detail-meta" style="margin-top:8px">UC: ' + esc(r.uc_message) + '</div>' : '') +
+      (r.uc_status === 'pushed' && stepsOf(r) ? '<div class="steps-line" style="margin-top:8px">' + stepsLine(stepsOf(r)) + '</div>' : '') +
+      (r.uc_status === 'pushed' && r.uc_message ? '<div class="detail-meta" style="margin-top:4px">UC: ' + esc(r.uc_message) + '</div>' : '') +
       '</td></tr>';
   }
 
@@ -639,7 +670,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
       var its = items(r);
       return '<tr class="hist-row" data-id="' + r.id + '">' +
         '<td class="num">' + (i + 1) + '</td>' +
-        '<td class="rtn">' + rtnNo(r.id) + '</td>' +
+        '<td class="rtn">' + esc(retNo(r)) + (r.uc_status === 'pushed' && r.uc_po_code && r.uc_po_code !== r.return_no ? '<span class="po-code">PO ' + esc(r.uc_po_code) + '</span>' : '') + '</td>' +
         '<td class="num">' + its.length + '</td>' +
         '<td class="num">' + esc(r.total_qty) + '</td>' +
         '<td class="num">' + actionCell(r) + '</td>' +
@@ -659,7 +690,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
       var r = rows.filter(function (x) { return x.id === id; })[0]; if (!r) return;
       var stuckMsg = btn.dataset.stuck ? '\n\nThe last push never reported back. Make sure these SKUs were NOT already added in UC, or the stock will be added twice.' : '';
       // One click pushes. Only a stuck retry asks first (risk of adding stock twice).
-      if (stuckMsg && !confirm('Retry ' + rtnNo(id) + '?' + stuckMsg)) return;
+      if (stuckMsg && !confirm('Retry ' + retNo(r) + '?' + stuckMsg)) return;
       btn.disabled = true; btn.textContent = 'Sending…';
       try {
         var res = await fetch(WORKER + '?action=rsv_requestUcPush', {
@@ -668,9 +699,9 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
         }).then(function (x) { return x.json(); });
         if (!res.ok && !(res.slip && res.slip.uc_status)) throw new Error(res.error || 'Failed');
         if (res.slip) Object.assign(r, res.slip);
-        toast(res.ok ? rtnNo(id) + ' sent for push to UC' : rtnNo(id) + ' is already ' + (r.uc_status === 'pushed' ? 'pushed' : 'being pushed'), res.ok ? '' : 'err');
+        toast(res.ok ? retNo(r) + ' sent for push to UC' : retNo(r) + ' is already ' + (r.uc_status === 'pushed' ? 'pushed' : 'being pushed'), res.ok ? '' : 'err');
       } catch (err) {
-        toast('Could not queue ' + rtnNo(id) + ': ' + err.message, 'err');
+        toast('Could not queue ' + retNo(r) + ': ' + err.message, 'err');
       }
       render();
       return;
@@ -686,8 +717,8 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
           body: JSON.stringify({ action: 'rsv_cancelUcPush', id: cid })
         }).then(function (x) { return x.json(); });
         if (!cres.ok) throw new Error(cres.error || 'Failed');
-        toast(rtnNo(cid) + ' push cancelled');
-      } catch (err) { toast('Could not cancel ' + rtnNo(cid) + ': ' + err.message, 'err'); }
+        toast(retNoById(cid) + ' push cancelled');
+      } catch (err) { toast('Could not cancel ' + retNoById(cid) + ': ' + err.message, 'err'); }
       await load(true);
       return;
     }
@@ -695,7 +726,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     if (done) {
       e.stopPropagation();
       var did = +done.dataset.done;
-      if (!confirm('Mark ' + rtnNo(did) + ' as done?\n\nOnly do this after the failed SKUs have been added by hand in UC.')) return;
+      if (!confirm('Mark ' + retNoById(did) + ' as done?\n\nOnly do this after everything left (GRN / putaway / rejected SKUs) has been finished by hand in UC.')) return;
       done.disabled = true;
       try {
         var dres = await fetch(WORKER + '?action=rsv_markManualDone', {
@@ -703,9 +734,9 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
           body: JSON.stringify({ action: 'rsv_markManualDone', id: did })
         }).then(function (x) { return x.json(); });
         if (!dres.ok) throw new Error(dres.error || 'Failed');
-        toast(rtnNo(did) + ' marked done — moved to Pushed');
+        toast(retNoById(did) + ' marked done — moved to Pushed');
         await load(true);
-      } catch (err) { toast('Could not mark ' + rtnNo(did) + ' done: ' + err.message, 'err'); render(); }
+      } catch (err) { toast('Could not mark ' + retNoById(did) + ' done: ' + err.message, 'err'); render(); }
       return;
     }
     var row = e.target.closest('.hist-row'); if (!row) return;

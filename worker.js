@@ -1069,7 +1069,7 @@ export default {
           const limit = Math.min(parseInt(url.searchParams.get('limit') || '300', 10) || 300, 1000);
           const rows = await env.DB.prepare(
             'SELECT id, slip_date, items_json, line_count, total_qty, created_by, created_at, ' +
-            "COALESCE(uc_status, 'pending') AS uc_status, uc_requested_by, uc_requested_at, uc_pushed_at, uc_message, uc_claimed_at, uc_failed_json " +
+            "COALESCE(uc_status, 'pending') AS uc_status, uc_requested_by, uc_requested_at, uc_pushed_at, uc_message, uc_claimed_at, uc_failed_json, return_no, uc_steps_json, uc_po_code " +
             'FROM returns_slips ORDER BY id DESC LIMIT ?'
           ).bind(limit).all();
           return json({ ok: true, slips: rows.results || [] });
@@ -2608,7 +2608,7 @@ export default {
           if (!healthTokenOk(request, env)) return json({ ok: false, error: 'Invalid or missing health token' }, 401);
           await ensureReturnsSlipsTable(env.DB);
           const rows = await env.DB.prepare(
-            "SELECT id, slip_date, items_json, total_qty FROM returns_slips WHERE uc_status = 'queued' ORDER BY id ASC LIMIT 20"
+            "SELECT id, slip_date, items_json, total_qty, return_no FROM returns_slips WHERE uc_status = 'queued' ORDER BY id ASC LIMIT 20"
           ).all();
           const out = [];
           for (const r of (rows.results || [])) {
@@ -2617,14 +2617,21 @@ export default {
               "UPDATE returns_slips SET uc_status = 'pushing', uc_claimed_at = datetime('now') WHERE id = ? AND uc_status = 'queued'"
             ).bind(r.id).run();
             if (!upd.meta || !upd.meta.changes) continue;
+            const returnNo = r.return_no || ('RTN-' + String(r.id).padStart(5, '0'));
             out.push({
               id: r.id,
-              return_no: 'RTN-' + String(r.id).padStart(5, '0'),
+              return_no: returnNo,
               slip_date: r.slip_date,
-              facility_code: 'industrialtoolsandhardware',   // E3 — always
+              mode: 'purchase_order',                          // PO -> GRN -> putaway (no direct adjustment)
+              steps: ['vendor_mapping', 'po', 'grn', 'putaway'],
+              po_number: returnNo,                             // PO number = return number
+              vendor_name: 'Returns (Adjustment)',
+              vendor_unit_price: 100,                          // every line, and for new vendor SKU mappings
+              vendor_sku_rule: 'same_as_item_sku',             // Vendor SKU Code = Item Type SKU Code
+              facility_code: 'industrialtoolsandhardware',     // E3 — always
               inventory_type: 'GOOD_INVENTORY',                // always
-              adjustment_type: 'ADD',                          // NEVER replace
-              remark: 'Return Received',                       // remark on the UC adjustment
+              putaway_shelf: 'DEFAULT',                        // UC's default putaway shelf in E3
+              remark: 'Return Received - ' + returnNo,
               total_qty: r.total_qty,
               items: JSON.parse(r.items_json || '[]')          // [{ sku, qty }], enabled simple UC SKUs, merged
             });
@@ -2649,34 +2656,32 @@ export default {
             sku: String((f && f.sku) || ''), qty: parseInt(f && f.qty, 10) || 0, error: String((f && f.error) || '').slice(0, 1000)
           })).filter(f => f.sku);
           const pushedCount = Array.isArray(body.pushed_items) ? body.pushed_items.length : 0;
+          // steps = { po, grn, putaway } each 'done' | 'failed' | 'manual'
+          const stepsIn = (body.steps && typeof body.steps === 'object') ? body.steps : null;
+          const clean = v => (['done', 'failed', 'manual'].includes(v) ? v : null);
+          const steps = stepsIn ? { po: clean(stepsIn.po), grn: clean(stepsIn.grn), putaway: clean(stepsIn.putaway) } : null;
           let status;
-          if (body.ok && !failed.length) status = 'pushed';
+          if (steps) {
+            // PO flow: fully done = all three steps done, no rejected SKUs.
+            const allDone = steps.po === 'done' && steps.grn === 'done' && steps.putaway === 'done';
+            if (allDone && !failed.length) status = 'pushed';
+            else if (steps.po === 'done') status = 'partial';   // PO exists — finish the rest in UC
+            else status = 'failed';
+          } else if (body.ok && !failed.length) status = 'pushed';
           else if (failed.length && (pushedCount > 0 || body.ok)) status = 'partial';
           else status = 'failed';
           const res = await env.DB.prepare(
-            "UPDATE returns_slips SET uc_status = ?, uc_message = ?, uc_failed_json = ?, " +
+            "UPDATE returns_slips SET uc_status = ?, uc_message = ?, uc_failed_json = ?, uc_steps_json = ?, uc_po_code = COALESCE(?, uc_po_code), " +
             "uc_pushed_at = CASE WHEN ? IN ('pushed','partial') THEN datetime('now') ELSE uc_pushed_at END " +
             "WHERE id = ? AND uc_status = 'pushing'"
-          ).bind(status, msg || (status === 'failed' ? 'Push failed (no error text returned)' : ''), failed.length ? JSON.stringify(failed) : null, status, id).run();
+          ).bind(status, msg || (status === 'failed' ? 'Push failed (no error text returned)' : ''),
+                 failed.length ? JSON.stringify(failed) : null, steps ? JSON.stringify(steps) : null,
+                 body.po_code ? String(body.po_code).slice(0, 100) : null, status, id).run();
           if (!res.meta || !res.meta.changes) {
             const row = await env.DB.prepare("SELECT COALESCE(uc_status, 'pending') AS uc_status FROM returns_slips WHERE id = ?").bind(id).first();
             return json({ ok: false, error: row ? 'Return is ' + row.uc_status + ', not pushing' : 'Return not found' }, 409);
           }
           return json({ ok: true, status });
-        }
-
-        // ── RETURNS VERIFIER — cancel a Push click (only while still queued) ──
-        // Once the script has claimed it ('pushing'), cancel is refused so
-        // a return can never be half-sent.
-        if (act === 'rsv_cancelUcPush') {
-          await ensureReturnsSlipsTable(env.DB);
-          const id = parseInt(body.id, 10);
-          if (!id) return json({ ok: false, error: 'id required' }, 400);
-          const res = await env.DB.prepare(
-            "UPDATE returns_slips SET uc_status = 'pending', uc_requested_by = NULL, uc_requested_at = NULL WHERE id = ? AND uc_status = 'queued'"
-          ).bind(id).run();
-          if (!res.meta || !res.meta.changes) return json({ ok: false, error: 'Already picked up by the push script — can\'t cancel now' }, 409);
-          return json({ ok: true });
         }
 
         // ── RETURNS VERIFIER — failed SKUs were added by hand in UC ───────
@@ -2724,10 +2729,19 @@ export default {
           const lineCount = parseInt(body.line_count, 10) || items.length;
           const sessionUser = await resolveSession(request, env.DB);
           const who = (sessionUser && (sessionUser.display_name || sessionUser.username)) || 'unauthenticated';
+          // Return number = UC PO number: RTN/MMYY/NNN, MMYY = month submitted
+          // (IST), counter restarts every month.
+          const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
+          const mmyy = String(ist.getUTCMonth() + 1).padStart(2, '0') + String(ist.getUTCFullYear()).slice(-2);
+          const prefix = 'RTN/' + mmyy + '/';
+          const last = await env.DB.prepare(
+            "SELECT MAX(CAST(substr(return_no, 10) AS INTEGER)) AS n FROM returns_slips WHERE return_no LIKE ?"
+          ).bind(prefix + '%').first();
+          const returnNo = prefix + String(((last && last.n) || 0) + 1).padStart(3, '0');
           const res = await env.DB.prepare(
-            'INSERT INTO returns_slips (slip_date, items_json, line_count, total_qty, created_by) VALUES (?, ?, ?, ?, ?)'
-          ).bind(slipDate, JSON.stringify(items), lineCount, totalQty, who).run();
-          return json({ ok: true, id: res.meta && res.meta.last_row_id, total_qty: totalQty, sku_count: items.length });
+            'INSERT INTO returns_slips (slip_date, items_json, line_count, total_qty, created_by, return_no) VALUES (?, ?, ?, ?, ?, ?)'
+          ).bind(slipDate, JSON.stringify(items), lineCount, totalQty, who, returnNo).run();
+          return json({ ok: true, id: res.meta && res.meta.last_row_id, return_no: returnNo, total_qty: totalQty, sku_count: items.length });
         }
 
         // ── OPS CHATBOT — natural-language stock lookup ───────────────────
@@ -5907,7 +5921,10 @@ async function ensureReturnsSlipsTable(DB) {
     ["uc_pushed_at", "TEXT"],
     ["uc_message", "TEXT"],
     ["uc_claimed_at", "TEXT"],  // when SK's script picked it up ('pushing')
-    ["uc_failed_json", "TEXT"]  // [{ sku, qty, error }] SKUs UC rejected — to be added manually
+    ["uc_failed_json", "TEXT"], // [{ sku, qty, error }] SKUs UC rejected — to be added manually
+    ["return_no", "TEXT"],      // RTN/MMYY/NNN (also the UC PO number); older slips: NULL -> RTN-00001 style
+    ["uc_steps_json", "TEXT"],  // { po, grn, putaway } each 'done' | 'failed' | 'manual'
+    ["uc_po_code", "TEXT"]      // PO code as created in UC
   ];
   for (const [name, def] of add) {
     if (!have.has(name)) await DB.prepare('ALTER TABLE returns_slips ADD COLUMN ' + name + ' ' + def).run();

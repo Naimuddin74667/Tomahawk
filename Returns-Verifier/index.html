@@ -583,6 +583,8 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
   function norm(s) { return String(s || '').toLowerCase().replace(/[\s\-_.\/]/g, ''); }
   // Return number for a saved slip: RTN-00007 (same format as UC Push Panel)
   function rtnNo(id) { return 'RTN-' + String(id).padStart(5, '0'); }
+  // New slips: return_no = RTN/MMYY/NNN (also the UC PO number). Older: RTN-00001.
+  function retNo(r) { return (r && r.return_no) || rtnNo(r.id); }
   function todayISO() { var d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); }
   function fmtDate(iso) { if (!iso) return '—'; var p = String(iso).slice(0, 10).split('-'); return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : iso; }
   function fmtDateTime(s) {
@@ -936,7 +938,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     var blob = new Blob([rows.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = (id ? rtnNo(id) + '_' : 'Returns_Slip_') + fmtDate(slipDate) + '.csv';
+    a.download = (id ? String(id).replace(/\//g, '-') + '_' : 'Returns_Slip_') + fmtDate(slipDate) + '.csv';
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
   }
@@ -957,7 +959,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
       }).then(function (r) { return r.json(); });
       if (!res.ok) throw new Error(res.error || 'Save failed');
       // Submit only saves — the CSV is still available from History.
-      toast(rtnNo(res.id) + ' submitted (' + items.length + ' SKUs, ' + items.reduce(function (a, i) { return a + i.qty; }, 0) + ' qty)');
+      toast((res.return_no || rtnNo(res.id)) + ' submitted (' + items.length + ' SKUs, ' + items.reduce(function (a, i) { return a + i.qty; }, 0) + ' qty)');
       localStorage.removeItem(DRAFT_KEY);
       lines = [newLine()]; $('slip-date').value = todayISO();
       renderLines(); focusSku(lines[0].id);
@@ -1154,7 +1156,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     if (!histRows.length) { body.innerHTML = '<tr><td colspan="7" class="hist-empty">No slips submitted yet. Submitted slips show up here.</td></tr>'; return; }
     body.innerHTML = histRows.map(function (r) {
       return '<tr class="hist-row" data-id="' + r.id + '">' +
-        '<td style="font-weight:700">' + rtnNo(r.id) + '</td>' +
+        '<td style="font-weight:700">' + esc(retNo(r)) + '</td>' +
         '<td>' + esc(fmtDate(r.slip_date)) + '</td>' +
         '<td class="num">' + slipItems(r).length + '</td>' +
         '<td class="num">' + esc(r.total_qty) + '</td>' +
@@ -1171,7 +1173,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     var row = e.target.closest('.hist-row');
     if (!row) return;
     var r = histRows.filter(function (x) { return String(x.id) === row.dataset.id; })[0]; if (!r) return;
-    if (csvBtn) { e.stopPropagation(); downloadCsv(slipItems(r), r.slip_date, r.id); return; }
+    if (csvBtn) { e.stopPropagation(); downloadCsv(slipItems(r), r.slip_date, retNo(r)); return; }
     // Toggle an inline detail row listing the slip's SKUs
     var next = row.nextElementSibling;
     if (next && next.classList.contains('hist-detail')) { next.remove(); return; }
