@@ -955,7 +955,9 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     try {
       var res = await fetch(WORKER + '?action=saveReturnsSlip', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'saveReturnsSlip', slip_date: slipDate, items: items, line_count: filled.length })
+        // Slip photo goes with it (smaller copy) so UC Push Panel can show it.
+        body: JSON.stringify({ action: 'saveReturnsSlip', slip_date: slipDate, items: items, line_count: filled.length,
+          photo_b64: (!img.hidden && img.naturalWidth) ? photoAsJpegBase64(1400, 0.72) : '' })
       }).then(function (r) { return r.json(); });
       if (!res.ok) throw new Error(res.error || 'Save failed');
       // Submit only saves — the CSV is still available from History.
@@ -1042,13 +1044,13 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
 
   // ---- SCAN (Cloudflare Workers AI via the Worker) ------------------
   // Shrinks the photo (as currently rotated) to max 1600px JPEG first.
-  function photoAsJpegBase64() {
-    var maxSide = 1600;
+  function photoAsJpegBase64(maxSide, quality) {
+    maxSide = maxSide || 1600;
     var k = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
     var c = document.createElement('canvas');
     c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
     c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-    return c.toDataURL('image/jpeg', 0.85).split(',')[1];
+    return c.toDataURL('image/jpeg', quality || 0.85).split(',')[1];
   }
 
   var scanning = false;

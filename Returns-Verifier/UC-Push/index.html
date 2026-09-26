@@ -479,6 +479,11 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
 .filter-bar .tabs { padding: 3px; }
 .filter-bar .tab-btn { padding: 5px 12px; font-size: 12.5px; }
 .count-badge { font-size: 11px; opacity: .75; margin-left: 4px; }
+.detail-grid { display: grid; grid-template-columns: minmax(260px, 5fr) 7fr; gap: 20px; align-items: start; }
+.detail-photo { background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-md); overflow: auto; max-height: 78vh; position: sticky; top: 72px; }
+.detail-photo img { display: block; width: 100%; height: auto; cursor: zoom-in; }
+.detail-photo .ph-msg { padding: 40px 16px; text-align: center; color: var(--text-secondary); font-size: 13px; }
+@media (max-width: 900px) { .detail-grid { grid-template-columns: 1fr; } .detail-photo { position: relative; top: 0; max-height: 60vh; } }
 .detail-meta { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
 .detail-table { border-collapse: collapse; font-size: 12.5px; min-width: 320px; }
 .detail-table td, .detail-table th { padding: 4px 18px 4px 0; border: 0; text-align: left; }
@@ -643,18 +648,40 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     return '<tr class="err-row"><td></td><td colspan="4">' + (st ? '<div class="steps-line">' + stepsLine(st) + '</div>' : '') + '<div class="fail-msg">' + head + '</div>' + list + '</td></tr>';
   }
 
+  // Photos are fetched once per return and cached for the session.
+  var photoCache = {};
+  function loadPhoto(r) {
+    var box = document.querySelector('[data-photo="' + r.id + '"]');
+    if (!box) return;
+    if (!r.has_photo) { box.innerHTML = '<div class="ph-msg">No slip photo saved for this return (submitted before photos were kept).</div>'; return; }
+    function show(url) { box.innerHTML = '<img src="' + url + '" alt="Slip photo ' + esc(retNo(r)) + '" title="Click to open full size">'; }
+    if (photoCache[r.id]) { show(photoCache[r.id]); return; }
+    box.innerHTML = '<div class="ph-msg">Loading slip photo…</div>';
+    fetch(WORKER + '?action=rsv_getSlipPhoto&id=' + r.id).then(function (x) { return x.json(); }).then(function (res) {
+      if (!res.ok) throw new Error(res.error || 'Not found');
+      photoCache[r.id] = res.data_url;
+      var cur = document.querySelector('[data-photo="' + r.id + '"]'); if (cur) { box = cur; show(res.data_url); }
+    }).catch(function (e) { box.innerHTML = '<div class="ph-msg">Could not load photo: ' + esc(e.message) + '</div>'; });
+  }
+
   function detailRow(r) {
     var its = items(r);
     return '<tr class="hist-detail" data-detail="' + r.id + '"><td colspan="5">' +
       '<div class="detail-meta">Slip date ' + esc(fmtDate(r.slip_date)) + ' · verified by ' + esc(r.created_by || '—') + ' on ' + esc(fmtDateTime(r.created_at)) +
       (r.uc_requested_at ? ' · push requested by ' + esc(r.uc_requested_by || '—') + ' on ' + esc(fmtDateTime(r.uc_requested_at)) : '') + '</div>' +
-      '<table class="detail-table"><thead><tr><th class="num">#</th><th>UC SKU</th><th class="num">Qty</th></tr></thead><tbody>' +
-      its.map(function (it, i) { return '<tr><td class="num">' + (i + 1) + '</td><td>' + esc(it.sku) + '</td><td class="num">' + esc(it.qty) + '</td></tr>'; }).join('') +
-      '</tbody></table>' +
-      (r.uc_status === 'pushed' && stepsOf(r) ? '<div class="steps-line" style="margin-top:8px">' + stepsLine(stepsOf(r)) + '</div>' : '') +
-      (r.uc_status === 'pushed' && r.uc_message ? '<div class="detail-meta" style="margin-top:4px">UC: ' + esc(r.uc_message) + '</div>' : '') +
+      '<div class="detail-grid">' +
+        '<div class="detail-photo" data-photo="' + r.id + '"></div>' +
+        '<div>' +
+          '<table class="detail-table"><thead><tr><th class="num">#</th><th>UC SKU</th><th class="num">Qty</th></tr></thead><tbody>' +
+          its.map(function (it, i) { return '<tr><td class="num">' + (i + 1) + '</td><td>' + esc(it.sku) + '</td><td class="num">' + esc(it.qty) + '</td></tr>'; }).join('') +
+          '</tbody></table>' +
+          (r.uc_status === 'pushed' && stepsOf(r) ? '<div class="steps-line" style="margin-top:8px">' + stepsLine(stepsOf(r)) + '</div>' : '') +
+          (r.uc_status === 'pushed' && r.uc_message ? '<div class="detail-meta" style="margin-top:4px">UC: ' + esc(r.uc_message) + '</div>' : '') +
+        '</div>' +
+      '</div>' +
       '</td></tr>';
   }
+
 
   function render() {
     var counts = { pending: 0, pushed: 0 };
@@ -680,9 +707,13 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
       ((r.uc_status === 'failed' || r.uc_status === 'partial') ? failRow(r) : '') +
       (openId === r.id ? detailRow(r) : '');
     }).join('');
+    if (openId != null) { var or = rows.filter(function (x) { return x.id === openId; })[0]; if (or) loadPhoto(or); }
   }
 
   $('push-body').addEventListener('click', async function (e) {
+    var pimg = e.target.closest('.detail-photo img');
+    if (pimg) { e.stopPropagation(); var w = window.open(); if (w) { w.document.write('<title>Slip photo</title><body style="margin:0;background:#111"><img src="' + pimg.src + '" style="max-width:100%;display:block;margin:auto">'); } return; }
+    if (e.target.closest('.hist-detail')) return;   // clicks inside the open detail don't collapse it
     var btn = e.target.closest('[data-push]');
     if (btn) {
       e.stopPropagation();

@@ -381,7 +381,9 @@ const ACTION_TIERS = {
   // marks the return done (moves it to Pushed) — manager_up. —
   rsv_markManualDone: 'manager_up',
   // Undo a Push click before SK's script has picked it up (queued -> pending). —
-  rsv_cancelUcPush: 'manager_up'
+  rsv_cancelUcPush: 'manager_up',
+  // Slip photo saved with each submitted return (shown in UC Push Panel). —
+  rsv_getSlipPhoto: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -1053,6 +1055,16 @@ export default {
           catch (e) { return json({ ok: false, error: e.message }, 502); }
         }
 
+        // ── RETURNS VERIFIER — slip photo for one return ────────────────
+        if (action === 'rsv_getSlipPhoto') {
+          await ensureReturnsSlipPhotosTable(env.DB);
+          const id = parseInt(url.searchParams.get('id') || '', 10);
+          if (!id) return json({ ok: false, error: 'id required' }, 400);
+          const row = await env.DB.prepare('SELECT mime, data_b64 FROM returns_slip_photos WHERE slip_id = ?').bind(id).first();
+          if (!row) return json({ ok: false, error: 'No photo saved for this return' }, 404);
+          return json({ ok: true, data_url: 'data:' + (row.mime || 'image/jpeg') + ';base64,' + row.data_b64 });
+        }
+
         // ── RETURNS VERIFIER — bundle SKU codes to exclude ─────────────
         // Same GAS bridge route Stock Alert uses (?type=bundles, reads
         // UC_BundleComposition). Edge-cached 5 min via fetchGasCached.
@@ -1066,10 +1078,12 @@ export default {
         // ── RETURNS VERIFIER — list submitted slips (newest first) ─────
         if (action === 'listReturnsSlips') {
           await ensureReturnsSlipsTable(env.DB);
+          await ensureReturnsSlipPhotosTable(env.DB);
           const limit = Math.min(parseInt(url.searchParams.get('limit') || '300', 10) || 300, 1000);
           const rows = await env.DB.prepare(
             'SELECT id, slip_date, items_json, line_count, total_qty, created_by, created_at, ' +
-            "COALESCE(uc_status, 'pending') AS uc_status, uc_requested_by, uc_requested_at, uc_pushed_at, uc_message, uc_claimed_at, uc_failed_json, return_no, uc_steps_json, uc_po_code " +
+            "COALESCE(uc_status, 'pending') AS uc_status, uc_requested_by, uc_requested_at, uc_pushed_at, uc_message, uc_claimed_at, uc_failed_json, return_no, uc_steps_json, uc_po_code, " +
+            "EXISTS(SELECT 1 FROM returns_slip_photos p WHERE p.slip_id = returns_slips.id) AS has_photo " +
             'FROM returns_slips ORDER BY id DESC LIMIT ?'
           ).bind(limit).all();
           return json({ ok: true, slips: rows.results || [] });
@@ -2741,6 +2755,14 @@ export default {
           const res = await env.DB.prepare(
             'INSERT INTO returns_slips (slip_date, items_json, line_count, total_qty, created_by, return_no) VALUES (?, ?, ?, ?, ?, ?)'
           ).bind(slipDate, JSON.stringify(items), lineCount, totalQty, who, returnNo).run();
+          const newId = res.meta && res.meta.last_row_id;
+          // Optional slip photo (compressed JPEG, base64) — stored separately.
+          const photo = String(body.photo_b64 || '');
+          if (newId && photo && photo.length < 1500000 && /^[A-Za-z0-9+/=]+$/.test(photo.slice(0, 200))) {
+            await ensureReturnsSlipPhotosTable(env.DB);
+            await env.DB.prepare('INSERT OR REPLACE INTO returns_slip_photos (slip_id, mime, data_b64) VALUES (?, ?, ?)')
+              .bind(newId, 'image/jpeg', photo).run();
+          }
           return json({ ok: true, id: res.meta && res.meta.last_row_id, return_no: returnNo, total_qty: totalQty, sku_count: items.length });
         }
 
@@ -5929,6 +5951,17 @@ async function ensureReturnsSlipsTable(DB) {
   for (const [name, def] of add) {
     if (!have.has(name)) await DB.prepare('ALTER TABLE returns_slips ADD COLUMN ' + name + ' ' + def).run();
   }
+}
+
+// Slip photos live in their own table so listing slips stays light.
+// One compressed JPEG (base64) per slip, ~100–250 KB.
+async function ensureReturnsSlipPhotosTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS returns_slip_photos (
+    slip_id    INTEGER PRIMARY KEY,
+    mime       TEXT DEFAULT 'image/jpeg',
+    data_b64   TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  )`).run();
 }
 
 // ══════════════════════════════════════════════════════════════════
