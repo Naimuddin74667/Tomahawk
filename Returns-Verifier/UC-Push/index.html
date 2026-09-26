@@ -589,7 +589,8 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     if (isStuck(r)) return '<span class="status-pill st-failed" style="margin-right:8px">No response</span>' +
       '<button class="btn btn-sm btn-primary push-btn" data-push="' + r.id + '" data-stuck="1"' + (canPush ? '' : ' disabled title="View only"') + '>Retry push</button>';
     if (st === 'pushing') return '<span class="status-pill st-queued" title="Picked up ' + esc(fmtDateTime(r.uc_claimed_at)) + '">Pushing…</span>';
-    if (st === 'queued') return '<span class="status-pill st-queued" title="Requested by ' + esc(r.uc_requested_by || '') + ' · ' + esc(fmtDateTime(r.uc_requested_at)) + '">Waiting for push…</span>';
+    if (st === 'queued') return '<span class="status-pill st-queued" title="Requested by ' + esc(r.uc_requested_by || '') + ' · ' + esc(fmtDateTime(r.uc_requested_at)) + '">Waiting for push…</span>' +
+      '<button class="btn btn-sm" data-cancel="' + r.id + '"' + (canPush ? '' : ' disabled title="View only"') + ' style="margin-left:6px" title="Undo the Push click">Cancel</button>';
     if (st === 'pushed') return '<span class="status-pill st-pushed">Pushed ' + esc(fmtDateTime(r.uc_pushed_at)) + '</span>';
     var dis = canPush ? '' : ' disabled title="View only"';
     var doneBtn = '<button class="btn btn-sm" data-done="' + r.id + '"' + dis + ' style="margin-left:6px" title="Use after adding the failed SKUs by hand in UC">Mark done</button>';
@@ -672,6 +673,22 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
         toast('Could not queue ' + rtnNo(id) + ': ' + err.message, 'err');
       }
       render();
+      return;
+    }
+    var cancel = e.target.closest('[data-cancel]');
+    if (cancel) {
+      e.stopPropagation();
+      var cid = +cancel.dataset.cancel;
+      cancel.disabled = true;
+      try {
+        var cres = await fetch(WORKER + '?action=rsv_cancelUcPush', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'rsv_cancelUcPush', id: cid })
+        }).then(function (x) { return x.json(); });
+        if (!cres.ok) throw new Error(cres.error || 'Failed');
+        toast(rtnNo(cid) + ' push cancelled');
+      } catch (err) { toast('Could not cancel ' + rtnNo(cid) + ': ' + err.message, 'err'); }
+      await load(true);
       return;
     }
     var done = e.target.closest('[data-done]');

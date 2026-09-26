@@ -334,7 +334,9 @@ const ACTION_TIERS = {
   rsv_ucClaim: 'public', rsv_ucReport: 'public',
   // After SKUs failed in UC and someone added them by hand in UC, this
   // marks the return done (moves it to Pushed) — manager_up. —
-  rsv_markManualDone: 'manager_up'
+  rsv_markManualDone: 'manager_up',
+  // Undo a Push click before SK's script has picked it up (queued -> pending). —
+  rsv_cancelUcPush: 'manager_up'
 };
 
 function getAuthRequirement(act) {
@@ -2610,6 +2612,20 @@ export default {
             return json({ ok: false, error: row ? 'Return is ' + row.uc_status + ', not pushing' : 'Return not found' }, 409);
           }
           return json({ ok: true, status });
+        }
+
+        // ── RETURNS VERIFIER — cancel a Push click (only while still queued) ──
+        // Once the script has claimed it ('pushing'), cancel is refused so
+        // a return can never be half-sent.
+        if (act === 'rsv_cancelUcPush') {
+          await ensureReturnsSlipsTable(env.DB);
+          const id = parseInt(body.id, 10);
+          if (!id) return json({ ok: false, error: 'id required' }, 400);
+          const res = await env.DB.prepare(
+            "UPDATE returns_slips SET uc_status = 'pending', uc_requested_by = NULL, uc_requested_at = NULL WHERE id = ? AND uc_status = 'queued'"
+          ).bind(id).run();
+          if (!res.meta || !res.meta.changes) return json({ ok: false, error: 'Already picked up by the push script — can\'t cancel now' }, 409);
+          return json({ ok: true });
         }
 
         // ── RETURNS VERIFIER — failed SKUs were added by hand in UC ───────
