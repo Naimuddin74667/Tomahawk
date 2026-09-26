@@ -2568,6 +2568,7 @@ export default {
               facility_code: 'industrialtoolsandhardware',   // E3 — always
               inventory_type: 'GOOD_INVENTORY',                // always
               adjustment_type: 'ADD',                          // NEVER replace
+              remark: 'Return Received',                       // remark on the UC adjustment
               total_qty: r.total_qty,
               items: JSON.parse(r.items_json || '[]')          // [{ sku, qty }], enabled simple UC SKUs, merged
             });
