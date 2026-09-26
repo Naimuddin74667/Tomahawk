@@ -501,7 +501,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     <div class="hist-wrap">
       <table class="hist-table push-table">
         <thead><tr>
-          <th class="num">Sr.</th><th>Return no.</th><th class="num">Total SKUs</th><th class="num">Total qty</th><th class="num"></th>
+          <th class="num">Sr.</th><th>Return no.</th><th class="num">Total SKUs</th><th class="num">Total qty</th><th class="num">UC status</th>
         </tr></thead>
         <tbody id="push-body"><tr><td colspan="5" class="hist-empty">Loading…</td></tr></tbody>
       </table>
@@ -571,9 +571,21 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     }
   }
 
+  // Minutes since a D1 UTC timestamp ('YYYY-MM-DD HH:MM:SS').
+  function minsAgo(ts) {
+    if (!ts) return 0;
+    var d = new Date(String(ts).replace(' ', 'T') + 'Z');
+    return isNaN(d) ? 0 : (Date.now() - d.getTime()) / 60000;
+  }
+  // 'pushing' with no result for 15+ min = SK's script never reported back.
+  function isStuck(r) { return r.uc_status === 'pushing' && minsAgo(r.uc_claimed_at) >= 15; }
+
   function actionCell(r) {
     var st = r.uc_status || 'pending';
-    if (st === 'queued') return '<span class="status-pill st-queued" title="Requested by ' + esc(r.uc_requested_by || '') + ' · ' + esc(fmtDateTime(r.uc_requested_at)) + '">Pushing…</span>';
+    if (isStuck(r)) return '<span class="status-pill st-failed" style="margin-right:8px">No response</span>' +
+      '<button class="btn btn-sm btn-primary push-btn" data-push="' + r.id + '" data-stuck="1"' + (canPush ? '' : ' disabled title="View only"') + '>Retry push</button>';
+    if (st === 'pushing') return '<span class="status-pill st-queued" title="Picked up ' + esc(fmtDateTime(r.uc_claimed_at)) + '">Pushing…</span>';
+    if (st === 'queued') return '<span class="status-pill st-queued" title="Requested by ' + esc(r.uc_requested_by || '') + ' · ' + esc(fmtDateTime(r.uc_requested_at)) + '">Waiting for push…</span>';
     if (st === 'pushed') return '<span class="status-pill st-pushed">Pushed ' + esc(fmtDateTime(r.uc_pushed_at)) + '</span>';
     var label = st === 'failed' ? 'Retry push' : 'Push to UC';
     return (st === 'failed' ? '<span class="status-pill st-failed" style="margin-right:8px">Failed</span>' : '') +
@@ -610,6 +622,8 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
         '<td class="num">' + esc(r.total_qty) + '</td>' +
         '<td class="num">' + actionCell(r) + '</td>' +
       '</tr>' +
+      (isStuck(r) ? '<tr class="err-row"><td></td><td colspan="4"><div class="fail-msg">The push script picked this up ' + esc(fmtDateTime(r.uc_claimed_at)) + ' but never reported back. Check UC stock for these SKUs before retrying, so nothing is added twice.</div></td></tr>' : '') +
+      (r.uc_status === 'queued' && minsAgo(r.uc_requested_at) >= 5 ? '<tr class="err-row"><td></td><td colspan="4"><div class="fail-msg" style="color:var(--c-orange)">Not picked up yet — the push script on SK\'s server may not be running.</div></td></tr>' : '') +
       (r.uc_status === 'failed' ? '<tr class="err-row"><td></td><td colspan="4"><div class="fail-msg">UC error: ' + esc(r.uc_message || 'No error message returned') + '</div></td></tr>' : '') +
       (openId === r.id ? detailRow(r) : '');
     }).join('');
@@ -621,7 +635,8 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
       e.stopPropagation();
       var id = +btn.dataset.push;
       var r = rows.filter(function (x) { return x.id === id; })[0]; if (!r) return;
-      if (!confirm('Push ' + rtnNo(id) + ' to Unicommerce?\n\n' + items(r).length + ' SKUs · ' + r.total_qty + ' qty')) return;
+      var stuckMsg = btn.dataset.stuck ? '\n\nThe last push never reported back. Make sure these SKUs were NOT already added in UC, or the stock will be added twice.' : '';
+      if (!confirm('Push ' + rtnNo(id) + ' to Unicommerce (E3, good inventory)?\n\n' + items(r).length + ' SKUs · ' + r.total_qty + ' qty' + stuckMsg)) return;
       btn.disabled = true; btn.textContent = 'Sending…';
       try {
         var res = await fetch(WORKER + '?action=rsv_requestUcPush', {
@@ -651,7 +666,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     });
   });
   $('refresh-btn').addEventListener('click', function () { load(); });
-  setInterval(function () { if (!document.hidden) load(true); }, 60000);   // keep statuses fresh
+  setInterval(function () { if (!document.hidden) load(true); }, 20000);   // keep push statuses fresh
 
   load();
 })();

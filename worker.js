@@ -326,7 +326,12 @@ const ACTION_TIERS = {
   rsv_getBundleSkus: 'viewer_read',
   // UC Push Panel: "Push to UC" marks a verified slip as queued for SK's
   // UC push. Writes a status only (no UC call yet) — manager_up. —
-  rsv_requestUcPush: 'manager_up'
+  rsv_requestUcPush: 'manager_up',
+  // SK's UC push script (runs on his VPS, which has the UC API access).
+  // 'public' here on purpose — the real gate is the X-Health-Token header
+  // (same shared secret his System Health heartbeats use), checked inside
+  // each handler, exactly like healthHeartbeat. —
+  rsv_ucClaim: 'public', rsv_ucReport: 'public'
 };
 
 function getAuthRequirement(act) {
@@ -1008,7 +1013,7 @@ export default {
           const limit = Math.min(parseInt(url.searchParams.get('limit') || '300', 10) || 300, 1000);
           const rows = await env.DB.prepare(
             'SELECT id, slip_date, items_json, line_count, total_qty, created_by, created_at, ' +
-            "COALESCE(uc_status, 'pending') AS uc_status, uc_requested_by, uc_requested_at, uc_pushed_at, uc_message " +
+            "COALESCE(uc_status, 'pending') AS uc_status, uc_requested_by, uc_requested_at, uc_pushed_at, uc_message, uc_claimed_at " +
             'FROM returns_slips ORDER BY id DESC LIMIT ?'
           ).bind(limit).all();
           return json({ ok: true, slips: rows.results || [] });
@@ -2527,8 +2532,9 @@ export default {
           const sessionUser = await resolveSession(request, env.DB);
           const who = (sessionUser && (sessionUser.display_name || sessionUser.username)) || 'unauthenticated';
           const res = await env.DB.prepare(
-            "UPDATE returns_slips SET uc_status = 'queued', uc_requested_by = ?, uc_requested_at = datetime('now'), uc_message = NULL " +
-            "WHERE id = ? AND COALESCE(uc_status, 'pending') IN ('pending', 'failed')"
+            "UPDATE returns_slips SET uc_status = 'queued', uc_requested_by = ?, uc_requested_at = datetime('now'), uc_message = NULL, uc_claimed_at = NULL " +
+            "WHERE id = ? AND (COALESCE(uc_status, 'pending') IN ('pending', 'failed') " +
+            "OR (uc_status = 'pushing' AND uc_claimed_at < datetime('now', '-15 minutes')))"
           ).bind(who, id).run();
           const row = await env.DB.prepare(
             "SELECT id, COALESCE(uc_status, 'pending') AS uc_status, uc_requested_by, uc_requested_at FROM returns_slips WHERE id = ?"
@@ -2536,6 +2542,56 @@ export default {
           if (!row) return json({ ok: false, error: 'Return not found' }, 404);
           if (!res.meta || !res.meta.changes) return json({ ok: false, error: 'Already ' + row.uc_status, slip: row }, 409);
           return json({ ok: true, slip: row });
+        }
+
+        // ── RETURNS VERIFIER — SK's push script: claim queued returns ─────
+        // Hands out every 'queued' slip (max 20) and marks each 'pushing'
+        // in the same step, so a slip is never handed out twice. Target is
+        // fixed by the business rule: facility E3, GOOD_INVENTORY, ADD.
+        if (act === 'rsv_ucClaim') {
+          if (!healthTokenOk(request, env)) return json({ ok: false, error: 'Invalid or missing health token' }, 401);
+          await ensureReturnsSlipsTable(env.DB);
+          const rows = await env.DB.prepare(
+            "SELECT id, slip_date, items_json, total_qty FROM returns_slips WHERE uc_status = 'queued' ORDER BY id ASC LIMIT 20"
+          ).all();
+          const out = [];
+          for (const r of (rows.results || [])) {
+            // Conditional update = the claim. If another run grabbed it first, changes = 0 and we skip it.
+            const upd = await env.DB.prepare(
+              "UPDATE returns_slips SET uc_status = 'pushing', uc_claimed_at = datetime('now') WHERE id = ? AND uc_status = 'queued'"
+            ).bind(r.id).run();
+            if (!upd.meta || !upd.meta.changes) continue;
+            out.push({
+              id: r.id,
+              return_no: 'RTN-' + String(r.id).padStart(5, '0'),
+              slip_date: r.slip_date,
+              facility_code: 'industrialtoolsandhardware',   // E3 — always
+              inventory_type: 'GOOD_INVENTORY',                // always
+              adjustment_type: 'ADD',                          // NEVER replace
+              total_qty: r.total_qty,
+              items: JSON.parse(r.items_json || '[]')          // [{ sku, qty }], enabled simple UC SKUs, merged
+            });
+          }
+          return json({ ok: true, returns: out });
+        }
+
+        // ── RETURNS VERIFIER — SK's push script: report the UC result ─────
+        // body: { id, ok: true|false, message: "exact UC response / error" }
+        // Only a slip currently 'pushing' can be reported on.
+        if (act === 'rsv_ucReport') {
+          if (!healthTokenOk(request, env)) return json({ ok: false, error: 'Invalid or missing health token' }, 401);
+          await ensureReturnsSlipsTable(env.DB);
+          const id = parseInt(body.id, 10);
+          if (!id || typeof body.ok !== 'boolean') return json({ ok: false, error: 'id and ok (true/false) required' }, 400);
+          const msg = String(body.message == null ? '' : body.message).slice(0, 4000);
+          const res = body.ok
+            ? await env.DB.prepare("UPDATE returns_slips SET uc_status = 'pushed', uc_pushed_at = datetime('now'), uc_message = ? WHERE id = ? AND uc_status = 'pushing'").bind(msg, id).run()
+            : await env.DB.prepare("UPDATE returns_slips SET uc_status = 'failed', uc_message = ? WHERE id = ? AND uc_status = 'pushing'").bind(msg || 'Push failed (no error text returned)', id).run();
+          if (!res.meta || !res.meta.changes) {
+            const row = await env.DB.prepare("SELECT COALESCE(uc_status, 'pending') AS uc_status FROM returns_slips WHERE id = ?").bind(id).first();
+            return json({ ok: false, error: row ? 'Return is ' + row.uc_status + ', not pushing' : 'Return not found' }, 409);
+          }
+          return json({ ok: true });
         }
 
         // ── RETURNS VERIFIER — save one verified slip ─────────────────────
@@ -5738,7 +5794,8 @@ async function ensureReturnsSlipsTable(DB) {
     ["uc_requested_by", "TEXT"],
     ["uc_requested_at", "TEXT"],
     ["uc_pushed_at", "TEXT"],
-    ["uc_message", "TEXT"]
+    ["uc_message", "TEXT"],
+    ["uc_claimed_at", "TEXT"]   // when SK's script picked it up ('pushing')
   ];
   for (const [name, def] of add) {
     if (!have.has(name)) await DB.prepare('ALTER TABLE returns_slips ADD COLUMN ' + name + ' ' + def).run();
