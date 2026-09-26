@@ -320,7 +320,10 @@ const ACTION_TIERS = {
   saveReturnsSlip: 'manager_up', listReturnsSlips: 'viewer_read',
   // Auto-read of the slip photo via Cloudflare Workers AI (free included
   // usage, same AI binding as the Chatbot) — manager_up like Submit.
-  readReturnsSlip: 'manager_up'
+  readReturnsSlip: 'manager_up',
+  // Bundle (master) SKU codes from UC_BundleComposition — Returns Verifier
+  // excludes these so slips always resolve to simple SKUs.
+  rsv_getBundleSkus: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -984,6 +987,16 @@ export default {
             piecesPerCarton: ppcRow ? JSON.parse(ppcRow.value || '{}') : {},
             updatedAt: row ? row.updated_at : null
           });
+        }
+
+        // ── RETURNS VERIFIER — bundle SKU codes to exclude ─────────────
+        // Same GAS bridge route Stock Alert uses (?type=bundles, reads
+        // UC_BundleComposition). Edge-cached 5 min via fetchGasCached.
+        // Shape from GAS: { bundles: { masterSku: { name, enabled, components } } }
+        if (action === 'rsv_getBundleSkus') {
+          const data = await fetchGasCached(SA_UC_GAS_URL + '?type=bundles', 'https://cache.internal/rsv-uc-bundles-v1');
+          const map = (data && data.bundles) || {};
+          return json({ ok: true, bundles: Object.keys(map) });
         }
 
         // ── RETURNS VERIFIER — list submitted slips (newest first) ─────
