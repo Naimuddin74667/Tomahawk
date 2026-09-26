@@ -1347,6 +1347,34 @@ html[data-theme="light"]       .icon-moon { display: none; }
     window.location.href = d.url;
   }
 
+  // UC Push Panel card alert (admins + anyone whose default app it is):
+  // counts returns where some/all SKUs failed in UC and must be added by
+  // hand. Turns the card badge red: "2 need manual fix".
+  var ucAlertLoaded = false;
+  async function updateUcPushAlert(user) {
+    var own = defaultAppFor(user);
+    if (user.role !== 'admin' && !(own && own.slug === 'UC-Push-Panel')) return;
+    if (ucAlertLoaded) return;
+    ucAlertLoaded = true;
+    var card = document.querySelector('.app-card[data-app-slug="UC-Push-Panel"]');
+    if (!card) return;
+    try {
+      var res = await api('listReturnsSlips');
+      if (!res.ok) return;
+      var slips = res.slips || [];
+      var fix = slips.filter(function (r) { return r.uc_status === 'partial' || r.uc_status === 'failed'; }).length;
+      var waiting = slips.filter(function (r) { return !r.uc_status || r.uc_status === 'pending'; }).length;
+      var badge = card.querySelector('.card-badge');
+      if (!badge) return;
+      if (fix) {
+        badge.textContent = fix + ' need manual fix';
+        badge.style.cssText = 'color:#f87171;border-color:#f8717166;background:#f8717114;';
+      } else if (waiting) {
+        badge.textContent = waiting + ' to push';
+      }
+    } catch (e) { /* badge stays as-is */ }
+  }
+
   function showApp(user) {
     gate.hidden = true;
     headerUser.hidden = false;
@@ -1366,6 +1394,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
     if (masterSheetCard) masterSheetCard.hidden = user.role !== 'admin';
     applyRoleCardVisibility(user);
     applyAppVisibility(user);
+    updateUcPushAlert(user);
     updateGreetingWithName(label.split(' ')[0]);
   }
 

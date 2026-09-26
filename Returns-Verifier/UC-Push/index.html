@@ -466,6 +466,10 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
 .st-queued  { color: var(--c-blue);  border-color: var(--c-blue-border);  background: var(--c-blue-dim); }
 .st-pushed  { color: var(--c-green); border-color: var(--c-green-border); background: var(--c-green-dim); }
 .st-failed  { color: #f87171; border-color: #f8717166; background: #f8717114; }
+.st-partial { color: var(--c-orange); border-color: var(--c-orange-border); background: var(--c-orange-dim); }
+.manual-list { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--text-primary); }
+.manual-list li { margin: 2px 0; }
+.manual-list .err { color: #f87171; }
 .filter-bar { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap; }
 .filter-bar .tabs { padding: 3px; }
 .filter-bar .tab-btn { padding: 5px 12px; font-size: 12.5px; }
@@ -587,9 +591,25 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     if (st === 'pushing') return '<span class="status-pill st-queued" title="Picked up ' + esc(fmtDateTime(r.uc_claimed_at)) + '">Pushing…</span>';
     if (st === 'queued') return '<span class="status-pill st-queued" title="Requested by ' + esc(r.uc_requested_by || '') + ' · ' + esc(fmtDateTime(r.uc_requested_at)) + '">Waiting for push…</span>';
     if (st === 'pushed') return '<span class="status-pill st-pushed">Pushed ' + esc(fmtDateTime(r.uc_pushed_at)) + '</span>';
-    var label = st === 'failed' ? 'Retry push' : 'Push to UC';
-    return (st === 'failed' ? '<span class="status-pill st-failed" style="margin-right:8px">Failed</span>' : '') +
-      '<button class="btn btn-sm btn-primary push-btn" data-push="' + r.id + '"' + (canPush ? '' : ' disabled title="View only"') + '>' + label + '</button>';
+    var dis = canPush ? '' : ' disabled title="View only"';
+    var doneBtn = '<button class="btn btn-sm" data-done="' + r.id + '"' + dis + ' style="margin-left:6px" title="Use after adding the failed SKUs by hand in UC">Mark done</button>';
+    if (st === 'partial') return '<span class="status-pill st-partial" style="margin-right:8px">Partly pushed</span>' + doneBtn;
+    if (st === 'failed') return '<span class="status-pill st-failed" style="margin-right:8px">Failed</span>' +
+      '<button class="btn btn-sm btn-primary push-btn" data-push="' + r.id + '"' + dis + '>Retry push</button>' + doneBtn;
+    return '<button class="btn btn-sm btn-primary push-btn" data-push="' + r.id + '"' + dis + '>Push to UC</button>';
+  }
+
+  function failedItems(r) { try { return JSON.parse(r.uc_failed_json || '[]'); } catch (e) { return []; } }
+  // Red block under a partial/failed return: which SKUs to add by hand in UC and why.
+  function failRow(r) {
+    var f = failedItems(r);
+    var head = r.uc_status === 'partial'
+      ? 'The other SKUs were added to UC. Add these by hand in UC (E3, good inventory), then click Mark done:'
+      : (f.length ? 'Nothing was added. Retry, or add these by hand in UC and click Mark done:' : 'UC error: ' + esc(r.uc_message || 'No error message returned'));
+    var list = f.length ? '<ul class="manual-list">' + f.map(function (x) {
+      return '<li><b>' + esc(x.sku) + '</b> × ' + esc(x.qty) + (x.error ? ' — <span class="err">' + esc(x.error) + '</span>' : '') + '</li>';
+    }).join('') + '</ul>' : '';
+    return '<tr class="err-row"><td></td><td colspan="4"><div class="fail-msg">' + head + '</div>' + list + '</td></tr>';
   }
 
   function detailRow(r) {
@@ -600,6 +620,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
       '<table class="detail-table"><thead><tr><th class="num">#</th><th>UC SKU</th><th class="num">Qty</th></tr></thead><tbody>' +
       its.map(function (it, i) { return '<tr><td class="num">' + (i + 1) + '</td><td>' + esc(it.sku) + '</td><td class="num">' + esc(it.qty) + '</td></tr>'; }).join('') +
       '</tbody></table>' +
+      (r.uc_status === 'pushed' && r.uc_message ? '<div class="detail-meta" style="margin-top:8px">UC: ' + esc(r.uc_message) + '</div>' : '') +
       '</td></tr>';
   }
 
@@ -624,7 +645,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
       '</tr>' +
       (isStuck(r) ? '<tr class="err-row"><td></td><td colspan="4"><div class="fail-msg">The push script picked this up ' + esc(fmtDateTime(r.uc_claimed_at)) + ' but never reported back. Check UC stock for these SKUs before retrying, so nothing is added twice.</div></td></tr>' : '') +
       (r.uc_status === 'queued' && minsAgo(r.uc_requested_at) >= 5 ? '<tr class="err-row"><td></td><td colspan="4"><div class="fail-msg" style="color:var(--c-orange)">Not picked up yet — the push script on SK\'s server may not be running.</div></td></tr>' : '') +
-      (r.uc_status === 'failed' ? '<tr class="err-row"><td></td><td colspan="4"><div class="fail-msg">UC error: ' + esc(r.uc_message || 'No error message returned') + '</div></td></tr>' : '') +
+      ((r.uc_status === 'failed' || r.uc_status === 'partial') ? failRow(r) : '') +
       (openId === r.id ? detailRow(r) : '');
     }).join('');
   }
@@ -636,7 +657,8 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
       var id = +btn.dataset.push;
       var r = rows.filter(function (x) { return x.id === id; })[0]; if (!r) return;
       var stuckMsg = btn.dataset.stuck ? '\n\nThe last push never reported back. Make sure these SKUs were NOT already added in UC, or the stock will be added twice.' : '';
-      if (!confirm('Push ' + rtnNo(id) + ' to Unicommerce (E3, good inventory)?\n\n' + items(r).length + ' SKUs · ' + r.total_qty + ' qty' + stuckMsg)) return;
+      // One click pushes. Only a stuck retry asks first (risk of adding stock twice).
+      if (stuckMsg && !confirm('Retry ' + rtnNo(id) + '?' + stuckMsg)) return;
       btn.disabled = true; btn.textContent = 'Sending…';
       try {
         var res = await fetch(WORKER + '?action=rsv_requestUcPush', {
@@ -650,6 +672,23 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
         toast('Could not queue ' + rtnNo(id) + ': ' + err.message, 'err');
       }
       render();
+      return;
+    }
+    var done = e.target.closest('[data-done]');
+    if (done) {
+      e.stopPropagation();
+      var did = +done.dataset.done;
+      if (!confirm('Mark ' + rtnNo(did) + ' as done?\n\nOnly do this after the failed SKUs have been added by hand in UC.')) return;
+      done.disabled = true;
+      try {
+        var dres = await fetch(WORKER + '?action=rsv_markManualDone', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'rsv_markManualDone', id: did })
+        }).then(function (x) { return x.json(); });
+        if (!dres.ok) throw new Error(dres.error || 'Failed');
+        toast(rtnNo(did) + ' marked done — moved to Pushed');
+        await load(true);
+      } catch (err) { toast('Could not mark ' + rtnNo(did) + ' done: ' + err.message, 'err'); render(); }
       return;
     }
     var row = e.target.closest('.hist-row'); if (!row) return;

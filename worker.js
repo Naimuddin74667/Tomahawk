@@ -331,7 +331,10 @@ const ACTION_TIERS = {
   // 'public' here on purpose — the real gate is the X-Health-Token header
   // (same shared secret his System Health heartbeats use), checked inside
   // each handler, exactly like healthHeartbeat. —
-  rsv_ucClaim: 'public', rsv_ucReport: 'public'
+  rsv_ucClaim: 'public', rsv_ucReport: 'public',
+  // After SKUs failed in UC and someone added them by hand in UC, this
+  // marks the return done (moves it to Pushed) — manager_up. —
+  rsv_markManualDone: 'manager_up'
 };
 
 function getAuthRequirement(act) {
@@ -1013,7 +1016,7 @@ export default {
           const limit = Math.min(parseInt(url.searchParams.get('limit') || '300', 10) || 300, 1000);
           const rows = await env.DB.prepare(
             'SELECT id, slip_date, items_json, line_count, total_qty, created_by, created_at, ' +
-            "COALESCE(uc_status, 'pending') AS uc_status, uc_requested_by, uc_requested_at, uc_pushed_at, uc_message, uc_claimed_at " +
+            "COALESCE(uc_status, 'pending') AS uc_status, uc_requested_by, uc_requested_at, uc_pushed_at, uc_message, uc_claimed_at, uc_failed_json " +
             'FROM returns_slips ORDER BY id DESC LIMIT ?'
           ).bind(limit).all();
           return json({ ok: true, slips: rows.results || [] });
@@ -2532,7 +2535,7 @@ export default {
           const sessionUser = await resolveSession(request, env.DB);
           const who = (sessionUser && (sessionUser.display_name || sessionUser.username)) || 'unauthenticated';
           const res = await env.DB.prepare(
-            "UPDATE returns_slips SET uc_status = 'queued', uc_requested_by = ?, uc_requested_at = datetime('now'), uc_message = NULL, uc_claimed_at = NULL " +
+            "UPDATE returns_slips SET uc_status = 'queued', uc_requested_by = ?, uc_requested_at = datetime('now'), uc_message = NULL, uc_claimed_at = NULL, uc_failed_json = NULL " +
             "WHERE id = ? AND (COALESCE(uc_status, 'pending') IN ('pending', 'failed') " +
             "OR (uc_status = 'pushing' AND uc_claimed_at < datetime('now', '-15 minutes')))"
           ).bind(who, id).run();
@@ -2577,7 +2580,11 @@ export default {
         }
 
         // ── RETURNS VERIFIER — SK's push script: report the UC result ─────
-        // body: { id, ok: true|false, message: "exact UC response / error" }
+        // body: { id, ok: true|false, message, pushed_items:[{sku,qty}],
+        //         failed_items:[{sku,qty,error}] }
+        //   no failed_items            -> 'pushed'
+        //   failed + some pushed       -> 'partial' (good SKUs are in UC)
+        //   failed + nothing pushed    -> 'failed'
         // Only a slip currently 'pushing' can be reported on.
         if (act === 'rsv_ucReport') {
           if (!healthTokenOk(request, env)) return json({ ok: false, error: 'Invalid or missing health token' }, 401);
@@ -2585,13 +2592,39 @@ export default {
           const id = parseInt(body.id, 10);
           if (!id || typeof body.ok !== 'boolean') return json({ ok: false, error: 'id and ok (true/false) required' }, 400);
           const msg = String(body.message == null ? '' : body.message).slice(0, 4000);
-          const res = body.ok
-            ? await env.DB.prepare("UPDATE returns_slips SET uc_status = 'pushed', uc_pushed_at = datetime('now'), uc_message = ? WHERE id = ? AND uc_status = 'pushing'").bind(msg, id).run()
-            : await env.DB.prepare("UPDATE returns_slips SET uc_status = 'failed', uc_message = ? WHERE id = ? AND uc_status = 'pushing'").bind(msg || 'Push failed (no error text returned)', id).run();
+          const failed = (Array.isArray(body.failed_items) ? body.failed_items : []).map(f => ({
+            sku: String((f && f.sku) || ''), qty: parseInt(f && f.qty, 10) || 0, error: String((f && f.error) || '').slice(0, 1000)
+          })).filter(f => f.sku);
+          const pushedCount = Array.isArray(body.pushed_items) ? body.pushed_items.length : 0;
+          let status;
+          if (body.ok && !failed.length) status = 'pushed';
+          else if (failed.length && (pushedCount > 0 || body.ok)) status = 'partial';
+          else status = 'failed';
+          const res = await env.DB.prepare(
+            "UPDATE returns_slips SET uc_status = ?, uc_message = ?, uc_failed_json = ?, " +
+            "uc_pushed_at = CASE WHEN ? IN ('pushed','partial') THEN datetime('now') ELSE uc_pushed_at END " +
+            "WHERE id = ? AND uc_status = 'pushing'"
+          ).bind(status, msg || (status === 'failed' ? 'Push failed (no error text returned)' : ''), failed.length ? JSON.stringify(failed) : null, status, id).run();
           if (!res.meta || !res.meta.changes) {
             const row = await env.DB.prepare("SELECT COALESCE(uc_status, 'pending') AS uc_status FROM returns_slips WHERE id = ?").bind(id).first();
             return json({ ok: false, error: row ? 'Return is ' + row.uc_status + ', not pushing' : 'Return not found' }, 409);
           }
+          return json({ ok: true, status });
+        }
+
+        // ── RETURNS VERIFIER — failed SKUs were added by hand in UC ───────
+        if (act === 'rsv_markManualDone') {
+          await ensureReturnsSlipsTable(env.DB);
+          const id = parseInt(body.id, 10);
+          if (!id) return json({ ok: false, error: 'id required' }, 400);
+          const sessionUser = await resolveSession(request, env.DB);
+          const who = (sessionUser && (sessionUser.display_name || sessionUser.username)) || 'unauthenticated';
+          const res = await env.DB.prepare(
+            "UPDATE returns_slips SET uc_status = 'pushed', uc_pushed_at = COALESCE(uc_pushed_at, datetime('now')), " +
+            "uc_message = TRIM(COALESCE(uc_message, '') || ' · Failed SKUs added manually in UC by ' || ? || ' on ' || datetime('now')) " +
+            "WHERE id = ? AND uc_status IN ('partial', 'failed')"
+          ).bind(who, id).run();
+          if (!res.meta || !res.meta.changes) return json({ ok: false, error: 'Only partial or failed returns can be marked done' }, 409);
           return json({ ok: true });
         }
 
@@ -5787,7 +5820,9 @@ async function ensureReturnsSlipsTable(DB) {
   // UC push tracking (SK's UC Push Panel). Added after the table first
   // shipped, so add any missing column in place — safe to re-run.
   //   uc_status: 'pending' (verified, not pushed) | 'queued' (Push clicked,
-  //   waiting for SK's UC push) | 'pushed' | 'failed'
+  //   waiting for SK's UC push) | 'pushing' (script picked it up) |
+  //   'pushed' | 'partial' (some SKUs added, others failed — do the failed
+  //   ones manually in UC, then Mark done) | 'failed' (nothing added)
   const cols = await DB.prepare('PRAGMA table_info(returns_slips)').all();
   const have = new Set((cols.results || []).map(c => c.name));
   const add = [
@@ -5796,7 +5831,8 @@ async function ensureReturnsSlipsTable(DB) {
     ["uc_requested_at", "TEXT"],
     ["uc_pushed_at", "TEXT"],
     ["uc_message", "TEXT"],
-    ["uc_claimed_at", "TEXT"]   // when SK's script picked it up ('pushing')
+    ["uc_claimed_at", "TEXT"],  // when SK's script picked it up ('pushing')
+    ["uc_failed_json", "TEXT"]  // [{ sku, qty, error }] SKUs UC rejected — to be added manually
   ];
   for (const [name, def] of add) {
     if (!have.has(name)) await DB.prepare('ALTER TABLE returns_slips ADD COLUMN ' + name + ' ' + def).run();
