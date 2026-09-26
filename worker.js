@@ -323,7 +323,10 @@ const ACTION_TIERS = {
   readReturnsSlip: 'manager_up',
   // Bundle (master) SKU codes from UC_BundleComposition — Returns Verifier
   // excludes these so slips always resolve to simple SKUs.
-  rsv_getBundleSkus: 'viewer_read'
+  rsv_getBundleSkus: 'viewer_read',
+  // UC Push Panel: "Push to UC" marks a verified slip as queued for SK's
+  // UC push. Writes a status only (no UC call yet) — manager_up. —
+  rsv_requestUcPush: 'manager_up'
 };
 
 function getAuthRequirement(act) {
@@ -1004,7 +1007,9 @@ export default {
           await ensureReturnsSlipsTable(env.DB);
           const limit = Math.min(parseInt(url.searchParams.get('limit') || '300', 10) || 300, 1000);
           const rows = await env.DB.prepare(
-            'SELECT id, slip_date, items_json, line_count, total_qty, created_by, created_at FROM returns_slips ORDER BY id DESC LIMIT ?'
+            'SELECT id, slip_date, items_json, line_count, total_qty, created_by, created_at, ' +
+            "COALESCE(uc_status, 'pending') AS uc_status, uc_requested_by, uc_requested_at, uc_pushed_at, uc_message " +
+            'FROM returns_slips ORDER BY id DESC LIMIT ?'
           ).bind(limit).all();
           return json({ ok: true, slips: rows.results || [] });
         }
@@ -2510,6 +2515,27 @@ export default {
             } catch (e) { lastErr = model + ': ' + e.message; }
           }
           return json({ ok: false, error: 'Auto-read failed — ' + lastErr }, 502);
+        }
+
+        // ── RETURNS VERIFIER — queue one slip for UC push (SK's panel) ────
+        // Only 'pending' or 'failed' slips can be queued, so a slip can
+        // never be queued twice while a push is waiting or done.
+        if (act === 'rsv_requestUcPush') {
+          await ensureReturnsSlipsTable(env.DB);
+          const id = parseInt(body.id, 10);
+          if (!id) return json({ ok: false, error: 'id required' }, 400);
+          const sessionUser = await resolveSession(request, env.DB);
+          const who = (sessionUser && (sessionUser.display_name || sessionUser.username)) || 'unauthenticated';
+          const res = await env.DB.prepare(
+            "UPDATE returns_slips SET uc_status = 'queued', uc_requested_by = ?, uc_requested_at = datetime('now'), uc_message = NULL " +
+            "WHERE id = ? AND COALESCE(uc_status, 'pending') IN ('pending', 'failed')"
+          ).bind(who, id).run();
+          const row = await env.DB.prepare(
+            "SELECT id, COALESCE(uc_status, 'pending') AS uc_status, uc_requested_by, uc_requested_at FROM returns_slips WHERE id = ?"
+          ).bind(id).first();
+          if (!row) return json({ ok: false, error: 'Return not found' }, 404);
+          if (!res.meta || !res.meta.changes) return json({ ok: false, error: 'Already ' + row.uc_status, slip: row }, 409);
+          return json({ ok: true, slip: row });
         }
 
         // ── RETURNS VERIFIER — save one verified slip ─────────────────────
@@ -5701,6 +5727,22 @@ async function ensureReturnsSlipsTable(DB) {
     created_by TEXT,
     created_at TEXT DEFAULT (datetime('now'))
   )`).run();
+  // UC push tracking (SK's UC Push Panel). Added after the table first
+  // shipped, so add any missing column in place — safe to re-run.
+  //   uc_status: 'pending' (verified, not pushed) | 'queued' (Push clicked,
+  //   waiting for SK's UC push) | 'pushed' | 'failed'
+  const cols = await DB.prepare('PRAGMA table_info(returns_slips)').all();
+  const have = new Set((cols.results || []).map(c => c.name));
+  const add = [
+    ["uc_status", "TEXT DEFAULT 'pending'"],
+    ["uc_requested_by", "TEXT"],
+    ["uc_requested_at", "TEXT"],
+    ["uc_pushed_at", "TEXT"],
+    ["uc_message", "TEXT"]
+  ];
+  for (const [name, def] of add) {
+    if (!have.has(name)) await DB.prepare('ALTER TABLE returns_slips ADD COLUMN ' + name + ' ' + def).run();
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════

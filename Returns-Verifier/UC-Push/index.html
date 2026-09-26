@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%231a1a1a'/%3E%3Ctext x='32' y='48' font-family='Arial Black,sans-serif' font-weight='900' font-size='52' text-anchor='middle' fill='%23F5A800'%3ET%3C/text%3E%3C/svg%3E">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UC Push Panel — Tomahawk Operations</title>
+<!--
+  UC Push Panel v1.0 — /Returns-Verifier/UC-Push/
+  SK's panel: lists returns slips verified in Returns Verifier (D1
+  returns_slips). Click a row for its lines; "Push to UC" marks the slip
+  as queued (rsv_requestUcPush). The actual UC API push (SK's side picks
+  up queued slips and reports back pushed/failed) is wired in a later step.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-base:           #0c0c14;
+  --bg-surface:        #13131e;
+  --bg-raised:         #1a1a28;
+  --bg-hover:          #1f1f30;
+  --border-subtle:     #1f1f2e;
+  --border-default:    #2a2a38;
+  --border-strong:     #55556a;
+
+  --text-primary:      #e8e8f0;
+  --text-secondary:    #888899;
+  --text-muted:        #44445a;
+  --text-faint:        #2a2a40;
+
+  --accent:            #F5A800;
+  --accent-dim:        #F5A80018;
+  --accent-border:     #F5A80044;
+
+  --c-blue:            #60a5fa;
+  --c-blue-dim:        #60a5fa15;
+  --c-blue-border:     #60a5fa40;
+
+  --c-green:           #4ade80;
+  --c-green-dim:       #4ade8015;
+  --c-green-border:    #4ade8040;
+
+  --c-purple:          #a78bfa;
+  --c-purple-dim:      #a78bfa15;
+  --c-purple-border:   #a78bfa40;
+
+  --c-orange:          #fb923c;
+  --c-orange-dim:      #fb923c15;
+  --c-orange-border:   #fb923c40;
+
+  --radius-sm:  6px;
+  --radius-md:  10px;
+  --radius-lg:  14px;
+  --radius-xl:  20px;
+
+  --font-display: 'Syne', sans-serif;
+  --font-body:    'DM Sans', sans-serif;
+  --font-slab:    'Roboto Slab', serif;
+}
+
+html[data-theme="light"] {
+  --bg-base:           #f4f4f7;
+  --bg-surface:        #ffffff;
+  --bg-raised:         #ededf3;
+  --bg-hover:          #e4e4ee;
+  --border-subtle:     #e0e0ea;
+  --border-default:    #d0d0dd;
+  --border-strong:     #9999b0;
+
+  --text-primary:      #111118;
+  --text-secondary:    #555566;
+  --text-muted:        #888899;
+  --text-faint:        #bbbbcc;
+
+  --accent:            #c98a00;
+  --accent-dim:        #F5A80014;
+  --accent-border:     #F5A80055;
+
+  --c-blue:            #2563eb;
+  --c-blue-dim:        #2563eb12;
+  --c-blue-border:     #2563eb40;
+
+  --c-green:           #16a34a;
+  --c-green-dim:       #16a34a12;
+  --c-green-border:    #16a34a40;
+
+  --c-purple:          #7c3aed;
+  --c-purple-dim:      #7c3aed12;
+  --c-purple-border:   #7c3aed40;
+
+  --c-orange:          #ea580c;
+  --c-orange-dim:      #ea580c12;
+  --c-orange-border:   #ea580c40;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  transition: background .2s ease, color .2s ease;
+}
+</style>
+<style>
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  height: 62px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  padding: 0 36px;
+  justify-content: space-between;
+  gap: 20px;
+  transition: background .2s ease, border-color .2s ease;
+}
+
+.header-logo { display: flex; align-items: center; gap: 14px; text-decoration: none; flex-shrink: 0; }
+.logo-svg-wrap { display: flex; align-items: center; color: var(--accent); }
+.logo-divider { width: 2px; height: 36px; background: rgba(255,255,255,0.5); border-radius: 2px; }
+html[data-theme="light"] .logo-divider { background: rgba(0,0,0,0.25); }
+.logo-tagline { font-size: 16px; font-weight: 600; color: var(--text-secondary); letter-spacing: .04em; }
+
+.header-right { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
+
+.sys-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-green); flex-shrink: 0; animation: pulse 2.5s ease-in-out infinite; }
+.status-dot.is-error { background: #f87171; animation: none; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+
+.theme-toggle {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--bg-raised); border: 1px solid var(--border-default);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted); transition: background .15s, border-color .15s, color .15s;
+  flex-shrink: 0;
+}
+.theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.theme-toggle svg { display: block; }
+html:not([data-theme="light"]) .icon-sun  { display: none; }
+html[data-theme="light"]       .icon-moon { display: none; }
+
+.header-user {
+  display: flex; align-items: center; gap: 9px;
+  background: var(--bg-raised); border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl); padding: 6px 14px 6px 6px;
+  cursor: pointer; transition: background .15s, border-color .15s;
+}
+.header-user:hover { border-color: var(--border-default); background: var(--bg-hover); }
+.user-avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #111; }
+.user-name { font-size: 13px; color: var(--text-secondary); }
+
+@media (max-width: 640px) {
+  .site-header { height: auto; padding: 14px 16px; flex-wrap: wrap; gap: 12px; }
+  .header-logo { gap: 10px; }
+  .logo-svg-wrap svg { height: 32px !important; }
+  .logo-divider { height: 16px; }
+  .logo-tagline { font-size: 11px; }
+  .header-right { gap: 10px; }
+  .sys-status span { display: none; }
+  .status-dot { width: 9px; height: 9px; }
+  .user-name { display: none; }
+  .header-user { padding: 5px; }
+  .theme-toggle { width: 32px; height: 32px; }
+}
+@media (min-width: 641px) and (max-width: 900px) {
+  .site-header { padding: 0 20px; height: 54px; }
+  .logo-svg-wrap svg { height: 40px !important; }
+  .sys-status { font-size: 11px; }
+}
+</style>
+<style>
+/* — Auth gate + header auth controls — shared pattern across all Tomahawk apps — */
+.auth-gate{position:fixed;inset:0;z-index:500;background:var(--bg-base);display:flex;align-items:center;justify-content:center;padding:20px}
+.auth-gate[hidden]{display:none}
+.auth-card{width:100%;max-width:340px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:14px;padding:32px 28px 28px}
+.auth-logo-row{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+.auth-logo-mark{width:34px;height:34px;border-radius:8px;background:var(--accent);color:#111;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-weight:800;font-size:16px;flex-shrink:0}
+.auth-title{font-weight:700;font-size:16px;color:var(--text-primary)}
+.auth-sub{font-size:11px;color:var(--text-muted);margin-top:1px}
+.header-logout-btn{width:34px;height:34px;border-radius:50%;background:var(--bg-raised);border:1px solid var(--border-default);color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:border-color .15s,color .15s;flex-shrink:0}
+.header-logout-btn:hover{border-color:#f87171;color:#f87171}
+.header-logout-btn[hidden]{display:none}
+.header-user[hidden]{display:none}
+.role-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:20px;background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent-border);margin-left:2px}
+.access-denied-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:'DM Sans',sans-serif;color:var(--text-primary);background:var(--bg-base);text-align:center;padding:20px}
+</style>
+<!-- ============================================================
+     BLOCK 3 — RETURNS VERIFIER LAYOUT
+============================================================ -->
+<style>
+.site-body { max-width: 1480px; margin: 0 auto; padding: 22px 36px 60px; }
+
+.page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+.page-title { font-family: var(--font-display); font-weight: 800; font-size: 24px; letter-spacing: -.01em; }
+.page-sub { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+
+.tabs { display: flex; gap: 4px; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 4px; }
+.tab-btn { background: none; border: 0; color: var(--text-secondary); font: 600 13px var(--font-body); padding: 7px 16px; border-radius: var(--radius-sm); cursor: pointer; }
+.tab-btn:hover { color: var(--text-primary); }
+.tab-btn.is-active { background: var(--accent); color: #111; }
+.tab-btn:focus-visible, .btn:focus-visible, .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.rsv-layout { display: grid; grid-template-columns: minmax(320px, 5fr) 7fr; gap: 20px; align-items: start; }
+.panel { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); }
+
+/* — Photo panel (left, sticky so the slip stays beside the table) — */
+.photo-panel { position: sticky; top: 78px; display: flex; flex-direction: column; height: calc(100vh - 100px); min-height: 420px; overflow: hidden; }
+.photo-bar { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap; }
+.photo-name { font-size: 12px; color: var(--text-secondary); flex: 1; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.photo-stage { flex: 1; overflow: auto; background: var(--bg-base); position: relative; }
+.photo-panel { position: sticky; }
+.photo-stage img { display: block; max-width: none; user-select: none; }
+.photo-empty { position: absolute; inset: 14px; border: 2px dashed var(--border-default); border-radius: var(--radius-md); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; color: var(--text-secondary); font-size: 13px; padding: 20px; cursor: pointer; }
+.photo-empty:hover, .photo-empty.is-drag { border-color: var(--accent); color: var(--text-primary); }
+.photo-empty strong { font-family: var(--font-display); font-size: 16px; color: var(--text-primary); }
+
+/* — Buttons — */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; font: 600 13px var(--font-body); padding: 8px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-default); background: var(--bg-raised); color: var(--text-primary); cursor: pointer; white-space: nowrap; }
+.btn:hover { border-color: var(--border-strong); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #111; }
+.btn-primary:hover { filter: brightness(1.06); border-color: var(--accent); }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+.icon-btn { width: 30px; height: 30px; border-radius: var(--radius-sm); border: 1px solid var(--border-default); background: var(--bg-raised); color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font: 700 14px var(--font-body); }
+.icon-btn:hover { color: var(--text-primary); border-color: var(--border-strong); }
+.zoom-label { font-size: 12px; color: var(--text-muted); min-width: 40px; text-align: center; }
+
+/* — Entry panel (right) — */
+.entry-top { display: flex; align-items: flex-end; gap: 18px; padding: 14px 16px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap; }
+.field label { display: block; font-size: 11.5px; color: var(--text-secondary); margin-bottom: 4px; }
+.input { font: 500 14px var(--font-body); color: var(--text-primary); background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 8px 10px; outline: none; }
+.input:focus { border-color: var(--accent); }
+html[data-theme="light"] .input { color-scheme: light; }
+html:not([data-theme="light"]) .input { color-scheme: dark; }
+
+.tally { display: flex; gap: 22px; margin-left: auto; }
+.tally-item { text-align: right; }
+.tally-num { font-family: var(--font-body); font-weight: 700; font-size: 26px; line-height: 1; font-variant-numeric: tabular-nums; }
+.tally-lbl { font-size: 11.5px; color: var(--text-secondary); margin-top: 4px; }
+.tally-item.is-warn .tally-num { color: #f87171; }
+.tally-item.is-check .tally-num { color: var(--c-orange); }
+
+.lines { padding: 6px 0; }
+.line-head, .line-row { display: grid; grid-template-columns: 36px 1fr 96px 34px; gap: 10px; align-items: center; padding: 0 16px; }
+.line-head { font-size: 11.5px; color: var(--text-muted); padding-top: 6px; padding-bottom: 6px; }
+.line-row { padding-top: 6px; padding-bottom: 6px; border-top: 1px solid var(--border-subtle); }
+.line-row:first-of-type { border-top: 0; }
+.line-num { font-size: 13px; color: var(--text-muted); text-align: right; font-variant-numeric: tabular-nums; }
+.line-sku-wrap { position: relative; }
+.line-sku { width: 100%; }
+.line-qty { width: 100%; text-align: right; font-variant-numeric: tabular-nums; }
+.line-note { font-size: 11.5px; margin-top: 3px; min-height: 0; }
+.line-note:empty { display: none; }
+.line-row.is-ok .line-sku { border-color: var(--c-green-border); }
+.line-row.is-bad .line-sku { border-color: #f8717188; }
+.line-row.is-bad .line-note { color: #f87171; }
+.line-row.is-dup .line-note { color: var(--c-orange); }
+.line-row.is-ok .line-num::before { content: '✓ '; color: var(--c-green); }
+.line-row.is-check { background: var(--c-orange-dim); box-shadow: inset 3px 0 0 var(--c-orange); }
+.line-row.is-check.is-ok .line-num::before { content: '? '; color: var(--c-orange); }
+.line-read { font-size: 11.5px; color: var(--text-muted); margin-top: 3px; }
+.line-read:empty { display: none; }
+.sugg { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.sugg:empty { display: none; }
+.sugg-chip { font: 500 12px var(--font-body); background: var(--bg-raised); border: 1px solid var(--border-default); color: var(--text-primary); border-radius: 20px; padding: 3px 10px; cursor: pointer; }
+.sugg-chip:hover { border-color: var(--accent); color: var(--accent); }
+.scan-overlay { position: absolute; inset: 0; background: rgba(12,12,20,.72); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #fff; font-size: 14px; z-index: 5; text-align: center; padding: 20px; }
+.scan-spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(255,255,255,.25); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.line-del { background: none; border: 0; color: var(--text-muted); font-size: 18px; cursor: pointer; border-radius: var(--radius-sm); height: 30px; }
+.line-del:hover { color: #f87171; background: var(--bg-raised); }
+
+/* — Autocomplete dropdown — */
+.ac-list { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 60; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: 0 12px 28px rgba(0,0,0,.35); max-height: 280px; overflow-y: auto; padding: 4px; }
+.ac-item { padding: 7px 10px; border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-item mark { background: var(--accent-dim); color: var(--accent); border-radius: 3px; padding: 0 1px; }
+.ac-item.is-active { background: var(--bg-hover); }
+.ac-empty { padding: 8px 10px; font-size: 12.5px; color: var(--text-muted); }
+
+.entry-foot { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; }
+.entry-hint { font-size: 12px; color: var(--text-muted); flex: 1; min-width: 180px; }
+.entry-hint kbd { font: 600 11px var(--font-body); background: var(--bg-raised); border: 1px solid var(--border-default); border-radius: 4px; padding: 1px 5px; color: var(--text-secondary); }
+
+/* — History — */
+.hist-wrap { overflow-x: auto; }
+.hist-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.hist-table th { text-align: left; font-weight: 600; font-size: 11.5px; color: var(--text-muted); padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; }
+.hist-table td { padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; }
+.hist-table td.num, .hist-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.hist-row { cursor: pointer; }
+.hist-row:hover td { background: var(--bg-hover); }
+.hist-detail td { background: var(--bg-base); white-space: normal; }
+.hist-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 20px; font-size: 12.5px; }
+.hist-items span b { font-variant-numeric: tabular-nums; margin-left: 6px; color: var(--accent); }
+.hist-empty { padding: 40px 16px; text-align: center; color: var(--text-secondary); font-size: 13px; }
+
+/* — Toast — */
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); opacity: 0; pointer-events: none; background: var(--bg-surface); border: 1px solid var(--border-default); border-left: 4px solid var(--c-green); color: var(--text-primary); padding: 11px 16px; border-radius: var(--radius-md); font-size: 13px; box-shadow: 0 10px 30px rgba(0,0,0,.35); transition: opacity .2s, transform .2s; z-index: 400; max-width: calc(100vw - 32px); }
+.toast.is-show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.is-err { border-left-color: #f87171; }
+
+[hidden] { display: none !important; }
+
+@media (max-width: 960px) {
+  .site-body { padding: 16px 14px 60px; }
+  .rsv-layout { grid-template-columns: 1fr; }
+  .photo-panel { position: relative; top: 0; height: 60vh; }
+  .tally { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .toast, .status-dot { transition: none; animation: none; } }
+</style>
+</head>
+<body>
+
+<div class="auth-gate" id="auth-gate">
+  <div class="auth-card">
+    <div class="auth-logo-row">
+      <div class="auth-logo-mark">T</div>
+      <div>
+        <div class="auth-title">Tomahawk Operations</div>
+        <div class="auth-sub">Sign in to continue</div>
+      </div>
+    </div>
+    <div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:14px;">
+      Login now happens once on the <a href="../../index.html" style="color:var(--accent)">Tomahawk hub</a>. Redirecting you there&#8230;
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     HEADER  (identical component to other Tomahawk apps)
+============================================================ -->
+<header class="site-header">
+  <a href="/Tomahawk/" class="header-logo">
+    <div class="logo-svg-wrap">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="474 509 6803 1270" style="height:54px;width:auto;display:block;fill:currentColor;">
+        <path d="M796.6 803.57l625.42 0c4.17,0.55 6.71,2.65 7.48,6.14l-84.8 151.21 -181.47 0c-16.1,25.18 -100.16,178.13 -252.2,458.77l-203.52 0 -0.67 -3.08c109.72,-202.64 190.86,-354.55 243.59,-455.69l-240.46 0 -0.77 -3.7c47.6,-91.52 76.61,-142.78 87.4,-153.65zm-14.19 821.74l-287.36 153.05 187.35 -278.86 1362.49 0 -8.53 5.99 -1253.95 119.82zm6102.31 -1005.2l131.69 -113.42 0 215.51 -960.53 0 8.48 -6 820.36 -96.09zm-574.92 183.46l298.9 0 1.32 6.14c-45.66,84.33 -70.46,131.58 -74.1,141.4 160.29,-96.44 243.35,-144.55 249.31,-144.55l224.51 0 1.32 6.11c-3.09,0.39 -163.87,96.95 -482.4,289.8l215.31 314.14 -5.44 3.08 -212.81 0c-5.17,-3.62 -50.38,-70.48 -135.48,-200.49l-3.14 0c-57.01,115.32 -92.82,182.15 -107.4,200.49l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.77,-24.7l-1.96 -9.09c-2.91,-13.47 -17.46,-33.95 -43.92,-61.58l5.47 -2.99zm-900.24 0.38l295.21 0 0.67 3.13 -177.4 332.67 0.7 3.15 3.15 0 281.78 -191.3c5.47,6.84 8.72,12.09 9.42,15.42l50.56 191.26 2.97 0c-0.06,-5.07 62.84,-123.21 188.62,-354.33l199.85 0 7 3.13c-2.97,8.9 -110.79,213.14 -323.65,612.64l-212.28 0c-4.01,0 -6.55,-2.09 -7.43,-6.09l-8.67 -40.1c-6.4,-29.71 -17.38,-75.75 -32.99,-138.44l-289.68 184.63 -221.52 0 -0.69 -3.12 276.81 -529.56 -3.98 -18.37c-2.88,-13.46 -17.46,-33.93 -43.89,-61.59l5.44 -3.13zm-792.78 -0.38l758.24 0 0.66 2.99c-195.43,377.28 -303.39,581.65 -323.9,613.13l-197.37 0c-4.22,0 -6.58,-2.06 -7.45,-6.06 5.76,-4.89 46.12,-79.83 121.01,-225.06l-249.55 0c-5.54,7.52 -48.45,84.55 -128.62,231.12l-203.51 0 -0.67 -3.08c178.19,-329 269.43,-500.66 273.89,-514.68 2.75,-6.83 3.49,-17.15 2.64,-30.81 -2.41,-11.19 -17.16,-31.67 -44.05,-61.41l-1.32 -6.14zm185.18 228.04l249.02 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.73 0c-2.8,0 -16.07,23.62 -40.03,70.69zm-991.54 -228.04l298.86 0 1.32 6.14 -118.16 221.9 0.69 3.15 249.5 0c81.88,-151.73 124.55,-228.88 128.62,-231.19l191.28 0c4.13,0.55 6.7,2.65 7.45,6.14 -213.25,402.5 -322.44,606 -327.72,609.98l-196.86 0 -0.67 -3.08 112.7 -218.93 -252.85 0c-6.07,5.96 -41.47,70.68 -105.58,194.4 -11.11,18.37 -17.29,27.61 -18.72,27.61l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.79,-24.7l-1.98 -9.09c-2.9,-13.47 -17.45,-33.95 -43.92,-61.58l5.51 -2.99zm-792.75 0l758.27 0 0.64 2.99c-195.44,377.28 -303.38,581.65 -323.89,613.13l-197.37 0c-4.24,0 -6.6,-2.06 -7.45,-6.06 5.75,-4.89 46.12,-79.83 120.97,-225.06l-249.51 0c-5.56,7.52 -48.47,84.55 -128.62,231.12l-203.49 0 -0.69 -3.08c178.16,-329 269.38,-500.66 273.91,-514.68 2.71,-6.83 3.45,-17.15 2.6,-30.81 -2.39,-11.19 -17.15,-31.67 -44.05,-61.41l-1.32 -6.14zm185.2 228.04l249 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.72 0c-2.81,0 -16.06,23.62 -40.02,70.69zm-1103.91 -228.04l298.89 0c4.16,0.55 6.74,2.81 7.57,6.66l9.27 43.04c6.44,29.76 17.44,75.82 32.88,138.45 190.96,-123.03 291.13,-185.84 300.97,-188.15l206.5 0c4.3,0.55 6.73,2.81 7.55,6.66 -212.8,402.15 -321.84,605.48 -327.27,609.46l-203.52 0 -0.69 -3.08 175.45 -329.54 -0.68 -3.15 -2.97 0 -282.28 191.28c-5.52,-6.84 -8.76,-12.07 -9.47,-15.4l-50.55 -191.26 -2.98 0c-112.09,216.6 -175.21,333.7 -189.29,351.15l-202.99 0 -0.71 -3.08 274.04 -514.16c2.58,-7.52 2.71,-15.74 0.78,-24.65l-1.95 -9.11c-2.91,-13.47 -17.46,-33.95 -43.93,-61.59l5.38 -3.53zm-496.95 0l400.37 0c23.26,0 40.99,20.47 53.34,61.46 5.96,27.63 -9.61,69.81 -46.53,126.69 -44.77,80.33 -115.53,214.7 -211.82,403.33 -9.73,16.45 -24.43,24.64 -43.84,24.64l-517.82 0c-14.01,-8.19 -22.34,-17.45 -24.49,-27.61 -6.2,-28.7 27.81,-103.76 102.25,-225.02 91.52,-179.21 152.8,-290.15 184.01,-332.87 24.3,-20.48 59.21,-30.62 104.53,-30.62zm-137.63 461.82l203.51 0c1.89,-7.52 54.92,-107.99 159.41,-301.53l-0.63 -2.94 -196.86 0c-5.24,4 -60.32,105.51 -165.43,304.47z"/>
+        <path d="M7160.73 529.99c52.95,0 95.89,42.94 95.89,95.95 0,52.95 -42.94,95.89 -95.89,95.89 -53,0 -95.97,-42.94 -95.97,-95.89 0,-53.01 42.97,-95.95 95.97,-95.95zm-42.35 149.95l0 -110.28 46.91 0c11.77,0 20.35,1.01 25.65,3.01 5.34,1.97 9.65,5.52 12.86,10.57 3.22,5.05 4.8,10.81 4.8,17.39 0,8.2 -2.44,15.09 -7.3,20.45 -4.85,5.38 -12.16,8.8 -21.83,10.2 4.84,2.81 8.84,5.9 11.95,9.27 3.13,3.36 7.34,9.3 12.66,17.89l13.46 21.5 -26.6 0 -16.09 -23.99c-5.74,-8.56 -9.67,-13.99 -11.76,-16.2 -2.1,-2.26 -4.33,-3.73 -6.7,-4.58 -2.37,-0.83 -6.08,-1.25 -11.2,-1.25l-4.5 0 0 46.02 -22.31 0zm22.31 -63.65l16.45 0c10.69,0 17.35,-0.44 20.02,-1.32 2.65,-0.87 4.74,-2.48 6.23,-4.68 1.53,-2.18 2.3,-4.96 2.3,-8.25 0,-3.76 -1.01,-6.69 -3,-8.99 -1.97,-2.32 -4.75,-3.73 -8.39,-4.34 -1.8,-0.25 -7.21,-0.37 -16.25,-0.37l-17.36 0 0 27.95zm20.04 -72.89c45.53,0 82.45,36.94 82.45,82.54 0,45.52 -36.92,82.49 -82.45,82.49 -45.59,0 -82.53,-36.97 -82.53,-82.49 0,-45.6 36.94,-82.54 82.53,-82.54z"/>
+      </svg>
+    </div>
+    <div class="logo-divider"></div>
+    <span class="logo-tagline">UC Push Panel</span>
+  </a>
+
+  <div class="header-right">
+    <div class="sys-status">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="status-text">Loading returns…</span>
+    </div>
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle light/dark mode">
+      <svg class="icon-moon" width="18" height="18" viewBox="0 0 18 18" fill="none">
+        <path d="M15.5 10.5A7 7 0 017.5 2.5a7 7 0 000 13 7 7 0 008-5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+      </svg>
+      <svg class="icon-sun" width="18" height="18" viewBox="0 0 18 18" fill="none">
+        <circle cx="9" cy="9" r="3.5" stroke="currentColor" stroke-width="1.4"/>
+        <path d="M9 1v2M9 15v2M1 9h2M15 9h2M3.22 3.22l1.42 1.42M13.36 13.36l1.42 1.42M3.22 14.78l1.42-1.42M13.36 4.64l1.42-1.42" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <div class="header-user" id="header-user" hidden>
+      <div class="user-avatar" id="user-avatar">--</div>
+      <span class="user-name" id="user-name-display">&#8212;</span>
+      <span class="role-badge" id="user-role-badge">&#8212;</span>
+    </div>
+    <button class="header-logout-btn" id="header-logout-btn" hidden title="Log out">
+      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M8 17H4.5a1.5 1.5 0 01-1.5-1.5v-11A1.5 1.5 0 014.5 3H8M13.5 14l3.5-4-3.5-4M17 10H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+</header>
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+// AUTH — session comes from the Tomahawk hub (same pattern as Stock
+// Alert). admin/manager can submit slips; viewer can look up SKUs and
+// browse history but Submit is disabled. picker_packer has no access.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var TM_SESSION_KEY = 'tm_session_v1';
+  var TM_WORKER = 'https://tomahawk-returns.naimuddin.workers.dev';
+
+  function getSession() { try { return JSON.parse(localStorage.getItem(TM_SESSION_KEY) || 'null'); } catch (e) { return null; } }
+  function clearSession() { localStorage.removeItem(TM_SESSION_KEY); }
+  function goToHub() { window.location.href = '../../index.html'; }
+
+  window.TM_ROLE = null;
+
+  // Attach the session header to every Worker call made by this page.
+  var _origFetch = window.fetch.bind(window);
+  window.fetch = function (url, opts) {
+    try {
+      var urlStr = typeof url === 'string' ? url : (url && url.url) || '';
+      if (urlStr.indexOf('tomahawk-returns.naimuddin.workers.dev') !== -1) {
+        var session = getSession();
+        opts = opts || {};
+        opts.headers = Object.assign({}, opts.headers || {}, (session && session.token) ? { 'X-Tomahawk-Session': session.token } : {});
+      }
+    } catch (e) {}
+    return _origFetch(url, opts);
+  };
+
+  function showApp(user) {
+    document.getElementById('auth-gate').hidden = true;
+    document.getElementById('header-user').hidden = false;
+    document.getElementById('header-logout-btn').hidden = false;
+    var label = user.display_name || user.username;
+    document.getElementById('user-avatar').textContent = label.slice(0, 2).toUpperCase();
+    document.getElementById('user-name-display').textContent = label;
+    var roleLabels = { admin: 'Admin', manager: 'Manager', viewer: 'Viewer', picker_packer: 'Picker & Packer' };
+    document.getElementById('user-role-badge').textContent = roleLabels[user.role] || user.role;
+    window.TM_ROLE = user.role;
+    if (typeof window.rsvOnRole === 'function') window.rsvOnRole(user.role);
+  }
+
+  function showAccessDenied() {
+    document.body.innerHTML =
+      '<div class="access-denied-screen">' +
+      '<div style="font-size:15px;font-weight:700;">You don\'t have access to this app</div>' +
+      '<div style="font-size:13px;color:var(--text-muted);max-width:320px;">Picker &amp; Packer accounts only have access to the Scanner App.</div>' +
+      '<a href="../../index.html" style="margin-top:8px;color:var(--accent);font-size:13px;text-decoration:none;">&#8592; Back to Tomahawk Operations</a>' +
+      '</div>';
+  }
+
+  document.getElementById('header-logout-btn').addEventListener('click', async function () {
+    var session = getSession();
+    if (session && session.token) {
+      try {
+        await _origFetch(TM_WORKER + '?action=logout', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tomahawk-Session': session.token },
+          body: JSON.stringify({ action: 'logout' })
+        });
+      } catch (e) {}
+    }
+    clearSession();
+    goToHub();
+  });
+
+  (async function initAuth() {
+    var session = getSession();
+    if (!session || !session.token) { goToHub(); return; }
+    if (session.role !== 'admin' && session.role !== 'manager' && session.role !== 'viewer') { showAccessDenied(); return; }
+    showApp(session);
+    try {
+      var res = await _origFetch(TM_WORKER + '?action=validateSession', { headers: { 'X-Tomahawk-Session': session.token } }).then(function (r) { return r.json(); });
+      if (!res.ok || !res.user) { clearSession(); goToHub(); return; }
+      if (res.user.role !== 'admin' && res.user.role !== 'manager' && res.user.role !== 'viewer') { showAccessDenied(); return; }
+      localStorage.setItem(TM_SESSION_KEY, JSON.stringify({ token: session.token, username: res.user.username, role: res.user.role, display_name: res.user.display_name }));
+      showApp(res.user);
+    } catch (e) { /* network hiccup — keep the optimistic render */ }
+  })();
+})();
+</script>
+
+<style>
+/* — UC Push Panel additions — */
+.push-table td, .push-table th { vertical-align: middle; }
+.rtn { font-weight: 700; font-variant-numeric: tabular-nums; }
+.status-pill { display: inline-block; font: 600 11.5px var(--font-body); padding: 3px 10px; border-radius: 20px; border: 1px solid; white-space: nowrap; }
+.st-queued  { color: var(--c-blue);  border-color: var(--c-blue-border);  background: var(--c-blue-dim); }
+.st-pushed  { color: var(--c-green); border-color: var(--c-green-border); background: var(--c-green-dim); }
+.st-failed  { color: #f87171; border-color: #f8717166; background: #f8717114; }
+.filter-bar { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap; }
+.filter-bar .tabs { padding: 3px; }
+.filter-bar .tab-btn { padding: 5px 12px; font-size: 12.5px; }
+.count-badge { font-size: 11px; opacity: .75; margin-left: 4px; }
+.detail-meta { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
+.detail-table { border-collapse: collapse; font-size: 12.5px; min-width: 320px; }
+.detail-table td, .detail-table th { padding: 4px 18px 4px 0; border: 0; text-align: left; }
+.detail-table th { color: var(--text-muted); font-weight: 600; font-size: 11.5px; }
+.detail-table td.num, .detail-table th.num { text-align: right; }
+.fail-msg { color: #f87171; font-size: 12px; margin-top: 6px; }
+.push-btn { min-width: 110px; }
+</style>
+
+<div class="site-body">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">Verified returns</h1>
+      <div class="page-sub">Returns checked in Returns Verifier. Click a row to see its lines, then push it to Unicommerce.</div>
+    </div>
+    <button class="btn" id="refresh-btn">↻ Refresh</button>
+  </div>
+
+  <section class="panel">
+    <div class="filter-bar">
+      <div class="tabs" role="tablist">
+        <button class="tab-btn is-active" data-f="ready">To push<span class="count-badge" id="c-ready"></span></button>
+        <button class="tab-btn" data-f="queued">Queued<span class="count-badge" id="c-queued"></span></button>
+        <button class="tab-btn" data-f="pushed">Pushed<span class="count-badge" id="c-pushed"></span></button>
+        <button class="tab-btn" data-f="all">All<span class="count-badge" id="c-all"></span></button>
+      </div>
+    </div>
+    <div class="hist-wrap">
+      <table class="hist-table push-table">
+        <thead><tr>
+          <th class="num">Sr.</th><th>Return no.</th><th class="num">Total SKUs</th><th class="num">Total qty</th><th class="num"></th>
+        </tr></thead>
+        <tbody id="push-body"><tr><td colspan="5" class="hist-empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  var WORKER = 'https://tomahawk-returns.naimuddin.workers.dev';
+
+  // ---- THEME (shared tm_theme key across all apps) --------------
+  var html = document.documentElement;
+  if (localStorage.getItem('tm_theme') === 'light') html.setAttribute('data-theme', 'light');
+  document.getElementById('theme-toggle').addEventListener('click', function () {
+    var isLight = html.getAttribute('data-theme') === 'light';
+    if (isLight) { html.removeAttribute('data-theme'); localStorage.setItem('tm_theme', 'dark'); }
+    else { html.setAttribute('data-theme', 'light'); localStorage.setItem('tm_theme', 'light'); }
+  });
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function fmtDate(iso) { if (!iso) return '—'; var p = String(iso).slice(0, 10).split('-'); return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : iso; }
+  function fmtDateTime(s) {
+    if (!s) return '—';
+    var d = new Date(String(s).replace(' ', 'T') + (String(s).indexOf('Z') === -1 ? 'Z' : ''));
+    if (isNaN(d)) return s;
+    return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+  // Return number shown everywhere for a slip: RTN-00007 (from its D1 id)
+  function rtnNo(id) { return 'RTN-' + String(id).padStart(5, '0'); }
+
+  var toastTimer = null;
+  function toast(msg, type) {
+    var t = $('toast'); t.textContent = msg;
+    t.className = 'toast is-show' + (type === 'err' ? ' is-err' : '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.className = 'toast'; }, type === 'err' ? 5000 : 3000);
+  }
+
+  var canPush = true;
+  window.rsvOnRole = function (role) { canPush = (role === 'admin' || role === 'manager'); render(); };
+
+  var rows = [], filter = 'ready', openId = null;
+  function items(r) { try { return JSON.parse(r.items_json || '[]'); } catch (e) { return []; } }
+  function inFilter(r) {
+    var st = r.uc_status || 'pending';
+    if (filter === 'ready') return st === 'pending' || st === 'failed';
+    if (filter === 'all') return true;
+    return st === filter;
+  }
+
+  async function load(quiet) {
+    var dot = $('status-dot'), txt = $('status-text');
+    try {
+      var res = await fetch(WORKER + '?action=listReturnsSlips&limit=1000').then(function (r) { return r.json(); });
+      if (!res.ok) throw new Error(res.error || 'Load failed');
+      rows = res.slips || [];
+      dot.classList.remove('is-error');
+      txt.textContent = rows.length + ' verified returns · refreshed ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+      render();
+    } catch (e) {
+      dot.classList.add('is-error'); txt.textContent = 'Could not load returns';
+      if (!quiet) $('push-body').innerHTML = '<tr><td colspan="5" class="hist-empty">Could not load returns: ' + esc(e.message) + '</td></tr>';
+    }
+  }
+
+  function actionCell(r) {
+    var st = r.uc_status || 'pending';
+    if (st === 'queued') return '<span class="status-pill st-queued" title="Requested by ' + esc(r.uc_requested_by || '') + ' · ' + esc(fmtDateTime(r.uc_requested_at)) + '">Queued</span>';
+    if (st === 'pushed') return '<span class="status-pill st-pushed" title="' + esc(fmtDateTime(r.uc_pushed_at)) + '">Pushed</span>';
+    var label = st === 'failed' ? 'Retry push' : 'Push to UC';
+    return (st === 'failed' ? '<span class="status-pill st-failed" style="margin-right:8px">Failed</span>' : '') +
+      '<button class="btn btn-sm btn-primary push-btn" data-push="' + r.id + '"' + (canPush ? '' : ' disabled title="View only"') + '>' + label + '</button>';
+  }
+
+  function detailRow(r) {
+    var its = items(r);
+    return '<tr class="hist-detail" data-detail="' + r.id + '"><td colspan="5">' +
+      '<div class="detail-meta">Slip date ' + esc(fmtDate(r.slip_date)) + ' · verified by ' + esc(r.created_by || '—') + ' on ' + esc(fmtDateTime(r.created_at)) +
+      (r.uc_requested_at ? ' · push requested by ' + esc(r.uc_requested_by || '—') + ' on ' + esc(fmtDateTime(r.uc_requested_at)) : '') + '</div>' +
+      '<table class="detail-table"><thead><tr><th class="num">#</th><th>UC SKU</th><th class="num">Qty</th></tr></thead><tbody>' +
+      its.map(function (it, i) { return '<tr><td class="num">' + (i + 1) + '</td><td>' + esc(it.sku) + '</td><td class="num">' + esc(it.qty) + '</td></tr>'; }).join('') +
+      '</tbody></table>' +
+      (r.uc_status === 'failed' && r.uc_message ? '<div class="fail-msg">UC said: ' + esc(r.uc_message) + '</div>' : '') +
+      '</td></tr>';
+  }
+
+  function render() {
+    var counts = { ready: 0, queued: 0, pushed: 0, all: rows.length };
+    rows.forEach(function (r) {
+      var st = r.uc_status || 'pending';
+      if (st === 'pending' || st === 'failed') counts.ready++;
+      else if (counts[st] != null) counts[st]++;
+    });
+    Object.keys(counts).forEach(function (k) { $('c-' + k).textContent = counts[k] ? '(' + counts[k] + ')' : ''; });
+
+    var list = rows.filter(inFilter);
+    if (!list.length) {
+      var msg = filter === 'ready' ? 'Nothing to push — every verified return has been sent.' : 'No returns here yet.';
+      $('push-body').innerHTML = '<tr><td colspan="5" class="hist-empty">' + msg + '</td></tr>'; return;
+    }
+    $('push-body').innerHTML = list.map(function (r, i) {
+      var its = items(r);
+      return '<tr class="hist-row" data-id="' + r.id + '">' +
+        '<td class="num">' + (i + 1) + '</td>' +
+        '<td class="rtn">' + rtnNo(r.id) + '</td>' +
+        '<td class="num">' + its.length + '</td>' +
+        '<td class="num">' + esc(r.total_qty) + '</td>' +
+        '<td class="num">' + actionCell(r) + '</td>' +
+      '</tr>' + (openId === r.id ? detailRow(r) : '');
+    }).join('');
+  }
+
+  $('push-body').addEventListener('click', async function (e) {
+    var btn = e.target.closest('[data-push]');
+    if (btn) {
+      e.stopPropagation();
+      var id = +btn.dataset.push;
+      var r = rows.filter(function (x) { return x.id === id; })[0]; if (!r) return;
+      if (!confirm('Push ' + rtnNo(id) + ' to Unicommerce?\n\n' + items(r).length + ' SKUs · ' + r.total_qty + ' qty')) return;
+      btn.disabled = true; btn.textContent = 'Queuing…';
+      try {
+        var res = await fetch(WORKER + '?action=rsv_requestUcPush', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'rsv_requestUcPush', id: id })
+        }).then(function (x) { return x.json(); });
+        if (!res.ok && !(res.slip && res.slip.uc_status)) throw new Error(res.error || 'Failed');
+        if (res.slip) Object.assign(r, res.slip);
+        toast(res.ok ? rtnNo(id) + ' queued for UC push' : rtnNo(id) + ' is ' + r.uc_status + ' already', res.ok ? '' : 'err');
+      } catch (err) {
+        toast('Could not queue ' + rtnNo(id) + ': ' + err.message, 'err');
+      }
+      render();
+      return;
+    }
+    var row = e.target.closest('.hist-row'); if (!row) return;
+    var rid = +row.dataset.id;
+    openId = openId === rid ? null : rid;
+    render();
+  });
+
+  document.querySelectorAll('.filter-bar .tab-btn').forEach(function (b) {
+    b.addEventListener('click', function () {
+      filter = b.dataset.f; openId = null;
+      document.querySelectorAll('.filter-bar .tab-btn').forEach(function (x) { x.classList.toggle('is-active', x === b); });
+      render();
+    });
+  });
+  $('refresh-btn').addEventListener('click', function () { load(); });
+  setInterval(function () { if (!document.hidden) load(true); }, 60000);   // keep statuses fresh
+
+  load();
+})();
+</script>
+</body>
+</html>

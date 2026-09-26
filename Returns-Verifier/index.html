@@ -469,6 +469,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     <div class="tabs" role="tablist">
       <button class="tab-btn is-active" id="tab-verify" role="tab" aria-selected="true">Verify slip</button>
       <button class="tab-btn" id="tab-history" role="tab" aria-selected="false">History</button>
+      <a class="tab-btn" href="./UC-Push/" style="text-decoration:none">UC Push Panel ↗</a>
     </div>
   </div>
 
@@ -530,9 +531,9 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     <div class="hist-wrap">
       <table class="hist-table">
         <thead><tr>
-          <th>Slip date</th><th class="num">SKUs</th><th class="num">Total qty</th><th>Submitted by</th><th>Submitted at</th><th></th>
+          <th>Return no.</th><th>Slip date</th><th class="num">SKUs</th><th class="num">Total qty</th><th>Submitted by</th><th>Submitted at</th><th>UC</th><th></th>
         </tr></thead>
-        <tbody id="hist-body"><tr><td colspan="6" class="hist-empty">Loading…</td></tr></tbody>
+        <tbody id="hist-body"><tr><td colspan="7" class="hist-empty">Loading…</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -564,6 +565,8 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
   // Normalise for matching: lowercase, drop spaces/dashes/dots/underscores
   // so "tcd 18d", "TCD-18D" and "tcd18d" all compare equal.
   function norm(s) { return String(s || '').toLowerCase().replace(/[\s\-_.\/]/g, ''); }
+  // Return number for a saved slip: RTN-00007 (same format as UC Push Panel)
+  function rtnNo(id) { return 'RTN-' + String(id).padStart(5, '0'); }
   function todayISO() { var d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); }
   function fmtDate(iso) { if (!iso) return '—'; var p = String(iso).slice(0, 10).split('-'); return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : iso; }
   function fmtDateTime(s) {
@@ -916,7 +919,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     var blob = new Blob([rows.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'Returns_Slip_' + fmtDate(slipDate) + (id ? '_' + id : '') + '.csv';
+    a.download = (id ? rtnNo(id) + '_' : 'Returns_Slip_') + fmtDate(slipDate) + '.csv';
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
   }
@@ -937,7 +940,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
       }).then(function (r) { return r.json(); });
       if (!res.ok) throw new Error(res.error || 'Save failed');
       downloadCsv(items, slipDate, res.id);
-      toast('Slip saved · CSV downloaded (' + items.length + ' SKUs, ' + items.reduce(function (a, i) { return a + i.qty; }, 0) + ' qty)');
+      toast(rtnNo(res.id) + ' saved · CSV downloaded (' + items.length + ' SKUs, ' + items.reduce(function (a, i) { return a + i.qty; }, 0) + ' qty)');
       localStorage.removeItem(DRAFT_KEY);
       lines = [newLine()]; $('slip-date').value = todayISO();
       renderLines(); focusSku(lines[0].id);
@@ -1110,7 +1113,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
 
   async function loadHistory() {
     var body = $('hist-body');
-    body.innerHTML = '<tr><td colspan="6" class="hist-empty">Loading…</td></tr>';
+    body.innerHTML = '<tr><td colspan="7" class="hist-empty">Loading…</td></tr>';
     try {
       var res = await fetch(WORKER + '?action=listReturnsSlips').then(function (r) { return r.json(); });
       if (!res.ok) throw new Error(res.error || 'Load failed');
@@ -1118,7 +1121,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
       histLoaded = true;
       renderHistory();
     } catch (e) {
-      body.innerHTML = '<tr><td colspan="6" class="hist-empty">Could not load history: ' + esc(e.message) + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="7" class="hist-empty">Could not load history: ' + esc(e.message) + '</td></tr>';
     }
   }
 
@@ -1126,14 +1129,16 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
 
   function renderHistory() {
     var body = $('hist-body');
-    if (!histRows.length) { body.innerHTML = '<tr><td colspan="6" class="hist-empty">No slips submitted yet. Submitted slips show up here.</td></tr>'; return; }
+    if (!histRows.length) { body.innerHTML = '<tr><td colspan="7" class="hist-empty">No slips submitted yet. Submitted slips show up here.</td></tr>'; return; }
     body.innerHTML = histRows.map(function (r) {
       return '<tr class="hist-row" data-id="' + r.id + '">' +
+        '<td style="font-weight:700">' + rtnNo(r.id) + '</td>' +
         '<td>' + esc(fmtDate(r.slip_date)) + '</td>' +
         '<td class="num">' + slipItems(r).length + '</td>' +
         '<td class="num">' + esc(r.total_qty) + '</td>' +
         '<td>' + esc(r.created_by || '—') + '</td>' +
         '<td>' + esc(fmtDateTime(r.created_at)) + '</td>' +
+        '<td>' + ({ queued: 'Queued', pushed: 'Pushed', failed: 'Failed' }[r.uc_status] || 'Not pushed') + '</td>' +
         '<td class="num"><button class="btn btn-sm" data-csv="' + r.id + '">Download CSV</button></td>' +
       '</tr>';
     }).join('');
@@ -1150,7 +1155,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     if (next && next.classList.contains('hist-detail')) { next.remove(); return; }
     var tr = document.createElement('tr');
     tr.className = 'hist-detail';
-    tr.innerHTML = '<td colspan="6"><div class="hist-items">' + slipItems(r).map(function (it) { return '<span>' + esc(it.sku) + '<b>' + esc(it.qty) + '</b></span>'; }).join('') + '</div></td>';
+    tr.innerHTML = '<td colspan="7"><div class="hist-items">' + slipItems(r).map(function (it) { return '<span>' + esc(it.sku) + '<b>' + esc(it.qty) + '</b></span>'; }).join('') + '</div></td>';
     row.after(tr);
   });
 
