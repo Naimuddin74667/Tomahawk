@@ -1467,16 +1467,30 @@ function poOpen(poNumber) {
     '</div>' +
     (p.status_note ? '<div class="pd-sub" style="margin:-.5rem 0 1rem">Note: <b>' + esc(p.status_note) + '</b></div>' : '');
 
-  // Lines: model sits under the description; totals in the footer
+  // Lines: SKU name | Item ID | Sent qty | Recv qty
+  //  Sent = invoiced qty (PO qty until an invoice exists)
+  //  Recv = Sent minus Credit Note qty for that line; if no CN but the GRN
+  //         received qty equals total sent, every line was received in full.
+  var parse = function (j) { try { return JSON.parse(j || '[]'); } catch (e) { return []; } };
+  var sentBy = {}, cnBy = {};
+  (inv && inv.items_json ? parse(inv.items_json) : items).forEach(function (it) { sentBy[it.item_code] = (sentBy[it.item_code] || 0) + (Number(it.qty) || 0); });
+  if (cn) parse(cn.items_json).forEach(function (it) { cnBy[it.item_code] = (cnBy[it.item_code] || 0) + (Number(it.qty) || 0); });
+  var totSent = 0; for (var k in sentBy) totSent += sentBy[k];
+  var grn = (p.received_qty != null && p.received_qty !== '') ? Number(p.received_qty) : null;
+  var recvKnown = !!cn || (grn !== null && grn === totSent);
+  var totRecv = 0;
   document.getElementById('poModalItems').innerHTML = '<table class="detail-table"><thead><tr>' +
-    '<th>Item code</th><th>Description</th><th>HSN</th><th class="tc">Qty</th><th class="tr">MRP</th><th class="tr">Rate</th><th class="tr">Taxable</th><th class="tc">GST</th><th class="tr">Total</th></tr></thead><tbody>' +
+    '<th>SKU name</th><th>Item ID</th><th class="tr">Sent qty</th><th class="tr">Recv qty</th></tr></thead><tbody>' +
     items.map(function (it) {
-      var lib = S.lib[it.item_code];
-      return '<tr><td class="mono">' + esc(it.item_code) + '</td>' +
-        '<td>' + esc(it.description) + '<div>' + (lib ? '<span class="pd-muted" style="font-size:11px">' + esc(lib.model) + '</span>' : '<span class="pd-miss">Not in SKU Library</span>') + '</div></td>' +
-        '<td class="mono">' + esc(it.hsn) + '</td><td class="tc">' + it.qty + '</td><td class="tr">' + fmt(it.mrp) + '</td>' +
-        '<td class="tr">' + fmt(it.base_cost) + '</td><td class="tr">' + fmt(it.taxable) + '</td><td class="tc">' + it.gst_rate + '%</td><td class="tr"><b>' + fmt(it.total) + '</b></td></tr>';
-    }).join('') + '</tbody><tfoot><tr><td colspan="3">Total</td><td class="tc">' + sum('qty') + '</td><td></td><td></td><td class="tr">' + fmt(sum('taxable')) + '</td><td></td><td class="tr">' + fmt(sum('total')) + '</td></tr></tfoot></table>';
+      var lib = S.lib[it.item_code], sent = sentBy[it.item_code] || 0;
+      var recv = recvKnown ? Math.max(0, sent - (cnBy[it.item_code] || 0)) : null;
+      totRecv += recv || 0;
+      return '<tr><td>' + (lib ? '<b style="font-weight:600">' + esc(lib.model) + '</b>' : '<span class="pd-miss">Not in SKU Library</span>') +
+        '<div class="pd-muted" style="font-size:11px">' + esc(it.description) + '</div></td>' +
+        '<td class="mono">' + esc(it.item_code) + '</td>' +
+        '<td class="tr">' + sent + '</td><td class="tr">' + (recv === null ? '\u2014' : recv) + '</td></tr>';
+    }).join('') + '</tbody><tfoot><tr><td colspan="2">Total</td><td class="tr">' + totSent + '</td><td class="tr">' +
+    (recvKnown ? totRecv : (grn !== null ? grn : '\u2014')) + '</td></tr></tfoot></table>';
 
   var gp = S.gatepass[poNumber] || [];
   document.getElementById('poModalGatepass').innerHTML = gp.length ? '<div class="section-kicker" style="margin:1rem 0 .5rem">UC Gatepass</div>' +
