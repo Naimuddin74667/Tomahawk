@@ -359,6 +359,28 @@ body.view-only .needs-edit{display:none!important}
 .kv-grid .k{font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-family:'DM Mono',monospace;margin-bottom:2px}
 .kv-grid .v{font-weight:600;color:var(--text);word-break:break-word}
 .detail-table{width:100%;border-collapse:collapse;font-size:11.5px}
+/* PO detail modal — dates strip, two info cards, lines table with totals */
+.pd-sub{font-size:12px;color:var(--muted);margin:-.4rem 0 1rem}
+.pd-sub b{color:var(--text);font-weight:600}
+.pd-dates{display:grid;grid-template-columns:repeat(4,1fr);background:var(--surface2);border:1px solid var(--border);border-radius:7px;margin-bottom:.8rem}
+.pd-dates > div{padding:.65rem .9rem}
+.pd-dates > div + div{border-left:1px solid var(--border)}
+.pd-k{font-size:10.5px;color:var(--muted);margin-bottom:3px}
+.pd-v{font-size:13px;font-weight:600;color:var(--text)}
+.pd-cards{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin-bottom:1.1rem}
+.pd-card{background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:.75rem .9rem}
+.pd-card-title{font-size:11px;font-weight:700;color:var(--accent);margin-bottom:.5rem}
+.pd-row{display:flex;justify-content:space-between;gap:1rem;font-size:12px;padding:4px 0}
+.pd-row + .pd-row{border-top:1px dashed var(--border)}
+.pd-row > span:first-child{color:var(--muted);flex-shrink:0}
+.pd-row > span:last-child{font-weight:600;text-align:right}
+.pd-addr{font-size:11.5px;color:var(--muted);line-height:1.45;margin:2px 0 .5rem}
+.pd-muted{font-weight:400;color:var(--muted)}
+.pd-miss{display:inline-block;font-size:10px;color:#e05555;background:rgba(224,85,85,.12);border-radius:4px;padding:1px 6px;margin-top:3px}
+.detail-table tfoot td{font-weight:700;border-bottom:none;border-top:1px solid var(--border);background:var(--surface2)}
+.pd-grn{display:grid;grid-template-columns:150px 1fr auto;gap:.5rem;align-items:end;margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)}
+.pd-actions{margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border);display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+@media (max-width:760px){ .pd-dates{grid-template-columns:1fr 1fr} .pd-dates > div:nth-child(3){border-left:none} .pd-dates > div:nth-child(n+3){border-top:1px solid var(--border)} .pd-cards{grid-template-columns:1fr} }
 .detail-table th{background:var(--surface2);color:var(--muted);font-weight:600;text-align:left;padding:6px 8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--border)}
 .detail-table td{padding:6px 8px;border-bottom:1px solid var(--border)}
 .detail-table .tr{text-align:right}.detail-table .tc{text-align:center}
@@ -789,15 +811,15 @@ html[data-theme="light"] .bulk-table th,html[data-theme="light"] .bulk-footer{ba
 <div class="modal-bg" id="poModal">
   <div class="modal" style="width:960px;max-width:95vw;max-height:90vh;overflow-y:auto">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem">
-      <div class="modal-title" style="margin-bottom:0">&#128197; PO Detail &mdash; <span id="poModalNumber"></span></div>
+      <div class="modal-title" style="margin-bottom:0;display:flex;align-items:center;gap:.6rem">&#128197; PO <span id="poModalNumber"></span> <span id="poModalPill"></span></div>
       <button onclick="closeModal('poModal')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
     </div>
-    <div id="poModalSummary" class="kv-grid"></div>
-    <div class="section-kicker" style="margin:1rem 0 .5rem">PO Lines</div>
+    <div id="poModalSummary"></div>
+    <div class="section-kicker" style="margin:0 0 .5rem">PO lines</div>
     <div style="overflow-x:auto"><div id="poModalItems"></div></div>
     <div id="poModalGatepass"></div>
-    <div id="poModalEdit" class="needs-edit" style="display:grid;grid-template-columns:160px 1fr auto;gap:.5rem;align-items:end;margin-top:1rem"></div>
-    <div id="poModalActions" style="margin-top:1.1rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap"></div>
+    <div id="poModalEdit" class="needs-edit pd-grn"></div>
+    <div id="poModalActions" class="pd-actions"></div>
   </div>
 </div>
 
@@ -1419,32 +1441,49 @@ function poOpen(poNumber) {
   var inv = invByPo(poNumber), cn = inv ? cnByInv(inv.inv_number) : null, st = poStatus(p);
   var intra = isIntraState(p.ship_gstin), left = daysUntil(p.expiry_date);
   document.getElementById('poModalNumber').textContent = poNumber;
-  var kv = function (k, v) { return '<div><div class="k">' + k + '</div><div class="v">' + v + '</div></div>'; };
-  document.getElementById('poModalSummary').innerHTML =
-    kv('Status', '<span class="pill ' + STATUS_PILL[st] + '">' + STATUS_LABEL[st] + '</span>') +
-    kv('PO Date', niceDate(p.po_date)) +
-    kv('Expected Delivery', niceDate(p.expected_date)) +
-    kv('PO Expiry', niceDate(p.expiry_date) + (left != null && isActive(p) ? ' <span class="days ' + (left <= 3 ? 'days-red' : 'days-ok') + '">' + (left < 0 ? 'expired' : left + 'd left') + '</span>' : '')) +
-    kv('Appointment', p.appointment_date ? niceDate(p.appointment_date) : '\u2014') +
-    kv('Pod', esc(p.pod_name || '\u2014')) +
-    kv('Ship To', esc(p.ship_name) + '<div style="font-weight:400;font-size:11px;color:var(--muted)">' + esc(p.ship_addr) + '</div>') +
-    kv('GSTIN / Tax', esc(p.ship_gstin) + ' <span style="font-weight:400;color:var(--muted)">\u00b7 ' + (intra ? 'CGST + SGST' : 'IGST') + '</span>') +
-    kv('PO Value', '\u20b9' + fmt(p.grand_total)) +
-    kv('Invoice', inv ? esc(inv.inv_number) + ' <span style="font-weight:400;color:var(--muted)">\u00b7 ' + esc(inv.inv_date) + '</span>' : '\u2014') +
-    kv('Credit Note', cn ? esc(cn.cn_number) + ' <span style="font-weight:400;color:var(--muted)">\u00b7 ' + cn.total_qty + ' pcs \u00b7 \u20b9' + fmt(cn.amount) + '</span>' : '\u2014') +
-    kv('Received Qty', (p.received_qty != null && p.received_qty !== '') ? p.received_qty + ' of ' + p.total_qty : '\u2014') +
-    (p.status_note ? kv('Note', esc(p.status_note)) : '');
-
+  document.getElementById('poModalPill').innerHTML = '<span class="pill ' + STATUS_PILL[st] + '">' + STATUS_LABEL[st] + '</span>';
   var items = poItems(p);
+  var sum = function (f) { return items.reduce(function (t, it) { return t + (Number(it[f]) || 0); }, 0); };
+  var muted = function (t) { return ' <span class="pd-muted">' + t + '</span>'; };
+  var dash = '\u2014';
+  var date = function (k, v) { return '<div><div class="pd-k">' + k + '</div><div class="pd-v">' + v + '</div></div>'; };
+  var row = function (k, v) { return '<div class="pd-row"><span>' + k + '</span><span>' + v + '</span></div>'; };
+
+  document.getElementById('poModalSummary').innerHTML =
+    // One-line context under the title
+    '<div class="pd-sub"><b>' + esc(p.pod_name || dash) + '</b> &nbsp;&middot;&nbsp; ' + items.length + ' SKUs &nbsp;&middot;&nbsp; ' + p.total_qty + ' pcs &nbsp;&middot;&nbsp; <b>\u20b9' + fmt(p.grand_total) + '</b></div>' +
+    // Dates strip, in the order they happen
+    '<div class="pd-dates">' +
+      date('PO date', niceDate(p.po_date)) +
+      date('Expected delivery', niceDate(p.expected_date)) +
+      date('Appointment', p.appointment_date ? niceDate(p.appointment_date) : '<span class="pd-muted">Not set</span>') +
+      date('PO expiry', niceDate(p.expiry_date) + (left != null && isActive(p) ? '<span class="days ' + (left <= 3 ? 'days-red' : 'days-ok') + '">' + (left < 0 ? 'expired' : left + 'd left') + '</span>' : '')) +
+    '</div>' +
+    '<div class="pd-cards">' +
+      '<div class="pd-card"><div class="pd-card-title">Ship to</div>' +
+        '<div style="font-size:13px;font-weight:700">' + esc(p.ship_name) + '</div>' +
+        '<div class="pd-addr">' + esc(p.ship_addr) + '</div>' +
+        row('POD', esc(p.pod_name || dash)) +
+        row('GSTIN', '<span class="mono">' + esc(p.ship_gstin) + '</span>' + muted('\u00b7 ' + (intra ? 'CGST + SGST' : 'IGST'))) +
+      '</div>' +
+      '<div class="pd-card"><div class="pd-card-title">Documents &amp; GRN</div>' +
+        row('Invoice', inv ? '<span class="mono">' + esc(inv.inv_number) + '</span>' + muted('\u00b7 ' + esc(inv.inv_date)) : muted('Not generated')) +
+        row('Credit note', cn ? '<span class="mono">' + esc(cn.cn_number) + '</span>' + muted('\u00b7 ' + cn.total_qty + ' pcs \u00b7 \u20b9' + fmt(cn.amount)) : muted(dash)) +
+        row('Received qty', (p.received_qty != null && p.received_qty !== '') ? p.received_qty + muted('of ' + p.total_qty) : muted('Pending of ' + p.total_qty)) +
+        (p.status_note ? row('Note', esc(p.status_note)) : '') +
+      '</div>' +
+    '</div>';
+
+  // Lines: model sits under the description; totals in the footer
   document.getElementById('poModalItems').innerHTML = '<table class="detail-table"><thead><tr>' +
-    '<th>#</th><th>Item Code</th><th>Description</th><th>Model (Library)</th><th>HSN</th><th class="tc">Qty</th><th class="tr">MRP</th><th class="tr">Rate</th><th class="tr">Taxable</th><th class="tc">GST</th><th class="tr">Total</th></tr></thead><tbody>' +
-    items.map(function (it, i) {
+    '<th>Item code</th><th>Description</th><th>HSN</th><th class="tc">Qty</th><th class="tr">MRP</th><th class="tr">Rate</th><th class="tr">Taxable</th><th class="tc">GST</th><th class="tr">Total</th></tr></thead><tbody>' +
+    items.map(function (it) {
       var lib = S.lib[it.item_code];
-      return '<tr><td>' + (i + 1) + '</td><td class="mono">' + esc(it.item_code) + '</td><td>' + esc(it.description) + '</td>' +
-        '<td>' + (lib ? esc(lib.model) : '<span style="color:#e05555;font-size:10.5px">not in library</span>') + '</td>' +
+      return '<tr><td class="mono">' + esc(it.item_code) + '</td>' +
+        '<td>' + esc(it.description) + '<div>' + (lib ? '<span class="pd-muted" style="font-size:11px">' + esc(lib.model) + '</span>' : '<span class="pd-miss">Not in SKU Library</span>') + '</div></td>' +
         '<td class="mono">' + esc(it.hsn) + '</td><td class="tc">' + it.qty + '</td><td class="tr">' + fmt(it.mrp) + '</td>' +
         '<td class="tr">' + fmt(it.base_cost) + '</td><td class="tr">' + fmt(it.taxable) + '</td><td class="tc">' + it.gst_rate + '%</td><td class="tr"><b>' + fmt(it.total) + '</b></td></tr>';
-    }).join('') + '</tbody></table>';
+    }).join('') + '</tbody><tfoot><tr><td colspan="3">Total</td><td class="tc">' + sum('qty') + '</td><td></td><td></td><td class="tr">' + fmt(sum('taxable')) + '</td><td></td><td class="tr">' + fmt(sum('total')) + '</td></tr></tfoot></table>';
 
   var gp = S.gatepass[poNumber] || [];
   document.getElementById('poModalGatepass').innerHTML = gp.length ? '<div class="section-kicker" style="margin:1rem 0 .5rem">UC Gatepass</div>' +
@@ -1456,8 +1495,8 @@ function poOpen(poNumber) {
 
   // Received qty + note (managers only)
   document.getElementById('poModalEdit').innerHTML =
-    '<div class="field" style="margin:0"><label class="field-lbl">Received Qty (GRN)</label><input type="number" id="poRecv" min="0" value="' + (p.received_qty != null ? p.received_qty : '') + '" placeholder="of ' + p.total_qty + '"></div>' +
-    '<div class="field" style="margin:0"><label class="field-lbl">Status Note</label><input type="text" id="poNote" value="' + esc(p.status_note || '') + '" placeholder="e.g. 2 pcs short at GRN"></div>' +
+    '<div class="field" style="margin:0"><label class="field-lbl">Received qty (GRN)</label><input type="number" id="poRecv" min="0" value="' + (p.received_qty != null ? p.received_qty : '') + '" placeholder="of ' + p.total_qty + '"></div>' +
+    '<div class="field" style="margin:0"><label class="field-lbl">Status note</label><input type="text" id="poNote" value="' + esc(p.status_note || '') + '" placeholder="e.g. 2 pcs short at GRN"></div>' +
     '<button class="btn btn-secondary btn-sm" style="width:auto;height:36px" onclick="poSaveRecvNote()">Save</button>';
 
   var b = [];
