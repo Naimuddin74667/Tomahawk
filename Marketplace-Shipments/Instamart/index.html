@@ -213,6 +213,29 @@
     #label{transform:none!important;width:75mm!important;height:50mm!important;border:0.5px solid #000!important;margin:0!important;position:absolute!important;top:0!important;left:0!important}
   }
 
+  /* ── Box label, 100×150 mm (378×567 px @96dpi) — Instamart Courier Inbound SOP ── */
+  #off-box{width:378px;height:567px;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;box-sizing:border-box;padding:10px;display:flex}
+  .bx{flex:1;border:2px solid #000;display:flex;flex-direction:column;min-height:0}
+  .bx > div{border-bottom:2px solid #000}
+  .bx > div:last-child{border-bottom:none}
+  .bx-logo{height:54px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .bx-logo img{height:34px;max-width:80%;object-fit:contain}
+  .bx-kv{padding:6px 12px 7px;flex-shrink:0}
+  .bx-k{font-size:11px;font-weight:700;margin-bottom:1px}
+  .bx-v{font-size:25px;font-weight:800;line-height:1.1;word-break:break-all}
+  .bx-bc{padding:10px 16px 6px;text-align:center;flex-shrink:0}
+  .bx-bc svg{width:100%;height:78px;display:block}
+  .bx-code{font-size:17px;font-weight:800;letter-spacing:2px;margin-top:4px}
+  .bx-name{padding:6px 12px 8px;flex-shrink:0}
+  .bx-name .bx-v{font-size:17px;word-break:normal;overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
+  .bx-row{flex:1;display:flex;min-height:0}
+  .bx-cell{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .bx-cell + .bx-cell{border-left:2px solid #000}
+  .bx-qty{font-size:60px;font-weight:800;line-height:1}
+  .bx-box{font-size:32px;font-weight:800;line-height:1.1}
+  .bx-foot{padding:5px 12px;font-size:11px;line-height:1.3;flex-shrink:0}
+  .box-split{font-size:11px;color:var(--muted);font-family:'DM Mono',monospace}
+
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
@@ -673,7 +696,10 @@ html[data-theme="light"] .bulk-table th,html[data-theme="light"] .bulk-footer{ba
     <div id="lblTableArea" style="display:none;flex:1;flex-direction:column;padding:1.2rem 1.5rem 1rem;overflow:hidden">
       <div class="bulk-header" style="flex-shrink:0">
         <span class="bulk-summary" id="lblSummary"></span>
-        <button class="btn btn-primary btn-sm" onclick="openPrintConfirm()">&#9113; Print All</button>
+        <div style="display:flex;gap:.4rem">
+          <button class="btn btn-secondary btn-sm" id="lblBoxBtn" style="width:auto" onclick="openBoxModal()" title="100&times;150 mm box labels per Instamart inbound SOP &mdash; needs a confirmed invoice">&#128230; Box Labels</button>
+          <button class="btn btn-primary btn-sm" style="width:auto" onclick="openPrintConfirm()">&#9113; Print All</button>
+        </div>
       </div>
       <div class="bulk-table-wrap">
         <table class="bulk-table">
@@ -862,6 +888,24 @@ html[data-theme="light"] .bulk-table th,html[data-theme="light"] .bulk-footer{ba
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:.8rem;padding:.6rem .8rem;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">
       <span style="font-size:11px;color:var(--muted)"><span id="printSkuCount" style="color:var(--text);font-weight:700"></span> SKUs &nbsp;&middot;&nbsp; <span id="printQty" style="color:var(--accent);font-weight:700"></span> labels</span>
       <button class="btn btn-primary" style="width:auto;padding:8px 20px" onclick="generateLabelsPDF()">Generate PDF</button>
+    </div>
+  </div>
+</div>
+
+<!-- Box labels (100×150 mm) -->
+<div class="modal-bg" id="boxModal">
+  <div class="modal" style="width:640px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+      <div class="modal-title" style="margin-bottom:0">&#128230; Box Labels &mdash; 100&times;150 mm</div>
+      <button onclick="closeModal('boxModal')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:.8rem" id="boxMeta"></div>
+    <div style="overflow-y:auto;max-height:340px;border:1px solid var(--border);border-radius:7px">
+      <table class="bulk-table" style="width:100%"><thead><tr><th>Item Code</th><th>Model</th><th style="text-align:center">Inv Qty</th><th style="width:96px">Units / box</th><th>Boxes</th></tr></thead><tbody id="boxTbody"></tbody></table>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:.8rem;padding:.6rem .8rem;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">
+      <span style="font-size:11px;color:var(--muted)"><span id="boxSkuCount" style="color:var(--text);font-weight:700"></span> SKUs &nbsp;&middot;&nbsp; <span id="boxTotal" style="color:var(--accent);font-weight:700"></span> boxes</span>
+      <button class="btn btn-primary" id="boxGenBtn" style="width:auto;padding:8px 20px" onclick="generateBoxLabelsPDF()">Generate PDF</button>
     </div>
   </div>
 </div>
@@ -1959,6 +2003,10 @@ function lblRender() {
   }).join('');
   document.getElementById('lblSummary').innerHTML = esc(_lbl.po.po_number) + (_lbl.inv ? ' \u00b7 ' + esc(_lbl.inv.inv_number) + ' (invoiced qty)' : ' (PO qty)') +
     (missing ? ' \u00b7 <span style="color:#e05555">' + missing + ' not in library</span>' : '');
+  // Box labels need the invoice number (SOP mandatory field) — only after invoice confirm
+  var bb = document.getElementById('lblBoxBtn');
+  bb.disabled = !_lbl.inv; bb.style.opacity = _lbl.inv ? '' : '.45';
+  bb.title = _lbl.inv ? '100\u00d7150 mm box labels per Instamart inbound SOP' : 'Confirm the invoice for this PO first \u2014 box labels need the invoice number';
   document.getElementById('lblSkuCount').textContent = _lbl.rows.length;
   document.getElementById('lblQtyCount').textContent = qty;
 }
@@ -2018,6 +2066,99 @@ function generateLabelsPDF() {
         .then(function (c) { lastKey = key; lastImg = c.toDataURL('image/png', 1.0); addImg(lastImg); })
         .catch(function (e) { console.error(e); i++; next(); });
     }, 120);
+  })();
+}
+
+// ══════════════════════════════════════════════════════════════════
+// BOX LABELS — 100×150 mm, one box = one SKU (Instamart Courier Inbound SOP)
+// Mandatory per box: PO number, Invoice number, SKU barcode, SKU code,
+// SKU name, SKU qty. Units per box are typed at print time (not stored).
+// Qty source = the confirmed invoice (handles partial shipping).
+// ══════════════════════════════════════════════════════════════════
+var _box = { rows: [] };
+
+// 70 units at 20/box → [20, 20, 20, 10]
+function boxSplit(qty, per) {
+  qty = parseInt(qty) || 0; per = parseInt(per) || 0;
+  if (qty <= 0 || per <= 0) return [];
+  var out = [];
+  while (qty > 0) { out.push(Math.min(per, qty)); qty -= per; }
+  return out;
+}
+function openBoxModal() {
+  if (!_lbl.inv) { toast('Confirm the invoice for this PO first \u2014 box labels need the invoice number', 'err', 5000); return; }
+  var rows = _lbl.rows.filter(function (r) { return r.qty > 0; });
+  var missing = rows.filter(function (r) { return !S.lib[r.code]; });
+  if (missing.length) { toast(missing.length + ' item(s) not in the SKU Library \u2014 use + Add first', 'err', 5000); return; }
+  if (!rows.length) { toast('No invoiced qty on this PO', 'err'); return; }
+  _box.rows = rows;
+  document.getElementById('boxMeta').textContent = 'PO ' + _lbl.po.po_number + '  \u00b7  Invoice ' + _lbl.inv.inv_number + '  \u00b7  Enter how many units go in each box; the last box takes the remainder.';
+  document.getElementById('boxTbody').innerHTML = rows.map(function (r, i) {
+    return '<tr><td class="mono">' + esc(r.code) + '</td><td>' + esc(S.lib[r.code].model) + '</td><td style="text-align:center">' + r.qty + '</td>' +
+      '<td><input type="number" min="1" value="' + r.qty + '" data-i="' + i + '" oninput="boxTotals()" style="padding:4px 6px;font-size:12px"></td>' +
+      '<td class="box-split" id="boxSplit-' + i + '"></td></tr>';
+  }).join('');
+  boxTotals();
+  openModal('boxModal');
+}
+function boxTotals() {
+  var total = 0, bad = 0;
+  document.querySelectorAll('#boxTbody input').forEach(function (el) {
+    var i = +el.getAttribute('data-i'), parts = boxSplit(_box.rows[i].qty, el.value);
+    var cell = document.getElementById('boxSplit-' + i);
+    if (!parts.length) { bad++; cell.innerHTML = '<span style="color:#e05555">enter units / box</span>'; return; }
+    total += parts.length;
+    // Show the split, compressed for long runs: "4 boxes: 20×3 + 10"
+    var full = parts.filter(function (n) { return n === parts[0]; }).length, rest = parts.length > full ? ' + ' + parts[parts.length - 1] : '';
+    cell.textContent = parts.length + (parts.length === 1 ? ' box: ' : ' boxes: ') + parts[0] + (full > 1 ? '\u00d7' + full : '') + rest;
+  });
+  document.getElementById('boxSkuCount').textContent = _box.rows.length;
+  document.getElementById('boxTotal').textContent = total;
+  var btn = document.getElementById('boxGenBtn'); btn.disabled = bad > 0; btn.style.opacity = bad ? '.45' : '';
+}
+// Fill the off-screen box label. d = {brand, po, inv, code, name, qty, boxNo, boxOf, pod}
+function renderBoxLabel(d) {
+  var $ = function (id) { return document.getElementById('bx-' + id); };
+  $('logo').src = 'data:image/png;base64,' + (d.brand === 'oxford' ? OXFORD_B64 : LOGO_B64);
+  $('po').textContent = d.po; $('inv').textContent = d.inv; $('code').textContent = d.code;
+  $('name').textContent = d.name; $('qty').textContent = d.qty;
+  $('box').textContent = d.boxNo + ' of ' + d.boxOf; $('pod').textContent = d.pod || '';
+  try {
+    JsBarcode($('bc'), String(d.code), { format: 'CODE128', displayValue: false, margin: 0, width: 2, height: 78, background: '#ffffff', lineColor: '#000000' });
+    $('bc').setAttribute('width', '100%'); $('bc').setAttribute('preserveAspectRatio', 'none');
+  } catch (e) { $('bc').innerHTML = ''; }
+}
+function generateBoxLabelsPDF() {
+  var queue = [];
+  document.querySelectorAll('#boxTbody input').forEach(function (el) {
+    var r = _box.rows[+el.getAttribute('data-i')], e = S.lib[r.code], parts = boxSplit(r.qty, el.value);
+    parts.forEach(function (n, j) {
+      queue.push({ brand: e.brand || 'tomahawk', po: _lbl.po.po_number, inv: _lbl.inv.inv_number, code: r.code,
+        name: e.model + (e.generic ? ' \u00b7 ' + e.generic : ''), qty: n, boxNo: j + 1, boxOf: parts.length, pod: _lbl.po.pod_name });
+    });
+  });
+  if (!queue.length) { toast('Nothing to print', 'err'); return; }
+  closeModal('boxModal');
+  var pdf = new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: [100, 150], compress: true });
+  var i = 0, el = document.getElementById('off-box');
+  progress(true, 0, queue.length, 'Box label');
+  (function next() {
+    if (i >= queue.length) {
+      pdf.save('Instamart_BoxLabels_' + _lbl.po.po_number + '.pdf');
+      progress(false); toast('PDF saved \u2014 ' + queue.length + ' box labels \u2713', 'ok');
+      return;
+    }
+    renderBoxLabel(queue[i]);
+    setTimeout(function () {
+      // scale 4 → 1512×2268 px, well above the DA310's 203 dpi
+      html2canvas(el, { scale: 4, useCORS: true, backgroundColor: '#ffffff', width: el.offsetWidth, height: el.offsetHeight, logging: false })
+        .then(function (c) {
+          if (i > 0) pdf.addPage([100, 150], 'portrait');
+          pdf.addImage(c.toDataURL('image/png'), 'PNG', 0, 0, 100, 150, undefined, 'FAST');
+          i++; progress(true, i, queue.length, 'Box label'); setTimeout(next, 0);
+        })
+        .catch(function (e) { console.error(e); toast('Box label ' + (i + 1) + ' failed: ' + e.message, 'err', 6000); progress(false); });
+    }, 60);
   })();
 }
 
@@ -2191,6 +2332,21 @@ window.addEventListener('load', function () {
                   </div>
                 </div>
   </div>
+</div>
+<!-- OFF-SCREEN BOX LABEL (100×150 mm) for PDF generation -->
+<div style="position:fixed;left:-9999px;top:-9999px;opacity:0;pointer-events:none;z-index:-1">
+  <div id="off-box"><div class="bx">
+    <div class="bx-logo"><img id="bx-logo" src="" alt="Brand"></div>
+    <div class="bx-kv"><div class="bx-k">PO number</div><div class="bx-v" id="bx-po"></div></div>
+    <div class="bx-kv"><div class="bx-k">Invoice number</div><div class="bx-v" id="bx-inv"></div></div>
+    <div class="bx-bc"><svg id="bx-bc"></svg><div class="bx-code" id="bx-code"></div></div>
+    <div class="bx-name"><div class="bx-k">SKU name</div><div class="bx-v" id="bx-name"></div></div>
+    <div class="bx-row">
+      <div class="bx-cell"><div class="bx-k">SKU qty</div><div class="bx-qty" id="bx-qty"></div></div>
+      <div class="bx-cell"><div class="bx-k">Box</div><div class="bx-box" id="bx-box"></div></div>
+    </div>
+    <div class="bx-foot">Ship to: <b id="bx-pod"></b><br>From: Industrial Tools &amp; Hardware, Bhiwandi 421302</div>
+  </div></div>
 </div>
 </body>
 </html>
