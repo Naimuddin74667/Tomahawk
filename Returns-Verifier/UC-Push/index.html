@@ -620,7 +620,14 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     if (st === 'pushed') return '<span class="status-pill st-pushed">Pushed ' + esc(fmtDateTime(r.uc_pushed_at)) + '</span>';
     var dis = canPush ? '' : ' disabled title="View only"';
     var doneBtn = '<button class="btn btn-sm" data-done="' + r.id + '"' + dis + ' style="margin-left:6px" title="Use after adding the failed SKUs by hand in UC">Mark done</button>';
-    if (st === 'partial') return '<span class="status-pill st-partial" style="margin-right:8px">Partly pushed</span>' + doneBtn;
+    if (st === 'partial') {
+      var ps = stepsOf(r);
+      // PO flow waiting on QC/putaway: after "Mark QC Complete" in Uniware, click GRN Verified -> script does putaway
+      var needsPutaway = ps && ps.po === 'done' && ps.grn === 'done' && ps.putaway !== 'done' && !failedItems(r).length;
+      return '<span class="status-pill st-partial" style="margin-right:8px">' + (needsPutaway ? 'Waiting for QC' : 'Partly pushed') + '</span>' +
+        (needsPutaway ? '<button class="btn btn-sm btn-primary push-btn" data-grnok="' + r.id + '"' + dis + ' title="Click after Mark QC Complete in Uniware — putaway then runs automatically">GRN Verified</button>' : '') +
+        doneBtn;
+    }
     if (st === 'failed') return '<span class="status-pill st-failed" style="margin-right:8px">Failed</span>' +
       '<button class="btn btn-sm btn-primary push-btn" data-push="' + r.id + '"' + dis + '>Retry push</button>' + doneBtn;
     return '<button class="btn btn-sm btn-primary push-btn" data-push="' + r.id + '"' + dis + '>Push to UC</button>';
@@ -634,7 +641,11 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     if (st) {
       var todo = ['grn', 'qc', 'putaway'].filter(function (k) { return (k !== 'qc' || st.qc) && st[k] !== 'done'; })
         .map(function (k) { return k === 'qc' ? 'Mark QC Complete' : STEP_LABEL[k]; });
-      head = r.uc_status === 'partial'
+      var waitQc = st.po === 'done' && st.grn === 'done' && st.putaway !== 'done' && !f.length;
+      head = waitQc
+        ? 'PO ' + esc(r.uc_po_code || retNo(r)) + ' and its GRN are in UC. In Uniware, open the GRN and click <b>Mark QC Complete</b>, then click <b>GRN Verified</b> here — putaway runs automatically.' +
+          (r.uc_message ? '<br>UC: ' + esc(r.uc_message) : '')
+        : r.uc_status === 'partial'
         ? 'PO ' + esc(r.uc_po_code || retNo(r)) + ' is in UC.' + (todo.length ? ' Finish ' + todo.join(' + ') + ' in UC.' : '') +
           (f.length ? ' These SKUs were rejected — add them by hand:' : '') + ' Then click Mark done.' +
           (r.uc_message ? '<br>UC: ' + esc(r.uc_message) : '')
@@ -647,7 +658,8 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     var list = f.length ? '<ul class="manual-list">' + f.map(function (x) {
       return '<li><b>' + esc(x.sku) + '</b> × ' + esc(x.qty) + (x.error ? ' — <span class="err">' + esc(x.error) + '</span>' : '') + '</li>';
     }).join('') + '</ul>' : '';
-    return '<tr class="err-row"><td></td><td colspan="4">' + (st ? '<div class="steps-line">' + stepsLine(st) + '</div>' : '') + '<div class="fail-msg">' + head + '</div>' + list + '</td></tr>';
+    var calm = st && st.po === 'done' && st.grn === 'done' && st.putaway !== 'done' && !f.length;
+    return '<tr class="err-row"><td></td><td colspan="4">' + (st ? '<div class="steps-line">' + stepsLine(st) + '</div>' : '') + '<div class="fail-msg"' + (calm ? ' style="color:var(--c-orange)"' : '') + '>' + head + '</div>' + list + '</td></tr>';
   }
 
   // Photos are fetched once per return and cached for the session.
@@ -737,6 +749,22 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
         toast('Could not queue ' + retNo(r) + ': ' + err.message, 'err');
       }
       render();
+      return;
+    }
+    var grnok = e.target.closest('[data-grnok]');
+    if (grnok) {
+      e.stopPropagation();
+      var gid = +grnok.dataset.grnok;
+      grnok.disabled = true; grnok.textContent = 'Sending…';
+      try {
+        var gres = await fetch(WORKER + '?action=rsv_grnVerified', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'rsv_grnVerified', id: gid })
+        }).then(function (x) { return x.json(); });
+        if (!gres.ok) throw new Error(gres.error || 'Failed');
+        toast(retNoById(gid) + ' — putaway requested');
+      } catch (err) { toast('Could not send ' + retNoById(gid) + ': ' + err.message, 'err'); }
+      await load(true);
       return;
     }
     var cancel = e.target.closest('[data-cancel]');

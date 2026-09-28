@@ -383,7 +383,10 @@ const ACTION_TIERS = {
   // Undo a Push click before SK's script has picked it up (queued -> pending). —
   rsv_cancelUcPush: 'manager_up',
   // Slip photo saved with each submitted return (shown in UC Push Panel). —
-  rsv_getSlipPhoto: 'viewer_read'
+  rsv_getSlipPhoto: 'viewer_read',
+  // "GRN Verified": QC was marked complete in Uniware -> re-queue so SK's
+  // script resumes on the SAME PO/GRN and does the putaway. —
+  rsv_grnVerified: 'manager_up'
 };
 
 function getAuthRequirement(act) {
@@ -2595,6 +2598,25 @@ export default {
         // ── RETURNS VERIFIER — queue one slip for UC push (SK's panel) ────
         // Only 'pending' or 'failed' slips can be queued, so a slip can
         // never be queued twice while a push is waiting or done.
+        // ── RETURNS VERIFIER — GRN verified in Uniware -> resume for putaway ──
+        // Only for a PO-flow return that is 'partial' (PO + GRN exist). Steps,
+        // PO code and history are kept; the claim hands it out with resume=true
+        // so the script continues from QC/putaway — never a new PO or GRN.
+        if (act === 'rsv_grnVerified') {
+          await ensureReturnsSlipsTable(env.DB);
+          const id = parseInt(body.id, 10);
+          if (!id) return json({ ok: false, error: 'id required' }, 400);
+          const sessionUser = await resolveSession(request, env.DB);
+          const who = (sessionUser && (sessionUser.display_name || sessionUser.username)) || 'unauthenticated';
+          const res = await env.DB.prepare(
+            "UPDATE returns_slips SET uc_status = 'queued', uc_requested_by = ?, uc_requested_at = datetime('now'), uc_claimed_at = NULL, " +
+            "uc_message = 'GRN verified in Uniware by ' || ? || ' — waiting for putaway' " +
+            "WHERE id = ? AND uc_status = 'partial' AND uc_steps_json IS NOT NULL"
+          ).bind(who, who, id).run();
+          if (!res.meta || !res.meta.changes) return json({ ok: false, error: 'Only a partly pushed PO return can be sent for putaway' }, 409);
+          return json({ ok: true });
+        }
+
         if (act === 'rsv_requestUcPush') {
           await ensureReturnsSlipsTable(env.DB);
           const id = parseInt(body.id, 10);
@@ -2622,7 +2644,7 @@ export default {
           if (!healthTokenOk(request, env)) return json({ ok: false, error: 'Invalid or missing health token' }, 401);
           await ensureReturnsSlipsTable(env.DB);
           const rows = await env.DB.prepare(
-            "SELECT id, slip_date, items_json, total_qty, return_no FROM returns_slips WHERE uc_status = 'queued' ORDER BY id ASC LIMIT 20"
+            "SELECT id, slip_date, items_json, total_qty, return_no, uc_steps_json, uc_po_code FROM returns_slips WHERE uc_status = 'queued' ORDER BY id ASC LIMIT 20"
           ).all();
           const out = [];
           for (const r of (rows.results || [])) {
@@ -2648,7 +2670,12 @@ export default {
               putaway_shelf: 'DEFAULT',                        // UC's default putaway shelf in E3
               remark: 'Return Received - ' + returnNo,
               total_qty: r.total_qty,
-              items: JSON.parse(r.items_json || '[]')          // [{ sku, qty }], enabled simple UC SKUs, merged
+              items: JSON.parse(r.items_json || '[]'),         // [{ sku, qty }], enabled simple UC SKUs, merged
+              // resume=true: "GRN Verified" was clicked — PO + GRN already exist and
+              // QC was completed in Uniware. Continue from putaway on the SAME GRN.
+              resume: !!r.uc_steps_json,
+              previous_steps: r.uc_steps_json ? JSON.parse(r.uc_steps_json) : null,
+              po_code: r.uc_po_code || null
             });
           }
           return json({ ok: true, returns: out });
