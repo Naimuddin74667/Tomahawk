@@ -3980,11 +3980,19 @@ async function ensureAmazonShipmentItemsTable(DB) {
   // Added later than the original table — ALTER TABLE ADD COLUMN has no
   // "IF NOT EXISTS" in SQLite, so just swallow the error on repeat runs
   // once the columns already exist.
-  try { await DB.prepare(`ALTER TABLE amazon_shipment_items ADD COLUMN uc_sku TEXT`).run(); } catch (e) {}
-  try { await DB.prepare(`ALTER TABLE amazon_shipment_items ADD COLUMN sent_qty TEXT`).run(); } catch (e) {}
-  try { await DB.prepare(`ALTER TABLE amazon_shipment_items ADD COLUMN sent_qty_inferred INTEGER DEFAULT 0`).run(); } catch (e) {}
-  try { await DB.prepare(`ALTER TABLE amazon_shipment_items ADD COLUMN matched_sku TEXT`).run(); } catch (e) {}
-  try { await DB.prepare(`ALTER TABLE amazon_shipment_items ADD COLUMN expected_qty TEXT`).run(); } catch (e) {}
+  // Only attempt the ALTERs for columns that are actually missing — one
+  // PRAGMA read instead of 5 failing ALTERs on every call (each counted
+  // against D1's per-invocation query cap).
+  const info = await DB.prepare(`PRAGMA table_info(amazon_shipment_items)`).all();
+  const have = new Set((info.results || []).map(c => c.name));
+  const wanted = [
+    ['uc_sku', 'TEXT'], ['sent_qty', 'TEXT'], ['sent_qty_inferred', 'INTEGER DEFAULT 0'],
+    ['matched_sku', 'TEXT'], ['expected_qty', 'TEXT']
+  ];
+  for (const [col, type] of wanted) {
+    if (have.has(col)) continue;
+    try { await DB.prepare(`ALTER TABLE amazon_shipment_items ADD COLUMN ${col} ${type}`).run(); } catch (e) {}
+  }
 }
 
 // Splits "FBA15MBWY7C5, FBA15MBX58GG, FBA15MBXRJ3Y" into trimmed,
@@ -4124,7 +4132,14 @@ async function rebuildAmazonShipments(env) {
       const noOfSkus = (sheetDetail && sheetDetail.no_of_skus != null) ? sheetDetail.no_of_skus : r.no_of_skus;
       const noOfUnits = (sheetDetail && sheetDetail.no_of_units != null) ? sheetDetail.no_of_units : r.no_of_units;
 
-      await env.DB.prepare(`
+      // All writes for this shipment go into ONE DB.batch() call below.
+      // D1 caps queries per Worker invocation (50 free / 1000 paid) and a
+      // batch counts as a single query — running each write separately
+      // blew that cap partway through the loop, leaving the newest
+      // shipments with only their first few items saved. A batch is also
+      // atomic, so a shipment can never end up half-written.
+      const stmts = [];
+      stmts.push(env.DB.prepare(`
         INSERT INTO amazon_shipments (
           shipment_id, appointment_id, destination_fc, no_of_boxes, no_of_skus,
           no_of_units, appointment_status, confirmed_slot, reporting_time,
@@ -4148,14 +4163,14 @@ async function rebuildAmazonShipments(env) {
         shipmentId, r.appointment_id, r.destination_fc, r.no_of_boxes, noOfSkus,
         noOfUnits, r.appointment_status, r.confirmed_slot, r.reporting_time,
         r.email_date, r.gmail_msg_id, r.manual_status
-      ).run();
+      ));
 
       // Persist the per-SKU line items once per shipment (delete + re-insert
       // is simplest/cheap at this volume, and self-heals if the sheet's
       // block ever legitimately changes before the appointment is over).
       if (sheetDetail && Array.isArray(sheetDetail.items)) {
-        await ensureAmazonShipmentItemsTable(env.DB);
-        await env.DB.prepare('DELETE FROM amazon_shipment_items WHERE shipment_id = ?').bind(shipmentId).run();
+        // (table is ensured once at the top of this function, not per shipment)
+        stmts.push(env.DB.prepare('DELETE FROM amazon_shipment_items WHERE shipment_id = ?').bind(shipmentId));
 
         // A mutable per-shipment pool of remaining gatepass quantity,
         // keyed by Uniware SKU. The SAME SKU can be both a standalone
@@ -4238,15 +4253,18 @@ async function rebuildAmazonShipments(env) {
         for (let idx = 0; idx < sheetDetail.items.length; idx++) {
           const item = sheetDetail.items[idx];
           const res = results.get(idx) || {};
-          await env.DB.prepare(
+          stmts.push(env.DB.prepare(
             'INSERT INTO amazon_shipment_items (shipment_id, product, asin, total, barcode, uc_sku, sent_qty, sent_qty_inferred, matched_sku, expected_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
           ).bind(
             shipmentId, item.product || null, item.asin || null, item.total, item.barcode || null,
             res.displayUcSku || null, (res.sentQty !== undefined ? res.sentQty : null),
             res.sentQtyInferred ? 1 : 0, res.matchedSku || null, (res.expectedQty !== undefined ? res.expectedQty : item.total)
-          ).run();
+          ));
         }
       }
+
+      // One query-budget unit for the whole shipment (upsert + items).
+      await env.DB.batch(stmts);
     }
   }
 
@@ -4257,13 +4275,14 @@ async function rebuildAmazonShipments(env) {
   if (expectedDetails && expectedDetails.size > 0) {
     const idsArr = Array.from(expectedDetails.keys());
     const placeholders = idsArr.map(() => '?').join(',');
-    await env.DB.prepare(
-      `DELETE FROM amazon_shipments WHERE shipment_id NOT IN (${placeholders})`
-    ).bind(...idsArr).run();
-    await ensureAmazonShipmentItemsTable(env.DB);
-    await env.DB.prepare(
-      `DELETE FROM amazon_shipment_items WHERE shipment_id NOT IN (${placeholders})`
-    ).bind(...idsArr).run();
+    await env.DB.batch([
+      env.DB.prepare(
+        `DELETE FROM amazon_shipments WHERE shipment_id NOT IN (${placeholders})`
+      ).bind(...idsArr),
+      env.DB.prepare(
+        `DELETE FROM amazon_shipment_items WHERE shipment_id NOT IN (${placeholders})`
+      ).bind(...idsArr)
+    ]);
   }
 }
 
