@@ -310,6 +310,10 @@ const ACTION_TIERS = {
   //   button) and read by Master Sheet's Add SKU dropdown. —
   ucsku_getList: 'viewer_read', ucsku_saveList: 'admin_only',
 
+  // — Order-Processing: customer selling price per UC order, read from the
+  //   Supabase API mirror (SK's UC sync). Read-only, same tier as above. —
+  getOrderPrices: 'viewer_read',
+
   // — Ops Chatbot: read-only stock Q&A, same tier as ucsku_getList. —
   chatAsk: 'viewer_read',
 
@@ -715,6 +719,44 @@ export default {
       if (request.method === 'GET' && action === 'authStatus') {
         const enforced = await isEnforcementOn(env.DB);
         return json({ ok: true, enforced });
+      }
+
+      // ── ORDER-PROCESSING — customer selling price per UC order ──────
+      // Body: { action:'getOrderPrices', codes:['<UC sale order code>', ...] }
+      // Reads the Supabase API mirror via the get_order_prices() SQL
+      // function (sums sellingPrice across a combo's component lines).
+      // Returns { ok, prices: { code: { price, lines } } } — codes Supabase
+      // hasn't synced yet are simply absent; the frontend shows "NA".
+      // Needs SUPABASE_URL ([vars] in wrangler.toml) + SUPABASE_SECRET_KEY
+      // (Worker secret — never commit it).
+      if (request.method === 'POST' && act === 'getOrderPrices') {
+        const codes = [...new Set(((body && body.codes) || []).map(c => String(c || '').trim()).filter(Boolean))].slice(0, 2000);
+        if (!codes.length) return json({ ok: true, prices: {} });
+        if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) {
+          return json({ ok: false, error: 'Supabase not configured on Worker (SUPABASE_URL / SUPABASE_SECRET_KEY)' }, 500);
+        }
+        const prices = {};
+        // Chunk so a very large picklist never hits request-size limits
+        for (let i = 0; i < codes.length; i += 500) {
+          const resp = await fetch(env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/rpc/get_order_prices', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'apikey': env.SUPABASE_SECRET_KEY,
+              'Authorization': 'Bearer ' + env.SUPABASE_SECRET_KEY
+            },
+            body: JSON.stringify({ codes: codes.slice(i, i + 500) })
+          });
+          if (!resp.ok) {
+            const txt = await resp.text();
+            return json({ ok: false, error: 'Supabase ' + resp.status + ': ' + txt.slice(0, 300) }, 502);
+          }
+          const rows = await resp.json();
+          (rows || []).forEach(r => {
+            prices[r.sale_order_code] = { price: Number(r.selling_price), lines: r.line_count };
+          });
+        }
+        return json({ ok: true, prices, requested: codes.length, found: Object.keys(prices).length });
       }
 
       // ── Phone Scanner App — list Picker & Packer accounts to tap-pick from ──

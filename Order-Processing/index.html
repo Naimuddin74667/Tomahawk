@@ -235,13 +235,15 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
   .section-divider.combo-2 + .tbl-wrap table th:nth-child(3),
   .section-divider.combo-3 + .tbl-wrap table th:nth-child(3) { width: 15% !important; }
   .section-divider.combo-2 + .tbl-wrap table th:nth-child(4),
-  .section-divider.combo-3 + .tbl-wrap table th:nth-child(4) { width: 28% !important; }
+  .section-divider.combo-3 + .tbl-wrap table th:nth-child(4) { width: 26% !important; }
   .section-divider.combo-2 + .tbl-wrap table th:nth-child(5),
   .section-divider.combo-3 + .tbl-wrap table th:nth-child(5) { width: 8% !important; }
   .section-divider.combo-2 + .tbl-wrap table th:nth-child(6),
-  .section-divider.combo-3 + .tbl-wrap table th:nth-child(6) { width: 22% !important; }
+  .section-divider.combo-3 + .tbl-wrap table th:nth-child(6) { width: 14% !important; }
   .section-divider.combo-2 + .tbl-wrap table th:nth-child(7),
-  .section-divider.combo-3 + .tbl-wrap table th:nth-child(7) { width: 4% !important; }
+  .section-divider.combo-3 + .tbl-wrap table th:nth-child(7) { width: 6% !important; }
+  .section-divider.combo-2 + .tbl-wrap table th:nth-child(8),
+  .section-divider.combo-3 + .tbl-wrap table th:nth-child(8) { width: 4% !important; }
   .section-divider.combo-2 + .tbl-wrap table td,
   .section-divider.combo-3 + .tbl-wrap table td { word-break: break-word; }
 }
@@ -864,33 +866,19 @@ const IMAGE_MAP = {
 };
 
 // Check if two SKUs are totally different
-// ── Live Flipkart selling price (fetched from GAS bridge, type=pricing) ──
-const PRICING_URL = 'https://script.google.com/macros/s/AKfycbzWR3EMfSLBJ92wLJG8PSaA0xqIWVAlNibQHxVIQQOTZr7vQZbV_yuBXax9AAvOM3V35w/exec?type=pricing';
-let PRICE_MAP = {}; // { "<Seller SKU Id>": { price, mrp, status } }
-let PRICE_BY_FSN = {}; // { "<Flipkart Serial Number>": { price, mrp, status } } — fallback match
-let priceMapPromise = null;
-
-// Fetches once per session and caches the in-flight promise so repeated
-// CSV uploads don't re-fetch. Fails soft — picklist still renders, just
-// shows "Unlinked" prices, if the bridge is unreachable.
-function ensurePriceMap() {
-  if (!priceMapPromise) {
-    priceMapPromise = fetch(PRICING_URL)
-      .then(r => r.json())
-      .then(data => {
-        PRICE_MAP = (data && data.ok && data.prices) ? data.prices : {};
-        PRICE_BY_FSN = (data && data.ok && data.pricesByFsn) ? data.pricesByFsn : {};
-      })
-      .catch(err => { console.error('Price fetch failed:', err); PRICE_MAP = {}; PRICE_BY_FSN = {}; });
-  }
-  return priceMapPromise;
-}
+// ── Customer selling price (Supabase API mirror, via Worker) ──
+// Each CSV row's `Shipment` column is the UC sale order code. After upload
+// we send all codes to the Worker's getOrderPrices action, which reads
+// SK's Supabase sync and returns what the customer paid per order (combo
+// component lines already summed). Orders not synced yet come back absent
+// and show "NA". If the whole lookup fails, the column shows "—" and the
+// picklist still renders normally.
+const PRICE_API_URL = 'https://tomahawk-returns.naimuddin.workers.dev/?action=getOrderPrices';
 
 // Flipkart's "Channel Product Images" field is actually "<Listing ID>~<image URL>".
 // The Listing ID is always "LST" + 16-char FSN + a short suffix — so we can pull
-// the FSN straight out of it without any extra lookup. Used as a fallback price
-// match when the Seller SKU string doesn't hit (renamed/relisted SKUs etc),
-// since FSN is Flipkart's permanent product id and survives those renames.
+// the FSN straight out of it without any extra lookup. Used as the key for the
+// live Flipkart image lookup, since FSN is Flipkart's permanent product id.
 function extractFsnFromListingId(imgRaw) {
   if (!imgRaw || !imgRaw.includes('~')) return '';
   const listingId = imgRaw.split('~')[0].trim();
@@ -898,19 +886,15 @@ function extractFsnFromListingId(imgRaw) {
   return listingId.slice(3, 19);
 }
 
-function lookupPrice(sellerSku, fsn) {
-  let info = PRICE_MAP[sellerSku];
-  if (info && info.price != null) return info;
-  info = PRICE_BY_FSN[fsn];
-  if (info && info.price != null) return info;
-  return null;
-}
-
+// countsObj = { "<price per set>": qty, "__na__": qty }. One price shows
+// plainly; mixed prices show a breakdown like "₹999 (3) / NA (1)".
 function formatPriceBreakdown(countsObj) {
-  if (!countsObj || !Object.keys(countsObj).length) return '<span class="price-unlinked">—</span>';
+  if (!countsObj || !Object.keys(countsObj).length) return '<span class="price-unlinked">\u2014</span>';
   const entries = Object.entries(countsObj).sort((a, b) => b[1] - a[1]);
   const parts = entries.map(([key, qty], i) => {
-    const label = key === '__unlinked__' ? '<span class="price-unlinked">Unlinked</span>' : `\u20b9${Number(key).toLocaleString('en-IN')}`;
+    const label = key === '__na__'
+      ? '<span class="price-unlinked">NA</span>'
+      : `\u20b9${Number(key).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
     const text = entries.length > 1 ? `${label} (${qty})` : label;
     const sep = (entries.length > 1 && i < entries.length - 1) ? '<span class="price-sep"> / </span>' : '';
     return `<span class="price-line">${text}</span>${sep}`;
@@ -997,7 +981,8 @@ function processRows(rows) {
         channel: rowChannel,     // first channel seen for this combo — decides fkFsn vs amzSku below
         qtyPerSku: Object.fromEntries(uniqueSkus.map(s=>[s,0])),
         skuCounts: Object.fromEntries(uniqueSkus.map(s=>[s,1])),
-        priceCounts: {},
+        orders: [],          // [{ code, sets }] — for the price lookup
+        priceCounts: null,   // filled by fillOrderPrices(); null = lookup failed
         qty: 0,
         orderCount: 0
       };
@@ -1021,21 +1006,9 @@ function processRows(rows) {
     // effectively Flipkart-only for now.
     if (!sections[comboSize][key].fsn && orderFsn) sections[comboSize][key].fsn = orderFsn;
 
-    // Tally this order's actual selling price ONCE per order/set — not
-    // per component. A combo is sold under a single bundle listing (one
-    // Seller SKU covers all components together), so price is a whole-
-    // combo attribute, same as Image/Qty, not something that varies per
-    // component. Matched against the live PRICE_MAP first, falling back
-    // to FSN (extracted from Channel Product Images) if the Seller SKU
-    // string doesn't hit a listing — so orders under two different
-    // Flipkart listings (different price) for the same UC SKU/combo show
-    // up as separate price buckets, not merged wrong, and renamed/
-    // relisted SKUs still resolve via their stable FSN where possible.
-    const sellerSku = selList[0] || '';
-    const priceInfo = lookupPrice(sellerSku, orderFsn);
-    const priceKey = priceInfo ? String(priceInfo.price) : '__unlinked__';
-    const priceCounts = sections[comboSize][key].priceCounts;
-    priceCounts[priceKey] = (priceCounts[priceKey] || 0) + sets;
+    // Remember this order's UC code — price is fetched after grouping
+    // (see fillOrderPrices). Price is per order, not per component.
+    sections[comboSize][key].orders.push({ code: (r['Shipment'] || '').trim(), sets });
   });
 
   return sections;
@@ -1061,6 +1034,7 @@ function renderSection(groups, comboSize, rowNumStart) {
         <th style="width:150px">Channel SKU</th>
         <th style="width:200px">${isCombo ? 'Combo' : ''}</th>
         <th style="width:60px;text-align:center">Image</th>
+        <th style="width:90px;text-align:center">Price</th>
         <th style="width:42px;text-align:center">Qty</th>
         <th class="check-col">&#10003;</th>
       </tr></thead>
@@ -1072,6 +1046,7 @@ function renderSection(groups, comboSize, rowNumStart) {
   sorted.forEach(group => {
     const isMultiRow = group.uniqueSkus.length > 1;
     const imgUrl = group.imgUrl || IMAGE_MAP[group.uniqueSkus[0]] || '';
+    const priceHtml = formatPriceBreakdown(group.priceCounts);
 
     // combo chip html
     let comboHtml = '';
@@ -1105,6 +1080,7 @@ function renderSection(groups, comboSize, rowNumStart) {
           ${selCell}
           ${isCombo && isFirst ? `<td rowspan="${rowspan}" style="width:200px">${comboHtml}</td>` : isCombo && !isFirst ? '' : ''}
           ${isFirst ? `<td rowspan="${rowspan}" class="img-cell">${imgUrl ? `<img src="${imgUrl}" alt="">` : ''}</td>` : ''}
+          ${isFirst ? `<td rowspan="${rowspan}" class="price-cell">${priceHtml}</td>` : ''}
           ${isFirst ? `<td rowspan="${rowspan}" class="qty">${group.qty||group.qtyPerSku[sku]}</td>` : ''}
           ${isFirst ? `<td rowspan="${rowspan}" class="check-col"><input type="checkbox"></td>` : ''}
         </tr>`;
@@ -1117,6 +1093,7 @@ function renderSection(groups, comboSize, rowNumStart) {
         <td><div class="sku-sell${skusDiffer(sku, group.selMap[sku]||'') ? ' diff' : ''}">${group.selMap[sku]||''}</div></td>
         <td style="width:200px"></td>
         <td class="img-cell">${imgUrl ? `<img src="${imgUrl}" alt="">` : ''}</td>
+        <td class="price-cell">${priceHtml}</td>
         <td class="qty">${group.qty||group.qtyPerSku[sku]}</td>
         <td class="check-col"><input type="checkbox"></td>
       </tr>`;
@@ -1209,10 +1186,45 @@ async function fillLiveImages(sections) {
   }
 }
 
+async function fillOrderPrices(sections) {
+  const groups = [];
+  Object.values(sections).forEach(g => Object.values(g).forEach(x => groups.push(x)));
+  const codes = [...new Set(groups.flatMap(g => g.orders.map(o => o.code)).filter(Boolean))];
+  let prices = null;
+  try {
+    let token = null;
+    try { token = (JSON.parse(localStorage.getItem('tm_session_v1') || 'null') || {}).token || null; } catch (e) {}
+    const resp = await fetch(PRICE_API_URL, {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, token ? { 'X-Tomahawk-Session': token } : {}),
+      body: JSON.stringify({ action: 'getOrderPrices', codes })
+    });
+    const data = await resp.json();
+    if (data && data.ok) prices = data.prices || {};
+    else console.warn('Price lookup failed (non-fatal):', data && data.error);
+  } catch (e) {
+    console.warn('Price lookup failed (non-fatal):', e);
+  }
+  if (!prices) return; // leave priceCounts null -> column shows "—"
+
+  // Bucket each order by price per set (an order of 2 sets at ₹1,998
+  // counts as 2 × ₹999), so the breakdown lines up with the Qty column.
+  groups.forEach(g => {
+    const counts = {};
+    g.orders.forEach(o => {
+      const hit = prices[o.code];
+      const key = hit ? String(Math.round((hit.price / (o.sets || 1)) * 100) / 100) : '__na__';
+      counts[key] = (counts[key] || 0) + (o.sets || 1);
+    });
+    g.priceCounts = counts;
+  });
+}
+
 async function render(rows) {
   showLoading('Reading orders\u2026');
   const sections = processRows(rows);
-  await fillLiveImages(sections);
+  // Images and prices load in parallel — prices add no extra wait
+  await Promise.all([fillLiveImages(sections), fillOrderPrices(sections)]);
   updateLoading('Rendering picklist\u2026');
   const channels = [...new Set(rows.map(r => (r['Channel']||'UNKNOWN').trim().toUpperCase()))];
   const channel = channels.length > 1 ? `${channels.length} CHANNELS MERGED` : channels[0];
@@ -1268,9 +1280,7 @@ function load(file) {
       const rows = parseCSV(e.target.result);
       if (!rows.length) { alert('No data found.'); return; }
       allRows = rows;
-      // Selling Price lookup disabled for now (see ensurePriceMap) — not
-      // useful as-is, and skipping it speeds up every upload since it was
-      // a network round-trip on the critical path before rendering.
+      // Prices are fetched inside render() alongside the image sync.
       await render(allRows);
     } catch(err) { alert('Error: ' + err.message); console.error(err); }
     finally { hideLoading(); }
