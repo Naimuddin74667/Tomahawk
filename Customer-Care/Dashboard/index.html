@@ -338,6 +338,10 @@ body.cc-fit .pager { padding-top: 8px; }
 .b-blue { background: color-mix(in srgb, #60a5fa 15%, transparent); color: #60a5fa; }
 .b-gray { background: var(--surface2); color: var(--text2); }
 .b-red { background: color-mix(in srgb, #f87171 15%, transparent); color: #f87171; }
+/* Ticket TAT cell: days number + priority/SLA pill (reuses badge colours) */
+.tat-d { font-family: var(--font-display); font-weight: 800; font-size: 14px; white-space: nowrap; }
+.tat-d.breach { color: #f87171; }
+.tat-pill { margin-top: 4px; font-size: 9.5px; padding: 2px 8px; }
 /* Status badge icon (sits right of the text): truck facing left = coming to
    us (amber), warehouse = in-house (blue), truck facing right = going out
    (green), check = closed (grey). */
@@ -502,8 +506,8 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     </div>
     <div class="table-wrap">
       <table class="case-table">
-        <thead><tr><th>Case</th><th>Customer</th><th>Product</th><th>Type</th><th>Status</th></tr></thead>
-        <tbody id="case-body"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+        <thead><tr><th>Case</th><th>Customer</th><th>Product</th><th>Type</th><th>Status</th><th>TAT</th></tr></thead>
+        <tbody id="case-body"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
       </table>
     </div>
     <!-- Pagination footer (hidden when everything fits on one page) -->
@@ -1033,6 +1037,49 @@ async function to4x6Pdf(bytes) {
     return { RPR: 'Repair', FRPR: 'Repair', REP: 'Replace', RPL: 'Replace', FRPL: 'Replace', RFD: 'Refund', FOC: 'Free Of Cost' }[pre] || '—';
   }
 
+  // ── Ticket TAT ─────────────────────────────────────────────────────
+  // Start = first booking of the case (reverse pickup, or the forward
+  // shipment for send-only cases). End = case closed:
+  //   Refunded  → refunded_at on the reverse leg
+  //   Delivered → courier's delivered scan on the forward leg (delivered_at;
+  //               tracked_at only as a stop-gap until the Worker backfills)
+  // Open cases count up to now. SLA = 15 days.
+  //   Open:   0–10 Normal (green) · 11–15 High (amber) · 16+ Breached (red)
+  //   Closed: ≤15 On time (green) · 16+ Breached (red)
+  var SLA_DAYS = 15, HIGH_FROM = 11;
+  function parseTs(t) {
+    if (!t) return null;
+    var s = String(t); if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) s = s.replace(' ', 'T') + 'Z'; // D1 datetime() = UTC
+    var d = new Date(s);
+    return isNaN(d) ? null : d;
+  }
+  function caseTat(c) {
+    var start = parseTs((c.reverse || c.forward).created_at);
+    if (!start) return null;
+    var closed = c.st.tone === 'closed', end = null;
+    if (closed) {
+      if (c.st.label === 'Refunded') end = parseTs(c.reverse && c.reverse.refunded_at);
+      else if (c.forward) end = parseTs(c.forward.delivered_at || c.forward.tracked_at);
+      if (!end) return null; // closed but no close time recorded
+    } else end = new Date();
+    var days = Math.max(0, Math.floor((end - start) / 864e5));
+    var pr = days > SLA_DAYS ? { label: 'Breached', cls: 'b-red' }
+      : closed ? { label: 'On time', cls: 'b-green' }
+      : days >= HIGH_FROM ? { label: 'High', cls: 'b-amber' } : { label: 'Normal', cls: 'b-green' };
+    return { days: days, closed: closed, breach: days > SLA_DAYS, label: pr.label, cls: pr.cls };
+  }
+  function dayWord(n) { return n === 1 ? '1 day' : n + ' days'; }
+  function tatCellHtml(t) {
+    if (!t) return '<span class="sub">&#8212;</span>';
+    return '<div class="tat-d' + (t.breach ? ' breach' : '') + '">' + t.days + 'd</div>' +
+      '<div class="sub">' + (t.closed ? 'Closed' : 'Open') + '</div>' +
+      '<span class="badge tat-pill ' + t.cls + '">' + t.label + '</span>';
+  }
+  function tatText(t) {
+    if (!t) return '';
+    return (t.closed ? 'Closed in ' : 'Open ') + dayWord(t.days) + ' · ' + t.label;
+  }
+
   function buildCases(orders) {
     var byId = {};
     orders.forEach(function (o) { if (o.order_id) byId[o.order_id] = byId[o.order_id] || o; });
@@ -1049,6 +1096,7 @@ async function to4x6Pdf(bytes) {
     });
     out.forEach(function (c) {
       c.st = caseStatus(c);
+      c.tat = c.st ? caseTat(c) : null;
       var lead = c.reverse || c.forward, sh = ship(lead);
       c.customer = sh.name || '';
       c.city = [sh.city, sh.state].filter(Boolean).join(', ');
@@ -1084,7 +1132,7 @@ async function to4x6Pdf(bytes) {
       return tileTest(tileFilter)(c) && (!kind || c.type === kind || (kind === 'Refund' && / Refund$/.test(c.type))) && (!q || c.search.indexOf(q) !== -1);
     });
     var body = document.getElementById('case-body');
-    if (!rows.length) { body.innerHTML = '<tr><td colspan="5" class="muted">No cases match.</td></tr>'; renderPager(0, 1); return; }
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="6" class="muted">No cases match.</td></tr>'; renderPager(0, 1); return; }
     var totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
     if (page > totalPages) page = totalPages;
     if (page < 1) page = 1;
@@ -1103,7 +1151,8 @@ async function to4x6Pdf(bytes) {
         '<td>' + esc(c.customer || '—') + (c.city ? '<div class="sub">' + esc(c.city) + '</div>' : '') + '</td>' +
         '<td>' + esc(c.product || '—') + '</td>' +
         '<td>' + esc(c.type) + '</td>' +
-        '<td>' + badgeHtml(c.st) + '</td>';
+        '<td>' + badgeHtml(c.st) + '</td>' +
+        '<td>' + tatCellHtml(c.tat) + '</td>';
       tr.addEventListener('click', function () { openCase(c); });
       body.appendChild(tr);
     });
@@ -1113,7 +1162,7 @@ async function to4x6Pdf(bytes) {
       for (var i = rows.length; i < PAGE_SIZE; i++) {
         var pad = document.createElement('tr');
         pad.setAttribute('aria-hidden', 'true');
-        pad.innerHTML = '<td colspan="5">&nbsp;<div class="sub">&nbsp;</div></td>';
+        pad.innerHTML = '<td colspan="6">&nbsp;<div class="sub">&nbsp;</div></td>';
         body.appendChild(pad);
       }
     }
@@ -1736,6 +1785,7 @@ async function to4x6Pdf(bytes) {
       f('Courier Partner', [c.reverse && (c.reverse.courier || 'Delhivery'), c.forward && (c.forward.courier || 'Delhivery')]
         .filter(function (x, i, a) { return x && a.indexOf(x) === i; }).join(' / ')) +
       '<div><div class="cm-k">Status</div><div>' + badgeHtml(c.st) + '</div></div>' +
+      f('TAT (SLA ' + SLA_DAYS + ' days)', tatText(c.tat)) +
       '</div>';
     // Bottom row: next-step button(s), then Track now per leg on the right.
     var trackBtns = legs.map(function (l, i) {
