@@ -2086,8 +2086,8 @@ export default {
           const dirRow = await env.DB.prepare('SELECT direction FROM delhivery_orders WHERE waybill = ? LIMIT 1').bind(tid).first();
           const d = deriveEkartStage(tr, dirRow && dirRow.direction);
           await env.DB.prepare(
-            "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now') WHERE waybill = ?"
-          ).bind(d.stage, d.rawStatus, d.reattempts, tid).run();
+            "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now'), delivered_at = COALESCE(delivered_at, ?) WHERE waybill = ?"
+          ).bind(d.stage, d.rawStatus, d.reattempts, ekartDeliveredAt(tr, d.stage), tid).run();
           const scans = (tr.details || []).map(x => ({
             status: x.status || '', detail: x.desc || '', location: x.location || '',
             at: x.ctime ? new Date(Number(x.ctime)).toISOString() : ''
@@ -4479,6 +4479,9 @@ async function ensureDelhiveryTable(DB) {
                      'refunded_at TEXT',
                      // in_process_at — reverse parcel checked in and being worked on (manual)
                      'in_process_at TEXT',
+                     // delivered_at — courier's own "Delivered" scan time (UTC ISO). Closes a
+                     // forward/send-back case for the Customer Care Dashboard ticket TAT.
+                     'delivered_at TEXT',
                      // cancelled_at — case cancelled in Tomahawk by an admin (courier booking untouched)
                      'cancelled_at TEXT',
                      // Refund flow (Refund cases + Repair/Replace converted to refund)
@@ -4557,7 +4560,9 @@ async function refreshDelhiveryStages(env, force) {
     SELECT waybill, direction FROM delhivery_orders
     WHERE delhivery_ok = 1 AND waybill IS NOT NULL AND waybill != ''
       AND COALESCE(courier, 'Delhivery') = 'Delhivery'
-      AND (track_stage IS NULL OR track_stage NOT IN ('Delivered','RTO','Cancelled','Lost'))
+      AND (track_stage IS NULL OR track_stage NOT IN ('Delivered','RTO','Cancelled','Lost')
+           -- backfill: delivered forward legs from before delivered_at existed
+           OR (track_stage = 'Delivered' AND delivered_at IS NULL AND COALESCE(direction, 'forward') = 'forward'))
       ${force ? '' : "AND (tracked_at IS NULL OR tracked_at < datetime('now', '-10 minutes'))"}
     ORDER BY created_at DESC LIMIT 100
   `).all();
@@ -4579,8 +4584,8 @@ async function refreshDelhiveryStages(env, force) {
       if (!s || !s.AWB) return;
       const d = deriveDelhiveryStage(s, dirOf[String(s.AWB)]);
       stmts.push(env.DB.prepare(
-        "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now') WHERE waybill = ?"
-      ).bind(d.stage, d.rawStatus, d.reattempts, String(s.AWB)));
+        "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now'), delivered_at = COALESCE(delivered_at, ?) WHERE waybill = ?"
+      ).bind(d.stage, d.rawStatus, d.reattempts, delhiveryDeliveredAt(s, d.stage), String(s.AWB)));
     });
     if (stmts.length) await env.DB.batch(stmts);
   }
@@ -4600,6 +4605,31 @@ async function refreshDelhiveryStages(env, force) {
 //   Picked         — picked up from the customer, not yet moving
 // and after pickup, "Dispatched" means out for delivery to OUR warehouse.
 // Picked-up is detected from StatusType PU or a "picked up" scan.
+// ── Delivered time (for ticket TAT) ──────────────────────────────────
+// Only filled once a leg reaches 'Delivered'; null for every other stage.
+// Delhivery sends StatusDateTime in IST with no zone ("2026-09-25T14:32:10.1")
+// so we pin it to +05:30 before converting to UTC ISO.
+function istToIso(t) {
+  if (!t) return null;
+  let v = String(t).trim().replace(' ', 'T');
+  if (!/(Z|[+-]\d{2}:?\d{2})$/i.test(v)) v += '+05:30';
+  const d = new Date(v);
+  return isNaN(d) ? null : d.toISOString();
+}
+function delhiveryDeliveredAt(s, stage) {
+  if (stage !== 'Delivered') return null;
+  return istToIso((s.Status || {}).StatusDateTime);
+}
+// Ekart: time of the latest "delivered" scan in track.details (ctime = epoch
+// ms); falls back to the latest scan of any kind.
+function ekartDeliveredAt(tr, stage) {
+  if (stage !== 'Delivered') return null;
+  const det = (tr && tr.details) || [];
+  const pick = list => list.reduce((m, x) => Math.max(m, Number(x.ctime) || 0), 0);
+  const t = pick(det.filter(x => /deliver/i.test(String(x.status || '')) && !/undeliver|rto/i.test(String(x.status || '')))) || pick(det);
+  return t ? new Date(t).toISOString() : null;
+}
+
 function deriveDelhiveryStage(s, direction) {
   const st = s.Status || {};
   const raw = String(st.Status || '');
@@ -4792,7 +4822,9 @@ async function refreshEkartStages(env, force) {
   const rows = await env.DB.prepare(`
     SELECT waybill, direction FROM delhivery_orders
     WHERE delhivery_ok = 1 AND waybill IS NOT NULL AND waybill != '' AND courier = 'Ekart'
-      AND (track_stage IS NULL OR track_stage NOT IN ('Delivered','RTO','Cancelled','Lost'))
+      AND (track_stage IS NULL OR track_stage NOT IN ('Delivered','RTO','Cancelled','Lost')
+           -- backfill: delivered forward legs from before delivered_at existed
+           OR (track_stage = 'Delivered' AND delivered_at IS NULL AND COALESCE(direction, 'forward') = 'forward'))
       ${force ? '' : "AND (tracked_at IS NULL OR tracked_at < datetime('now', '-10 minutes'))"}
     ORDER BY created_at DESC LIMIT 30
   `).all();
@@ -4804,8 +4836,8 @@ async function refreshEkartStages(env, force) {
       if (!j || !j.track) return;
       const d = deriveEkartStage(j.track, r.direction);
       stmts.push(env.DB.prepare(
-        "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now') WHERE waybill = ?"
-      ).bind(d.stage, d.rawStatus, d.reattempts, String(r.waybill)));
+        "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now'), delivered_at = COALESCE(delivered_at, ?) WHERE waybill = ?"
+      ).bind(d.stage, d.rawStatus, d.reattempts, ekartDeliveredAt(j.track, d.stage), String(r.waybill)));
     } catch (e) { /* skip this one */ }
   }));
   if (stmts.length) await env.DB.batch(stmts);
