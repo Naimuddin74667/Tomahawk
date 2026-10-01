@@ -4,2098 +4,1863 @@
 <meta charset="UTF-8">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%231a1a1a'/%3E%3Ctext x='32' y='48' font-family='Arial Black,sans-serif' font-weight='900' font-size='52' text-anchor='middle' fill='%23F5A800'%3ET%3C/text%3E%3C/svg%3E">
 <link rel="apple-touch-icon" href="https://tomahawk.tools/cdn/shop/files/Frame_271.png?v=1733307291&width=180">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<meta name="theme-color" content="#0a0a0f">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="TK Scanner">
-<title>Scanner App — Tomahawk</title>
-<link rel="manifest" href="/Tomahawk/Scanner/scanner-manifest.json">
-<script src="https://unpkg.com/@zxing/library@0.18.6/umd/index.min.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600;700&family=Roboto+Slab:wght@700&display=swap" rel="stylesheet">
+<title>Customer Care Dashboard — Tomahawk</title>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600;700&family=Roboto+Slab:wght@400;600&display=swap');
-
+/* ── Design tokens (matches the rest of the Tomahawk suite) ── */
 :root {
-  --bg: #0a0a0f;
-  --surface: #13131a;
-  --surface2: #1c1c26;
-  --surface3: #252535;
-  --border: #2a2a3d;
-  --accent: #F5A800;
-  --accent-dim: rgba(245,168,0,0.12);
-  --accent-glow: rgba(245,168,0,0.25);
-  --green: #4ade80;
-  --green-dim: rgba(74,222,128,0.12);
-  --red: #f87171;
-  --red-dim: rgba(248,113,113,0.12);
-  --blue: #60a5fa;
-  --blue-dim: rgba(96,165,250,0.12);
-  --text: #e8eaf0;
-  --text2: #8b90a7;
-  --text3: #5a5f7a;
-  --mono: 'DM Sans', sans-serif;
-  --sans: 'DM Sans', sans-serif;
-  --display: 'Syne', sans-serif;
-  --radius: 12px;
-  --radius-sm: 8px;
+  --bg:       #0c0c14;
+  --surface:  #13131e;
+  --surface2: #1a1a28;
+  --border:   #1f1f2e;
+  --accent:   #F5A800;
+  --text:     #e8e8f0;
+  --text2:    #888899;
+  --green:    #4ade80;
+  --red:      #f87171;
+  --font-display: 'Syne', sans-serif;
+  --font-body:    'DM Sans', sans-serif;
 }
-
 html[data-theme="light"] {
-  --bg: #f4f5f7;
-  --surface: #ffffff;
+  --bg:       #f4f5f7;
+  --surface:  #ffffff;
   --surface2: #f0f1f4;
-  --surface3: #e4e6ec;
-  --border: #d0d4e0;
-  --accent: #d4920a;
-  --accent-dim: rgba(212,146,10,0.12);
-  --accent-glow: rgba(212,146,10,0.25);
-  --text: #1a1d27;
-  --text2: #5a6075;
-  --text3: #8b90a7;
+  --border:   #d0d4e0;
+  --accent:   #c98a00;
+  --text:     #111118;
+  --text2:    #555566;
+  --green:    #16a34a;
+  --red:      #dc2626;
 }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-body); background: var(--bg); color: var(--text); font-size: 13px; transition: background .2s, color .2s; }
 
-* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-
-html, body {
-  height: 100%;
-  overflow: hidden;
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--sans);
-  -webkit-font-smoothing: antialiased;
-}
-
-/* ── SCREENS ── */
-.screen { display: none; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
-.screen.active { display: flex; }
-
-/* ── NAME PICKER SCREEN ── */
-#screen-namepicker {
-  background: var(--bg);
-  align-items: center;
-  justify-content: center;
-  padding: 32px 24px;
-  position: relative;
-  overflow: hidden;
-}
-#screen-namepicker::before {
-  content: '';
-  position: absolute;
-  top: -120px; left: 50%;
-  transform: translateX(-50%);
-  width: 400px; height: 400px;
-  background: radial-gradient(circle, rgba(240,180,41,0.08) 0%, transparent 70%);
-  pointer-events: none;
-}
-
-.login-logo-wrap {
-  margin-bottom: 40px;
-  text-align: center;
-}
-.login-logo-wrap svg { height: 36px; width: auto; }
-.login-sub {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--text3);
-  letter-spacing: 3px;
-  text-transform: uppercase;
-  margin-top: 10px;
-}
-
-.login-card {
-  width: 100%;
-  max-width: 360px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 28px 24px;
-}
-
-.login-title {
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--accent);
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  margin-bottom: 24px;
-}
-
-.namepicker-list { display: flex; flex-direction: column; gap: 8px; max-height: 50vh; overflow-y: auto; }
-.namepicker-item {
-  display: flex; align-items: center; gap: 12px;
-  width: 100%; background: var(--surface2); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); padding: 12px 14px;
-  color: var(--text); font-family: var(--sans); font-size: 14px; font-weight: 600;
-  cursor: pointer; text-align: left; transition: all 0.15s;
-}
-.namepicker-item:active { background: var(--surface3); border-color: var(--accent); }
-.namepicker-loading, .namepicker-error {
-  font-family: var(--mono); font-size: 12px; color: var(--text2);
-  text-align: center; padding: 20px 8px;
-}
-.namepicker-error { color: var(--red); }
-
-.field { margin-bottom: 16px; }
-.field label {
-  display: block;
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--text2);
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  margin-bottom: 8px;
-}
-.field input {
-  width: 100%;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 15px;
-  padding: 14px 16px;
-  outline: none;
-  transition: border-color 0.2s;
-}
-.field input:focus { border-color: var(--accent); }
-.field input::placeholder { color: var(--text3); }
-
-.btn-login {
-  width: 100%;
-  background: var(--accent);
-  color: #000;
-  border: none;
-  border-radius: var(--radius-sm);
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  padding: 16px;
-  cursor: pointer;
-  margin-top: 8px;
-  transition: all 0.15s;
-}
-.btn-login:active { transform: scale(0.98); background: #ffd060; }
-
-.login-error {
-  background: var(--red-dim);
-  border: 1px solid var(--red);
-  border-radius: var(--radius-sm);
-  padding: 10px 14px;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--red);
-  margin-top: 14px;
-  display: none;
-}
-.login-error.show { display: block; }
-
-/* ── TOP BAR ── */
+/* ── Portal header (shared pattern) ── */
 .site-header {
+  position: sticky; top: 0; z-index: 100;
+  height: 62px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  height: 62px;
-  padding: 0 28px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-shrink: 0;
-  position: relative;
-  z-index: 10;
+  display: flex; align-items: center;
+  padding: 0 36px;
+  justify-content: space-between; gap: 20px;
+  transition: background .2s, border-color .2s;
 }
 .header-logo { display: flex; align-items: center; gap: 14px; text-decoration: none; flex-shrink: 0; }
 .logo-svg-wrap { display: flex; align-items: center; color: var(--accent); }
-.logo-svg-wrap svg { height: 42px; width: auto; display: block; fill: currentColor; flex-shrink: 0; }
-.logo-divider { width: 2px; height: 36px; background: rgba(255,255,255,0.5); border-radius: 2px; flex-shrink: 0; }
+.logo-divider { width: 2px; height: 36px; background: rgba(255,255,255,0.5); border-radius: 2px; }
 html[data-theme="light"] .logo-divider { background: rgba(0,0,0,0.25); }
-.logo-tagline { font-family: var(--sans); font-size: 16px; font-weight: 600; color: var(--text2); letter-spacing: .04em; flex-shrink: 0; white-space: nowrap; }
-.topbar-avatar {
-  width: 28px; height: 28px; border-radius: 50%; background: var(--accent);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 10px; font-weight: 800; color: #111; font-family: var(--sans);
-  flex-shrink: 0;
-}
-.theme-toggle {
-  width: 32px; height: 32px; border-radius: 50%;
+.logo-tagline { font-size: 16px; font-weight: 600; color: var(--text2); letter-spacing: .04em; font-family: var(--font-body); }
+.header-right { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
+.sys-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; flex-shrink: 0; animation: hpulse 2.5s ease-in-out infinite; }
+@keyframes hpulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+.header-theme-toggle {
+  width: 36px; height: 36px; border-radius: 50%;
   background: var(--surface2); border: 1px solid var(--border);
   cursor: pointer; display: flex; align-items: center; justify-content: center;
-  color: var(--text2); transition: background .15s, border-color .15s, color .15s;
-  flex-shrink: 0;
+  color: var(--text2); transition: border-color .15s, color .15s;
 }
-.theme-toggle:active { border-color: var(--accent); color: var(--accent); }
-.theme-toggle svg { display: block; }
-html:not([data-theme="light"]) .icon-sun { display: none; }
-html[data-theme="light"] .icon-moon { display: none; }
-.topbar-info { flex: 1; min-width: 0; }
-.topbar-role {
-  font-family: var(--mono);
-  font-size: 9px;
-  font-weight: 700;
-  color: var(--accent);
-  letter-spacing: 2px;
-  text-transform: uppercase;
-}
-.topbar-user {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--text);
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.topbar-right { display: flex; gap: 8px; align-items: center; }
-.btn-icon {
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text2);
-  font-size: 14px;
-  padding: 8px 10px;
-  cursor: pointer;
-  font-family: var(--mono);
-  transition: all 0.15s;
-}
-.btn-icon:active { background: var(--surface3); }
-
-/* ── SESSION BANNER ── */
-.session-banner {
-  padding: 10px 20px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
-}
-.session-banner.active-session { background: rgba(74,222,128,0.06); }
-.session-banner.no-session { background: rgba(248,113,113,0.06); }
-.session-dot {
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.session-dot.green { background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse-dot 2s infinite; }
-.session-dot.red { background: var(--red); }
-@keyframes pulse-dot {
-  0%,100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-.session-name {
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--text);
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.session-label {
-  font-family: var(--mono);
-  font-size: 9px;
-  color: var(--text3);
-  text-transform: uppercase;
-  letter-spacing: 1px;
+.header-theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+html:not([data-theme="light"]) .icon-sun  { display: none; }
+html[data-theme="light"]       .icon-moon { display: none; }
+.header-user { display: flex; align-items: center; gap: 9px; background: var(--surface2); border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px 6px 6px; }
+.user-avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #111; }
+.user-name { font-size: 13px; color: var(--text2); font-family: var(--font-body); }
+@media (max-width: 640px) {
+  .site-header { padding: 12px 16px; height: auto; flex-wrap: wrap; gap: 10px; }
+  .logo-tagline { font-size: 11px; }
+  .sys-status span { display: none; }
+  .user-name { display: none; }
+  .header-user { padding: 5px; }
+  .header-theme-toggle { width: 32px; height: 32px; }
 }
 
-/* ── BOTTOM NAV ── */
-.bottom-nav {
-  display: flex;
-  background: var(--surface);
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.nav-item {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 10px 4px 14px;
-  cursor: pointer;
-  transition: all 0.15s;
-  border-top: 2px solid transparent;
-  gap: 4px;
-}
-.nav-item.active { border-top-color: var(--accent); }
-.nav-icon { font-size: 20px; line-height: 1; }
-.nav-label {
-  font-family: var(--mono);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  color: var(--text3);
-  text-transform: uppercase;
-}
-.nav-item.active .nav-label { color: var(--accent); }
+/* ── Auth gate + role badge (shared pattern) ── */
+.auth-gate{position:fixed;inset:0;z-index:500;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px}
+.auth-gate[hidden]{display:none}
+.auth-card{width:100%;max-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:32px 28px 28px}
+.auth-logo-row{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+.auth-logo-mark{width:34px;height:34px;border-radius:8px;background:var(--accent);color:#111;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;flex-shrink:0}
+.auth-title{font-weight:700;font-size:16px;color:var(--text)}
+.auth-sub{font-size:11px;color:var(--text2);margin-top:1px}
+.header-logout-btn{width:34px;height:34px;border-radius:50%;background:var(--surface2);border:1px solid var(--border);color:var(--text2);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:border-color .15s,color .15s;flex-shrink:0}
+.header-logout-btn:hover{border-color:var(--red);color:var(--red)}
+.header-logout-btn[hidden]{display:none}
+.header-user[hidden]{display:none}
+.role-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:20px;background:var(--surface2);color:var(--accent);border:1px solid var(--border);margin-left:2px}
+.access-denied-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:'DM Sans',sans-serif;color:var(--text);background:var(--bg);text-align:center;padding:20px}
 
-/* ── SCROLL CONTENT ── */
-.scroll-content {
-  flex: 1;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  padding: 20px;
-}
+/* ── Page layout ── */
+.page { max-width: 1600px; margin: 0 auto; padding: 28px 32px 60px; }
+.page-head { margin-bottom: 22px; }
+.page-title { font-family: var(--font-display); font-size: 22px; font-weight: 800; color: var(--text); }
+.page-sub { font-size: 12.5px; color: var(--text2); margin-top: 4px; }
 
-/* ── CARDS ── */
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 18px;
-  margin-bottom: 14px;
-}
-.card-title {
-  font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--accent);
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  margin-bottom: 14px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.card-title::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--border);
-}
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: start; }
+@media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
 
-/* ── BUTTONS ── */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border-radius: var(--radius-sm);
-  font-family: var(--mono);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  padding: 12px 18px;
-  cursor: pointer;
-  border: none;
-  transition: all 0.15s;
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 22px; }
+.panel-title {
+  font-family: var(--font-display); font-size: 13px; font-weight: 800; color: var(--accent);
+  letter-spacing: 1px; text-transform: uppercase; margin-bottom: 16px;
+  display: flex; align-items: center; gap: 8px;
 }
-.btn:active { transform: scale(0.97); }
-.btn-primary { background: var(--accent); color: #000; }
-.btn-primary:active { background: #ffd060; }
-.btn-danger { background: var(--red-dim); color: var(--red); border: 1px solid var(--red); }
-.btn-success { background: var(--green-dim); color: var(--green); border: 1px solid var(--green); }
-.btn-ghost { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
-.btn-full { width: 100%; }
+.panel-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 
-/* ── FORM ELEMENTS ── */
-.form-group { margin-bottom: 14px; }
-.form-group label {
-  display: block;
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--text2);
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  margin-bottom: 8px;
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+.form-row.single { grid-template-columns: 1fr; }
+.form-row.three { grid-template-columns: 1fr 1fr 1fr; }
+.field label { display: block; font-size: 10.5px; font-weight: 700; color: var(--text2); margin-bottom: 6px; letter-spacing: .04em; text-transform: uppercase; }
+.field label .opt { text-transform: none; font-weight: 500; color: var(--text2); opacity: .7; letter-spacing: 0; }
+.field input, .field select, .field textarea {
+  width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 7px;
+  color: var(--text); font-family: var(--font-body); font-size: 13px; padding: 9px 12px;
+  outline: none; transition: border-color .15s;
 }
-.form-group input, .form-group select {
-  width: 100%;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 14px;
-  padding: 12px 14px;
-  outline: none;
-  transition: border-color 0.2s;
-}
-.form-group input:focus, .form-group select:focus { border-color: var(--accent); }
-.form-group select option { background: var(--surface2); }
+.field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); }
+.field input[readonly] { color: var(--text2); cursor: not-allowed; background: var(--surface); }
+/* Hide native up/down spinner arrows on all number fields (Chrome/Safari/Firefox) */
+.field input[type="number"]::-webkit-inner-spin-button,
+.field input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.field input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+.field textarea { resize: vertical; min-height: 54px; }
+.field-hint { font-size: 10.5px; color: var(--text2); margin-top: 5px; line-height: 1.5; }
 
-/* ── SCAN SCREEN ── */
-#screen-user { background: var(--bg); }
+.submit-btn {
+  width: 100%; margin-top: 6px; padding: 12px; border-radius: 8px; border: none;
+  background: var(--accent); color: #111; font-family: var(--font-body); font-weight: 700; font-size: 13.5px;
+  cursor: pointer; transition: opacity .15s;
+}
+.submit-btn:hover { opacity: .9; }
+.submit-btn:disabled { opacity: .5; cursor: not-allowed; }
 
-.scan-area {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  position: relative;
-  overflow: hidden;
-}
-
-.scan-viewfinder {
-  width: 100%;
-  max-width: 320px;
-  aspect-ratio: 1;
-  position: relative;
-  border-radius: 16px;
-  overflow: hidden;
-  background: #000;
-}
-
-#scan-video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.scan-overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.scan-frame {
-  width: 60%;
-  height: 60%;
-  position: relative;
-}
-.scan-frame::before, .scan-frame::after,
-.scan-frame > span::before, .scan-frame > span::after {
-  content: '';
-  position: absolute;
-  width: 24px; height: 24px;
-  border-color: var(--accent);
-  border-style: solid;
-}
-.scan-frame::before { top: 0; left: 0; border-width: 3px 0 0 3px; border-radius: 4px 0 0 0; }
-.scan-frame::after { top: 0; right: 0; border-width: 3px 3px 0 0; border-radius: 0 4px 0 0; }
-.scan-frame > span::before { bottom: 0; left: 0; border-width: 0 0 3px 3px; border-radius: 0 0 0 4px; }
-.scan-frame > span::after { bottom: 0; right: 0; border-width: 0 3px 3px 0; border-radius: 0 0 4px 0; }
-
-.scan-line {
-  position: absolute;
-  left: 5%; right: 5%;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  border-radius: 1px;
-  animation: scan-sweep 2s ease-in-out infinite;
-}
-@keyframes scan-sweep {
-  0% { top: 5%; opacity: 0; }
-  10% { opacity: 1; }
-  90% { opacity: 1; }
-  100% { top: 95%; opacity: 0; }
-}
-
-.scan-status {
-  margin-top: 16px;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--text2);
-  text-align: center;
-  letter-spacing: 0.5px;
-}
-
-/* Scan start button */
-.btn-scan-start {
-  margin-top: 20px;
-  background: var(--accent);
-  color: #000;
-  border: none;
-  border-radius: 50px;
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  padding: 16px 36px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  transition: all 0.15s;
-  box-shadow: 0 4px 20px rgba(240,180,41,0.3);
-}
-.btn-scan-start:active { transform: scale(0.97); }
-.btn-scan-start.scanning {
-  background: var(--surface2);
-  color: var(--text2);
-  box-shadow: none;
-  border: 1px solid var(--border);
-}
-
-/* Torch (flashlight) toggle — sits in the top-right corner of the viewfinder */
-.btn-torch {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 2;
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-  border: 1px solid rgba(255,255,255,0.25);
-  background: rgba(0,0,0,0.45);
-  color: #fff;
-  font-size: 16px;
-  display: none; /* shown once camera is live */
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.btn-torch.on {
-  background: var(--accent);
-  color: #000;
-  border-color: var(--accent);
-  box-shadow: 0 0 12px rgba(240,180,41,0.6);
-}
-.btn-torch:active { transform: scale(0.92); }
-
-.torch-warning {
-  margin-top: 8px;
-  font-family: var(--mono);
-  font-size: 10px;
-  color: #f0a800;
-  text-align: center;
-  letter-spacing: 0.3px;
+.confirm-box {
+  margin-top: 14px; padding: 16px; border-radius: 8px;
+  background: var(--surface2); border: 1px solid var(--accent);
   display: none;
 }
-
-/* Canvas for QR processing - hidden */
-#scan-canvas { display: none; }
-
-/* ── QTY INPUT MODAL ── */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.75);
-  z-index: 100;
-  display: none;
-  align-items: flex-end;
-  justify-content: center;
-  backdrop-filter: blur(4px);
+.confirm-box.show { display: block; }
+.confirm-box .confirm-title { font-weight: 700; font-size: 13px; margin-bottom: 6px; }
+.confirm-box .confirm-amount { font-family: monospace; font-size: 20px; font-weight: 700; color: var(--accent); }
+.confirm-box .confirm-note { font-size: 11px; color: var(--text2); margin: 6px 0 12px; line-height: 1.5; }
+.confirm-actions { display: flex; gap: 10px; }
+.confirm-actions button {
+  flex: 1; padding: 10px; border-radius: 7px; font-family: var(--font-body); font-weight: 700; font-size: 13px; cursor: pointer;
 }
-.modal-overlay.show { display: flex; }
+.btn-confirm-yes { background: var(--accent); color: #111; border: none; }
+.btn-confirm-yes:hover { opacity: .9; }
+.btn-confirm-no { background: transparent; color: var(--text2); border: 1px solid var(--border); }
+.btn-confirm-no:hover { border-color: var(--red); color: var(--red); }
 
-.modal-sheet {
-  background: var(--surface);
-  border-radius: 20px 20px 0 0;
-  border: 1px solid var(--border);
-  border-bottom: none;
-  padding: 24px 24px 40px;
-  width: 100%;
-  max-width: 480px;
-  animation: slide-up 0.25s ease-out;
-}
-@keyframes slide-up {
-  from { transform: translateY(100%); }
-  to { transform: translateY(0); }
+.viewer-note {
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 14px;
+  font-size: 12.5px; color: var(--text2); line-height: 1.6;
 }
 
-.modal-handle {
-  width: 36px; height: 4px;
-  background: var(--border);
-  border-radius: 2px;
-  margin: 0 auto 20px;
-}
+/* Result banner */
+.result-box { margin-top: 16px; border-radius: 8px; padding: 14px; font-size: 12.5px; line-height: 1.6; display: none; }
+.result-box.show { display: block; }
+.result-box.success { background: color-mix(in srgb, var(--green) 12%, transparent); border: 1px solid color-mix(in srgb, var(--green) 40%, transparent); }
+.result-box.error   { background: color-mix(in srgb, var(--red) 12%, transparent); border: 1px solid color-mix(in srgb, var(--red) 40%, transparent); }
+.result-title { font-weight: 700; margin-bottom: 4px; }
+.result-box.success .result-title { color: var(--green); }
+.result-box.error .result-title { color: var(--red); }
+.result-waybill { font-family: monospace; font-size: 13px; background: var(--surface2); padding: 2px 8px; border-radius: 5px; }
 
-.modal-sku-badge {
-  background: var(--accent-dim);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  padding: 10px 14px;
-  margin-bottom: 20px;
-  font-family: var(--mono);
+/* Log table */
+.log-table-wrap { overflow-x: auto; }
+table.log-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.log-table th {
+  text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--text2); padding: 8px 10px; border-bottom: 1px solid var(--border);
 }
-.modal-sku-label { font-size: 9px; color: var(--accent); letter-spacing: 2px; text-transform: uppercase; }
-.modal-sku-value { font-size: 18px; font-weight: 700; color: var(--text); margin-top: 4px; }
+table.log-table td { padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.log-table tr:last-child td { border-bottom: none; }
+.badge { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px; text-transform: uppercase; letter-spacing: .03em; }
+.badge.created { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
+.badge.failed  { background: color-mix(in srgb, var(--red) 15%, transparent); color: var(--red); }
+.mono { font-family: monospace; font-size: 11.5px; }
+.details-toggle { cursor: pointer; color: var(--accent); font-size: 11px; user-select: none; }
+.details-json {
+  display: none; margin-top: 6px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px; font-family: monospace; font-size: 10.5px; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto;
+}
+.details-json.show { display: block; }
+.log-empty { color: var(--text2); font-size: 12.5px; padding: 20px 0; text-align: center; }
+.log-refresh { font-size: 11px; color: var(--text2); cursor: pointer; }
+.log-refresh:hover { color: var(--accent); }
+.field-hint.ok { color: var(--green); }
+.field-hint.bad { color: var(--red); }
+.panel-head-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.panel-head-row .panel-title { margin-bottom: 0; }
 
-.modal-title {
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text);
-  margin-bottom: 16px;
+/* ── Customer Care landing: sub-card picker (same visual language as
+   the Marketplace Shipments hub's platform cards) ── */
+/* 3 cards per row like the main hub; 2 on tablets, 1 on phones */
+.cc-landing-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 1000px) { .cc-landing-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .cc-landing-grid { grid-template-columns: 1fr; } }
+.cc-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  padding: 28px; cursor: pointer; text-decoration: none; display: flex; flex-direction: column;
+  position: relative; overflow: hidden;
+  transition: border-color .15s, background .15s, transform .15s;
 }
+.cc-card:hover { border-color: var(--card-color); background: var(--surface2); transform: translateY(-2px); }
+.cc-card-glow {
+  position: absolute; top: -1px; right: -1px; width: 100px; height: 100px;
+  border-radius: 0 14px 0 100px; background: var(--card-color); opacity: .06; pointer-events: none;
+}
+.cc-card-icon {
+  width: 48px; height: 48px; border-radius: 10px;
+  background: var(--card-color-dim); color: var(--card-color);
+  display: flex; align-items: center; justify-content: center; margin-bottom: 18px; flex-shrink: 0;
+}
+.cc-card-platform {
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--card-color); font-weight: 600; margin-bottom: 6px;
+}
+.cc-card-name { font-family: var(--font-display); font-weight: 800; font-size: 20px; color: var(--text); margin-bottom: 8px; letter-spacing: -.01em; }
+.cc-card-desc { font-size: 12px; color: var(--text2); line-height: 1.6; margin-bottom: 20px; flex: 1; }
+.cc-card-chips { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 18px; }
+.cc-chip {
+  font-size: 9px; padding: 2px 8px; border-radius: 20px; font-weight: 500;
+  color: var(--card-color); border: 1px solid var(--card-color-border); background: var(--card-color-dim);
+}
+.cc-chip.cc-chip-gray { color: var(--text2); border-color: var(--border); background: transparent; }
+.cc-card-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  border-top: 1px solid var(--border); padding-top: 14px;
+}
+.cc-card-cta { font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--card-color); }
+.cc-card-arrow {
+  width: 26px; height: 26px; border-radius: 6px; background: var(--card-color-dim); color: var(--card-color);
+  display: flex; align-items: center; justify-content: center; font-size: 14px; transition: transform .15s;
+}
+.cc-card:hover .cc-card-arrow { transform: translateX(3px); }
+.cc-card-soon { cursor: default; opacity: .75; }
+.cc-card-soon:hover { transform: none; border-color: var(--border); background: var(--surface); }
+.cc-card-soon:hover .cc-card-arrow { transform: none; }
 
-.qty-input-big {
-  width: 100%;
-  background: var(--surface2);
-  border: 2px solid var(--accent);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 32px;
-  font-weight: 700;
-  text-align: center;
-  padding: 16px;
-  outline: none;
-  margin-bottom: 16px;
+.sub-back {
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; margin-bottom: 16px; transition: color .15s;
 }
+.sub-back a { color: var(--text2); text-decoration: none; }
+.sub-back a:hover { color: var(--accent); }
 
-.modal-btns { display: flex; gap: 10px; }
-.modal-btns .btn { flex: 1; padding: 14px; }
-
-/* ── SUCCESS CARD ── */
-.success-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.85);
-  z-index: 200;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  backdrop-filter: blur(8px);
+.placeholder-panel {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  text-align: center; padding: 60px 20px; color: var(--text2); font-size: 13px;
 }
-.success-overlay.show { display: flex; }
-
-.success-card {
-  background: var(--surface);
-  border-radius: 20px;
-  padding: 32px 28px;
-  text-align: center;
-  width: 100%;
-  max-width: 320px;
-  border: 1px solid var(--border);
-  animation: pop-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-  transition: transform 0.15s;
-  user-select: none;
-  -webkit-user-select: none;
-  touch-action: none;
+.placeholder-panel .ph-title { font-family: var(--font-display); font-size: 16px; font-weight: 800; color: var(--text); }
+/* ── Customer Care Dashboard ── */
+.back-link { font-size: 12px; font-weight: 600; color: var(--text2); text-decoration: none; display: inline-block; margin-bottom: 10px; }
+.back-link:hover { color: var(--accent); }
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+@media (max-width: 760px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.tile-flag { font-size: 9.5px; font-weight: 700; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 1px 6px; margin-left: 4px; }
+.tile {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px;
+  cursor: pointer; transition: border-color .12s, transform .12s; text-align: left; color: var(--text); font: inherit;
 }
-.success-card:active { transform: scale(0.97); }
-@keyframes pop-in {
-  from { transform: scale(0.8); opacity: 0; }
-  to { transform: scale(1); opacity: 1; }
+.tile:hover { border-color: var(--tile-c, var(--accent)); transform: translateY(-1px); }
+.tile.active { border-color: var(--tile-c, var(--accent)); box-shadow: inset 0 0 0 1px var(--tile-c, var(--accent)); }
+.tile-n { font-family: var(--font-display); font-weight: 800; font-size: 26px; color: var(--tile-c, var(--text)); line-height: 1.1; }
+.tile-l { font-size: 11px; color: var(--text2); margin-top: 4px; font-weight: 600; }
+.tile.attn .tile-n::after { content: ' •'; color: var(--accent); }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+.panel-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.panel-title { font-family: var(--font-display); font-size: 13px; font-weight: 800; color: var(--accent); letter-spacing: 1px; text-transform: uppercase; }
+.tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tools input, .tools select {
+  background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px;
+  padding: 7px 10px; font: inherit; font-size: 12px; outline: none;
 }
-
-.success-icon {
-  font-size: 56px;
-  margin-bottom: 16px;
-  display: block;
-  animation: bounce-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) 0.1s both;
+.tools input { width: 260px; max-width: 100%; }
+.tools input:focus, .tools select:focus { border-color: var(--accent); }
+.log-refresh { font-size: 11px; color: var(--text2); cursor: pointer; white-space: nowrap; }
+.log-refresh:hover { color: var(--accent); }
+.table-wrap { overflow-x: auto; }
+/* Fit-to-screen layout — same template as Blinkit / Flipkart / Amazon:
+   the page fills the viewport (no page scroll), the cases panel takes
+   the remaining height, the table stretches to fill it (10 equal rows,
+   short pages padded), and the pager sits pinned at the panel bottom.
+   Short or narrow screens fall back to normal page scrolling. */
+@media (min-height: 640px) and (min-width: 761px) {
+  body.cc-fit { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  body.cc-fit .site-header { flex-shrink: 0; }
+  body.cc-fit .page { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; }
+  body.cc-fit .page > .panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  body.cc-fit .page-head, body.cc-fit .tiles, body.cc-fit .panel-head-row { flex-shrink: 0; }
+  body.cc-fit .table-wrap { flex: 1; min-height: 0; overflow: auto; }
+  body.cc-fit .case-table { height: 100%; }
+  body.cc-fit .case-table td { vertical-align: middle; padding-top: 4px; padding-bottom: 4px; }
+  body.cc-fit .pager { flex-shrink: 0; }
 }
-@keyframes bounce-in {
-  from { transform: scale(0); }
-  to { transform: scale(1); }
-}
-
-.success-type {
-  font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 3px;
-  text-transform: uppercase;
-  margin-bottom: 8px;
-}
-.success-type.sealed { color: var(--green); }
-.success-type.loose { color: var(--accent); }
-.success-type.duplicate { color: var(--red); }
-
-.success-sku {
-  font-family: var(--mono);
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--text);
-  margin-bottom: 6px;
-}
-
-.success-qty {
-  font-family: var(--mono);
-  font-size: 40px;
-  font-weight: 700;
-  margin-bottom: 4px;
-}
-.success-qty.sealed { color: var(--green); }
-.success-qty.loose { color: var(--accent); }
-
-.success-unit {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--text2);
-  letter-spacing: 2px;
-  text-transform: uppercase;
-}
-
-.success-bar {
-  height: 3px;
-  background: var(--border);
-  border-radius: 2px;
-  margin-top: 24px;
-  overflow: hidden;
-}
-.success-bar-fill {
-  height: 100%;
-  border-radius: 2px;
-  animation: drain 1.5s linear forwards;
-}
-.success-bar-fill.sealed { background: var(--green); }
-.success-bar-fill.loose { background: var(--accent); }
-.success-bar-fill.duplicate { background: var(--red); }
-@keyframes drain {
-  from { width: 100%; }
-  to { width: 0%; }
-}
-
-/* ── HISTORY SCREEN (User) ── */
-.history-item {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 14px 16px;
-  margin-bottom: 10px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.history-type-badge {
-  width: 52px;
-  padding: 4px 0;
-  border-radius: 4px;
-  font-family: var(--mono);
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  text-align: center;
-  flex-shrink: 0;
-  text-transform: uppercase;
-}
-.history-type-badge.sealed { background: var(--green-dim); color: var(--green); }
-.history-type-badge.loose { background: var(--accent-dim); color: var(--accent); }
-.history-info { flex: 1; min-width: 0; }
-.history-sku {
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.history-time {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--text3);
-  margin-top: 3px;
-}
-.history-qty {
-  font-family: var(--mono);
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--text);
-  flex-shrink: 0;
-}
-.history-qty-unit {
-  font-size: 9px;
-  color: var(--text3);
-  letter-spacing: 1px;
-}
-
-.admin-tabs {
-  display: flex;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-}
-.admin-tabs::-webkit-scrollbar { display: none; }
-.admin-tab {
-  padding: 12px 18px;
-  font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  color: var(--text3);
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  white-space: nowrap;
-  transition: all 0.15s;
-}
-.admin-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-
-.admin-panel { display: none; }
-.admin-panel.active { display: block; }
-
-/* Session controls */
-.session-control-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px;
-  margin-bottom: 14px;
-}
-
-.active-session-display {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.session-icon { font-size: 28px; }
-.session-display-name {
-  font-family: var(--mono);
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--text);
-}
-.session-display-meta {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--text3);
-  margin-top: 4px;
-}
-
-/* Tally table */
-.tally-row {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 14px 16px;
-  margin-bottom: 8px;
-}
-.tally-sku {
-  font-family: var(--mono);
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--accent);
-  margin-bottom: 6px;
-}
-.tally-breakdown {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 6px;
-}
-.tally-chip {
-  font-family: var(--mono);
-  font-size: 10px;
-  padding: 3px 8px;
-  border-radius: 4px;
-}
-.tally-chip.sealed { background: var(--green-dim); color: var(--green); }
-.tally-chip.loose { background: var(--accent-dim); color: var(--accent); }
-.tally-total {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--text2);
-}
-.tally-total span {
-  color: var(--green);
-  font-size: 18px;
-  font-weight: 700;
-}
-
-/* Users list */
-.user-row {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 12px 16px;
-  margin-bottom: 8px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.user-avatar {
-  width: 36px; height: 36px;
-  background: var(--surface3);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--mono);
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--accent);
-  flex-shrink: 0;
-}
-.user-info { flex: 1; min-width: 0; }
-.user-name {
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text);
-}
-.user-role {
-  font-family: var(--mono);
-  font-size: 9px;
-  color: var(--text3);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  margin-top: 3px;
-}
-.role-badge {
-  font-family: var(--mono);
-  font-size: 9px;
-  font-weight: 700;
-  padding: 3px 8px;
-  border-radius: 4px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-.role-badge.admin { background: var(--accent-dim); color: var(--accent); }
-.role-badge.user { background: var(--blue-dim); color: var(--blue); }
-
-/* Past sessions */
-.past-session-row {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 14px 16px;
-  margin-bottom: 8px;
-  cursor: pointer;
-  transition: border-color 0.15s;
-}
-.past-session-row:active { border-color: var(--accent); }
-.past-session-name {
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text);
-  margin-bottom: 4px;
-}
-.past-session-meta {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--text3);
-}
-
-/* Stats row */
-.stats-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-bottom: 14px;
-}
-.stat-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 14px;
-}
-.stat-num {
-  font-family: var(--mono);
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--accent);
-}
-.stat-lbl {
-  font-family: var(--mono);
-  font-size: 9px;
-  color: var(--text3);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  margin-top: 4px;
-}
-
-/* No session warning */
-.no-session-warn {
-  background: var(--red-dim);
-  border: 1px solid var(--red);
-  border-radius: var(--radius-sm);
-  padding: 14px 16px;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--red);
-  text-align: center;
-  margin-bottom: 16px;
-}
-
-/* Empty state */
-.empty-state {
-  text-align: center;
-  padding: 48px 20px;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--text3);
-}
-.empty-icon { font-size: 40px; opacity: 0.3; margin-bottom: 12px; }
-
-/* Toast */
-.toast {
-  position: fixed;
-  bottom: 100px;
-  left: 50%;
-  transform: translateX(-50%) translateY(20px);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 50px;
-  padding: 10px 20px;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--text);
-  white-space: nowrap;
-  opacity: 0;
-  transition: all 0.3s;
-  z-index: 300;
-  pointer-events: none;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
-}
-.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-.toast.error { border-color: var(--red); color: var(--red); }
-.toast.success { border-color: var(--green); color: var(--green); }
-
-/* Divider */
-.divider {
-  height: 1px;
-  background: var(--border);
-  margin: 16px 0;
-}
-
-/* Loading spinner */
-.spinner {
-  width: 32px; height: 32px;
-  border: 3px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  margin: 40px auto;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-
-/* Confirm modal */
-.confirm-modal {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.7);
-  z-index: 150;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  backdrop-filter: blur(4px);
-}
-.confirm-modal.show { display: flex; }
-.confirm-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 24px;
-  width: 100%;
-  max-width: 320px;
-}
-.confirm-title {
-  font-family: var(--mono);
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text);
-  margin-bottom: 8px;
-}
-.confirm-title.warning { color: var(--red); }
-.confirm-msg {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--text2);
-  margin-bottom: 20px;
-  line-height: 1.6;
-}
-.confirm-msg.warning { color: var(--red); }
-.confirm-btns { display: flex; gap: 10px; }
-.confirm-btns .btn { flex: 1; }
-
-/* Session detail overlay */
-.session-detail-overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--bg);
-  z-index: 120;
-  display: none;
-  flex-direction: column;
-}
-.session-detail-overlay.show { display: flex; }
-.session-detail-header {
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  padding: 14px 20px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-shrink: 0;
-}
-.back-btn {
-  background: none;
-  border: none;
-  color: var(--accent);
-  font-family: var(--mono);
-  font-size: 20px;
-  cursor: pointer;
-  padding: 4px;
-  line-height: 1;
-}
-.session-detail-name {
-  font-family: var(--mono);
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text);
-  flex: 1;
-}
-
-/* Scanning no-session state */
-.scan-blocked {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 32px;
-  text-align: center;
-}
-.scan-blocked-icon { font-size: 64px; margin-bottom: 20px; opacity: 0.4; }
-.scan-blocked-title {
-  font-family: var(--mono);
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text2);
-  margin-bottom: 8px;
-}
-.scan-blocked-sub {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--text3);
-  line-height: 1.6;
-}
+/* Full width + height — no centred max-width, only a slim edge gutter
+   (same as the Blinkit / Flipkart / Amazon pages). */
+body.cc-fit .page { max-width: none; margin: 0; padding: 12px 16px; }
+body.cc-fit .page-head { margin-bottom: 10px; }
+body.cc-fit .tiles { margin-bottom: 10px; }
+body.cc-fit .page > .panel { padding: 12px 14px; }
+body.cc-fit .panel-head-row { margin-bottom: 8px; }
+body.cc-fit .pager { padding-top: 8px; }
+.case-table thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+/* Pagination footer — same pattern as the Blinkit RO Ledger */
+.pager { display: none; align-items: center; justify-content: center; gap: 1rem; padding: 12px 0 0; border-top: 1px solid var(--border); margin-top: 4px; }
+.pager-btn { padding: 5px 10px; font-size: 11px; font-weight: 600; border-radius: 5px; background: transparent; color: var(--text); border: 1px solid var(--border); cursor: pointer; font-family: inherit; }
+.pager-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.pager-btn:disabled { opacity: .4; cursor: not-allowed; }
+.pager-ind { font-size: 11px; color: var(--text2); font-family: 'DM Mono', monospace; white-space: nowrap; }
+.case-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.case-table th { text-align: left; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--text2); padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.case-table td { padding: 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.case-table tr.case-row { cursor: pointer; }
+.case-table tr.case-row:hover td { background: var(--surface2); }
+.case-table tr.attn td { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.case-table tr.attn td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.mono { font-family: 'DM Mono', ui-monospace, monospace; font-size: 11.5px; }
+.sub { font-size: 10.5px; color: var(--text2); margin-top: 2px; }
+.muted { color: var(--text2); text-align: center; padding: 24px; }
+.journey { display: flex; gap: 3px; align-items: center; flex-wrap: wrap; }
+.step { font-size: 9.5px; font-weight: 700; padding: 3px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--text2); white-space: nowrap; }
+.step.done { border-color: color-mix(in srgb, #22c55e 50%, transparent); color: #22c55e; background: color-mix(in srgb, #22c55e 10%, transparent); }
+.step.now { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.step.bad { border-color: color-mix(in srgb, #f87171 50%, transparent); color: #f87171; }
+.step-sep { color: var(--text2); font-size: 9px; opacity: .6; }
+.badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; text-transform: uppercase; letter-spacing: .03em; }
+.b-green { background: color-mix(in srgb, #22c55e 15%, transparent); color: #22c55e; }
+.b-amber { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.b-blue { background: color-mix(in srgb, #60a5fa 15%, transparent); color: #60a5fa; }
+.b-gray { background: var(--surface2); color: var(--text2); }
+.b-red { background: color-mix(in srgb, #f87171 15%, transparent); color: #f87171; }
+/* Ticket TAT cell: days number + priority/SLA pill (reuses badge colours) */
+.tat-d { font-family: var(--font-display); font-weight: 800; font-size: 14px; white-space: nowrap; }
+.tat-d.breach { color: #f87171; }
+.tat-pill { margin-top: 4px; font-size: 9.5px; padding: 2px 8px; }
+/* Status badge icon (sits right of the text): truck facing left = coming to
+   us (amber), warehouse = in-house (blue), truck facing right = going out
+   (green), check = closed (grey). */
+.badge { display: inline-flex; align-items: center; gap: 6px; }
+.b-ico { width: 22px; height: 13px; flex-shrink: 0; fill: currentColor; }
+.b-ico.flip { transform: scaleX(-1); }
+/* Stage text colour inside the badge (badge background + icon keep the
+   phase colour): white = not moved yet, blue = moving, amber = final step
+   happening now, green = done, red = problem. */
+.bt-white { color: var(--text); }
+.bt-blue  { color: #60a5fa; }
+.bt-amber { color: #ffc940; }
+.bt-green { color: #22c55e; }
+.bt-red   { color: #f87171; }
+html[data-theme="light"] .bt-blue  { color: #2563eb; }
+html[data-theme="light"] .bt-amber { color: #b45309; }
+html[data-theme="light"] .bt-green { color: #15803d; }
+html[data-theme="light"] .bt-red   { color: #dc2626; }
+.case-acts { display: contents; }
+.case-act { font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--accent); background: transparent; color: var(--accent); cursor: pointer; text-decoration: none; }
+.case-act:hover, .case-act.primary { background: var(--accent); color: #111; }
+.case-act:disabled { opacity: .5; cursor: progress; }
+.case-act.danger { border-color: #f87171; color: #f87171; margin-left: auto; }
+.case-act.danger:hover { background: #f87171; color: #111; }
+/* popup */
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: 50px 16px; overflow-y: auto; }
+.modal-backdrop[hidden] { display: none; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; width: 100%; max-width: 900px; padding: 22px; }
+/* Case popup — same layout as the Blinkit RO Detail: summary strip,
+   small accent section headers (with their button on the right), and
+   the action buttons in one row at the bottom. */
+.cm-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 16px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; font-size: 12px; }
+.cm-summary .span2 { grid-column: span 2; }
+.cm-k { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2px; }
+.cm-sec { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 18px 0 8px; }
+.cm-sec-title { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); font-family: 'DM Mono', monospace; }
+.cm-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 16px; font-size: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+.cm-muted { font-size: 10.5px; color: var(--text2); margin-top: 1px; }
+.sb-input { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px 9px; font: inherit; font-size: 12px; margin-top: 2px; }
+.sb-input:focus { outline: none; border-color: var(--accent); }
+.sb-chips { display: flex; gap: 10px; flex-wrap: wrap; }
+.sb-chip { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 200px; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; font: inherit; font-size: 12px; text-align: left; }
+.sb-chip span { font-size: 11px; color: #22c55e; }
+.sb-chip.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.sb-chip.off { cursor: not-allowed; opacity: .6; }
+.sb-chip.off span { color: #f87171; }
+/* Label download button — same as Create Parcel Pickup's Recent orders */
+.label-dl-btn { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface2); color: var(--accent); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: border-color .15s, opacity .15s; }
+.label-dl-btn:hover:not(:disabled) { border-color: var(--accent); }
+.label-dl-btn.busy { opacity: .6; cursor: progress; }
+.copy-btn { background: none; border: none; color: var(--text2); cursor: pointer; padding: 0 0 0 6px; vertical-align: middle; line-height: 1; font-size: 12px; }
+.copy-btn:hover { color: var(--accent); }
+.copy-btn.copied { color: #22c55e; }
+.cm-steps { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.cm-step { flex: 1; padding: 10px 12px; font-size: 11.5px; border-right: 1px solid var(--border); color: var(--text2); min-width: 0; }
+.cm-step:last-child { border-right: none; }
+.cm-step .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--border); margin-right: 6px; }
+.cm-step.done { color: var(--text); }
+.cm-step.done .dot { background: #22c55e; }
+.cm-step.now { color: var(--text); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.cm-step.now .dot { background: var(--accent); }
+.cm-step .when { font-size: 10.5px; color: var(--text2); margin-top: 3px; padding-left: 14px; }
+.cm-acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+@media (max-width: 700px) { .cm-summary, .cm-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cm-steps { flex-direction: column; } .cm-step { border-right: none; border-bottom: 1px solid var(--border); } }
+.modal-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+.modal-title { font-family: var(--font-display); font-weight: 800; font-size: 17px; }
+.modal-sub { font-size: 12px; color: var(--text2); margin-top: 3px; }
+.modal-close { background: var(--surface2); border: 1px solid var(--border); color: var(--text2); border-radius: 50%; width: 30px; height: 30px; cursor: pointer; }
+.leg { border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-top: 12px; }
+.leg-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.leg-title { font-weight: 700; font-size: 13px; }
+.leg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 14px; margin-top: 10px; font-size: 12px; }
+.leg-grid .k { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: .04em; }
+.track-btn { font-size: 11px; font-weight: 700; padding: 5px 12px; border-radius: 7px; border: 1px solid var(--accent); background: transparent; color: var(--accent); cursor: pointer; }
+.track-btn:hover { background: var(--accent); color: #111; }
+.track-box { margin-top: 10px; font-size: 12px; }
+.scan-list { list-style: none; margin: 8px 0 0; padding: 0; border-left: 2px solid var(--border); }
+.scan-list li { padding: 0 0 10px 12px; position: relative; }
+.scan-list li::before { content: ''; position: absolute; left: -5px; top: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--border); }
+.scan-list li:first-child::before { background: var(--accent); }
+.scan-st { font-weight: 700; }
+.scan-meta { font-size: 10.5px; color: var(--text2); }
+@media (max-width: 640px) { .tools input { width: 100%; } }
 </style>
 </head>
-<body>
-<script>(function(){var t=localStorage.getItem('tm_theme');if(t==='light'){document.documentElement.setAttribute('data-theme','light');}})();</script>
+<body class="cc-fit">
 
-<!-- ════════════════════════════════════════════
-     NAME PICKER SCREEN — no login, just pick who's scanning
-════════════════════════════════════════════ -->
-<div id="screen-namepicker" class="screen active">
-  <div class="login-logo-wrap">
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="490 530 7280 1260" fill="#F5A800">
-      <path d="M796.6 803.57l625.42 0c4.17,0.55 6.71,2.65 7.48,6.14l-84.8 151.21 -181.47 0c-16.1,25.18 -100.16,178.13 -252.2,458.77l-203.52 0 -0.67 -3.08c109.72,-202.64 190.86,-354.55 243.59,-455.69l-240.46 0 -0.77 -3.7c47.6,-91.52 76.61,-142.78 87.4,-153.65zm-14.19 821.74l-287.36 153.05 187.35 -278.86 1362.49 0 -8.53 5.99 -1253.95 119.82zm6102.31 -1005.2l131.69 -113.42 0 215.51 -960.53 0 8.48 -6 820.36 -96.09zm-574.92 183.46l298.9 0 1.32 6.14c-45.66,84.33 -70.46,131.58 -74.1,141.4 160.29,-96.44 243.35,-144.55 249.31,-144.55l224.51 0 1.32 6.11c-3.09,0.39 -163.87,96.95 -482.4,289.8l215.31 314.14 -5.44 3.08 -212.81 0c-5.17,-3.62 -50.38,-70.48 -135.48,-200.49l-3.14 0c-57.01,115.32 -92.82,182.15 -107.4,200.49l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.77,-24.7l-1.96 -9.09c-2.91,-13.47 -17.46,-33.95 -43.92,-61.58l5.47 -2.99zm-900.24 0.38l295.21 0 0.67 3.13 -177.4 332.67 0.7 3.15 3.15 0 281.78 -191.3c5.47,6.84 8.72,12.09 9.42,15.42l50.56 191.26 2.97 0c-0.06,-5.07 62.84,-123.21 188.62,-354.33l199.85 0 7 3.13c-2.97,8.9 -110.79,213.14 -323.65,612.64l-212.28 0c-4.01,0 -6.55,-2.09 -7.43,-6.09l-8.67 -40.1c-6.4,-29.71 -17.38,-75.75 -32.99,-138.44l-289.68 184.63 -221.52 0 -0.69 -3.12 276.81 -529.56 -3.98 -18.37c-2.88,-13.46 -17.46,-33.93 -43.89,-61.59l5.44 -3.13zm-792.78 -0.38l758.24 0 0.66 2.99c-195.43,377.28 -303.39,581.65 -323.9,613.13l-197.37 0c-4.22,0 -6.58,-2.06 -7.45,-6.06 5.76,-4.89 46.12,-79.83 121.01,-225.06l-249.55 0c-5.54,7.52 -48.45,84.55 -128.62,231.12l-203.51 0 -0.67 -3.08c178.19,-329 269.43,-500.66 273.89,-514.68 2.75,-6.83 3.49,-17.15 2.64,-30.81 -2.41,-11.19 -17.16,-31.67 -44.05,-61.41l-1.32 -6.14zm185.18 228.04l249.02 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.73 0c-2.8,0 -16.07,23.62 -40.03,70.69zm-991.54 -228.04l298.86 0 1.32 6.14 -118.16 221.9 0.69 3.15 249.5 0c81.88,-151.73 124.55,-228.88 128.62,-231.19l191.28 0c4.13,0.55 6.7,2.65 7.45,6.14 -213.25,402.5 -322.44,606 -327.72,609.98l-196.86 0 -0.67 -3.08 112.7 -218.93 -252.85 0c-6.07,5.96 -41.47,70.68 -105.58,194.4 -11.11,18.37 -17.29,27.61 -18.72,27.61l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.79,-24.7l-1.98 -9.09c-2.9,-13.47 -17.45,-33.95 -43.92,-61.58l5.51 -2.99zm-792.75 0l758.27 0 0.64 2.99c-195.44,377.28 -303.38,581.65 -323.89,613.13l-197.37 0c-4.24,0 -6.6,-2.06 -7.45,-6.06 5.75,-4.89 46.12,-79.83 120.97,-225.06l-249.51 0c-5.56,7.52 -48.47,84.55 -128.62,231.12l-203.49 0 -0.69 -3.08c178.16,-329 269.38,-500.66 273.91,-514.68 2.71,-6.83 3.45,-17.15 2.6,-30.81 -2.39,-11.19 -17.15,-31.67 -44.05,-61.41l-1.32 -6.14zm185.2 228.04l249 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.72 0c-2.81,0 -16.06,23.62 -40.02,70.69zm-1103.91 -228.04l298.89 0c4.16,0.55 6.74,2.81 7.57,6.66l9.27 43.04c6.44,29.76 17.44,75.82 32.88,138.45 190.96,-123.03 291.13,-185.84 300.97,-188.15l206.5 0c4.3,0.55 6.73,2.81 7.55,6.66 -212.8,402.15 -321.84,605.48 -327.27,609.46l-203.52 0 -0.69 -3.08 175.45 -329.54 -0.68 -3.15 -2.97 0 -282.28 191.28c-5.52,-6.84 -8.76,-12.07 -9.47,-15.4l-50.55 -191.26 -2.98 0c-112.09,216.6 -175.21,333.7 -189.29,351.15l-202.99 0 -0.71 -3.08 274.04 -514.16c2.58,-7.52 2.71,-15.74 0.78,-24.65l-1.95 -9.11c-2.91,-13.47 -17.46,-33.95 -43.93,-61.59l5.38 -3.53zm-496.95 0l400.37 0c23.26,0 40.99,20.47 53.34,61.46 5.96,27.63 -9.61,69.81 -46.53,126.69 -44.77,80.33 -115.53,214.7 -211.82,403.33 -9.73,16.45 -24.43,24.64 -43.84,24.64l-517.82 0c-14.01,-8.19 -22.34,-17.45 -24.49,-27.61 -6.2,-28.7 27.81,-103.76 102.25,-225.02 91.52,-179.21 152.8,-290.15 184.01,-332.87 24.3,-20.48 59.21,-30.62 104.53,-30.62zm-137.63 461.82l203.51 0c1.89,-7.52 54.92,-107.99 159.41,-301.53l-0.63 -2.94 -196.86 0c-5.24,4 -60.32,105.51 -165.43,304.47z"/>
-    </svg>
-    <div class="login-sub">Scanner App</div>
-  </div>
-
-  <div class="login-card">
-    <div class="login-title">Who's Scanning?</div>
-    <div id="namepicker-list" class="namepicker-list"></div>
+<div class="auth-gate" id="auth-gate">
+  <div class="auth-card">
+    <div class="auth-logo-row">
+      <div class="auth-logo-mark">T</div>
+      <div>
+        <div class="auth-title">Tomahawk Operations</div>
+        <div class="auth-sub">Sign in to continue</div>
+      </div>
+    </div>
+    <div style="font-size:11.5px;color:var(--text2);margin-bottom:14px;">
+      Login now happens once on the <a href="../index.html" style="color:var(--accent)">Tomahawk hub</a>. Redirecting you there&#8230;
+    </div>
   </div>
 </div>
 
-<!-- ════════════════════════════════════════════
-     USER SCREEN
-════════════════════════════════════════════ -->
-<div id="screen-user" class="screen">
-  <!-- Top bar -->
-  <div class="site-header">
-    <a href="/Tomahawk/" class="header-logo">
-      <div class="logo-svg-wrap">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="474 509 6803 1270">
+<header class="site-header">
+  <div class="header-logo">
+    <a href="/Tomahawk/Customer-Care/" class="logo-svg-wrap" style="text-decoration:none">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="474 509 6803 1270" style="height:54px;width:auto;display:block;fill:currentColor;">
         <path d="M796.6 803.57l625.42 0c4.17,0.55 6.71,2.65 7.48,6.14l-84.8 151.21 -181.47 0c-16.1,25.18 -100.16,178.13 -252.2,458.77l-203.52 0 -0.67 -3.08c109.72,-202.64 190.86,-354.55 243.59,-455.69l-240.46 0 -0.77 -3.7c47.6,-91.52 76.61,-142.78 87.4,-153.65zm-14.19 821.74l-287.36 153.05 187.35 -278.86 1362.49 0 -8.53 5.99 -1253.95 119.82zm6102.31 -1005.2l131.69 -113.42 0 215.51 -960.53 0 8.48 -6 820.36 -96.09zm-574.92 183.46l298.9 0 1.32 6.14c-45.66,84.33 -70.46,131.58 -74.1,141.4 160.29,-96.44 243.35,-144.55 249.31,-144.55l224.51 0 1.32 6.11c-3.09,0.39 -163.87,96.95 -482.4,289.8l215.31 314.14 -5.44 3.08 -212.81 0c-5.17,-3.62 -50.38,-70.48 -135.48,-200.49l-3.14 0c-57.01,115.32 -92.82,182.15 -107.4,200.49l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.77,-24.7l-1.96 -9.09c-2.91,-13.47 -17.46,-33.95 -43.92,-61.58l5.47 -2.99zm-900.24 0.38l295.21 0 0.67 3.13 -177.4 332.67 0.7 3.15 3.15 0 281.78 -191.3c5.47,6.84 8.72,12.09 9.42,15.42l50.56 191.26 2.97 0c-0.06,-5.07 62.84,-123.21 188.62,-354.33l199.85 0 7 3.13c-2.97,8.9 -110.79,213.14 -323.65,612.64l-212.28 0c-4.01,0 -6.55,-2.09 -7.43,-6.09l-8.67 -40.1c-6.4,-29.71 -17.38,-75.75 -32.99,-138.44l-289.68 184.63 -221.52 0 -0.69 -3.12 276.81 -529.56 -3.98 -18.37c-2.88,-13.46 -17.46,-33.93 -43.89,-61.59l5.44 -3.13zm-792.78 -0.38l758.24 0 0.66 2.99c-195.43,377.28 -303.39,581.65 -323.9,613.13l-197.37 0c-4.22,0 -6.58,-2.06 -7.45,-6.06 5.76,-4.89 46.12,-79.83 121.01,-225.06l-249.55 0c-5.54,7.52 -48.45,84.55 -128.62,231.12l-203.51 0 -0.67 -3.08c178.19,-329 269.43,-500.66 273.89,-514.68 2.75,-6.83 3.49,-17.15 2.64,-30.81 -2.41,-11.19 -17.16,-31.67 -44.05,-61.41l-1.32 -6.14zm185.18 228.04l249.02 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.73 0c-2.8,0 -16.07,23.62 -40.03,70.69zm-991.54 -228.04l298.86 0 1.32 6.14 -118.16 221.9 0.69 3.15 249.5 0c81.88,-151.73 124.55,-228.88 128.62,-231.19l191.28 0c4.13,0.55 6.7,2.65 7.45,6.14 -213.25,402.5 -322.44,606 -327.72,609.98l-196.86 0 -0.67 -3.08 112.7 -218.93 -252.85 0c-6.07,5.96 -41.47,70.68 -105.58,194.4 -11.11,18.37 -17.29,27.61 -18.72,27.61l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.79,-24.7l-1.98 -9.09c-2.9,-13.47 -17.45,-33.95 -43.92,-61.58l5.51 -2.99zm-792.75 0l758.27 0 0.64 2.99c-195.44,377.28 -303.38,581.65 -323.89,613.13l-197.37 0c-4.24,0 -6.6,-2.06 -7.45,-6.06 5.75,-4.89 46.12,-79.83 120.97,-225.06l-249.51 0c-5.56,7.52 -48.47,84.55 -128.62,231.12l-203.49 0 -0.69 -3.08c178.16,-329 269.38,-500.66 273.91,-514.68 2.71,-6.83 3.45,-17.15 2.6,-30.81 -2.39,-11.19 -17.15,-31.67 -44.05,-61.41l-1.32 -6.14zm185.2 228.04l249 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.72 0c-2.81,0 -16.06,23.62 -40.02,70.69zm-1103.91 -228.04l298.89 0c4.16,0.55 6.74,2.81 7.57,6.66l9.27 43.04c6.44,29.76 17.44,75.82 32.88,138.45 190.96,-123.03 291.13,-185.84 300.97,-188.15l206.5 0c4.3,0.55 6.73,2.81 7.55,6.66 -212.8,402.15 -321.84,605.48 -327.27,609.46l-203.52 0 -0.69 -3.08 175.45 -329.54 -0.68 -3.15 -2.97 0 -282.28 191.28c-5.52,-6.84 -8.76,-12.07 -9.47,-15.4l-50.55 -191.26 -2.98 0c-112.09,216.6 -175.21,333.7 -189.29,351.15l-202.99 0 -0.71 -3.08 274.04 -514.16c2.58,-7.52 2.71,-15.74 0.78,-24.65l-1.95 -9.11c-2.91,-13.47 -17.46,-33.95 -43.93,-61.59l5.38 -3.53zm-496.95 0l400.37 0c23.26,0 40.99,20.47 53.34,61.46 5.96,27.63 -9.61,69.81 -46.53,126.69 -44.77,80.33 -115.53,214.7 -211.82,403.33 -9.73,16.45 -24.43,24.64 -43.84,24.64l-517.82 0c-14.01,-8.19 -22.34,-17.45 -24.49,-27.61 -6.2,-28.7 27.81,-103.76 102.25,-225.02 91.52,-179.21 152.8,-290.15 184.01,-332.87 24.3,-20.48 59.21,-30.62 104.53,-30.62zm-137.63 461.82l203.51 0c1.89,-7.52 54.92,-107.99 159.41,-301.53l-0.63 -2.94 -196.86 0c-5.24,4 -60.32,105.51 -165.43,304.47z"/>
         <path d="M7160.73 529.99c52.95,0 95.89,42.94 95.89,95.95 0,52.95 -42.94,95.89 -95.89,95.89 -53,0 -95.97,-42.94 -95.97,-95.89 0,-53.01 42.97,-95.95 95.97,-95.95zm-42.35 149.95l0 -110.28 46.91 0c11.77,0 20.35,1.01 25.65,3.01 5.34,1.97 9.65,5.52 12.86,10.57 3.22,5.05 4.8,10.81 4.8,17.39 0,8.2 -2.44,15.09 -7.3,20.45 -4.85,5.38 -12.16,8.8 -21.83,10.2 4.84,2.81 8.84,5.9 11.95,9.27 3.13,3.36 7.34,9.3 12.66,17.89l13.46 21.5 -26.6 0 -16.09 -23.99c-5.74,-8.56 -9.67,-13.99 -11.76,-16.2 -2.1,-2.26 -4.33,-3.73 -6.7,-4.58 -2.37,-0.83 -6.08,-1.25 -11.2,-1.25l-4.5 0 0 46.02 -22.31 0zm22.31 -63.65l16.45 0c10.69,0 17.35,-0.44 20.02,-1.32 2.65,-0.87 4.74,-2.48 6.23,-4.68 1.53,-2.18 2.3,-4.96 2.3,-8.25 0,-3.76 -1.01,-6.69 -3,-8.99 -1.97,-2.32 -4.75,-3.73 -8.39,-4.34 -1.8,-0.25 -7.21,-0.37 -16.25,-0.37l-17.36 0 0 27.95zm20.04 -72.89c45.53,0 82.45,36.94 82.45,82.54 0,45.52 -36.92,82.49 -82.45,82.49 -45.59,0 -82.53,-36.97 -82.53,-82.49 0,-45.6 36.94,-82.54 82.53,-82.54z"/>
       </svg>
-      </div>
-      <div class="logo-divider"></div>
-      <span class="logo-tagline">Scanner</span>
     </a>
-    <div class="topbar-info">
-      <div class="topbar-role">Team Member</div>
-      <div class="topbar-user" id="user-topbar-name">—</div>
+    <div class="logo-divider"></div>
+    <span class="logo-tagline">Customer Care</span>
+  </div>
+  <div class="header-right">
+    <div class="sys-status">
+      <div class="status-dot"></div>
+      <span>All systems live</span>
     </div>
-    <div class="topbar-right">
-      <button class="theme-toggle" aria-label="Toggle light/dark mode" onclick="toggleTheme()">
-        <svg class="icon-moon" width="16" height="16" viewBox="0 0 18 18" fill="none">
-          <path d="M15.5 10.5A7 7 0 017.5 2.5a7 7 0 000 13 7 7 0 008-5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-        </svg>
-        <svg class="icon-sun" width="16" height="16" viewBox="0 0 18 18" fill="none">
-          <circle cx="9" cy="9" r="3.5" stroke="currentColor" stroke-width="1.4"/>
-          <path d="M9 1v2M9 15v2M1 9h2M15 9h2M3.22 3.22l1.42 1.42M13.36 13.36l1.42 1.42M3.22 14.78l1.42-1.42M13.36 4.64l1.42-1.42" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-        </svg>
-      </button>
-      <div class="topbar-avatar" id="user-topbar-avatar">—</div>
-      <button class="btn-icon" onclick="switchUser()" aria-label="Switch user">⎋</button>
+    <button class="header-theme-toggle" onclick="toggleTheme()" id="theme-btn" aria-label="Toggle theme">
+      <svg class="icon-moon" width="18" height="18" viewBox="0 0 18 18" fill="none">
+        <path d="M15.5 10.5A7 7 0 017.5 2.5a7 7 0 000 13 7 7 0 008-5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+      </svg>
+      <svg class="icon-sun" width="18" height="18" viewBox="0 0 18 18" fill="none">
+        <circle cx="9" cy="9" r="3.5" stroke="currentColor" stroke-width="1.4"/>
+        <path d="M9 1v2M9 15v2M1 9h2M15 9h2M3.22 3.22l1.42 1.42M13.36 13.36l1.42 1.42M3.22 14.78l1.42-1.42M13.36 4.64l1.42-1.42" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <div class="header-user" id="header-user" hidden>
+      <div class="user-avatar" id="user-avatar">--</div>
+      <span class="user-name" id="user-name-display">&#8212;</span>
+      <span class="role-badge" id="user-role-badge">&#8212;</span>
     </div>
+    <button class="header-logout-btn" id="header-logout-btn" hidden title="Log out">
+      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M8 17H4.5a1.5 1.5 0 01-1.5-1.5v-11A1.5 1.5 0 014.5 3H8M13.5 14l3.5-4-3.5-4M17 10H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+</header>
+
+<div class="page">
+  <div class="page-head">
+    <div class="page-title">Dashboard</div>
+    <div class="page-sub">Every pickup and shipment in one place — each case tracked from pickup to close</div>
   </div>
 
-  <!-- Session banner -->
-  <div class="session-banner" id="user-session-banner">
-    <div class="session-dot" id="user-session-dot"></div>
-    <div>
-      <div class="session-label">Current Session</div>
-      <div class="session-name" id="user-session-name">No active session</div>
-    </div>
-  </div>
+  <!-- Stage tiles — click one to filter the list -->
+  <div class="tiles" id="tiles"></div>
 
-  <!-- Tab content -->
-  <div id="user-scan-tab" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
-    <!-- No session state -->
-    <div class="scan-blocked" id="scan-blocked" style="display:none;">
-      <div class="scan-blocked-icon">🔒</div>
-      <div class="scan-blocked-title">No Active Session</div>
-      <div class="scan-blocked-sub">Admin needs to create a session<br>before you can start scanning.</div>
-    </div>
-
-    <!-- Active scan UI -->
-    <div class="scan-area" id="scan-active-ui">
-      <div class="scan-viewfinder">
-        <video id="scan-video" playsinline autoplay muted></video>
-        <div class="scan-overlay">
-          <div class="scan-frame"><span></span></div>
-          <div class="scan-line"></div>
-        </div>
-        <button class="btn-torch" id="btn-torch" onclick="toggleTorch()" aria-label="Toggle flashlight">🔦</button>
-      </div>
-      <canvas id="scan-canvas"></canvas>
-      <div class="scan-status" id="scan-status-text">Tap button to start camera</div>
-      <div class="torch-warning" id="torch-warning">⚠ Flashlight not supported on this device — scan in good lighting</div>
-
-      <button class="btn-scan-start" id="btn-scan-start" onclick="toggleScan()">
-        <span>📷</span> Start Scan
-      </button>
-    </div>
-  </div>
-
-  <div id="user-history-tab" style="flex:1;overflow:hidden;display:none;flex-direction:column;">
-    <div class="scroll-content" id="user-history-list">
-      <div class="empty-state">
-        <div class="empty-icon">📋</div>
-        No scans yet in this session
+  <div class="panel">
+    <div class="panel-head-row">
+      <div class="panel-title">All cases</div>
+      <div class="tools">
+        <input type="search" id="q" placeholder="Search order ID, customer, waybill, product…">
+        <select id="f-kind">
+          <option value="">All types</option>
+          <option value="Repair">Repair</option>
+          <option value="Replace">Replace</option>
+          <option value="Refund">Refund</option>
+          <option value="Free Of Cost">Free Of Cost</option>
+        </select>
+        <span class="log-refresh" id="refresh-btn">&#8635; Refresh</span>
       </div>
     </div>
-  </div>
-
-  <!-- Bottom nav -->
-  <div class="bottom-nav">
-    <div class="nav-item active" id="nav-scan" onclick="switchUserTab('scan')">
-      <div class="nav-icon">📷</div>
-      <div class="nav-label">Scan</div>
+    <div class="table-wrap">
+      <table class="case-table">
+        <thead><tr><th>Case</th><th>Customer</th><th>Product</th><th>Type</th><th>Status</th><th>TAT</th></tr></thead>
+        <tbody id="case-body"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+      </table>
     </div>
-    <div class="nav-item" id="nav-history" onclick="switchUserTab('history')">
-      <div class="nav-icon">📋</div>
-      <div class="nav-label">My History</div>
-    </div>
-  </div>
-</div>
-
-<!-- ════════════════════════════════════════════
-     MODALS & OVERLAYS
-════════════════════════════════════════════ -->
-
-<!-- Qty input modal -->
-<div class="modal-overlay" id="qty-modal">
-  <div class="modal-sheet">
-    <div class="modal-handle"></div>
-    <div class="modal-sku-badge">
-      <div class="modal-sku-label">Scanned SKU</div>
-      <div class="modal-sku-value" id="modal-sku-display">—</div>
-    </div>
-    <div class="modal-title">Enter Quantity</div>
-    <input type="number" class="qty-input-big" id="qty-input" placeholder="0" min="0" inputmode="numeric">
-    <div class="modal-btns">
-      <button class="btn btn-ghost" onclick="closeQtyModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="confirmQty()">Confirm →</button>
+    <!-- Pagination footer (hidden when everything fits on one page) -->
+    <div class="pager" id="pager">
+      <button class="pager-btn" id="pager-prev">&#8592; Prev</button>
+      <span class="pager-ind" id="pager-ind"></span>
+      <button class="pager-btn" id="pager-next">Next &#8594;</button>
     </div>
   </div>
 </div>
 
-<!-- Success overlay -->
-<div class="success-overlay" id="success-overlay">
-  <div class="success-card" id="success-card">
-    <span class="success-icon" id="success-icon">✅</span>
-    <div class="success-type" id="success-type">SEALED</div>
-    <div class="success-sku" id="success-sku">—</div>
-    <div class="success-qty" id="success-qty">0</div>
-    <div class="success-unit" id="success-unit">PIECES</div>
-    <div class="success-bar">
-      <div class="success-bar-fill" id="success-bar-fill"></div>
+<!-- Case details + live tracking popup -->
+<div class="modal-backdrop" id="case-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <div><div class="modal-title" id="case-title"></div><div class="modal-sub" id="case-sub"></div></div>
+      <button class="modal-close" id="case-close" title="Close">&#10005;</button>
     </div>
+    <div id="case-body-modal"></div>
   </div>
 </div>
-
-<!-- Confirm modal -->
-<div class="confirm-modal" id="confirm-modal">
-  <div class="confirm-card">
-    <div class="confirm-title" id="confirm-title">Are you sure?</div>
-    <div class="confirm-msg" id="confirm-msg">This action cannot be undone.</div>
-    <div class="confirm-btns">
-      <button class="btn btn-ghost" onclick="cancelConfirm()">Cancel</button>
-      <button class="btn btn-danger" id="confirm-ok-btn" onclick="">Confirm</button>
-    </div>
-  </div>
-</div>
-
-<!-- Toast -->
-<div class="toast" id="toast"></div>
 
 <script>
-// ══════════════════════════════════════════════════════
-// CONFIG
-// ══════════════════════════════════════════════════════
-const WORKER = 'https://tomahawk-returns.naimuddin.workers.dev';
-const TM_SESSION_KEY = 'tm_session_v1';
+// ══════════════════════════════════════════════════════════════════
+// AUTH — session comes from the Tomahawk hub, same pattern as every
+// other sub-app. picker_packer has no access here at all.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var TM_SESSION_KEY = 'tm_session_v1';
+  var TM_WORKER = 'https://tomahawk-returns.naimuddin.workers.dev';
 
-function getTmSession() { try { return JSON.parse(localStorage.getItem(TM_SESSION_KEY) || 'null'); } catch (e) { return null; } }
-function setTmSession(s) { localStorage.setItem(TM_SESSION_KEY, JSON.stringify(s)); }
-function clearTmSession() { localStorage.removeItem(TM_SESSION_KEY); }
+  function getSession() { try { return JSON.parse(localStorage.getItem(TM_SESSION_KEY) || 'null'); } catch (e) { return null; } }
+  function clearSession() { localStorage.removeItem(TM_SESSION_KEY); }
+  function goToHub() { window.location.href = '../index.html'; }
 
-// ══════════════════════════════════════════════════════
-// STATE
-// ══════════════════════════════════════════════════════
-let currentUser   = null;   // { username, role }
-let activeSession = null;   // { id, name, created_at, ... }
-let allRecords    = [];     // current session records
-let pastSessions  = [];
-let myHistory     = [];     // current user's scans this session
+  window.TM_ROLE = null;
+  window.TM_WORKER = TM_WORKER;
+  window.TM_getSession = getSession;
 
-let scanning      = false;
-let videoStream   = null;
-let scanInterval  = null;
-let pendingSku    = null;   // sku waiting for qty input
-let pendingBoxId  = null;   // box_id waiting for qty input (loose flow)
-let viewedSession = null;   // for detail overlay
-
-// ── SEAL QR DETECTION ──────────────────────────────────────────────────
-// Uses the native BarcodeDetector API (Chrome/Android) to read both the
-// main data QR and the small seal QR above it in the same camera view.
-// Not supported on iOS/Safari — on those devices we fall back to the
-// older ZXing single-QR flow further down. Since ZXing can only decode
-// ONE QR at a time, it can only ever read the main SKU/BOX QR — it has no
-// way to also pick up the separate QTY QR, so every scan on those devices
-// falls back to asking for a manual count (same as "loose" below).
-let barcodeDetector   = null;
-let bdCandidateMain    = null;  // raw text of the main QR (SKU/BOX) once first seen this scan
-let bdCandidateQtyRaw  = null;  // raw text of the QTY QR, if caught alongside it
-let bdConfirmTimer     = null;  // grace-window timer before deciding sealed/loose
-const BD_CONFIRM_WINDOW_MS = 1200;
-function supportsBarcodeDetector() {
-  return 'BarcodeDetector' in window;
-}
-
-// Prevents the same QR being processed again in rapid succession — either
-// from the ZXing fallback re-decoding the same frame stream repeatedly, or
-// from the camera restarting 3.2s later while still pointed at the same box.
-let lastScannedRaw = null;
-let lastScannedAt  = 0;
-const SCAN_COOLDOWN_MS = 4000;
-
-// Hard lock — once a scan is being processed (a popup is about to open or
-// is open), nothing else can trigger handleQR until scanning genuinely
-// resumes. This is a backstop against any timing race in the decode loop
-// itself (e.g. a frame already queued before a reset/clearInterval takes
-// effect) — the cooldown above only guards the SAME box; this guards
-// against ANY scan firing while one is already in flight.
-let processingScan = false;
-
-// ══════════════════════════════════════════════════════
-// API HELPERS
-// ══════════════════════════════════════════════════════
-async function api(action, body = null) {
-  try {
-    const opts = { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json' } };
-    const url  = body ? WORKER : `${WORKER}?action=${action}`;
-    if (body) opts.body = JSON.stringify({ action, ...body });
-    const session = getTmSession();
-    if (session && session.token) opts.headers['X-Tomahawk-Session'] = session.token;
-    const r = await fetch(url, opts);
-    return await r.json();
-  } catch (e) {
-    console.error('API error:', e);
-    return { ok: false, error: e.message };
-  }
-}
-
-// ══════════════════════════════════════════════════════
-// SCREEN MANAGEMENT
-// ══════════════════════════════════════════════════════
-function showScreen(id) {
-  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  document.getElementById('screen-' + id).classList.add('active');
-}
-
-// ══════════════════════════════════════════════════════
-// NAME PICKER — no login, just pick who you are
-// ══════════════════════════════════════════════════════
-async function showNamePicker() {
-  const listEl = document.getElementById('namepicker-list');
-  listEl.innerHTML = '<div class="namepicker-loading">Loading team members…</div>';
-  showScreen('namepicker');
-  const r = await api('scannerListPickers');
-  if (!r.ok) { listEl.innerHTML = '<div class="namepicker-error">Could not load team members — check your connection and retry.</div>'; return; }
-  const teamMembers = r.users || [];
-  if (!teamMembers.length) { listEl.innerHTML = '<div class="namepicker-error">No Picker &amp; Packer accounts set up yet — ask an admin to add one in Manage Users on the main portal.</div>'; return; }
-  listEl.innerHTML = teamMembers.map(u => `
-    <button class="namepicker-item" onclick="pickName('${u.username.replace(/'/g,"\\'")}')">
-      <div class="topbar-avatar">${initialsOf(u.display_name || u.username)}</div>
-      <span>${u.display_name || u.username}</span>
-    </button>
-  `).join('');
-}
-async function pickName(username) {
-  const r = await api('scannerPickSession', { username });
-  if (!r.ok) { showToast(r.error || 'Could not sign in', 'error'); return; }
-  setTmSession({ token: r.token, username: r.user.username, role: r.user.role, display_name: r.user.display_name });
-  currentUser = { username: r.user.username, role: r.user.role };
-  await loadAndRoute();
-}
-async function switchUser() {
-  stopScan();
-  const session = getTmSession();
-  if (session && session.token) {
-    try {
-      await fetch(`${WORKER}?action=logout`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tomahawk-Session': session.token },
-        body: JSON.stringify({ action: 'logout' })
-      });
-    } catch (e) {}
-  }
-  clearTmSession();
-  currentUser = null;
-  showNamePicker();
-}
-
-// ══════════════════════════════════════════════════════
-// ROUTING — load data then show correct screen
-// ══════════════════════════════════════════════════════
-function initialsOf(name) {
-  const clean = (name || '').trim();
-  if (!clean) return '—';
-  const parts = clean.split(/[\s._-]+/).filter(Boolean);
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-  return clean.slice(0, 2).toUpperCase();
-}
-function toggleTheme() {
-  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
-  if (isLight) { document.documentElement.removeAttribute('data-theme'); localStorage.setItem('tm_theme', 'dark'); }
-  else { document.documentElement.setAttribute('data-theme', 'light'); localStorage.setItem('tm_theme', 'light'); }
-}
-async function loadAndRoute() {
-  const r = await api('scannerLoadData');
-  if (r.ok) {
-    activeSession = r.activeSession || null;
-    allRecords    = r.records || [];
-    pastSessions  = r.pastSessions || [];
-    myHistory     = allRecords.filter(rec => rec.scanned_by === currentUser.username);
+  function showApp(user) {
+    document.getElementById('auth-gate').hidden = true;
+    document.getElementById('header-user').hidden = false;
+    document.getElementById('header-logout-btn').hidden = false;
+    var label = user.display_name || user.username;
+    document.getElementById('user-avatar').textContent = label.slice(0, 2).toUpperCase();
+    document.getElementById('user-name-display').textContent = label;
+    var roleLabels = { admin: 'Admin', manager: 'Manager', viewer: 'Viewer', picker_packer: 'Picker & Packer' };
+    document.getElementById('user-role-badge').textContent = roleLabels[user.role] || user.role;
+    window.TM_ROLE = user.role;
   }
 
-  document.getElementById('user-topbar-name').textContent = currentUser.username;
-  document.getElementById('user-topbar-avatar').textContent = initialsOf(currentUser.username);
-  renderUserSession();
-  renderUserHistory();
-  showScreen('user');
-}
-
-// ══════════════════════════════════════════════════════
-// USER — SESSION BANNER
-// ══════════════════════════════════════════════════════
-function renderUserSession() {
-  const dot  = document.getElementById('user-session-dot');
-  const name = document.getElementById('user-session-name');
-  const banner = document.getElementById('user-session-banner');
-  const blocked = document.getElementById('scan-blocked');
-  const activeUi = document.getElementById('scan-active-ui');
-
-  if (activeSession) {
-    dot.className = 'session-dot green';
-    name.textContent = activeSession.name;
-    banner.className = 'session-banner active-session';
-    blocked.style.display = 'none';
-    activeUi.style.display = 'flex';
-  } else {
-    dot.className = 'session-dot red';
-    name.textContent = 'No active session';
-    banner.className = 'session-banner no-session';
-    blocked.style.display = 'flex';
-    activeUi.style.display = 'none';
+  function showAccessDenied() {
+    document.body.innerHTML =
+      '<div class="access-denied-screen">' +
+      '<div style="font-size:15px;font-weight:700;">You don\'t have access to this app</div>' +
+      '<div style="font-size:13px;color:var(--text2);max-width:320px;">Picker &amp; Packer accounts only have access to the Scanner App.</div>' +
+      '<a href="../index.html" style="margin-top:8px;color:var(--accent);font-size:13px;text-decoration:none;">&#8592; Back to Tomahawk Operations</a>' +
+      '</div>';
   }
-}
 
-// ══════════════════════════════════════════════════════
-// USER — TAB SWITCH
-// ══════════════════════════════════════════════════════
-function switchUserTab(tab) {
-  document.getElementById('nav-scan').classList.toggle('active', tab === 'scan');
-  document.getElementById('nav-history').classList.toggle('active', tab === 'history');
-
-  const scanTab = document.getElementById('user-scan-tab');
-  const histTab = document.getElementById('user-history-tab');
-
-  if (tab === 'scan') {
-    scanTab.style.display = 'flex';
-    histTab.style.display = 'none';
-  } else {
-    scanTab.style.display = 'none';
-    histTab.style.display = 'flex';
-    renderUserHistory();
-  }
-}
-
-// ══════════════════════════════════════════════════════
-// USER — HISTORY
-// ══════════════════════════════════════════════════════
-function renderUserHistory() {
-  const el = document.getElementById('user-history-list');
-  if (myHistory.length === 0) {
-    el.innerHTML = `<div class="empty-state"><div class="empty-icon">📋</div>No scans yet in this session</div>`;
-    return;
-  }
-  // Newest first
-  const sorted = [...myHistory].reverse();
-  el.innerHTML = sorted.map(r => `
-    <div class="history-item">
-      <div class="history-type-badge ${r.type}">${r.type}</div>
-      <div class="history-info">
-        <div class="history-sku">${r.sku}</div>
-        <div class="history-time">${formatTime(r.scanned_at)}</div>
-      </div>
-      <div>
-        <div class="history-qty">${r.qty}</div>
-        <div class="history-qty-unit">pcs</div>
-      </div>
-    </div>`).join('');
-}
-
-// ══════════════════════════════════════════════════════
-// SCANNING
-// ══════════════════════════════════════════════════════
-async function toggleScan() {
-  if (scanning) {
-    stopScan();
-  } else {
-    await startScan();
-  }
-}
-
-let zxingReader = null;
-let torchOn = false;
-let torchSupported = false;
-
-async function startScan() {
-  if (!activeSession) { showToast('No active session', 'error'); return; }
-  try {
-    // Stop any existing reader/stream first
-    pauseCameraForPopup();
-    bdCandidateMain = null; bdCandidateQtyRaw = null;
-    processingScan = false;
-
-    const video = document.getElementById('scan-video');
-
-    // Open rear camera via browser API — same method confirmed working.
-    // Explicitly requesting a high resolution matters here: the default
-    // stream resolution a browser picks is usually plenty for the large
-    // main QR, but not enough actual pixels for the small QTY QR above it
-    // to resolve reliably.
-    videoStream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: 'environment' },
-        width:  { ideal: 1920 },
-        height: { ideal: 1080 }
-      }
-    });
-    video.srcObject = videoStream;
-    await video.play();
-
-    scanning = true;
-    const btn = document.getElementById('btn-scan-start');
-    btn.innerHTML = '<span>⏹</span> Stop Scan';
-    btn.classList.add('scanning');
-    document.getElementById('scan-status-text').textContent = '🔍 Scanning... point at QR code';
-
-    // Flashlight is mandatory-by-default for scan quality — auto-engage
-    // the torch the moment the camera opens. On devices/browsers that
-    // don't expose torch control (notably iOS Safari), this fails
-    // silently and we fall back to a warning instead of blocking the
-    // scan — see enableTorch().
-    await enableTorch();
-
-    if (supportsBarcodeDetector()) {
-      // Dual-QR mode — reads both the main SKU/BOX QR and the small QTY
-      // QR above it from the same camera frame. Polls every 200ms rather
-      // than every frame, which is plenty for a handheld scan and keeps
-      // CPU/battery use reasonable.
-      if (!barcodeDetector) barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] });
-      scanInterval = setInterval(() => scanFrameForBarcodes(video), 200);
-    } else {
-      // Fallback — ZXing single-QR decode. It can only read one QR at a
-      // time, so it only ever gets the main SKU/BOX QR, never the QTY QR
-      // alongside it — every scan on these devices is treated as loose
-      // (asks for a manual count) since there's no way to confirm QTY.
-      zxingReader = new ZXing.BrowserMultiFormatReader();
-      zxingReader.decodeFromStream(videoStream, video, (result, err) => {
-        if (result && !processingScan) {
-          const raw = result.getText();
-          const now = Date.now();
-          if (raw === lastScannedRaw && (now - lastScannedAt) < SCAN_COOLDOWN_MS) return; // same box still in view — ignore
-          processingScan = true;
-          lastScannedRaw = raw; lastScannedAt = now;
-          if (navigator.vibrate) navigator.vibrate(80);
-          // Fully release the camera immediately — not just reset the
-          // decoder — so there's no live frame left for ZXing's internal
-          // loop to keep processing, regardless of how reset() behaves.
-          pauseCameraForPopup();
-          handleQR(raw, null);
-          // Scanning resumes on its own once whatever popup this opens
-          // (success card or qty modal) actually closes — see
-          // resumeScanning(), called from showSuccess()/closeQtyModal().
-        }
-        // NotFoundException fires every frame with no QR — safe to ignore
-        if (err && !(err instanceof ZXing.NotFoundException)) {
-          console.warn('ZXing:', err.message);
-        }
-      });
+  document.getElementById('header-logout-btn').addEventListener('click', async function () {
+    var session = getSession();
+    if (session && session.token) {
+      try {
+        await fetch(TM_WORKER + '?action=logout', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tomahawk-Session': session.token },
+          body: JSON.stringify({ action: 'logout' })
+        });
+      } catch (e) {}
     }
-
-  } catch (e) {
-    console.error('Scan error:', e);
-    showToast('Camera error: ' + (e.message || 'Check camera permission'), 'error');
-    scanning = false;
-    const btn = document.getElementById('btn-scan-start');
-    btn.innerHTML = '<span>📷</span> Start Scan';
-    btn.classList.remove('scanning');
-  }
-}
-
-// Polled every 200ms while scanning (BarcodeDetector path only). Looks for
-// the main QR (SKU:...|BOX:...) and, once found, keeps polling for a short
-// grace window to also catch the small QTY:... QR nearby before deciding
-// sealed/loose — this covers the case where the qty QR just wasn't in
-// frame on the exact same poll as the main QR.
-async function scanFrameForBarcodes(video) {
-  if (!videoStream || !barcodeDetector || processingScan) return;
-  let barcodes;
-  try {
-    barcodes = await barcodeDetector.detect(video);
-  } catch(e) { return; } // detect() can throw on an occasional bad frame — just try again next tick
-  if (!barcodes.length) return;
-
-  let mainRaw = null, qtyRaw = null;
-  barcodes.forEach(b => {
-    if (/^SKU:/i.test(b.rawValue)) mainRaw = b.rawValue;
-    if (/^QTY:/i.test(b.rawValue)) qtyRaw = b.rawValue;
+    clearSession();
+    goToHub();
   });
 
-  if (mainRaw && !bdCandidateMain) {
-    const now = Date.now();
-    if (mainRaw === lastScannedRaw && (now - lastScannedAt) < SCAN_COOLDOWN_MS) return; // same box still in view — ignore
-    // First time seeing this main QR this scan — lock immediately so no
-    // other poll (even one already in flight) can accept a second
-    // candidate, then start the confirm window.
-    processingScan = true;
-    if (navigator.vibrate) navigator.vibrate(80);
-    bdCandidateMain = mainRaw;
-    bdCandidateQtyRaw = qtyRaw; // may be null if not yet caught this poll
-    bdConfirmTimer = setTimeout(finalizeBarcodeScan, BD_CONFIRM_WINDOW_MS);
-  } else if (mainRaw && bdCandidateMain && qtyRaw && !bdCandidateQtyRaw) {
-    bdCandidateQtyRaw = qtyRaw; // caught it on a later poll within the window
-  }
-}
+  (async function initAuth() {
+    var session = getSession();
+    if (!session || !session.token) { goToHub(); return; }
+    if (session.role !== 'admin' && session.role !== 'manager' && session.role !== 'viewer') {
+      showAccessDenied(); return;
+    }
 
-// Fully releases the camera hardware and tears down whichever decoder is
-// active — the same cleanup stopScan() does, minus resetting the
-// `scanning` flag or button UI, since this is a pause (resumeScanning()
-// re-acquires the camera afterward), not a real stop. Doing this the
-// instant a scan is accepted — rather than just clearing a timer/interval
-// — means there is no camera frame left for any library-internal loop to
-// process, regardless of how ZXing/BarcodeDetector behave internally.
-function pauseCameraForPopup() {
-  if (zxingReader) { try { zxingReader.reset(); } catch(e){} zxingReader = null; }
-  if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
-  if (bdConfirmTimer) { clearTimeout(bdConfirmTimer); bdConfirmTimer = null; }
-  if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
-  const video = document.getElementById('scan-video');
-  if (video) video.srcObject = null;
-  // Torch dies with the track — reset the UI to match, it gets
-  // re-engaged automatically on the next startScan().
-  torchOn = false;
-  const torchBtn = document.getElementById('btn-torch');
-  if (torchBtn) { torchBtn.style.display = 'none'; torchBtn.classList.remove('on'); }
-}
-
-// Turns the flashlight on automatically as soon as the camera stream is
-// live. Torch control (MediaTrackConstraints.advanced[].torch) only works
-// on browsers/devices that expose it — mainly Android Chrome. iOS Safari
-// does not support it at all as of this writing, so this fails silently
-// there rather than blocking scanning: we show a small warning instead
-// so the picker knows to rely on ambient light.
-async function enableTorch() {
-  const torchBtn = document.getElementById('btn-torch');
-  const warningEl = document.getElementById('torch-warning');
-  if (!videoStream) return;
-  const track = videoStream.getVideoTracks()[0];
-  if (!track) return;
-  const caps = (typeof track.getCapabilities === 'function') ? track.getCapabilities() : {};
-  torchSupported = !!(caps && caps.torch);
-
-  if (!torchSupported) {
-    if (warningEl) warningEl.style.display = 'block';
-    if (torchBtn) torchBtn.style.display = 'none';
-    return;
-  }
-
-  if (warningEl) warningEl.style.display = 'none';
-  try {
-    await track.applyConstraints({ advanced: [{ torch: true }] });
-    torchOn = true;
-    if (torchBtn) { torchBtn.style.display = 'flex'; torchBtn.classList.add('on'); }
-  } catch (e) {
-    console.warn('Torch enable failed:', e.message);
-    torchSupported = false;
-    if (warningEl) warningEl.style.display = 'block';
-    if (torchBtn) torchBtn.style.display = 'none';
-  }
-}
-
-// Manual override — lets the picker turn the torch off (e.g. glare off a
-// glossy box) without stopping the whole scan session, and back on again.
-async function toggleTorch() {
-  if (!videoStream || !torchSupported) return;
-  const track = videoStream.getVideoTracks()[0];
-  if (!track) return;
-  const next = !torchOn;
-  try {
-    await track.applyConstraints({ advanced: [{ torch: next }] });
-    torchOn = next;
-    const torchBtn = document.getElementById('btn-torch');
-    if (torchBtn) torchBtn.classList.toggle('on', torchOn);
-  } catch (e) {
-    console.warn('Torch toggle failed:', e.message);
-    showToast('Could not toggle flashlight', 'error');
-  }
-}
-
-function finalizeBarcodeScan() {
-  const rawData = bdCandidateMain;
-  const qtyRaw  = bdCandidateQtyRaw;
-  lastScannedRaw = rawData; lastScannedAt = Date.now();
-  bdCandidateMain = null; bdCandidateQtyRaw = null; bdConfirmTimer = null;
-  pauseCameraForPopup();
-  handleQR(rawData, qtyRaw);
-  // Scanning resumes on its own once whatever popup this opens (success
-  // card, qty modal, or the "already scanned" confirm) actually closes —
-  // see resumeScanning(), not a blind timer here.
-}
-
-// Called once whatever popup a scan opened (success card, qty modal, or
-// the "already scanned" confirm dialog) actually closes — not on a blind
-// timer, so the camera never restarts while the picker is still looking
-// at or interacting with something on screen.
-function resumeScanning() {
-  if (scanning) startScan();
-}
-
-function stopScan() {
-  scanning = false;
-  pauseCameraForPopup();
-  processingScan = false;
-  const btn = document.getElementById('btn-scan-start');
-  btn.innerHTML = '<span>📷</span> Start Scan';
-  btn.classList.remove('scanning');
-  document.getElementById('scan-status-text').textContent = 'Tap button to start camera';
-  const warningEl = document.getElementById('torch-warning');
-  if (warningEl) warningEl.style.display = 'none';
-}
-
-// processFrame removed — ZXing handles frame decoding internally
-
-function handleQR(rawData, qtyRaw) {
-  // Show raw QR data in status bar for debugging — helps verify what was scanned
-  document.getElementById('scan-status-text').textContent = 'Read: ' + rawData.substring(0, 40);
-  console.log('QR raw data:', rawData, 'qty QR:', qtyRaw);
-
-  // Main QR: "SKU:TLL-02|BOX:TLL-02-0726-M0001" — no QTY here anymore.
-  // QTY lives in the small QR above it (qtyRaw, passed in separately) —
-  // if that one's been scratched out or torn off, qtyRaw comes back null
-  // and this is treated as loose (ask for a manual count).
-  const skuMatch = rawData.match(/SKU:([^|\n\r]+)/i);
-  const boxMatch = rawData.match(/BOX:([^|\n\r]+)/i);
-
-  if (!skuMatch) {
-    // QR detected but not our format — show what was read and resume
-    showToast('Not a stock QR: ' + rawData.substring(0, 20), 'error');
-    setTimeout(() => { if (scanning) startScan(); }, 2000);
-    return;
-  }
-
-  const sku   = skuMatch[1].trim().toUpperCase();
-  const boxId = boxMatch ? boxMatch[1].trim() : null;
-  const qtyMatch = qtyRaw ? qtyRaw.match(/QTY:(\d+)/i) : null;
-  const qty = qtyMatch ? parseInt(qtyMatch[1]) : null;
-
-  if (qty !== null) {
-    // Both QRs read successfully — sealed, trust the printed quantity.
-    // Check for a duplicate box_id before auto-saving.
-    proceedToSave(sku, qty, 'sealed', boxId);
-  } else {
-    // QTY QR missing/unreadable (scratched, torn, or — on devices without
-    // BarcodeDetector — simply can't be read alongside the main QR at
-    // all) — treat as loose and ask for a manual count.
-    pendingSku = sku;
-    pendingBoxId = boxId;
-    openQtyModal(sku);
-  }
-}
-
-// ══════════════════════════════════════════════════════
-// QTY MODAL
-// ══════════════════════════════════════════════════════
-function openQtyModal(sku) {
-  document.getElementById('modal-sku-display').textContent = sku;
-  document.getElementById('qty-input').value = '';
-  document.getElementById('qty-modal').classList.add('show');
-  setTimeout(() => document.getElementById('qty-input').focus(), 300);
-}
-
-function closeQtyModal() {
-  document.getElementById('qty-modal').classList.remove('show');
-  pendingSku = null;
-  pendingBoxId = null;
-  setTimeout(resumeScanning, 300);
-}
-
-function confirmQty() {
-  const qty = parseInt(document.getElementById('qty-input').value);
-  if (!qty || qty <= 0) { showToast('Enter a valid quantity', 'error'); return; }
-  document.getElementById('qty-modal').classList.remove('show');
-  proceedToSave(pendingSku, qty, 'loose', pendingBoxId);
-  pendingSku = null;
-  pendingBoxId = null;
-}
-
-document.getElementById('qty-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') confirmQty();
-});
-
-// ══════════════════════════════════════════════════════
-// DUPLICATE BOX CHECK — always a live D1 lookup (not the client's
-// possibly-stale cached records), so it still catches a box another
-// team member scanned moments ago on a different device.
-// ══════════════════════════════════════════════════════
-async function proceedToSave(sku, qty, type, boxId) {
-  if (boxId && activeSession) {
-    try {
-      const _session = getTmSession();
-      const res = await fetch(`${WORKER}?action=scannerCheckBox&session_id=${activeSession.id}&box_id=${encodeURIComponent(boxId)}`, {
-        headers: (_session && _session.token) ? { 'X-Tomahawk-Session': _session.token } : {}
-      });
-      const data = await res.json();
-      if (data.ok && data.exists) {
-        const isMe = currentUser && data.scanned_by === currentUser.username;
-        const who = isMe ? 'You have already scanned' : `${data.scanned_by} has already scanned`;
-        showDuplicateWarning(who, boxId);
-        return; // blocked — not saved
-      }
-    } catch(e) { /* check failed — don't block the scan on a network hiccup, just save normally */ }
-  }
-  saveRecord(sku, qty, type, boxId);
-}
-
-// ══════════════════════════════════════════════════════
-// SAVE RECORD
-// ══════════════════════════════════════════════════════
-async function saveRecord(sku, qty, type, boxId) {
-  const record = {
-    session_id:  activeSession.id,
-    sku,
-    qty,
-    type,
-    scanned_by:  currentUser.username,
-    scanned_at:  new Date().toISOString(),
-    box_id:      boxId || ''
-  };
-
-  // Optimistic update — add to local state immediately
-  const tempId = Date.now();
-  const localRecord = { ...record, id: tempId };
-  allRecords.push(localRecord);
-  myHistory.push(localRecord);
-
-  // Show success card
-  showSuccess(sku, qty, type);
-
-  // Save to D1 in background
-  const r = await api('scannerSaveRecord', { record });
-  if (r.ok && r.id) {
-    // Update temp id with real id
-    localRecord.id = r.id;
-  }
-  if (!r.ok) showToast('Sync error — data saved locally', 'error');
-
-  // ZXing auto-restarts via startScan after success card
-}
-
-// ══════════════════════════════════════════════════════
-// SUCCESS CARD
-// ══════════════════════════════════════════════════════
-// ── PAUSABLE CARD TIMER ──────────────────────────────────────────────
-// Backs the auto-dismiss on the success/duplicate-warning card. Press and
-// hold the card to pause the countdown (and freeze the progress bar) so
-// you can actually read it; release to resume with whatever time was left.
-const cardTimer = { timeoutId: null, remainingMs: 0, startedAt: 0, dismissFn: null };
-
-function startCardTimer(durationMs, dismissFn) {
-  cardTimer.remainingMs = durationMs;
-  cardTimer.dismissFn = dismissFn;
-  cardTimer.startedAt = Date.now();
-  cardTimer.timeoutId = setTimeout(fireCardTimer, durationMs);
-}
-function fireCardTimer() {
-  cardTimer.timeoutId = null;
-  const fn = cardTimer.dismissFn;
-  cardTimer.dismissFn = null;
-  if (fn) fn();
-}
-function pauseCardTimer() {
-  if (!cardTimer.timeoutId) return;
-  clearTimeout(cardTimer.timeoutId);
-  cardTimer.remainingMs = Math.max(0, cardTimer.remainingMs - (Date.now() - cardTimer.startedAt));
-  cardTimer.timeoutId = null;
-  const bar = document.getElementById('success-bar-fill');
-  if (bar) bar.style.animationPlayState = 'paused';
-}
-function resumeCardTimer() {
-  if (cardTimer.timeoutId || !cardTimer.dismissFn) return;
-  cardTimer.startedAt = Date.now();
-  cardTimer.timeoutId = setTimeout(fireCardTimer, cardTimer.remainingMs);
-  const bar = document.getElementById('success-bar-fill');
-  if (bar) bar.style.animationPlayState = 'running';
-}
-// Press-and-hold on the card — touch (mobile) and mouse (desktop testing)
-(function() {
-  const card = document.getElementById('success-card');
-  if (!card) return;
-  card.addEventListener('touchstart', pauseCardTimer, { passive: true });
-  card.addEventListener('touchend', resumeCardTimer);
-  card.addEventListener('touchcancel', resumeCardTimer);
-  card.addEventListener('mousedown', pauseCardTimer);
-  card.addEventListener('mouseup', resumeCardTimer);
-  card.addEventListener('mouseleave', resumeCardTimer);
-})();
-
-function showSuccess(sku, qty, type) {
-  const overlay = document.getElementById('success-overlay');
-  document.getElementById('success-icon').textContent  = type === 'sealed' ? '✅' : '📦';
-  document.getElementById('success-type').textContent  = type === 'sealed' ? 'SEALED BOX' : 'LOOSE ITEMS';
-  document.getElementById('success-type').className    = `success-type ${type}`;
-  document.getElementById('success-sku').textContent   = sku;
-  document.getElementById('success-qty').textContent   = qty;
-  document.getElementById('success-qty').className     = `success-qty ${type}`;
-  document.getElementById('success-unit').textContent  = 'PIECES';
-
-  // Reset and restart bar animation
-  const bar = document.getElementById('success-bar-fill');
-  bar.className = `success-bar-fill ${type}`;
-  bar.style.animation = 'none';
-  bar.offsetHeight; // reflow
-  bar.style.animation = '';
-  bar.style.animationPlayState = 'running';
-
-  overlay.classList.add('show');
-  startCardTimer(1500, () => { overlay.classList.remove('show'); resumeScanning(); });
-}
-
-// Duplicate box detected — shown instead of saving, auto-dismisses after
-// 2s with no save action (this scan is simply blocked, not queued for
-// confirmation).
-function showDuplicateWarning(who, boxId) {
-  const overlay = document.getElementById('success-overlay');
-  document.getElementById('success-icon').textContent  = '⚠️';
-  document.getElementById('success-type').textContent  = 'DUPLICATE SCAN';
-  document.getElementById('success-type').className    = 'success-type duplicate';
-  document.getElementById('success-sku').textContent   = who;
-  document.getElementById('success-qty').textContent   = '';
-  document.getElementById('success-qty').className     = 'success-qty duplicate';
-  document.getElementById('success-unit').textContent  = boxId ? `Box ${boxId}` : '';
-
-  const bar = document.getElementById('success-bar-fill');
-  bar.className = 'success-bar-fill duplicate';
-  bar.style.animation = 'none';
-  bar.offsetHeight; // reflow
-  bar.style.animation = '';
-  bar.style.animationPlayState = 'running';
-
-  overlay.classList.add('show');
-  startCardTimer(2000, () => { overlay.classList.remove('show'); resumeScanning(); });
-}
-
-// ══════════════════════════════════════════════════════
-// ADMIN — SESSION
-// ══════════════════════════════════════════════════════
-function showConfirm(title, msg, cb, isWarning) {
-  const titleEl = document.getElementById('confirm-title');
-  const msgEl   = document.getElementById('confirm-msg');
-  titleEl.textContent = title;
-  msgEl.textContent   = msg;
-  titleEl.classList.toggle('warning', !!isWarning);
-  msgEl.classList.toggle('warning', !!isWarning);
-  confirmCallback = cb;
-  document.getElementById('confirm-modal').classList.add('show');
-}
-function closeConfirm() {
-  document.getElementById('confirm-modal').classList.remove('show');
-  document.getElementById('confirm-title').classList.remove('warning');
-  document.getElementById('confirm-msg').classList.remove('warning');
-  confirmCallback = null;
-}
-function cancelConfirm() {
-  // Cancelling means nothing else will happen (no save, no further popup),
-  // so resume scanning right away — unlike the OK path below, where the
-  // callback's own popup (the success card) controls when to resume.
-  closeConfirm();
-  resumeScanning();
-}
-document.getElementById('confirm-ok-btn').addEventListener('click', () => {
-  if (confirmCallback) confirmCallback();
-  closeConfirm();
-});
-
-// ══════════════════════════════════════════════════════
-// UTILS
-// ══════════════════════════════════════════════════════
-function showToast(msg, type = '') {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.className = 'toast show' + (type ? ' ' + type : '');
-  setTimeout(() => t.className = 'toast', 3000);
-}
-
-function formatTime(iso) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-}
-
-function formatDate(iso) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-}
-
-function downloadCSV(rows, filename) {
-  const csv = rows.map(r => r.map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(',')).join('\n');
-  const a = document.createElement('a');
-  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-  a.download = filename;
-  a.click();
-}
-
-// ══════════════════════════════════════════════════════
-// INIT — reuse an existing portal session if one exists
-// (e.g. an admin/manager already logged in from the hub or
-// another app); otherwise show the tap-your-name picker.
-// ══════════════════════════════════════════════════════
-(async function init() {
-  const session = getTmSession();
-  if (session && session.token && ['admin', 'manager', 'picker_packer'].includes(session.role)) {
-    currentUser = { username: session.username, role: session.role };
-    await loadAndRoute();
+    showApp(session);
 
     try {
-      const res = await fetch(`${WORKER}?action=validateSession`, { headers: { 'X-Tomahawk-Session': session.token } }).then(r => r.json());
-      if (!res.ok || !res.user || !['admin', 'manager', 'picker_packer'].includes(res.user.role)) {
-        clearTmSession();
-        switchUser();
-        return;
-      }
-      setTmSession({ token: session.token, username: res.user.username, role: res.user.role, display_name: res.user.display_name });
+      var res = await fetch(TM_WORKER + '?action=validateSession', { headers: { 'X-Tomahawk-Session': session.token } }).then(function (r) { return r.json(); });
+      if (!res.ok || !res.user) { clearSession(); goToHub(); return; }
+      if (res.user.role !== 'admin' && res.user.role !== 'manager' && res.user.role !== 'viewer') { showAccessDenied(); return; }
+      localStorage.setItem(TM_SESSION_KEY, JSON.stringify({ token: session.token, username: res.user.username, role: res.user.role, display_name: res.user.display_name }));
+      showApp(res.user);
     } catch (e) { /* network hiccup — keep the optimistic render */ }
-    return;
+
+  })();
+
+  // ── Theme ──
+  if (localStorage.getItem('tm_theme') === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
   }
-  showNamePicker();
+  window.toggleTheme = function () {
+    var isLight = document.documentElement.getAttribute('data-theme') === 'light';
+    document.documentElement.setAttribute('data-theme', isLight ? 'dark' : 'light');
+    localStorage.setItem('tm_theme', isLight ? 'dark' : 'light');
+  };
 })();
 </script>
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+// SHIPPING LABEL HELPERS — copied from Create-Pickup/index.html so the
+// Dashboard's ⬇ button produces the exact same label. Keep the two in
+// sync if the label design changes.
+// ══════════════════════════════════════════════════════════════════
+// ── 4×6 label conversion ─────────────────────────────────────────────
+// Delhivery's label PDF sits on a page with lots of empty white space
+// around it. For the 4×6 thermal printer we:
+//   1. render each page with PDF.js and find the box around everything
+//      that isn't white (the label's outer border),
+//   2. crop the page to exactly that box with pdf-lib,
+//   3. scale the crop to fill a 4×6 inch page (288×432 pt), no margin.
+// Both libraries load from the CDN only the first time a label is
+// downloaded.
+var PDF_LIB_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js';
+var PDFJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+var PDFJS_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+function loadScriptOnce(src, globalName) {
+  if (window[globalName]) return Promise.resolve(window[globalName]);
+  return new Promise(function (resolve, reject) {
+    var sc = document.createElement('script');
+    sc.src = src;
+    sc.onload = function () { resolve(window[globalName]); };
+    sc.onerror = function () { reject(new Error("couldn't load the PDF tools")); };
+    document.head.appendChild(sc);
+  });
+}
+
+// Returns the non-white content box of each page, in PDF points with a
+// bottom-left origin (what pdf-lib expects): [{left, bottom, right, top}].
+async function findContentBoxes(bytes) {
+  var pdfjsLib = await loadScriptOnce(PDFJS_URL, 'pdfjsLib');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+  var doc = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+  var boxes = [];
+  for (var n = 1; n <= doc.numPages; n++) {
+    var page = await doc.getPage(n);
+    var scale = 3; // ~216 dpi — enough to find the border precisely
+    var vp = page.getViewport({ scale: scale });
+    var canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    var px = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    var minX = canvas.width, minY = canvas.height, maxX = -1, maxY = -1;
+    for (var y = 0; y < canvas.height; y++) {
+      for (var x = 0; x < canvas.width; x++) {
+        var i = (y * canvas.width + x) * 4;
+        if (px[i] < 235 || px[i + 1] < 235 || px[i + 2] < 235) { // anything not near-white
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+      }
+    }
+    var view = page.view; // [x0, y0, x1, y1] in PDF points
+    var pageH = view[3] - view[1];
+    if (maxX < 0) { boxes.push(null); continue; } // blank page — leave as is
+    var pad = 1; // 1pt so the border line itself isn't shaved off
+    boxes.push({
+      left:   view[0] + minX / scale - pad,
+      right:  view[0] + (maxX + 1) / scale + pad,
+      top:    view[1] + pageH - minY / scale + pad,
+      bottom: view[1] + pageH - (maxY + 1) / scale - pad
+    });
+  }
+  return boxes;
+}
+
+// ── Shipping label — drawn to match the Delhivery One portal label ─────
+// Delhivery's API only gives an older label design, so we draw the portal
+// one ourselves: A6 page, same positions/fonts/lines as the label you get
+// from one.delhivery.com. Helvetica = same metrics as the portal's
+// Liberation Sans. Data: Delhivery packing-slip JSON (via the Worker) with
+// the order's own log row as fallback for every field.
+var JSPDF_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+var JSBARCODE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js';
+var DELHIVERY_LOGO_PNG = 'data:image/png;base64,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';
+// Our pickup location's details as they print on the portal label — used
+// only if Delhivery's packing-slip data doesn't include them.
+var LABEL_DEFAULTS = {
+  sellerName: 'INDUTRIAL TOOLS CORPORATION', // spelled as registered on Delhivery
+  sellerAddr: 'Industrial Tools Corporation, Block E3,Unit No.3 and 4 ,Parasnath Complex Near Pipeline,Valpada Bhiwandi-- 421302.',
+  returnAddr: 'Industrial Tools Corporation, Block E3,Unit No.3 and 4 ,Parasnath Complex Near Pipeline,Valpada Bhiwandi-- 421302. Maharashtra'
+};
+
+function firstVal() {
+  for (var i = 0; i < arguments.length; i++) {
+    var v = arguments[i];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+  }
+  return '';
+}
+
+// "22-Sep-2026 | 11:29 AM" in IST. Accepts ISO strings or D1's
+// "YYYY-MM-DD HH:MM:SS" (UTC).
+function labelDate(raw) {
+  var d = null;
+  if (raw) {
+    var s = String(raw);
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) s = s.replace(' ', 'T') + 'Z';
+    d = new Date(s);
+    if (isNaN(d)) d = null;
+  }
+  if (!d) d = new Date();
+  var ist = new Date(d.getTime() + 330 * 60000);
+  var mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][ist.getUTCMonth()];
+  var h = ist.getUTCHours(), ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12;
+  var p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+  return p2(ist.getUTCDate()) + '-' + mon + '-' + ist.getUTCFullYear() + ' | ' + p2(h) + ':' + p2(ist.getUTCMinutes()) + ' ' + ap;
+}
+
+// Merge Delhivery's packing-slip data (pkg) with our own log row (o).
+function labelDataFor(o, pkg) {
+  pkg = pkg || {};
+  var sh = (safeJsonTop(o.payload_json).shipments || [])[0] || {};
+  var resp = safeJsonTop(o.response_json);
+  var rPkg = (resp.packages || [])[0] || {};
+  var state = firstVal(pkg.state, sh.state);
+  var city = firstVal(pkg.city, sh.city);
+  var addr = firstVal(pkg.address, pkg.add, sh.add);
+  var country = firstVal(pkg.country, 'IN');
+  var amount = firstVal(pkg.rs, pkg.total_amount, sh.total_amount, '0');
+  var qty = firstVal(pkg.qty, pkg.quantity, sh.quantity, '1');
+  var pay = firstVal(pkg.pt, sh.payment_mode, 'Pre-paid');
+  if (/^pre-?paid$/i.test(pay)) pay = 'Pre-paid';
+  var mode = firstVal(pkg.mot === 'E' ? 'Express' : pkg.mot === 'S' ? 'Surface' : pkg.mot, sh.shipping_mode, 'Surface');
+  var ret = firstVal(pkg.radd, pkg.return_address);
+  var retState = firstVal(pkg.rst, pkg.return_state);
+  if (ret && retState && ret.indexOf(retState) === -1) ret += ' ' + retState;
+  var price = Number(amount) && Number(qty) ? String(Math.round(Number(amount) / Number(qty) * 100) / 100) : amount;
+  return {
+    awb: firstVal(pkg.wbn, pkg.waybill, o.waybill),
+    orderId: firstVal(pkg.oid, pkg.order, o.order_id, sh.order),
+    name: firstVal(pkg.name, sh.name),
+    address: [addr, state, country].filter(Boolean).join(', '),
+    destCenter: firstVal(pkg.destination, pkg.dest, pkg.destination_center,
+      city ? city + (state ? ' (' + state + ')' : '') : ''),
+    pin: firstVal(pkg.pin, sh.pin),
+    sortCode: firstVal(pkg.sort_code, rPkg.sort_code),
+    payLine: pay + ' - ' + mode,
+    amount: 'INR ' + amount,
+    dateStr: labelDate(firstVal(pkg.cd, pkg.created_at, o.created_at)),
+    sellerName: firstVal(pkg.snm, pkg.seller_name, LABEL_DEFAULTS.sellerName),
+    sellerAddr: firstVal(pkg.sadd, pkg.seller_address, LABEL_DEFAULTS.sellerAddr),
+    product: firstVal(pkg.prd, pkg.products_desc, sh.products_desc),
+    remark: String(o.remark || '').trim(),   // printed as-is under the product
+    qty: qty,
+    price: price,
+    total: amount,
+    returnAddr: firstVal(ret, LABEL_DEFAULTS.returnAddr)
+  };
+}
+function safeJsonTop(str) { try { return JSON.parse(str || '{}'); } catch (e) { return {}; } }
+
+// Code128 barcode as a PNG data URL (no human-readable text, no margin).
+function barcodePng(value) {
+  var c = document.createElement('canvas');
+  window.JsBarcode(c, String(value), { format: 'CODE128', displayValue: false, margin: 0, width: 4, height: 200, background: '#ffffff' });
+  return c.toDataURL('image/png');
+}
+
+async function buildPortalLabelPdf(d) {
+  await loadScriptOnce(JSPDF_URL, 'jspdf');
+  await loadScriptOnce(JSBARCODE_URL, 'JsBarcode');
+  var doc = new window.jspdf.jsPDF({ unit: 'pt', format: 'a6' });
+  var L = 26.7, R = 270;                           // content left / right edge
+  var ASC = 0.905;                                 // font ascent — y below is glyph TOP
+  // Sizes below are as measured from the portal PDF's text boxes; the
+  // glyphs actually render ~5% smaller than that, so scale when drawing.
+  var FS = 0.95;
+  function font(style, size) { doc.setFont('helvetica', style); doc.setFontSize(size * FS); }
+  function text(str, x, top, size, style, align) {
+    font(style || 'normal', size);
+    doc.text(String(str), x, top + size * ASC, align ? { align: align } : undefined);
+  }
+  function width(str, size, style) { font(style || 'normal', size); return doc.getTextWidth(String(str)); }
+  function wrap(str, w, size, style) { font(style || 'normal', size); return doc.splitTextToSize(String(str || ''), w); }
+  function hline(y, x0, x1, grey, t) { doc.setFillColor(grey, grey, grey); doc.rect(x0, y, x1 - x0, t || 0.25, 'F'); }
+  function vline(x, y0, y1) { doc.setFillColor(217, 217, 217); doc.rect(x, y0, 0.4, y1 - y0, 'F'); }
+  // Clip to maxLines; if cut, end the last line with "..." like the portal.
+  function clampLines(lines, maxLines, w, size, style) {
+    if (lines.length <= maxLines) return lines;
+    var out = lines.slice(0, maxLines), last = out[maxLines - 1] + ' ' + lines[maxLines];
+    while (last.length && width(last + '...', size, style) > w) last = last.slice(0, -1);
+    out[maxLines - 1] = last.replace(/\s+$/, '') + '...';
+    return out;
+  }
+  doc.setTextColor(0, 0, 0);
+
+  // Outer border
+  doc.setDrawColor(17, 17, 17); doc.setLineWidth(0.8);
+  doc.rect(23.8, 13.9, 272.9 - 23.8, 400.4 - 13.9);
+
+  // ── Top: brand + Delhivery logo
+  ['INDUSTRIAL TOOLS', 'AND HARDWARE'].forEach(function (ln, i) { text(ln, L, 21.8 + i * 10.9, 7.9); });
+  doc.addImage(DELHIVERY_LOGO_PNG, 'PNG', 190, 22, 80, 17);
+  hline(48.6, L, R, 238);
+
+  // ── AWB + barcode
+  text('AWB# ' + d.awb, L, 56.7, 7.9);
+  doc.addImage(barcodePng(d.awb), 'PNG', 69, 69, 159, 40);
+  text(d.pin, L, 114.2, 6.1);
+  text('AWB# ' + d.awb, (L + R) / 2, 114.2, 6.1, 'bold', 'center');
+  if (d.sortCode) text(d.sortCode, R, 114.2, 6.1, 'normal', 'right');
+  hline(123.4, L, R, 238);
+
+  // ── Ship to (left) — every line flows down from the name
+  text('Ship to - ', L, 135.1, 8.8);
+  text(d.name, L + width('Ship to - ', 8.8), 135.1, 8.8, 'bold');
+  var y = 145.9;
+  wrap(d.address, 143, 6.1).slice(0, 4).forEach(function (ln) { text(ln, L, y, 6.1); y += 8.8; });
+  y += 1.2;
+  wrap(d.destCenter, 143, 8.8, 'bold').slice(0, 2).forEach(function (ln) { text(ln, L, y, 8.8, 'bold'); y += 10.8; });
+  y += 1.5;
+  text('PIN - ' + d.pin, L, y, 7.9, 'bold');
+  // Payment / amount / date (right)
+  vline(172.5, 134.5, 186.1);
+  text(d.payLine, 174.9, 142.0, 6.1, 'bold');
+  text(d.amount, 174.9, 151.1, 7.9, 'bold');
+  hline(162.4, 175, 272.1, 217, 0.4);
+  text('Date', 174.9, 166.6, 6.1, 'bold');
+  text(d.dateStr, 174.9, 174.5, 5.3);
+  var sectionTop = Math.max(197.4, y + 7.9 + 12.5); // grows only if the address is very long
+  hline(sectionTop, L, R, 238);
+
+  // ── Seller (left) + Order ID barcode (right)
+  var s0 = sectionTop - 197.4;
+  text('Seller:', L, 208.8 + s0, 6.1);
+  text(d.sellerName, L + width('Seller:', 6.1), 208.8 + s0, 6.1, 'bold');
+  // Portal cuts the seller address at 90 characters and adds "..."
+  var sa = d.sellerAddr.length > 90 ? d.sellerAddr.slice(0, 90) + '...' : d.sellerAddr;
+  clampLines(wrap(sa, 143, 6.1), 2, 143, 6.1).forEach(function (ln, i) { text(ln, L, 217.6 + s0 + i * 8.8, 6.1); });
+  vline(171.3, 202.7 + s0, 238.2 + s0);
+  text(d.orderId, 173.7, 203.2 + s0, 8.8);
+  doc.addImage(barcodePng(d.orderId), 'PNG', 174, 215 + s0, 96, 21);
+  hline(242.2 + s0, L, R, 238);
+
+  // ── Product table (columns right-aligned like the portal)
+  text('Product Name', 26.9, 247.2 + s0, 5.3, 'bold');
+  text('Qty.', 209.4, 247.2 + s0, 5.3, 'bold', 'right');
+  text('Price', 240.1, 247.2 + s0, 5.3, 'bold', 'right');
+  text('Total', 270.6, 247.2 + s0, 5.3, 'bold', 'right');
+  var py = 254.7 + s0;
+  var prodLines = wrap(d.product, 165, 6.1);
+  prodLines.forEach(function (ln, i) { text(ln, L, py + i * 8.8, 6.1); });
+  // Remark (if entered on the form) — printed exactly as typed, under the
+  // Type - Model line, wrapping within the product column.
+  if (d.remark) {
+    var ry = py + prodLines.length * 8.8 + 1;
+    wrap(d.remark, 165, 6.1).slice(0, 12).forEach(function (ln, i) { text(ln, L, ry + i * 8.8, 6.1); });
+  }
+  text(d.qty, 208.8, py, 6.1, 'normal', 'right');
+  text(d.price, 240, py, 6.1, 'normal', 'right');
+  text(d.total, 270.6, py, 6.1, 'normal', 'right');
+
+  // ── Footer: return address, anchored to the bottom of the box
+  var ret = wrap('Return Address: ' + d.returnAddr, 176, 5.3).slice(0, 3);
+  var fy = 394.0 - (ret.length - 1) * 6.5;
+  ret.forEach(function (ln, i) { text(ln, L, fy + i * 6.5, 5.3); });
+  text('Page 1 of 1', R, 394.0, 5.3, 'normal', 'right');
+
+  return doc.output('blob');
+}
+
+async function to4x6Pdf(bytes) {
+  var PDFLib = await loadScriptOnce(PDF_LIB_URL, 'PDFLib');
+  var W = 288, H = 432; // 4×6 inch in points
+  var boxes = [];
+  try { boxes = await findContentBoxes(bytes); } catch (e) { boxes = []; } // fall back to whole page
+  var src = await PDFLib.PDFDocument.load(bytes);
+  var out = await PDFLib.PDFDocument.create();
+  var srcPages = src.getPages();
+  for (var i = 0; i < srcPages.length; i++) {
+    var emb = boxes[i] ? await out.embedPage(srcPages[i], boxes[i]) : await out.embedPage(srcPages[i]);
+    var page = out.addPage([W, H]);
+    var scale = Math.min(W / emb.width, H / emb.height);
+    var w = emb.width * scale, h = emb.height * scale;
+    page.drawPage(emb, { x: (W - w) / 2, y: (H - h) / 2, width: w, height: h });
+  }
+  return new Blob([await out.save()], { type: 'application/pdf' });
+}
+
+</script>
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+// CUSTOMER CARE DASHBOARD — every order from Create Parcel Pickup
+// (delhiveryListOrders: Delhivery + Ekart, forward + reverse), compiled
+// into CASES: a reverse pickup together with the forward order that sent
+// it back (linked_order_id), or a standalone forward order (e.g. FOC).
+// Stages follow the same rules as Create-Pickup's Recent lists.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var cases = [], tileFilter = '';
+  var page = 1, PAGE_SIZE = 10;   // pagination — same 10-per-page as the Blinkit RO Ledger
+
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function safeJson(s) { try { return JSON.parse(s || '{}'); } catch (e) { return {}; } }
+  function ship(o) { return (safeJson(o && o.payload_json).shipments || [])[0] || {}; }
+  function fmtWhen(t) {
+    if (!t) return '';
+    var s = String(t); if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) s = s.replace(' ', 'T') + 'Z';
+    var d = new Date(s);
+    return isNaN(d) ? String(t) : d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+  function api(q) {
+    var s = window.TM_getSession(), h = {};
+    if (s && s.token) h['X-Tomahawk-Session'] = s.token;
+    return fetch(window.TM_WORKER + '?action=' + q, { headers: h }).then(function (r) { return r.json(); });
+  }
+
+  // Courier-side stage of one leg (same as Create-Pickup).
+  function legStage(o) {
+    if (!o) return '';
+    if (!o.delhivery_ok) return 'Failed';
+    var st = o.track_stage || 'Created';
+    if (st === 'Created' && o.rtd_at && o.direction !== 'reverse') return 'RTD';
+    return st;
+  }
+  // Badge text per courier stage, one table per leg direction.
+  var PICKUP_LABEL = { 'Created': 'Booked', 'Out For Pickup': 'Out For Pickup', 'Picked': 'Picked',
+    'In Transit': 'In Transit', 'At Last Mile': 'At Bhiwandi Hub', 'Out For Delivery': 'Out For Delivery',
+    'Delivered': 'Delivered to us' };
+  var DISPATCH_LABEL = { 'Created': 'Booked', 'RTD': 'Ready To Dispatch', 'In Transit': 'In Transit',
+    'At Last Mile': 'Last Mile Hub', 'Out For Delivery': 'Out For Delivery', 'Delivered': 'Delivered' };
+
+  // ── One status per case — drives the badge, tiles and filters.
+  // Three paths:  Repair/Replace = Pickup → In-house → Dispatch
+  //               Refund         = Pickup → In-house → Refunded
+  //               FOC etc.       = Dispatch only
+  // Returns { label, tone, attn } or null (case hidden: failed/cancelled).
+  //   tone: 'in' (amber, coming to us) | 'house' (blue) | 'out' (green)
+  //         'closed' (grey) | 'bad-in' / 'bad-out' (red, truck keeps its direction)
+  function caseStatus(c) {
+    var r = c.reverse, f = c.forward;
+    if ((r || f).cancelled_at) return null;          // cancelled by an admin → hidden
+    var fs = f && f.delhivery_ok ? legStage(f) : '';
+    var fwdLive = fs && fs !== 'Cancelled';        // a failed/cancelled send-back is ignored → back to In Process
+    if (!r) {
+      if (!fwdLive) return null;
+      return dispatchStatus(fs);
+    }
+    if (!r.delhivery_ok) return null;
+    var rs = legStage(r);
+    if (rs === 'Cancelled' && !r.received_at) return null;
+    if (r.refunded_at) return { label: 'Refunded', tone: 'closed' };
+    if (fwdLive) return dispatchStatus(fs);
+    if (r.resolution === 'refund') {       // refund started (Refund case or "Refund instead")
+      return r.bank_submitted_at ? { label: 'Refund Pending', tone: 'house' } : { label: 'Awaiting Bank Details', tone: 'house' };
+    }
+    if (r.in_process_at || r.received_at) return { label: 'In Process', tone: 'house' }; // Received = In Process
+    if (rs === 'RTO' || rs === 'Lost') return { label: 'Pickup ' + rs, tone: 'bad-in' };
+    if (rs === 'Delivered') return { label: PICKUP_LABEL.Delivered, tone: 'in', attn: true }; // needs Verify received
+    return { label: PICKUP_LABEL[rs] || rs, tone: 'in' };
+  }
+  function dispatchStatus(fs) {
+    if (fs === 'Delivered') return { label: 'Delivered', tone: 'closed' }; // Delivered = case closed (grey)
+    if (fs === 'RTO' || fs === 'Lost') return { label: fs, tone: 'bad-out' };
+    return { label: DISPATCH_LABEL[fs] || fs, tone: 'out' };
+  }
+
+  // Badge = text + icon on the right.
+  // Box truck facing right (cargo stripes + cab window + wheel hubs), flipped for incoming.
+  var ICON_TRUCK = '<path fill-rule="evenodd" d="M1.2 0h11.6c.66 0 1.2.54 1.2 1.2V9.5H0V1.2C0 .54.54 0 1.2 0zM2 2.2v1.1h10V2.2zm0 2.4v1.1h10V4.6zm0 2.4v1.1h10V7z"/><path fill-rule="evenodd" d="M15 2.5h4.3c.35 0 .68.16.9.43l2.6 3.2c.13.17.2.37.2.58V9.5h-8zm1.3 1.2v2.6h4.9l-2-2.6z"/><path fill-rule="evenodd" d="M4.6 8.4a2.3 2.3 0 1 1 0 4.6 2.3 2.3 0 0 1 0-4.6zm0 1.4a.9.9 0 1 0 0 1.8.9.9 0 0 0 0-1.8zM18.6 8.4a2.3 2.3 0 1 1 0 4.6 2.3 2.3 0 0 1 0-4.6zm0 1.4a.9.9 0 1 0 0 1.8.9.9 0 0 0 0-1.8z"/>';
+  var ICON_HOUSE = '<path fill-rule="evenodd" d="M3 5 11.5 0 20 5v7h-5V8H8v4H3z"/>';
+  var ICON_CHECK = '<path d="M5 6.5 9 10.5 17 1.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>';
+  var TONE = {
+    'in':      { cls: 'b-amber', icon: ICON_TRUCK, flip: true },
+    'bad-in':  { cls: 'b-red',   icon: ICON_TRUCK, flip: true },
+    'house':   { cls: 'b-blue',  icon: ICON_HOUSE },
+    'out':     { cls: 'b-green', icon: ICON_TRUCK },
+    'bad-out': { cls: 'b-red',   icon: ICON_TRUCK },
+    'closed':  { cls: 'b-gray',  icon: ICON_CHECK }
+  };
+  // Text colour per stage (see .bt-* CSS). Problem badges are always red.
+  var STAGE_TEXT = {
+    'Booked': 'white', 'Ready To Dispatch': 'white', 'Received': 'white',
+    'Picked': 'blue', 'In Transit': 'blue', 'At Bhiwandi Hub': 'blue', 'Last Mile Hub': 'blue',
+    'Out For Pickup': 'amber', 'Out For Delivery': 'amber', 'In Process': 'amber',
+    'Awaiting Bank Details': 'white', 'Refund Pending': 'amber',
+    'Delivered to us': 'green', 'Delivered': 'green', 'Refunded': 'green'
+  };
+  function badgeHtml(st) {
+    var t = TONE[st.tone] || TONE.closed;
+    var txt = /^bad/.test(st.tone) ? 'red' : (STAGE_TEXT[st.label] || 'white');
+    return '<span class="badge ' + t.cls + '"><span class="bt-' + txt + '">' + esc(st.label) + '</span>' +
+      '<svg class="b-ico' + (t.flip ? ' flip' : '') + '" viewBox="0 0 23 13" aria-hidden="true">' + t.icon + '</svg></span>';
+  }
+
+  // Four tiles (click to filter):
+  //   All cases — everything
+  //   Open      — not closed/refunded (red problem cases stay here)
+  //   Upcoming  — amber: pickup booked until delivered to us (+ pickup problems)
+  //   Going out — green: forward booked until delivered (+ delivery problems)
+  var TILES = [
+    { key: '', label: 'All cases', c: 'var(--text)', test: function () { return true; } },
+    { key: 'open', label: 'Open cases', c: 'var(--text)', test: function (c) { return c.st.tone !== 'closed'; } },
+    { key: 'upcoming', label: 'Upcoming', c: 'var(--accent)', test: function (c) { return c.st.tone === 'in' || c.st.tone === 'bad-in'; } },
+    { key: 'goingout', label: 'Going out', c: '#22c55e', test: function (c) { return c.st.tone === 'out' || c.st.tone === 'bad-out'; } }
+  ];
+  function tileTest(key) { for (var i = 0; i < TILES.length; i++) if (TILES[i].key === key) return TILES[i].test; return TILES[0].test; }
+
+  // Type column: Repair / Replace / Refund / Free Of Cost. From job_type,
+  // falling back to the Order ID prefix for older orders saved without one
+  // (RPR/FRPR = Repair, REP/RPL/FRPL = Replace, RFD = Refund, FOC).
+  function caseType(c) {
+    var t = baseType(c);
+    // Repair / Replace that ended in a refund → "Repair → Refund"
+    if (c.reverse && c.reverse.resolution === 'refund' && t !== 'Refund') return t + ' \u2192 Refund';
+    return t;
+  }
+  function baseType(c) {
+    var lead = c.reverse || c.forward;
+    var jt = String(lead.job_type || '').toLowerCase();
+    if (/^repair/.test(jt)) return 'Repair';
+    if (/^replace/.test(jt)) return 'Replace';
+    if (jt === 'refund') return 'Refund';
+    if (jt === 'foc') return 'Free Of Cost';
+    var pre = String(lead.order_id || '').split('-')[0].toUpperCase();
+    return { RPR: 'Repair', FRPR: 'Repair', REP: 'Replace', RPL: 'Replace', FRPL: 'Replace', RFD: 'Refund', FOC: 'Free Of Cost' }[pre] || '—';
+  }
+
+  // ── Ticket TAT ─────────────────────────────────────────────────────
+  // Start = first booking of the case (reverse pickup, or the forward
+  // shipment for send-only cases). End = case closed:
+  //   Refunded  → refunded_at on the reverse leg
+  //   Delivered → courier's delivered scan on the forward leg (delivered_at;
+  //               tracked_at only as a stop-gap until the Worker backfills)
+  // Open cases count up to now. SLA = 15 days.
+  //   Open:   0–10 Normal (green) · 11–15 High (amber) · 16+ Breached (red)
+  //   Closed: ≤15 On time (green) · 16+ Breached (red)
+  var SLA_DAYS = 15, HIGH_FROM = 11;
+  function parseTs(t) {
+    if (!t) return null;
+    var s = String(t); if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) s = s.replace(' ', 'T') + 'Z'; // D1 datetime() = UTC
+    var d = new Date(s);
+    return isNaN(d) ? null : d;
+  }
+  function caseTat(c) {
+    var start = parseTs((c.reverse || c.forward).created_at);
+    if (!start) return null;
+    var closed = c.st.tone === 'closed', end = null;
+    if (closed) {
+      if (c.st.label === 'Refunded') end = parseTs(c.reverse && c.reverse.refunded_at);
+      else if (c.forward) end = parseTs(c.forward.delivered_at || c.forward.tracked_at);
+      if (!end) return null; // closed but no close time recorded
+    } else end = new Date();
+    var days = Math.max(0, Math.floor((end - start) / 864e5));
+    var pr = days > SLA_DAYS ? { label: 'Breached', cls: 'b-red' }
+      : closed ? { label: 'On time', cls: 'b-green' }
+      : days >= HIGH_FROM ? { label: 'High', cls: 'b-amber' } : { label: 'Normal', cls: 'b-green' };
+    return { days: days, closed: closed, breach: days > SLA_DAYS, label: pr.label, cls: pr.cls };
+  }
+  function dayWord(n) { return n === 1 ? '1 day' : n + ' days'; }
+  function tatCellHtml(t) {
+    if (!t) return '<span class="sub">&#8212;</span>';
+    return '<div class="tat-d' + (t.breach ? ' breach' : '') + '">' + t.days + 'd</div>' +
+      '<div class="sub">' + (t.closed ? 'Closed' : 'Open') + '</div>' +
+      '<span class="badge tat-pill ' + t.cls + '">' + t.label + '</span>';
+  }
+  function tatText(t) {
+    if (!t) return '';
+    return (t.closed ? 'Closed in ' : 'Open ') + dayWord(t.days) + ' · ' + t.label;
+  }
+
+  function buildCases(orders) {
+    var byId = {};
+    orders.forEach(function (o) { if (o.order_id) byId[o.order_id] = byId[o.order_id] || o; });
+    var used = {}, out = [];
+    orders.forEach(function (o) {
+      if (o.direction !== 'reverse') return;
+      var f = o.linked_order_id ? byId[o.linked_order_id] : null;
+      if (f) used[f.order_id] = true;
+      out.push({ id: o.order_id, reverse: o, forward: f, created: o.created_at });
+    });
+    orders.forEach(function (o) {
+      if (o.direction === 'reverse' || used[o.order_id]) return;
+      out.push({ id: o.order_id, reverse: null, forward: o, created: o.created_at });
+    });
+    out.forEach(function (c) {
+      c.st = caseStatus(c);
+      c.tat = c.st ? caseTat(c) : null;
+      var lead = c.reverse || c.forward, sh = ship(lead);
+      c.customer = sh.name || '';
+      c.city = [sh.city, sh.state].filter(Boolean).join(', ');
+      c.product = String(sh.products_desc || '').replace(/^(Repair|Replacement|Refund|Repaired|FOC)\s*-\s*/i, '');
+      c.kind = c.reverse ? (c.reverse.job_type || 'Reverse') : 'forward';
+      c.type = caseType(c);
+      c.search = [c.id, c.forward && c.forward.order_id, c.reverse && c.reverse.waybill, c.forward && c.forward.waybill, c.customer, c.product, sh.phone].join(' ').toLowerCase();
+    });
+    // Failed bookings and cancelled shipments aren't shown at all.
+    out = out.filter(function (c) { return !!c.st; });
+    out.sort(function (a, b) { return String(b.created || '').localeCompare(String(a.created || '')); });
+    return out;
+  }
+
+  function renderTiles() {
+    var el = document.getElementById('tiles');
+    el.innerHTML = TILES.map(function (t) {
+      var n = cases.filter(t.test).length;
+      var verify = t.key === 'upcoming' ? cases.filter(function (c) { return c.st.attn; }).length : 0;
+      return '<button class="tile' + (tileFilter === t.key ? ' active' : '') + '" data-f="' + t.key + '" style="--tile-c:' + t.c + '">' +
+        '<div class="tile-n">' + n + '</div><div class="tile-l">' + esc(t.label) +
+        (verify ? ' <span class="tile-flag">' + verify + ' to verify</span>' : '') + '</div></button>';
+    }).join('');
+    el.querySelectorAll('.tile').forEach(function (t) {
+      t.addEventListener('click', function () { tileFilter = t.dataset.f; page = 1; renderTiles(); renderTable(); });
+    });
+  }
+
+  function renderTable() {
+    var q = document.getElementById('q').value.trim().toLowerCase();
+    var kind = document.getElementById('f-kind').value;
+    var rows = cases.filter(function (c) {
+      return tileTest(tileFilter)(c) && (!kind || c.type === kind || (kind === 'Refund' && / Refund$/.test(c.type))) && (!q || c.search.indexOf(q) !== -1);
+    });
+    var body = document.getElementById('case-body');
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="6" class="muted">No cases match.</td></tr>'; renderPager(0, 1); return; }
+    var totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+    if (page > totalPages) page = totalPages;
+    if (page < 1) page = 1;
+    var total = rows.length;
+    rows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+    body.innerHTML = '';
+    rows.forEach(function (c) {
+      var tr = document.createElement('tr');
+      tr.className = 'case-row' + (c.st.attn ? ' attn' : '');
+      var ids = c.reverse
+        ? '<div class="mono">' + esc(c.reverse.order_id) + '</div>' + (c.forward ? '<div class="sub mono">&#8627; ' + esc(c.forward.order_id) + '</div>' : '')
+        : '<div class="mono">' + esc(c.forward.order_id) + '</div>';
+      var kindLabel = c.reverse ? esc(c.kind) + ' · ' + esc(c.reverse.courier || 'Delhivery') : 'Forward · ' + esc(c.forward.courier || 'Delhivery');
+      tr.innerHTML =
+        '<td>' + ids + '<div class="sub">' + kindLabel + '</div></td>' +
+        '<td>' + esc(c.customer || '—') + (c.city ? '<div class="sub">' + esc(c.city) + '</div>' : '') + '</td>' +
+        '<td>' + esc(c.product || '—') + '</td>' +
+        '<td>' + esc(c.type) + '</td>' +
+        '<td>' + badgeHtml(c.st) + '</td>' +
+        '<td>' + tatCellHtml(c.tat) + '</td>';
+      tr.addEventListener('click', function () { openCase(c); });
+      body.appendChild(tr);
+    });
+    // Pad a short page with blank rows so the table always has 10 equal
+    // rows — same shape on every page, pager never moves.
+    {
+      for (var i = rows.length; i < PAGE_SIZE; i++) {
+        var pad = document.createElement('tr');
+        pad.setAttribute('aria-hidden', 'true');
+        pad.innerHTML = '<td colspan="6">&nbsp;<div class="sub">&nbsp;</div></td>';
+        body.appendChild(pad);
+      }
+    }
+    renderPager(total, totalPages);
+  }
+
+  function renderPager(total, totalPages) {
+    var wrap = document.getElementById('pager');
+    if (total <= PAGE_SIZE) { wrap.style.display = 'none'; return; } // single page — nothing to paginate
+    wrap.style.display = 'flex';
+    document.getElementById('pager-ind').textContent =
+      ((page - 1) * PAGE_SIZE + 1) + '\u2013' + Math.min(page * PAGE_SIZE, total) + ' of ' + total + ' \u00b7 Page ' + page + ' of ' + totalPages;
+    document.getElementById('pager-prev').disabled = page <= 1;
+    document.getElementById('pager-next').disabled = page >= totalPages;
+  }
+  function goToPage(p) { page = p; renderTable(); }
+  document.getElementById('pager-prev').addEventListener('click', function () { goToPage(page - 1); });
+  document.getElementById('pager-next').addEventListener('click', function () { goToPage(page + 1); });
+
+  // ── Case popup: both legs + live tracking per leg ──
+  var modal = document.getElementById('case-modal');
+  function closeCase() { modal.hidden = true; }
+  document.getElementById('case-close').addEventListener('click', closeCase);
+  modal.addEventListener('click', function (e) { if (e.target === modal) closeCase(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !modal.hidden) closeCase(); });
+
+  // One courier leg: section header (+ Track now) and courier facts only.
+  // Customer/product details live once in the summary strip above.
+  function legHtml(o, title, idx) {
+    var st = legStage(o);
+    var stLabel = (o.direction === 'reverse' ? PICKUP_LABEL[st] : DISPATCH_LABEL[st]) || st;
+    var raw = String(o.track_status || '');
+    var showRaw = raw && raw.toLowerCase().replace(/l+/g, 'l') !== String(stLabel).toLowerCase().replace(/l+/g, 'l');
+    var f = function (k, v, sub) { return '<div><div class="cm-k">' + k + '</div><div>' + (v || '&#8212;') + '</div>' + (sub ? '<div class="cm-muted">' + sub + '</div>' : '') + '</div>'; };
+    return '<div class="cm-sec"><div class="cm-sec-title">' + esc(title) + ' &mdash; <span class="mono">' + esc(o.order_id) + '</span></div>' +
+        '</div>' +
+      '<div class="cm-grid">' +
+        f('Courier', esc(o.courier || 'Delhivery')) +
+        f('AWB Number', o.waybill ? '<span class="mono">' + esc(o.waybill) + '</span>' +
+          '<button class="copy-btn" data-copy="' + esc(o.waybill) + '" title="Copy AWB number" aria-label="Copy AWB number">' +
+          '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>' : '') +
+        f('Courier status', esc(stLabel), showRaw ? esc(raw) : '') +
+        f('Booked by', esc(o.created_by || ''), esc(fmtWhen(o.created_at))) +
+      '</div><div class="track-box" id="track-' + idx + '" hidden></div>';
+  }
+
+  // ── Next-step button for reverse cases (admin / manager only; the
+  //   Worker enforces the same). Send back itself is booked in Create
+  //   Parcel Pickup, so that one is just a link.
+  function actionsHtml(c) {
+    var html = nextStepHtml(c);
+    return html ? '<div class="case-acts">' + html + '</div>' : '';
+  }
+  function nextStepHtml(c) {
+    if (window.TM_ROLE !== 'admin' && window.TM_ROLE !== 'manager') return '';
+    var r = c.reverse, f = c.forward;
+    var btn = function (act, label) { return '<button class="case-act primary" data-act="' + act + '">' + label + '</button>'; };
+    var fs = f && f.delhivery_ok ? legStage(f) : '';
+    if (!r || !r.delhivery_ok || r.refunded_at) return '';
+    if (fs && fs !== 'Cancelled') return '';
+    if (!r.received_at) return legStage(r) === 'Delivered' ? btn('recv', 'Received') : '';
+    // Refund path: start (reason + amount) → customer link → bank details → Refund given (UTR)
+    if (r.resolution === 'refund') {
+      if (r.bank_submitted_at) return btn('bank', 'View bank details') + btn('refund', 'Refund given');
+      return btn('link', r.refund_link_sent_at ? 'Send bank details link again' : 'Send bank details link');
+    }
+    if (r.job_type === 'Refund') return btn('startrefund', 'Start refund');
+    return btn('sendback', 'Send back &#8594;') + '<button class="case-act" data-act="startrefund">Refund instead</button>';
+  }
+
+  // ══ SEND BACK — one click books the forward shipment to the exact same
+  // customer (name / number / address), same product, package and courier
+  // as the reverse pickup. Steps: build order → check the PIN is
+  // serviceable for forward delivery → show estimate + details → on
+  // confirm, get the next FRPR/FRPL Order ID and create it, linked to
+  // the pickup. Create Parcel Pickup's own "Send back →" (pre-filled
+  // form) stays as the fallback when anything needs editing.
+  var SEND_BACK_TYPE = { Repair: { job: 'Repaired', prefix: 'FRPR' }, Replacement: { job: 'Replacement', prefix: 'FRPL' } };
+
+  function sendBackOrder(r) {
+    var sh = ship(r), t = SEND_BACK_TYPE[r.job_type] || SEND_BACK_TYPE.Repair;
+    var sku = String(sh.products_desc || '').replace(/^(Repair|Replacement)\s*-\s*/i, '').trim();
+    return {
+      linked_order_id: r.order_id,
+      name: sh.name || '', phone: String(sh.phone || '').replace(/\D/g, '').slice(-10),
+      add: sh.add || '', pin: String(sh.pin || ''), city: sh.city || '', state: sh.state || '',
+      products_desc: t.job + ' - ' + sku, job_type: t.job, remark: r.remark || '',
+      direction: 'forward', payment_mode: 'Prepaid',
+      quantity: sh.quantity || '1', total_amount: sh.total_amount || '', hsn_code: sh.hsn_code || '8467',
+      weight: sh.weight || undefined,
+      length: sh.shipment_length || undefined, width: sh.shipment_width || undefined, height: sh.shipment_height || undefined,
+      courier: r.courier === 'Ekart' ? 'Ekart' : 'Delhivery',
+      _prefix: t.prefix, _sku: sku
+    };
+  }
+  var COURIERS = ['Delhivery', 'Ekart'];
+  function ckey(name) { return name === 'Ekart' ? 'ekart' : 'delhivery'; }
+
+  // ── Send-back confirm panel (editable) ─────────────────────────────
+  //   Product — defaults to the pickup's SKU; pick/type another if a
+  //             different item goes out. A known SKU also refreshes value,
+  //             weight and size from the listing data.
+  //   Value   — editable.
+  //   Courier — Delhivery / Ekart chips, each showing its serviceability
+  //             for the PIN and estimate; click to switch. Starts on the
+  //             pickup's courier, or the other one if it can't deliver.
+  var sb = null;          // current panel state
+  var skuList = null, skuInfo = null;   // loaded once, on first use
+
+  async function loadSkuSources() {
+    if (skuList) return;
+    skuList = [];
+    try {
+      var r = await api('ucsku_getList');
+      skuList = ((r && r.skus) || []).slice().sort();
+    } catch (e) {}
+    try {
+      var info = await api('delhiveryAmzProductInfo');
+      if (info && info.ok && info.products) skuInfo = info.products;
+    } catch (e) {}
+  }
+  function skuKey(x) { return String(x || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+  function lookupSku(sku) {
+    if (!skuInfo) return null;
+    if (skuInfo[sku]) return skuInfo[sku];
+    var want = skuKey(sku);
+    for (var k in skuInfo) if (skuKey(k) === want) return skuInfo[k];
+    return null;
+  }
+
+  async function startSendBack(c, btn) {
+    var o = sendBackOrder(c.reverse);
+    if (!o.name || !o.phone || !o.add || !/^\d{6}$/.test(o.pin)) {
+      alert('The pickup is missing the name, number, address or PIN — use Create Parcel Pickup to send it back.');
+      return;
+    }
+    btn.disabled = true; btn.textContent = 'Checking…';
+    sb = { c: c, o: o, btn: btn, sv: {}, refused: {}, note: '' };
+    await Promise.all([loadSkuSources(), checkCouriers()]);
+    // Start on the pickup's courier if it can deliver, else the other.
+    if (!sb.sv[o.courier] || !sb.sv[o.courier].ok) {
+      var alt = COURIERS.filter(function (x) { return x !== o.courier && sb.sv[x] && sb.sv[x].ok; })[0];
+      if (alt) { sb.note = o.courier + " can't deliver to " + o.pin + ' — using ' + alt + '.'; o.courier = alt; }
+    }
+    btn.style.display = 'none';
+    renderSendBack();
+  }
+
+  // Serviceability + estimate for both couriers (in parallel).
+  async function checkCouriers() {
+    var o = sb.o;
+    var qs = new URLSearchParams({ pin: o.pin, weight: o.weight || '500', payment_mode: 'Prepaid',
+      length: o.length || '5', width: o.width || '5', height: o.height || '5',
+      invoice_amount: o.total_amount || '0', direction: 'forward' }).toString();
+    await Promise.all(COURIERS.map(async function (name) {
+      var st = { ok: false, text: 'Checking…', cost: '' };
+      try {
+        var pr = await api(ckey(name) + 'CheckPincode&pin=' + o.pin);
+        if (!pr || !pr.ok) st.text = 'Couldn\u2019t check';
+        else if (!pr.serviceable || pr.prepaid === false) st.text = 'Not serviceable';
+        else {
+          st.ok = true; st.text = 'Serviceable';
+          // Each courier wants city/state in its own format (Delhivery
+          // gives "MH", Ekart needs "Maharashtra") — keep what it returned.
+          st.city = pr.city || ''; st.state = pr.state || '';
+          try {
+            var est = await api(ckey(name) + 'EstimateCharge&' + qs);
+            if (est && est.ok && est.estimated && est.totalAmount != null) st.cost = '₹' + est.totalAmount;
+          } catch (e) {}
+        }
+      } catch (e) { st.text = 'Couldn\u2019t check'; }
+      if (sb.refused[name]) { st.ok = false; st.text = 'Refused this PIN'; }
+      sb.sv[name] = st;
+    }));
+  }
+
+  // City/State shown under the address — from the selected courier's PIN
+  // lookup when available (that's what gets booked), else the pickup's.
+  function cityState() {
+    var st = sb.sv[sb.o.courier] || {};
+    return [st.city || sb.o.city, st.state || sb.o.state].filter(Boolean).join(', ');
+  }
+
+  function renderSendBack() {
+    var o = sb.o, panel = document.getElementById('cm-confirm');
+    var anyOk = COURIERS.some(function (x) { return sb.sv[x] && sb.sv[x].ok; });
+    var chips = COURIERS.map(function (name) {
+      var st = sb.sv[name] || { text: '…' };
+      return '<button type="button" class="sb-chip' + (o.courier === name ? ' on' : '') + (st.ok ? '' : ' off') + '" data-courier="' + name + '"' + (st.ok ? '' : ' disabled') + '>' +
+        '<b>' + name + '</b><span>' + (st.ok ? '&#10003; ' : '&#10007; ') + esc(st.text) + (st.cost ? ' · ' + esc(st.cost) : '') + '</span></button>';
+    }).join('');
+    panel.innerHTML =
+      '<div class="cm-sec-title" style="margin-bottom:8px">Confirm send back</div>' +
+      '<div class="cm-summary">' +
+        '<div><div class="cm-k">Deliver to</div><div>' + esc(o.name) + '</div></div>' +
+        '<div><div class="cm-k">Contact Number</div><div>' + esc(o.phone) + '</div></div>' +
+        '<div><div class="cm-k">Payment</div><div>Prepaid</div></div>' +
+        '<div class="span2"><div class="cm-k">Address (edit if the customer gave a corrected one)</div>' +
+          '<input class="sb-input" id="sb-address" value="' + esc(o.add) + '" autocomplete="off">' +
+          '<div class="cm-muted">' + esc(cityState()) + '</div></div>' +
+        '<div><div class="cm-k">PIN</div><input class="sb-input" id="sb-pin" inputmode="numeric" maxlength="6" value="' + esc(o.pin) + '"></div>' +
+        '<div class="span2"><div class="cm-k">Product (change if sending a different item)</div>' +
+          '<input class="sb-input" id="sb-product" list="sb-skus" value="' + esc(o._sku) + '" autocomplete="off">' +
+          '<datalist id="sb-skus">' + (skuList || []).map(function (x) { return '<option value="' + esc(x) + '">'; }).join('') + '</datalist></div>' +
+        '<div><div class="cm-k">Value (₹)</div><input class="sb-input" id="sb-value" type="number" min="1" value="' + esc(o.total_amount) + '"></div>' +
+      '</div>' +
+      '<div class="cm-k" style="margin:12px 0 6px">Courier partner &amp; serviceability for ' + esc(o.pin) + '</div>' +
+      '<div class="sb-chips">' + chips + '</div>' +
+      '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
+        '<button class="case-act primary" id="sb-yes"' + (anyOk ? '' : ' disabled') + '>Book send back</button>' +
+        '<button class="case-act" id="sb-no">Cancel</button>' +
+        '<span class="cm-muted" style="margin-left:auto">' + (sb.note ? '<b style="color:var(--accent)">' + esc(sb.note) + '</b> ' : '') +
+          (anyOk ? 'Nothing is booked until you confirm.' : 'Neither courier delivers here — send it another way.') + '</span>' +
+      '</div>';
+    panel.hidden = false;
+
+    panel.querySelectorAll('.sb-chip').forEach(function (ch) {
+      ch.addEventListener('click', function () { o.courier = ch.dataset.courier; sb.note = ''; readInputs(); renderSendBack(); });
+    });
+    // Product / value change → refresh package from listing data and re-check estimates.
+    var t = null;
+    function changed(e) {
+      clearTimeout(t);
+      t = setTimeout(async function () {
+        var prevSku = o._sku;
+        readInputs();
+        if (e && e.target.id === 'sb-product' && o._sku !== prevSku) {
+          var info = lookupSku(o._sku);
+          if (info) {
+            // Same rules as Create Parcel Pickup: listing price × qty,
+            // weight = 50% of the listing weight (rounded up).
+            if (info.price) o.total_amount = String(+(info.price * (parseInt(o.quantity, 10) || 1)).toFixed(2));
+            if (info.weight) o.weight = Math.ceil(Number(info.weight) * 0.5);
+            if (info.length && info.width && info.height) { o.length = Math.ceil(info.length); o.width = Math.ceil(info.width); o.height = Math.ceil(info.height); }
+          }
+        }
+        await checkCouriers();
+        if (!sb.sv[o.courier] || !sb.sv[o.courier].ok) {
+          var alt = COURIERS.filter(function (x) { return sb.sv[x] && sb.sv[x].ok; })[0];
+          if (alt) o.courier = alt;
+        }
+        renderSendBack();
+      }, 600);
+    }
+    document.getElementById('sb-product').addEventListener('change', changed);
+    document.getElementById('sb-value').addEventListener('change', changed);
+    document.getElementById('sb-pin').addEventListener('change', function (e) {
+      var v = e.target.value.replace(/\D/g, '');
+      if (!/^\d{6}$/.test(v)) { alert('Enter a valid 6-digit PIN.'); e.target.value = o.pin; return; }
+      if (v === o.pin) return;
+      o.pin = v; sb.refused = {}; sb.note = '';   // new PIN → both couriers get a fresh chance
+      changed(e);
+    });
+    document.getElementById('sb-no').addEventListener('click', function () {
+      panel.hidden = true; panel.innerHTML = '';
+      sb.btn.style.display = ''; sb.btn.disabled = false; sb.btn.innerHTML = 'Send back &#8594;';
+      sb = null;
+    });
+    document.getElementById('sb-yes').addEventListener('click', function () { readInputs(); bookSendBack(this); });
+  }
+
+  function readInputs() {
+    var p = document.getElementById('sb-product'), v = document.getElementById('sb-value');
+    if (p) sb.o._sku = p.value.trim() || sb.o._sku;
+    if (v && v.value) sb.o.total_amount = v.value;
+    var ad = document.getElementById('sb-address');
+    if (ad && ad.value.trim()) sb.o.add = ad.value.trim();
+    sb.o.products_desc = sb.o.job_type + ' - ' + sb.o._sku;
+  }
+
+  async function bookSendBack(yesBtn) {
+    var c = sb.c, o = sb.o;
+    if (!o._sku) { alert('Enter the product being sent.'); return; }
+    yesBtn.disabled = true; yesBtn.textContent = 'Booking…';
+    try {
+      var idRes = await api('delhiveryNextOrderId&prefix=' + o._prefix);
+      if (!idRes || !idRes.ok || !idRes.orderId) throw new Error("Couldn't get the next Order ID — try again.");
+      var order = Object.assign({}, o, { order: idRes.orderId });
+      delete order._prefix; delete order._sku;
+      // City/State exactly as the chosen courier's PIN lookup returned them
+      // (same as Create Parcel Pickup); fall back to the pickup's values.
+      var cs = sb.sv[order.courier] || {};
+      if (cs.city) order.city = cs.city;
+      if (cs.state) order.state = cs.state;
+      var res, attempts = 0;
+      while (true) {                 // same duplicate-ID retry as Create Parcel Pickup
+        res = await post(order.courier === 'Ekart' ? 'ekartCreateOrder' : 'delhiveryCreateOrder', { order: order });
+        if (res.ok) break;
+        var pkg = res.response && res.response.packages && res.response.packages[0];
+        var remarks = [res.error].concat(pkg && pkg.remarks ? [].concat(pkg.remarks) : []);
+        if (!remarks.some(function (x) { return /duplicate|already exists/i.test(String(x || '')); }) || ++attempts >= 5) break;
+        var m = /^([A-Z]+-\d{6})(\d+)$/.exec(order.order);
+        if (!m) break;
+        order.order = m[1] + String(parseInt(m[2], 10) + 1).padStart(2, '0');
+      }
+      if (!res.ok) {
+        var p = res.response && res.response.packages && res.response.packages[0];
+        var msg = res.error || (p && [].concat(p.remarks || []).join(', ')) || 'booking failed';
+        // Courier refused the PIN at booking time (its pincode check can't
+        // know e.g. same area as our warehouse) → mark it refused and move
+        // the selection to the other courier for a fresh confirm.
+        if (/serviceable|not service|pincode/i.test(msg)) {
+          sb.refused[order.courier] = true;
+          sb.sv[order.courier] = { ok: false, text: 'Refused this PIN' };
+          var alt = COURIERS.filter(function (x) { return sb.sv[x] && sb.sv[x].ok; })[0];
+          sb.note = order.courier + ' refused PIN ' + o.pin + (alt ? ' — switched to ' + alt + '.' : '.');
+          if (alt) o.courier = alt;
+          renderSendBack();
+          return;
+        }
+        throw new Error(msg);
+      }
+      // Reload and reopen this case — it now shows the green Booked badge
+      // and the Download label button.
+      sb = null;
+      await load(false);
+      var fresh = cases.filter(function (x) { return x.id === c.id; })[0];
+      if (fresh) openCase(fresh); else closeCase();
+    } catch (e) {
+      alert("Couldn't book the send back: " + e.message);
+      yesBtn.disabled = false; yesBtn.textContent = 'Book send back';
+    }
+  }
+
+  function post(action, body) {
+    var s = window.TM_getSession(), h = { 'Content-Type': 'application/json' };
+    if (s && s.token) h['X-Tomahawk-Session'] = s.token;
+    return fetch(window.TM_WORKER + '?action=' + action, {
+      method: 'POST', headers: h, body: JSON.stringify(Object.assign({ action: action }, body))
+    }).then(function (r) { return r.json(); });
+  }
+
+  // ── Label download — same as Create Parcel Pickup's ⬇ button: draws the
+  // Delhivery One portal-style label (buildPortalLabelPdf) from Delhivery's
+  // packing-slip data, falling back to Delhivery's own PDF cropped to 4×6;
+  // Ekart uses Ekart's label. Saved as <OrderID>_<AWB>.pdf. The first
+  // download stamps rtd_at (Worker) → Ready To Dispatch.
+  async function downloadLabel(o, btn) {
+    if (btn.classList.contains('busy') || btn.disabled) return;
+    btn.classList.add('busy'); btn.disabled = true;
+    try {
+      var session = window.TM_getSession();
+      var headers = {};
+      if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
+      var blob = null;
+      if (o.courier === 'Ekart') {
+        var er = await fetch(window.TM_WORKER + '?action=ekartGetLabel&waybill=' + encodeURIComponent(o.waybill), { headers: headers });
+        if (!er.ok || (er.headers.get('Content-Type') || '').indexOf('application/pdf') === -1) {
+          var ee = {};
+          try { ee = await er.json(); } catch (e4) {}
+          throw new Error(ee.error || ('HTTP ' + er.status));
+        }
+        blob = await er.blob();
+      } else try {
+        var pkg = null;
+        try {
+          var dr = await fetch(window.TM_WORKER + '?action=delhiveryGetLabel&json=1&waybill=' + encodeURIComponent(o.waybill), { headers: headers });
+          var dj = await dr.json();
+          if (dj && dj.ok) pkg = dj.pkg;
+        } catch (e3) { /* no Delhivery data — draw from our log row */ }
+        blob = await buildPortalLabelPdf(labelDataFor(o, pkg));
+      } catch (drawErr) {
+        console.warn('Portal-style label failed, using Delhivery API PDF:', drawErr);
+        var resp = await fetch(window.TM_WORKER + '?action=delhiveryGetLabel&file=1&waybill=' + encodeURIComponent(o.waybill), { headers: headers });
+        var type = resp.headers.get('Content-Type') || '';
+        if (!resp.ok || type.indexOf('application/pdf') === -1) {
+          var err = {};
+          try { err = await resp.json(); } catch (e2) {}
+          throw new Error(err.error || ('HTTP ' + resp.status));
+        }
+        blob = await to4x6Pdf(await resp.arrayBuffer());
+      }
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = String(o.order_id || 'label').replace(/[^A-Za-z0-9_-]/g, '_') + '_' + o.waybill + '.pdf';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      if (!o.rtd_at) {             // first print → Ready To Dispatch; refresh this case
+        var id = openCaseId;
+        await load(false);
+        var fresh = cases.filter(function (x) { return x.id === id; })[0];
+        if (fresh && !modal.hidden) openCase(fresh);
+        return;
+      }
+    } catch (e) {
+      alert("Couldn't download the label: " + e.message);
+    }
+    btn.classList.remove('busy'); btn.disabled = false;
+  }
+
+
+  // ══ REFUND FLOW ═════════════════════════════════════════════════════
+  //   Start refund / Refund instead (reason + amount)
+  //   → Send bank details link (customer fills /Refund/ form, NEFT only)
+  //   → View bank details (masked; Reveal is logged) → Refund given (UTR)
+  //   Panels open in the popup's confirm area (#cm-confirm).
+  var REFUND_REASONS = ['Not repairable', 'Replacement out of stock', 'Customer asked for refund', 'Other'];
+  var REFUND_PAGE = 'https://naimuddin74667.github.io/Tomahawk/Refund/';
+
+  async function reopenCase(id) {
+    await load(false);
+    var fresh = cases.filter(function (x) { return x.id === id; })[0];
+    if (fresh && !modal.hidden) openCase(fresh); else closeCase();
+  }
+  function showPanel(html) {
+    var panel = document.getElementById('cm-confirm');
+    panel.innerHTML = html; panel.hidden = false;
+    var acts = document.getElementById('cm-main-acts');
+    if (acts) acts.style.display = 'none';            // one task at a time
+    return panel;
+  }
+  function panelCancel(panel) {
+    panel.querySelector('[data-x]').addEventListener('click', function () {
+      panel.hidden = true; panel.innerHTML = '';
+      var acts = document.getElementById('cm-main-acts');
+      if (acts) acts.style.display = '';
+    });
+  }
+
+  function refundStartPanel(c) {
+    var r = c.reverse, isRefundCase = r.job_type === 'Refund';
+    var amt = ship(r).total_amount || '';
+    var panel = showPanel(
+      '<div class="cm-sec-title" style="margin-bottom:8px">' + (isRefundCase ? 'Start refund' : 'Refund instead of ' + (c.type === 'Replace' ? 'replacement' : 'repair')) + '</div>' +
+      '<div class="cm-summary">' +
+        '<div class="span2"><div class="cm-k">Reason' + (isRefundCase ? ' (optional)' : '') + '</div>' +
+          '<select class="sb-input" id="rf-reason"><option value="">' + (isRefundCase ? 'Refund case' : '— Pick a reason —') + '</option>' +
+          REFUND_REASONS.map(function (x) { return '<option>' + esc(x) + '</option>'; }).join('') + '</select>' +
+          '<input class="sb-input" id="rf-other" placeholder="Describe the reason" style="display:none;margin-top:6px"></div>' +
+        '<div><div class="cm-k">Refund amount (₹)</div><input class="sb-input" id="rf-amount" type="number" min="1" step="0.01" value="' + esc(amt) + '"></div>' +
+      '</div>' +
+      '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
+        '<button class="case-act primary" id="rf-yes">Start refund</button><button class="case-act" data-x>Cancel</button>' +
+        (isRefundCase ? '' : '<span class="cm-muted" style="margin-left:auto">No send-back will be made — the customer gets a refund instead.</span>') +
+      '</div>');
+    panelCancel(panel);
+    var sel = document.getElementById('rf-reason'), other = document.getElementById('rf-other');
+    sel.addEventListener('change', function () { other.style.display = sel.value === 'Other' ? '' : 'none'; });
+    document.getElementById('rf-yes').addEventListener('click', async function () {
+      var reason = sel.value === 'Other' ? other.value.trim() : sel.value;
+      if (!isRefundCase && !reason) { alert('Pick a reason.'); return; }
+      var amount = parseFloat(document.getElementById('rf-amount').value);
+      if (!(amount > 0)) { alert('Enter the refund amount.'); return; }
+      this.disabled = true; this.textContent = 'Saving…';
+      try {
+        var res = await post('delhiveryStartRefund', { order_id: r.order_id, reason: reason, amount: amount });
+        if (!res.ok) throw new Error(res.error || 'failed');
+        await reopenCase(c.id);
+      } catch (e) { alert("Couldn't start the refund: " + e.message); this.disabled = false; this.textContent = 'Start refund'; }
+    });
+  }
+
+  async function refundLinkPanel(c, btn) {
+    var r = c.reverse, sh = ship(r);
+    if (r.refund_link_sent_at && !confirm('Make a new link? The link sent earlier will stop working.')) return;
+    btn.disabled = true;
+    try {
+      var res = await post('refundCreateLink', { order_id: r.order_id });
+      if (!res.ok) throw new Error(res.error || 'failed');
+      var link = REFUND_PAGE + '?t=' + encodeURIComponent(res.token);
+      var first = String(sh.name || '').trim().split(/\s+/)[0] || 'there';
+      var msg = 'Hello ' + first + ', this is TOMAHAWK Tools customer care. For your refund of ₹' + r.refund_amount +
+        ' (case ' + r.order_id + '), please share your bank account details securely here: ' + link + '\n\nThe link is valid for 7 days.';
+      var phone = String(sh.phone || '').replace(/\D/g, '').slice(-10);
+      var panel = showPanel(
+        '<div class="cm-sec-title" style="margin-bottom:8px">Bank details link — valid 7 days, single use</div>' +
+        '<div class="cm-summary" style="grid-template-columns:1fr">' +
+          '<div><div class="cm-k">Link</div><div class="mono" style="word-break:break-all">' + esc(link) + '</div></div>' +
+          '<div><div class="cm-k">Message</div><textarea class="sb-input" id="rf-msg" rows="4">' + esc(msg) + '</textarea></div>' +
+        '</div>' +
+        '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
+          (phone ? '<a class="case-act primary" id="rf-wa" target="_blank" rel="noopener">Share on WhatsApp</a>' : '') +
+          '<button class="case-act" id="rf-copy">Copy message</button><button class="case-act" data-x>Done</button>' +
+          '<span class="cm-muted" style="margin-left:auto">The customer confirms the last 4 digits of ' + (phone ? 'XXXXXX' + esc(phone.slice(-4)) : 'their phone') + '.</span>' +
+        '</div>');
+      panel.querySelector('[data-x]').addEventListener('click', function () { reopenCase(c.id); });
+      var wa = document.getElementById('rf-wa');
+      if (wa) {
+        var setWa = function () { wa.href = 'https://wa.me/91' + phone + '?text=' + encodeURIComponent(document.getElementById('rf-msg').value); };
+        setWa(); document.getElementById('rf-msg').addEventListener('input', setWa);
+      }
+      document.getElementById('rf-copy').addEventListener('click', function () {
+        var b = this; navigator.clipboard.writeText(document.getElementById('rf-msg').value).then(function () { b.textContent = 'Copied ✓'; });
+      });
+    } catch (e) { alert("Couldn't make the link: " + e.message); btn.disabled = false; }
+  }
+
+  async function refundBankPanel(c, reveal) {
+    try {
+      var res = await post('refundGetBank', { order_id: c.reverse.order_id, reveal: reveal });
+      if (!res.ok) throw new Error(res.error || 'failed');
+      var f = function (k, v, cls) { return '<div' + (cls ? ' class="' + cls + '"' : '') + '><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
+      var panel = showPanel(
+        '<div class="cm-sec-title" style="margin-bottom:8px">Customer bank details (NEFT)</div>' +
+        '<div class="cm-summary">' +
+          f('Account holder', res.holder_name) +
+          '<div><div class="cm-k">Account number</div><div class="mono">' + esc(res.account_number) +
+            (res.revealed ? ' <button class="copy-btn" id="rf-cp-acct" title="Copy">&#10697;</button>' : '') + '</div></div>' +
+          '<div><div class="cm-k">IFSC</div><div class="mono">' + esc(res.ifsc) + ' <button class="copy-btn" id="rf-cp-ifsc" title="Copy">&#10697;</button></div></div>' +
+          f('Bank', res.bank_name) + f('Branch', res.branch) + f('Submitted', fmtWhen(res.submitted_at)) +
+          f('Refund amount', '₹' + c.reverse.refund_amount) +
+        '</div>' +
+        '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
+          (res.revealed ? '' : '<button class="case-act" id="rf-reveal">Reveal account number</button>') +
+          '<button class="case-act primary" id="rf-given">Refund given</button><button class="case-act" data-x>Close</button>' +
+          '<span class="cm-muted" style="margin-left:auto">Reveals are logged. Details are deleted 30 days after the refund.</span>' +
+        '</div>');
+      panelCancel(panel);
+      var rv = document.getElementById('rf-reveal');
+      if (rv) rv.addEventListener('click', function () { refundBankPanel(c, true); });
+      var cpA = document.getElementById('rf-cp-acct');
+      if (cpA) cpA.addEventListener('click', function () { navigator.clipboard.writeText(res.account_number); cpA.innerHTML = '&#10003;'; });
+      document.getElementById('rf-cp-ifsc').addEventListener('click', function () { navigator.clipboard.writeText(res.ifsc); this.innerHTML = '&#10003;'; });
+      document.getElementById('rf-given').addEventListener('click', function () { refundGivenPanel(c); });
+    } catch (e) { alert("Couldn't load the bank details: " + e.message); }
+  }
+
+  function refundGivenPanel(c) {
+    var panel = showPanel(
+      '<div class="cm-sec-title" style="margin-bottom:8px">Refund given</div>' +
+      '<div class="cm-summary">' +
+        '<div class="span2"><div class="cm-k">NEFT UTR / reference number</div><input class="sb-input" id="rf-utr" maxlength="40" autocomplete="off"></div>' +
+        '<div><div class="cm-k">Amount</div><div>₹' + esc(c.reverse.refund_amount) + '</div></div>' +
+      '</div>' +
+      '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
+        '<button class="case-act primary" id="rf-done">Close case as Refunded</button><button class="case-act" data-x>Cancel</button>' +
+      '</div>');
+    panelCancel(panel);
+    document.getElementById('rf-done').addEventListener('click', async function () {
+      var utr = document.getElementById('rf-utr').value.trim();
+      if (!utr) { alert('Enter the NEFT UTR / reference number.'); return; }
+      this.disabled = true; this.textContent = 'Saving…';
+      try {
+        var res = await post('delhiveryMarkRefunded', { order_id: c.reverse.order_id, utr: utr });
+        if (!res.ok) throw new Error(res.error || 'failed');
+        await reopenCase(c.id);
+      } catch (e) { alert("Couldn't close it: " + e.message); this.disabled = false; this.textContent = 'Close case as Refunded'; }
+    });
+  }
+
+  var ACTS = {
+    recv:    { worker: 'delhiveryMarkReceived',  ask: 'Confirm the parcel has physically arrived at the warehouse? It moves to In Process.' },
+    process: { worker: 'delhiveryMarkInProcess', ask: 'Start processing this case (repair / replacement / refund check)?' },
+    refund:  { worker: 'delhiveryMarkRefunded',  ask: 'Refund given? This closes the case.' }
+  };
+  // Marks every leg of the case cancelled in Tomahawk and hides it. Does
+  // NOT cancel the booking with the courier — do that in their panel.
+  async function cancelCase(c, btn) {
+    if (!confirm('Cancel ' + c.id + ' and remove it from the Dashboard?\n\nThis only marks it cancelled in Tomahawk — the courier booking itself is NOT cancelled.')) return;
+    var ids = [c.reverse && c.reverse.order_id, c.forward && c.forward.order_id].filter(Boolean);
+    btn.disabled = true;
+    try {
+      var s = window.TM_getSession(), h = { 'Content-Type': 'application/json' };
+      if (s && s.token) h['X-Tomahawk-Session'] = s.token;
+      var res = await fetch(window.TM_WORKER + '?action=delhiveryCancelCase', {
+        method: 'POST', headers: h, body: JSON.stringify({ action: 'delhiveryCancelCase', order_ids: ids })
+      }).then(function (r) { return r.json(); });
+      if (!res.ok) throw new Error(res.error || 'failed');
+      closeCase();
+      load(false);
+    } catch (e) {
+      alert("Couldn't cancel: " + e.message);
+      btn.disabled = false;
+    }
+  }
+
+  async function caseAction(c, btn) {
+    if (btn.dataset.act === 'sendback') return startSendBack(c, btn);
+    if (btn.dataset.act === 'startrefund') return refundStartPanel(c);
+    if (btn.dataset.act === 'link') return refundLinkPanel(c, btn);
+    if (btn.dataset.act === 'bank') return refundBankPanel(c, false);
+    if (btn.dataset.act === 'refund' && c.reverse.bank_submitted_at) return refundGivenPanel(c);
+    if (btn.dataset.act === 'label') return downloadLabel(c.forward, btn);
+    var a = ACTS[btn.dataset.act];
+    if (!a || !confirm(c.id + ': ' + a.ask)) return;
+    btn.disabled = true;
+    try {
+      var s = window.TM_getSession(), h = { 'Content-Type': 'application/json' };
+      if (s && s.token) h['X-Tomahawk-Session'] = s.token;
+      var res = await fetch(window.TM_WORKER + '?action=' + a.worker, {
+        method: 'POST', headers: h, body: JSON.stringify({ action: a.worker, order_id: c.reverse.order_id })
+      }).then(function (r) { return r.json(); });
+      if (!res.ok) throw new Error(res.error || 'failed');
+      closeCase();
+      load(false);
+    } catch (e) {
+      alert("Couldn't update: " + e.message);
+      btn.disabled = false;
+    }
+  }
+
+  // Refund facts for the popup (only once a refund has been started).
+  function refundInfoHtml(c) {
+    var r = c.reverse;
+    if (!r || r.resolution !== 'refund') return '';
+    var f = function (k, v) { return '<div><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
+    return '<div class="cm-sec"><div class="cm-sec-title">Refund</div></div><div class="cm-grid">' +
+      f('Amount', r.refund_amount ? '₹' + r.refund_amount : '') + f('Reason', r.refund_reason) +
+      f('Started by', [r.refund_marked_by, fmtWhen(r.refund_marked_at)].filter(Boolean).join(' · ')) +
+      f('Bank details', r.bank_submitted_at ? 'Received ' + fmtWhen(r.bank_submitted_at) : (r.refund_link_sent_at ? 'Link sent ' + fmtWhen(r.refund_link_sent_at) : 'Link not sent yet')) +
+      (r.refunded_at ? f('UTR', r.refund_utr) + f('Refunded', [fmtWhen(r.refunded_at), r.refunded_by].filter(Boolean).join(' · ')) : '') +
+      '</div>';
+  }
+
+  var openCaseId = null;
+  function openCase(c) {
+    openCaseId = c.id;
+    var legs = [];
+    if (c.reverse) legs.push([c.reverse, 'Reverse pickup']);
+    if (c.forward) legs.push([c.forward, c.reverse ? 'Send-back shipment' : 'Forward shipment']);
+    var lead = c.reverse || c.forward, sh = ship(lead);
+    document.getElementById('case-title').textContent = c.id;
+    document.getElementById('case-sub').textContent = '';
+    var f = function (k, v, cls) { return '<div' + (cls ? ' class="' + cls + '"' : '') + '><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
+    // Summary: name · number · type / product · status
+    var summary = '<div class="cm-summary">' +
+      f('Customer', sh.name) + f('Contact Number', sh.phone) + f('Type', c.type) +
+      f('Product', c.product) +
+      f('Courier Partner', [c.reverse && (c.reverse.courier || 'Delhivery'), c.forward && (c.forward.courier || 'Delhivery')]
+        .filter(function (x, i, a) { return x && a.indexOf(x) === i; }).join(' / ')) +
+      '<div><div class="cm-k">Status</div><div>' + badgeHtml(c.st) + '</div></div>' +
+      f('TAT (SLA ' + SLA_DAYS + ' days)', tatText(c.tat)) +
+      '</div>';
+    // Bottom row: next-step button(s), then Track now per leg on the right.
+    var trackBtns = legs.map(function (l, i) {
+      var o = l[0];
+      if (!o.delhivery_ok || !o.waybill) return '';
+      var lbl = legs.length > 1 ? (o.direction === 'reverse' ? 'Track pickup' : 'Track send-back') : 'Track now';
+      return '<button class="track-btn" data-leg="' + i + '">' + lbl + '</button>';
+    }).join('');
+    // Download Label — bottom-left, whenever the forward/send-back shipment
+    // has an AWB (first download → Ready To Dispatch; later ones = reprint).
+    var fl = c.forward;
+    var labelBtn = fl && fl.delhivery_ok && fl.waybill && legStage(fl) !== 'Cancelled'
+      ? '<button class="case-act primary" data-act="label">&#11015; Download Label</button>' : '';
+    var acts = labelBtn + actionsHtml(c) + (trackBtns ? '<span style="margin-left:auto;display:flex;gap:8px">' + trackBtns + '</span>' : '');
+    var box = document.getElementById('case-body-modal');
+    box.innerHTML = summary +
+      legs.map(function (l, i) { return legHtml(l[0], l[1], i); }).join('') +
+      refundInfoHtml(c) +
+      '<div id="cm-confirm" style="margin-top:18px" hidden></div>' +
+      (acts ? '<div class="cm-acts" id="cm-main-acts">' + acts + '</div>' : '');
+    box.querySelectorAll('.case-act[data-act]').forEach(function (b) {
+      b.addEventListener('click', function () { caseAction(c, b); });
+    });
+    var cb = box.querySelector('.case-act[data-cancel]');
+    if (cb) cb.addEventListener('click', function () { cancelCase(c, cb); });
+    // Copy AWB number — icon briefly turns into a green tick.
+    box.querySelectorAll('.copy-btn').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var done = function () { var h = b.innerHTML; b.classList.add('copied'); b.innerHTML = '&#10003;'; setTimeout(function () { b.innerHTML = h; b.classList.remove('copied'); }, 1200); };
+        if (navigator.clipboard) navigator.clipboard.writeText(b.dataset.copy).then(done, function () {});
+      });
+    });
+    box.querySelectorAll('.track-btn').forEach(function (b) {
+      b.addEventListener('click', function () { track(legs[+b.dataset.leg][0], b); });
+    });
+    modal.hidden = false;
+  }
+
+  async function track(o, btn) {
+    var box = document.getElementById('track-' + btn.dataset.leg);
+    box.hidden = false; box.innerHTML = 'Tracking…'; btn.disabled = true;
+    try {
+      var t = await api((o.courier === 'Ekart' ? 'ekartTrack' : 'delhiveryTrack') + '&waybill=' + encodeURIComponent(o.waybill));
+      if (!t || !t.ok) throw new Error((t && t.error) || 'no data');
+      var scans = t.scans || [];
+      box.innerHTML = '<div><b>' + esc(t.status || 'No status yet') + '</b>' +
+        (t.location ? ' · ' + esc(t.location) : '') + (t.at ? ' · ' + esc(fmtWhen(t.at)) : '') + '</div>' +
+        (t.detail ? '<div class="scan-meta">' + esc(t.detail) + '</div>' : '') +
+        (t.expectedDelivery ? '<div class="scan-meta">Expected: ' + esc(fmtWhen(t.expectedDelivery)) + '</div>' : '') +
+        (scans.length ? '<ul class="scan-list">' + scans.map(function (s) {
+          return '<li><div class="scan-st">' + esc(s.status) + '</div><div class="scan-meta">' +
+            esc([s.location, fmtWhen(s.at)].filter(Boolean).join(' · ')) + (s.detail ? ' — ' + esc(s.detail) : '') + '</div></li>';
+        }).join('') + '</ul>' : '<div class="scan-meta">No scans yet.</div>');
+    } catch (e) {
+      box.innerHTML = '<span style="color:#f87171">Couldn\'t load tracking: ' + esc(e.message) + '</span>';
+    }
+    btn.disabled = false; btn.textContent = 'Refresh tracking';
+  }
+
+  async function load(force) {
+    try {
+      var res = await api('delhiveryListOrders&limit=500' + (force ? '&refresh=1' : ''));
+      if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
+      cases = buildCases(res.orders || []);
+      renderTiles(); renderTable();
+    } catch (e) {
+      document.getElementById('case-body').innerHTML = '<tr><td colspan="5" class="muted">Couldn\'t load cases: ' + esc(e.message) + '</td></tr>';
+    }
+  }
+  document.getElementById('q').addEventListener('input', function () { page = 1; renderTable(); });
+  document.getElementById('f-kind').addEventListener('change', function () { page = 1; renderTable(); });
+  document.getElementById('refresh-btn').addEventListener('click', function () { load(true); });
+  load(false);
+})();
+</script>
+
 </body>
 </html>
