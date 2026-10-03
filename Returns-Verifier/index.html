@@ -1345,6 +1345,8 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     var st = r.uc_status || 'pending';
     if (isStuck(r)) return '<span class="status-pill st-failed" style="margin-right:8px">No response</span>' +
       '<button class="btn btn-sm btn-primary push-btn" data-push="' + r.id + '" data-stuck="1"' + (canPush ? '' : ' disabled title="View only"') + '>Retry push</button>';
+    // "Putaway done" was clicked: SK's script is checking UC for the putaway
+    if (r.uc_steps_json && (st === 'queued' || st === 'pushing')) return '<span class="status-pill st-queued" title="Putaway done clicked by ' + esc(r.uc_requested_by || '') + ' · ' + esc(fmtDateTime(r.uc_requested_at)) + '">Checking putaway in UC…</span>';
     if (st === 'pushing') return '<span class="status-pill st-queued" title="Picked up ' + esc(fmtDateTime(r.uc_claimed_at)) + '">Pushing…</span>';
     if (st === 'queued') return '<span class="status-pill st-queued" title="Requested by ' + esc(r.uc_requested_by || '') + ' · ' + esc(fmtDateTime(r.uc_requested_at)) + '">Waiting for push…</span>' +
       '<button class="btn btn-sm" data-cancel="' + r.id + '"' + (canPush ? '' : ' disabled title="View only"') + ' style="margin-left:6px" title="Undo the Push click">Cancel</button>';
@@ -1354,11 +1356,13 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     if (st === 'partial') {
       var ps = stepsOf(r);
       // PO flow: script made PO + GRN. UC has no QC / putaway API on our plan,
-      // so QC + putaway are done by hand in Uniware, then "Mark done" here.
+      // so QC + putaway are done by hand in Uniware, then "Putaway done" here
+      // re-queues the return (rsv_grnVerified) and SK's script checks UC:
+      // putaway found -> Pushed; not found -> back here with "check again".
       var handWork = ps && ps.po === 'done' && ps.grn === 'done' && ps.putaway !== 'done' && !failedItems(r).length;
       if (handWork) {
         return '<span class="status-pill st-partial" style="margin-right:8px">' + (ps.qc === 'done' ? 'Putaway pending' : 'QC + putaway pending') + '</span>' +
-          '<button class="btn btn-sm btn-primary push-btn" data-done="' + r.id + '"' + dis + ' title="Click after QC + putaway are finished in Uniware">Mark done</button>';
+          '<button class="btn btn-sm btn-primary push-btn" data-grnok="' + r.id + '"' + dis + ' title="Click after QC + putaway are finished in Uniware — UC is checked, then it moves to Pushed">Putaway done</button>';
       }
       return '<span class="status-pill st-partial" style="margin-right:8px">Partly pushed</span>' + doneBtn;
     }
@@ -1379,7 +1383,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
       head = waitQc
         ? 'PO ' + esc(r.uc_po_code || retNo(r)) + ' and its GRN are in UC. In Uniware, open the GRN' +
           (st.qc === 'done' ? ' and finish the <b>putaway</b>' : ', click <b>Mark QC Complete</b>, then finish the <b>putaway</b>') +
-          ' (E3, good inventory). Then click <b>Mark done</b> here.' +
+          ' (E3, good inventory). Then click <b>Putaway done</b> here — UC is checked and the return moves to Pushed once the putaway is found.' +
           (r.uc_message ? '<br>UC: ' + esc(r.uc_message) : '')
         : r.uc_status === 'partial'
         ? 'PO ' + esc(r.uc_po_code || retNo(r)) + ' is in UC.' + (todo.length ? ' Finish ' + todo.join(' + ') + ' in UC.' : '') +
@@ -1501,7 +1505,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
           body: JSON.stringify({ action: 'rsv_grnVerified', id: gid })
         }).then(function (x) { return x.json(); });
         if (!gres.ok) throw new Error(gres.error || 'Failed');
-        toast(retNoById(gid) + ' — putaway requested');
+        toast(retNoById(gid) + ' — checking the putaway in UC');
       } catch (err) { toast('Could not send ' + retNoById(gid) + ': ' + err.message, 'err'); }
       await load(true);
       return;
