@@ -2060,7 +2060,6 @@ function renderItemsTable(ctx) {
     // Factory: dropdown of mapped internal SKUs
     let internalCell;
     if (isFactory) {
-      const skuOptions = skuMap.map(m=>`<option value="${m.internalSku}" ${m.internalSku===it.internalSku?'selected':''}>${m.internalSku}</option>`).join('');
       if (it.manualEntry) {
         internalCell = `
           <input type="text" value="${it.internalSku}" placeholder="Enter internal SKU…"
@@ -2070,10 +2069,22 @@ function renderItemsTable(ctx) {
             ● manual &nbsp;<a href="#" style="color:var(--accent);text-decoration:none;font-size:12.0px;" onclick="event.preventDefault();factoryItems[${i}].manualEntry=false;renderItemsTable('factory')">← use dropdown</a>
           </div>`;
       } else {
-        internalCell = `<select onchange="factorySkuSelected(${i},this.value)" style="${W}padding:6px 8px;font-size:15.6px;">
-            <option value="">— Select SKU —</option>${skuOptions}
-            <option value="__manual__" ${it.manualEntry?'selected':''}>+ Add manually…</option>
-          </select>
+        // Searchable combo (same pattern as Warehouse Label's SKU picker):
+        // type to filter, click / Enter to pick, ↓ to move into the list.
+        internalCell = `<div style="position:relative;">
+            <input type="text" id="fac-sku-search-${i}" value="${it.internalSku}" placeholder="🔍 Search SKU…" autocomplete="off"
+              style="${W}padding:6px 8px;font-size:15.6px;"
+              onfocus="this.select();facFilterSkuList(${i},'')"
+              oninput="facFilterSkuList(${i},this.value)"
+              onkeydown="facSkuSearchKey(event,${i})"
+              onblur="facHideListSoon(${i})">
+            <select id="fac-sku-list-${i}" size="8"
+              onchange="factorySkuSelected(${i},this.value)"
+              onkeydown="if(event.key==='Enter'){event.preventDefault();factorySkuSelected(${i},this.value);}else if(event.key==='Escape'){this.style.display='none';}"
+              onblur="facHideListSoon(${i})"
+              style="width:100%;margin-top:4px;background:var(--surface2);border:1px solid var(--accent);border-radius:6px;color:var(--text);font-family:var(--mono);font-size:14px;padding:4px;display:none;">
+            </select>
+          </div>
           ${!it.internalSku?`<div style="font-size:13.2px;color:var(--accent2);margin-top:2px;">⚠ select or add manually</div>`:''}`;
       }
     } else {
@@ -2126,6 +2137,54 @@ function renderItemsTable(ctx) {
 }
 
 // ── ITEM FIELD INTERACTIONS ────────────────────────────────────────────
+// ── Factory row SKU search (type-to-filter list under the input) ──
+function facSkuMatches(query) {
+  const q = (query || '').trim().toLowerCase();
+  const seen = new Set(), all = [];
+  skuMap.forEach(function(m) {
+    if (!m.internalSku || seen.has(m.internalSku)) return;
+    seen.add(m.internalSku);
+    all.push({ val: m.internalSku, label: m.internalSku + (m.category ? '  ·  ' + m.category : '') });
+  });
+  // Keep skuMap order when not searching (same order as the old dropdown)
+  if (!q) return all;
+  // Starts-with matches first, then "contains" matches
+  const starts = [], contains = [];
+  all.forEach(function(x) {
+    const v = x.val.toLowerCase();
+    if (v.startsWith(q)) starts.push(x);
+    else if (v.includes(q) || x.label.toLowerCase().includes(q)) contains.push(x);
+  });
+  return starts.concat(contains);
+}
+function facFilterSkuList(i, query) {
+  const sel = document.getElementById('fac-sku-list-' + i);
+  if (!sel) return;
+  const matches = facSkuMatches(query);
+  sel.innerHTML = matches.map(function(x) {
+    return '<option value="' + x.val.replace(/"/g, '&quot;') + '">' + x.label.replace(/</g, '&lt;') + '</option>';
+  }).join('') + '<option value="__manual__">+ Add manually…</option>';
+  sel.style.display = 'block';
+}
+function facSkuSearchKey(e, i) {
+  const sel = document.getElementById('fac-sku-list-' + i);
+  if (!sel) return;
+  if (e.key === 'ArrowDown') { e.preventDefault(); sel.style.display = 'block'; sel.focus(); if (sel.selectedIndex < 0) sel.selectedIndex = 0; return; }
+  if (e.key === 'Escape') { sel.style.display = 'none'; return; }
+  if (e.key === 'Enter' && sel.options.length && sel.style.display !== 'none') {
+    e.preventDefault();
+    factorySkuSelected(i, sel.options[0].value);   // Enter = first match
+  }
+}
+// Hide the list once focus has left both the search box and the list
+function facHideListSoon(i) {
+  setTimeout(function() {
+    const sel = document.getElementById('fac-sku-list-' + i);
+    const inp = document.getElementById('fac-sku-search-' + i);
+    if (sel && document.activeElement !== sel && document.activeElement !== inp) sel.style.display = 'none';
+  }, 150);
+}
+
 function factorySkuSelected(i, internalSku) {
   const it = factoryItems[i];
   if (internalSku === '__manual__') {
