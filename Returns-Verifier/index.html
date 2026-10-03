@@ -1353,11 +1353,14 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     var doneBtn = '<button class="btn btn-sm" data-done="' + r.id + '"' + dis + ' style="margin-left:6px" title="Use after adding the failed SKUs by hand in UC">Mark done</button>';
     if (st === 'partial') {
       var ps = stepsOf(r);
-      // PO flow waiting on QC/putaway: after "Mark QC Complete" in Uniware, click GRN Verified -> script does putaway
-      var needsPutaway = ps && ps.po === 'done' && ps.grn === 'done' && ps.putaway !== 'done' && !failedItems(r).length;
-      return '<span class="status-pill st-partial" style="margin-right:8px">' + (needsPutaway ? 'Waiting for QC' : 'Partly pushed') + '</span>' +
-        (needsPutaway ? '<button class="btn btn-sm btn-primary push-btn" data-grnok="' + r.id + '"' + dis + ' title="Click after Mark QC Complete in Uniware — putaway then runs automatically">GRN Verified</button>' : '') +
-        doneBtn;
+      // PO flow: script made PO + GRN. UC has no QC / putaway API on our plan,
+      // so QC + putaway are done by hand in Uniware, then "Mark done" here.
+      var handWork = ps && ps.po === 'done' && ps.grn === 'done' && ps.putaway !== 'done' && !failedItems(r).length;
+      if (handWork) {
+        return '<span class="status-pill st-partial" style="margin-right:8px">' + (ps.qc === 'done' ? 'Putaway pending' : 'QC + putaway pending') + '</span>' +
+          '<button class="btn btn-sm btn-primary push-btn" data-done="' + r.id + '"' + dis + ' title="Click after QC + putaway are finished in Uniware">Mark done</button>';
+      }
+      return '<span class="status-pill st-partial" style="margin-right:8px">Partly pushed</span>' + doneBtn;
     }
     if (st === 'failed') return '<span class="status-pill st-failed" style="margin-right:8px">Failed</span>' +
       '<button class="btn btn-sm btn-primary push-btn" data-push="' + r.id + '"' + dis + '>Retry push</button>' + doneBtn;
@@ -1374,7 +1377,9 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
         .map(function (k) { return k === 'qc' ? 'Mark QC Complete' : STEP_LABEL[k]; });
       var waitQc = st.po === 'done' && st.grn === 'done' && st.putaway !== 'done' && !f.length;
       head = waitQc
-        ? 'PO ' + esc(r.uc_po_code || retNo(r)) + ' and its GRN are in UC. In Uniware, open the GRN and click <b>Mark QC Complete</b>, then click <b>GRN Verified</b> here — putaway runs automatically.' +
+        ? 'PO ' + esc(r.uc_po_code || retNo(r)) + ' and its GRN are in UC. In Uniware, open the GRN' +
+          (st.qc === 'done' ? ' and finish the <b>putaway</b>' : ', click <b>Mark QC Complete</b>, then finish the <b>putaway</b>') +
+          ' (E3, good inventory). Then click <b>Mark done</b> here.' +
           (r.uc_message ? '<br>UC: ' + esc(r.uc_message) : '')
         : r.uc_status === 'partial'
         ? 'PO ' + esc(r.uc_po_code || retNo(r)) + ' is in UC.' + (todo.length ? ' Finish ' + todo.join(' + ') + ' in UC.' : '') +
@@ -1521,7 +1526,7 @@ html:not([data-theme="light"]) .input { color-scheme: dark; }
     if (done) {
       e.stopPropagation();
       var did = +done.dataset.done;
-      if (!confirm('Mark ' + retNoById(did) + ' as done?\n\nOnly do this after everything left (GRN / putaway / rejected SKUs) has been finished by hand in UC.')) return;
+      if (!confirm('Mark ' + retNoById(did) + ' as done?\n\nOnly do this after everything left (QC / putaway / rejected SKUs) has been finished by hand in Uniware.')) return;
       done.disabled = true;
       try {
         var dres = await fetch(WORKER + '?action=rsv_markManualDone', {
