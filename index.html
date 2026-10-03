@@ -832,8 +832,11 @@ html[data-theme="light"]       .icon-moon { display: none; }
         </div>
       </a>
 
-      <!-- Card 4b: Returns Verifier — handwritten returns slip → enabled
-           UC SKU check → D1 + CSV. Same team visibility as Returns Manager. -->
+      <!-- Card 4b: Returns Upload (/Returns-Verifier/) — 3 tabs: Upload
+           (handwritten slip → enabled UC SKU check → D1), Push (was the
+           separate UC Push Panel card) and History. Same team visibility
+           as Returns Manager; the Push tab itself is shown only to admins,
+           Shikhar and Custom users with "UC-Push-Panel" ticked. -->
       <a href="./Returns-Verifier/" data-app-slug="Returns-Verifier" class="app-card"
          style="--card-color:var(--c-green);--card-color-dim:var(--c-green-dim);--card-color-border:var(--c-green-border);">
         <div class="card-corner-glow"></div>
@@ -847,13 +850,13 @@ html[data-theme="light"]       .icon-moon { display: none; }
           </div>
           <span class="card-badge">New</span>
         </div>
-        <div class="card-name">Returns Verifier</div>
-        <div class="card-version">Returns slip · UC SKU check</div>
-        <div class="card-desc">Type lines from a handwritten returns slip against enabled UC SKUs · saves the slip and downloads a UC SKU / Qty CSV</div>
+        <div class="card-name">Returns Upload</div>
+        <div class="card-version">Upload · Push · History</div>
+        <div class="card-desc">Upload a handwritten returns slip and check it against enabled UC SKUs · push verified returns into Unicommerce · full history with CSV</div>
         <div class="card-chips">
           <span class="chip chip-colored">Enabled UC SKUs</span>
-          <span class="chip chip-colored">CSV</span>
-          <span class="chip">D1 history</span>
+          <span class="chip chip-colored">Unicommerce push</span>
+          <span class="chip">History</span>
         </div>
         <div class="card-footer">
           <span class="card-open-label">Open app</span>
@@ -861,35 +864,6 @@ html[data-theme="light"]       .icon-moon { display: none; }
         </div>
       </a>
 
-      <!-- Card 4c: UC Push Panel — SK's panel. Lists returns verified in
-           Returns Verifier and queues them for push into Unicommerce.
-           Not in TEAM_VISIBLE_APPS: admins see it; give others access via
-           Manage Users (Custom role app list). -->
-      <a href="./Returns-Verifier/UC-Push/" data-app-slug="UC-Push-Panel" class="app-card"
-         style="--card-color:var(--c-blue);--card-color-dim:var(--c-blue-dim);--card-color-border:var(--c-blue-border);">
-        <div class="card-corner-glow"></div>
-        <div class="card-top">
-          <div class="card-icon">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-              <path d="M10 14V3M5.5 7.5L10 3l4.5 4.5" stroke="var(--c-blue)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-              <path d="M3 13v3a1.5 1.5 0 001.5 1.5h11A1.5 1.5 0 0017 16v-3" stroke="var(--c-blue)" stroke-width="1.5" stroke-linecap="round"/>
-            </svg>
-          </div>
-          <span class="card-badge">New</span>
-        </div>
-        <div class="card-name">UC Push Panel</div>
-        <div class="card-version">Verified returns → Unicommerce</div>
-        <div class="card-desc">Every return checked in Returns Verifier, with its SKUs and qty · push each one into Unicommerce</div>
-        <div class="card-chips">
-          <span class="chip chip-colored">Returns</span>
-          <span class="chip chip-colored">Unicommerce</span>
-          <span class="chip">Push queue</span>
-        </div>
-        <div class="card-footer">
-          <span class="card-open-label">Open app</span>
-          <div class="card-open-arrow">→</div>
-        </div>
-      </a>
 
       <!-- Card 4: Inward Label Generator -->
       <a href="./Inward-Label-Generator/" data-app-slug="Inward-Label-Generator" class="app-card"
@@ -1283,8 +1257,8 @@ html[data-theme="light"]       .icon-moon { display: none; }
     { slug: 'Order-Processing', name: 'Order Processing' },
     { slug: 'Inward-Label-Generator', name: 'Inward Label Generator' },
     { slug: 'Returns-Manager', name: 'Returns Manager' },
-    { slug: 'Returns-Verifier', name: 'Returns Verifier' },
-    { slug: 'UC-Push-Panel', name: 'UC Push Panel' },
+    { slug: 'Returns-Verifier', name: 'Returns Upload' },
+    { slug: 'UC-Push-Panel', name: 'Returns Upload · Push tab' },
     { slug: 'Stock-Alert', name: 'Stock Alert' },
     { slug: 'Inventory-Bot', name: 'Chatbot' },
     { slug: 'Scanner', name: 'Scanner Dashboard' },
@@ -1331,7 +1305,7 @@ html[data-theme="light"]       .icon-moon { display: none; }
   // also shown on their hub even if it isn't in TEAM_VISIBLE_APPS.
   // Key = username or display name, lowercase.
   var USER_DEFAULT_APP = {
-    shikhar: { slug: 'UC-Push-Panel', url: './Returns-Verifier/UC-Push/' }
+    shikhar: { slug: 'Returns-Verifier', url: './Returns-Verifier/#push', push: true }
   };
   function defaultAppFor(user) {
     return USER_DEFAULT_APP[String(user.username || '').toLowerCase()] ||
@@ -1347,17 +1321,19 @@ html[data-theme="light"]       .icon-moon { display: none; }
     window.location.href = d.url;
   }
 
-  // UC Push Panel card alert (admins + anyone whose default app it is):
-  // counts returns where some/all SKUs failed in UC and must be added by
-  // hand. Turns the card badge red: "2 need manual fix".
+  // Push alert on the Returns Upload card (admins, Shikhar, and Custom
+  // users with the Push tab): counts returns where some/all SKUs failed in
+  // UC and must be added by hand. Turns the card badge red: "2 need manual fix".
   var ucAlertLoaded = false;
   async function updateUcPushAlert(user) {
     var own = defaultAppFor(user);
-    if (user.role !== 'admin' && !(own && own.slug === 'UC-Push-Panel')) return;
+    var pushTab = user.allowedApps && user.allowedApps.indexOf('UC-Push-Panel') !== -1;
+    if (user.role !== 'admin' && !(own && own.push) && !pushTab) return;
     if (ucAlertLoaded) return;
     ucAlertLoaded = true;
-    var card = document.querySelector('.app-card[data-app-slug="UC-Push-Panel"]');
+    var card = document.querySelector('.app-card[data-app-slug="Returns-Verifier"]');
     if (!card) return;
+    card.setAttribute('href', './Returns-Verifier/#push');   // badge is about pushing → open that tab
     try {
       var res = await api('listReturnsSlips');
       if (!res.ok) return;
@@ -1436,6 +1412,8 @@ html[data-theme="light"]       .icon-moon { display: none; }
     document.querySelectorAll('.app-card[data-app-slug]').forEach(function (card) {
       if (!allowed) { return; } // no restriction — leave existing hidden state as-is
       var slug = card.getAttribute('data-app-slug');
+      // Returns Upload card also counts as allowed via its Push tab tick.
+      if (slug === 'Returns-Verifier' && allowed.indexOf('UC-Push-Panel') !== -1) return;
       if (allowed.indexOf(slug) === -1) card.hidden = true;
     });
   }
