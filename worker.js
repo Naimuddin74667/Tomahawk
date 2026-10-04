@@ -1555,7 +1555,14 @@ export default {
           const rows = await env.DB.prepare(
             'SELECT * FROM amazon_shipments ORDER BY updated_at DESC LIMIT 500'
           ).all();
-          return json({ ok: true, rows: rows.results || [] });
+          // Attach the FBA stage (At FBA / Received) from Amazon's own
+          // inbound emails — see checkAmazonFbaStageEmails.
+          const stageMap = await loadAmazonFbaStageMap(env.DB);
+          const out = (rows.results || []).map(r => {
+            const st = stageMap.get(r.shipment_id);
+            return st ? { ...r, fba_stage: st.stage, fba_stage_date: st.date } : r;
+          });
+          return json({ ok: true, rows: out });
         }
 
         // ── AMAZON SHIPMENT ITEMS — per-SKU line items (Product/ASIN/
@@ -5269,6 +5276,115 @@ function parseFcAppointmentEmailBody(text) {
 // Same paging/dedup pattern as checkNewRoEmails — pages through ALL
 // matching results (capped at 10 pages / ~300 messages), skips
 // gmail_msg_ids already logged, parses + inserts the rest.
+// ══════════════════════════════════════════════════════════════════
+// AMAZON FBA STAGE EMAILS — "At FBA" / "Received" status
+// ══════════════════════════════════════════════════════════════════
+// Amazon emails per shipment once the truck reaches the FC:
+//   "FBA Inbound Shipment Checked-In (FBA…)"      -> at_fba
+//   "FBA Inbound Shipment Receiving (FBA…)"       -> at_fba
+//   "FBA Inbound Shipment Received In-Full (FBA…)" -> received
+//   "FBA Inbound Shipment Closed (FBA…)"          -> received (final)
+// Everything needed is in the SUBJECT, so we only fetch message metadata.
+// One log row per email (deduped by gmail_msg_id); the shipment's stage
+// is derived at read time by loadAmazonFbaStageMap.
+async function ensureAmazonFbaStageTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS amazon_fba_stage_log (
+    gmail_msg_id  TEXT PRIMARY KEY,
+    shipment_id   TEXT,
+    stage         TEXT,
+    email_type    TEXT,
+    email_date    TEXT,
+    detected_at   TEXT DEFAULT (datetime('now'))
+  )`).run();
+}
+
+// Max NEW emails fetched per run — keeps each run well inside the
+// Worker's subrequest limit. A big backlog just catches up over a few
+// 15-min cron ticks.
+const AMAZON_FBA_STAGE_MAX_PER_RUN = 40;
+
+async function checkAmazonFbaStageEmails(env, accessToken) {
+  await ensureAmazonFbaStageTable(env.DB);
+  if (!accessToken) accessToken = await getGmailAccessToken(env);
+
+  // Already-logged message IDs in ONE query (not one query per message).
+  const seenRows = await env.DB.prepare('SELECT gmail_msg_id FROM amazon_fba_stage_log').all();
+  const seen = new Set((seenRows.results || []).map(r => r.gmail_msg_id));
+
+  const query = encodeURIComponent('subject:"FBA Inbound Shipment" newer_than:120d');
+  let messages = [];
+  let pageToken = '';
+  for (let page = 0; page < 5; page++) {
+    const pageParam = pageToken ? `&pageToken=${pageToken}` : '';
+    const listRes = await fetch(`${GMAIL_API_BASE}/messages?q=${query}&maxResults=100${pageParam}`, {
+      headers: { Authorization: 'Bearer ' + accessToken }
+    });
+    if (!listRes.ok) throw new Error('Gmail list failed: ' + listRes.status);
+    const listData = await listRes.json();
+    messages = messages.concat(listData.messages || []);
+    if (!listData.nextPageToken) break;
+    pageToken = listData.nextPageToken;
+  }
+
+  const fresh = messages.filter(m => !seen.has(m.id)).slice(0, AMAZON_FBA_STAGE_MAX_PER_RUN);
+  const stmts = [];
+  for (const m of fresh) {
+    const msgRes = await fetch(
+      `${GMAIL_API_BASE}/messages/${m.id}?format=metadata&metadataHeaders=Subject`,
+      { headers: { Authorization: 'Bearer ' + accessToken } }
+    );
+    if (!msgRes.ok) continue;
+    const msg = await msgRes.json();
+    const headers = (msg.payload && msg.payload.headers) || [];
+    const subjectHeader = headers.find(h => h.name === 'Subject');
+    const subject = subjectHeader ? subjectHeader.value : '';
+    const emailDate = msg.internalDate ? new Date(parseInt(msg.internalDate)).toISOString() : null;
+
+    const match = subject.match(/FBA Inbound Shipment\s+(Checked-In|Receiving|Received In-Full|Closed)\s*\((FBA[0-9A-Z]+)\)/i);
+    // Non-matching subjects are still logged (stage NULL) so we don't
+    // re-fetch them every run.
+    const type = match ? match[1] : null;
+    const shipmentId = match ? match[2].toUpperCase() : null;
+    let stage = null;
+    if (type) stage = /received|closed/i.test(type) ? 'received' : 'at_fba';
+
+    stmts.push(env.DB.prepare(`
+      INSERT INTO amazon_fba_stage_log (gmail_msg_id, shipment_id, stage, email_type, email_date)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(gmail_msg_id) DO NOTHING
+    `).bind(m.id, shipmentId, stage, type, emailDate));
+  }
+  // One D1 query-budget unit for all inserts.
+  if (stmts.length) await env.DB.batch(stmts);
+
+  return {
+    found: messages.length,
+    newLogged: stmts.length,
+    remaining: Math.max(0, messages.filter(m => !seen.has(m.id)).length - fresh.length)
+  };
+}
+
+// shipment_id -> { stage: 'received' | 'at_fba', date }
+//   received -> date of the Received In-Full / Closed email
+//   at_fba   -> date of the FIRST Checked-In / Receiving email (arrival)
+async function loadAmazonFbaStageMap(DB) {
+  await ensureAmazonFbaStageTable(DB);
+  const rows = await DB.prepare(`
+    SELECT shipment_id,
+           MAX(CASE WHEN stage = 'received' THEN email_date END) AS received_date,
+           MIN(CASE WHEN stage = 'at_fba'   THEN email_date END) AS at_fba_date
+    FROM amazon_fba_stage_log
+    WHERE shipment_id IS NOT NULL
+    GROUP BY shipment_id
+  `).all();
+  const map = new Map();
+  for (const r of (rows.results || [])) {
+    if (r.received_date) map.set(r.shipment_id, { stage: 'received', date: r.received_date });
+    else if (r.at_fba_date) map.set(r.shipment_id, { stage: 'at_fba', date: r.at_fba_date });
+  }
+  return map;
+}
+
 async function checkNewAmazonFcEmails(env) {
   await ensureAmazonFcTable(env.DB);
   const accessToken = await getGmailAccessToken(env);
@@ -5340,7 +5456,17 @@ async function checkNewAmazonFcEmails(env) {
   // makes it self-healing (see rebuildAmazonShipments's own comment).
   await rebuildAmazonShipments(env);
 
-  return { checked: messages.length, newLogged: newCount };
+  // FBA stage emails (Checked-In / Receiving / Received In-Full). Wrapped
+  // so a failure here never breaks the appointment watcher above.
+  let stage = null;
+  try {
+    stage = await checkAmazonFbaStageEmails(env, accessToken);
+  } catch (err) {
+    console.error('Amazon FBA stage email check failed:', err.message);
+    stage = { error: err.message };
+  }
+
+  return { checked: messages.length, newLogged: newCount, stage };
 }
 
 // ══════════════════════════════════════════════════════════════════

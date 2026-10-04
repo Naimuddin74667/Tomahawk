@@ -573,20 +573,20 @@
       <!-- Stats strip — same card style/sizing as CN Ledger / Blinkit RO Ledger,
            clickable filters the same way too (click again to clear). -->
       <div class="ro-stats-row">
-        <div class="ro-stat-card is-active-view" id="fcCardTotal" onclick="fcSetCardFilter('all')" title="Show all tracked shipments">
+        <div class="ro-stat-card" id="fcCardTotal" onclick="fcSetCardFilter('all')" title="Show all tracked shipments">
           <div class="ro-stat-label">Total Shipments</div>
           <div class="ro-stat-value" id="fcStatTotal">&mdash;</div>
           <div class="ro-stat-sub">all tracked FBA shipment IDs</div>
         </div>
-        <div class="ro-stat-card" id="fcCardConfirmed" onclick="fcSetCardFilter('confirmed')" title="Filter: not cancelled and not yet Ready to Dispatch (still Created or Under Packing)">
-          <div class="ro-stat-label">RTD Pending</div>
-          <div class="ro-stat-value accent" id="fcStatConfirmed">&mdash;</div>
-          <div class="ro-stat-sub">not cancelled, not yet Ready to Dispatch</div>
+        <div class="ro-stat-card is-active-view" id="fcCardActive" onclick="fcSetCardFilter('active')" title="Filter: still in progress (not Received, not cancelled)">
+          <div class="ro-stat-label">Active Shipments</div>
+          <div class="ro-stat-value accent" id="fcStatActive">&mdash;</div>
+          <div class="ro-stat-sub">in progress &mdash; not yet Received</div>
         </div>
-        <div class="ro-stat-card" id="fcCardCancelled" onclick="fcSetCardFilter('cancelled')" title="Filter: manually marked cancelled">
-          <div class="ro-stat-label">Cancelled</div>
-          <div class="ro-stat-value accent" id="fcStatCancelled">&mdash;</div>
-          <div class="ro-stat-sub">manually marked cancelled</div>
+        <div class="ro-stat-card" id="fcCardClosed" onclick="fcSetCardFilter('closed')" title="Filter: Received at FBA, or manually cancelled">
+          <div class="ro-stat-label">Closed Shipments</div>
+          <div class="ro-stat-value accent" id="fcStatClosed">&mdash;</div>
+          <div class="ro-stat-sub">Received at FBA or cancelled</div>
         </div>
       </div>
 
@@ -1152,7 +1152,7 @@ function switchTab(name, btn) {
 var _fcRows = [];
 var _fcPage = 1;
 var FC_PAGE_SIZE = 10;
-var _fcCardFilter = 'all'; // 'all' | 'confirmed' | 'cancelled'
+var _fcCardFilter = 'active'; // 'all' | 'active' | 'closed' — page always opens on Active
 
 function fcEsc(s) { return String(s == null ? '' : s).replace(/'/g, "\\'"); }
 
@@ -1178,10 +1178,9 @@ function fcCopyText(text) {
   } else { fail(); }
 }
 
-// Click a stat card to filter the table to that subset; click the same
-// card again (or Total) to go back to showing everything.
+// Click a stat card to filter the table to that subset (Total = everything).
 function fcSetCardFilter(view) {
-  _fcCardFilter = (_fcCardFilter === view || view === 'all') ? 'all' : view;
+  _fcCardFilter = view;
   _fcPage = 1;
   fcRender();
 }
@@ -1237,24 +1236,36 @@ function fcCheckEmailsNow() {
 }
 
 function fcIsCancelled(r) { return r.manual_status === 'cancelled'; }
-// "RTD Pending" — not cancelled, and hasn't reached Ready to Dispatch yet
-// (still shows as Created or Under Packing in fcStatusBadge, i.e. the
-// gatepass isn't fully CLOSED/NON_RETURNABLE across every match).
-function fcIsConfirmed(r) {
-  if (fcIsCancelled(r)) return false;
-  var ref = String(r.shipment_id || '').trim();
-  var gps = ref ? _fcGatepassMap[ref] : null;
-  var hasGatepass = !!(gps && gps.length);
-  var allDone = hasGatepass && gps.every(function (gp) { return gp.type === 'NON_RETURNABLE' && gp.status === 'CLOSED'; });
-  return !allDone;
+// FBA stage comes from Amazon's own inbound emails (worker.js →
+// checkAmazonFbaStageEmails): 'at_fba' = Checked-In / Receiving email seen,
+// 'received' = "Received In-Full" email seen.
+function fcIsReceived(r) { return r.fba_stage === 'received'; }
+// Closed = Received at FBA, or manually cancelled. Active = everything else.
+function fcIsClosed(r) { return fcIsCancelled(r) || fcIsReceived(r); }
+function fcIsActive(r) { return !fcIsClosed(r); }
+
+// Short "23 Sep 2026" from an ISO timestamp, for the status tooltip.
+function fcFmtStageDate(iso) {
+  var d = iso ? new Date(iso) : null;
+  if (!d || isNaN(d.getTime())) return '';
+  return d.toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 // Computed lifecycle status — a strict flow, not independent flags:
-//   Created -> Under Packing -> Ready to Dispatch -> Out For Delivery / Overdue -> (later) Inwarded
+//   Created -> Under Packing -> Ready to Dispatch -> Out For Delivery / Overdue -> At FBA -> Received
 // Cancelled overrides all of it. Driven entirely by Gatepass state + the
 // appointment date, same inputs already used for the Gatepass column.
 function fcStatusBadge(r) {
   if (fcIsCancelled(r)) return '<span style="color:#ff8080;font-weight:700">Cancelled</span>';
+
+  // Amazon's own emails win over our gatepass/date guess — once the
+  // truck has checked in at the FC, the shipment is At FBA, never Overdue.
+  if (r.fba_stage === 'received') {
+    return '<span style="color:#6dc87a;font-weight:700" title="Received In-Full email: ' + fcFmtStageDate(r.fba_stage_date) + '">Received</span>';
+  }
+  if (r.fba_stage === 'at_fba') {
+    return '<span style="color:#5bc0de;font-weight:700" title="At the FC since ' + fcFmtStageDate(r.fba_stage_date) + ' (Checked-In / Receiving email) — waiting for Received In-Full">At FBA</span>';
+  }
 
   var ref = String(r.shipment_id || '').trim();
   var gps = ref ? _fcGatepassMap[ref] : null;
@@ -1428,8 +1439,13 @@ function fcRender() {
 
   var statsBase = q ? _fcRows.filter(function (r) { return fcMatchesSearch(r, q); }) : _fcRows;
   document.getElementById('fcStatTotal').textContent = statsBase.length;
-  document.getElementById('fcStatConfirmed').textContent = statsBase.filter(fcIsConfirmed).length;
-  document.getElementById('fcStatCancelled').textContent = statsBase.filter(fcIsCancelled).length;
+  document.getElementById('fcStatActive').textContent = statsBase.filter(fcIsActive).length;
+  document.getElementById('fcStatClosed').textContent = statsBase.filter(fcIsClosed).length;
+  var cardIds = { all: 'fcCardTotal', active: 'fcCardActive', closed: 'fcCardClosed' };
+  Object.keys(cardIds).forEach(function (v) {
+    var el = document.getElementById(cardIds[v]);
+    if (el) el.classList.toggle('is-active-view', _fcCardFilter === v);
+  });
 
   var rows = _fcRows.slice().sort(function (a, b) {
     // Newest FETCHED shipment on top (first_detected_at = when this row
@@ -1439,8 +1455,8 @@ function fcRender() {
     return (b.first_detected_at || b.email_date || '').localeCompare(a.first_detected_at || a.email_date || '');
   });
   if (q) rows = rows.filter(function (r) { return fcMatchesSearch(r, q); });
-  if (_fcCardFilter === 'confirmed') rows = rows.filter(fcIsConfirmed);
-  else if (_fcCardFilter === 'cancelled') rows = rows.filter(fcIsCancelled);
+  if (_fcCardFilter === 'active') rows = rows.filter(fcIsActive);
+  else if (_fcCardFilter === 'closed') rows = rows.filter(fcIsClosed);
 
   var totalPages = Math.max(1, Math.ceil(rows.length / FC_PAGE_SIZE));
   if (_fcPage > totalPages) _fcPage = totalPages;
