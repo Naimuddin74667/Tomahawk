@@ -175,6 +175,7 @@ const ACTION_TIERS = {
   scannerPickSession: 'public', // phone app "tap your name" login — locked to picker_packer role only, see handler
   validateSession: 'viewer_read', // any authenticated role may confirm their own session
   warrantyLookup: 'public', // public Warranty Check page — non-personal order facts only, rate-limited
+  warrantyClaimSubmit: 'public', // public warranty claim form — rate-limited, emails support
 
   // — Admin only: portal user management + "wipe everything" dev actions —
   adminListUsers: 'admin_only', adminCreateUser: 'admin_only', adminUpdateUser: 'admin_only',
@@ -776,6 +777,25 @@ export default {
           return json({ ok: true, ...(await warrantyLookup(env, orderId)) });
         } catch (e) {
           return json({ ok: false, error: 'Lookup failed — please try again later.' }, 502);
+        }
+      }
+
+      // ── WARRANTY CLAIM (public) — /Warranty/claim/ form ─────────────
+      // POST JSON { action:'warrantyClaimSubmit', name, phone, email?, order_id,
+      // platform, product, issue_type, description, address, pincode, city,
+      // state, consent, files:[{name,type,data(base64)}] }. Saves to D1 and
+      // emails support (photos attached) + a confirmation to the customer.
+      if (request.method === 'POST' && act === 'warrantyClaimSubmit') {
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        if (!(await warrantyRateOk(env.DB, 'claim:' + ip, 5))) {
+          return json({ ok: false, error: 'Too many claims from this connection — please try again in an hour.' }, 429);
+        }
+        try {
+          return json(await submitWarrantyClaim(env, body || {}, ip));
+        } catch (e) {
+          if (e.userError) return json({ ok: false, error: e.message }, 400);
+          console.error('warranty claim failed:', e.message);
+          return json({ ok: false, error: 'Something went wrong — please try again, or email support@bullet.co.in.' }, 500);
         }
       }
 
@@ -5049,10 +5069,16 @@ function utf8ToBase64(str) {
 function wrap76(b64) { return String(b64).replace(/\s+/g, '').replace(/(.{76})/g, '$1\r\n'); }
 
 // Send one email (plain text + optional PDF attachment) via Gmail API.
-async function sendGmailMessage(env, { to, subject, text, attachment }) {
+// Send one email (plain text + optional attachments) via Gmail API.
+// attachment: { base64, filename, mime? } (single, kept for older callers)
+// attachments: [{ base64, filename, mime }]  ·  replyTo: optional address
+// Uses the media-upload endpoint so photos/videos up to ~35 MB fit.
+async function sendGmailMessage(env, { to, subject, text, attachment, attachments, replyTo }) {
   const boundary = 'tm_' + Date.now().toString(36);
+  const files = (attachments || []).concat(attachment && attachment.base64 ? [attachment] : []);
   const lines = [
     'To: ' + to.join(', '),
+    ...(replyTo ? ['Reply-To: ' + replyTo] : []),
     'Subject: =?UTF-8?B?' + utf8ToBase64(subject) + '?=',
     'MIME-Version: 1.0',
     'Content-Type: multipart/mixed; boundary="' + boundary + '"',
@@ -5063,25 +5089,26 @@ async function sendGmailMessage(env, { to, subject, text, attachment }) {
     '',
     wrap76(utf8ToBase64(text))
   ];
-  if (attachment && attachment.base64) {
-    const fname = String(attachment.filename || 'label.pdf').replace(/[^A-Za-z0-9._-]/g, '_');
+  files.forEach(f => {
+    if (!f || !f.base64) return;
+    const fname = String(f.filename || 'file').replace(/[^A-Za-z0-9._-]/g, '_');
+    const mime = /^[a-z]+\/[a-z0-9.+-]+$/i.test(f.mime || '') ? f.mime : 'application/pdf';
     lines.push(
       '--' + boundary,
-      'Content-Type: application/pdf; name="' + fname + '"',
+      'Content-Type: ' + mime + '; name="' + fname + '"',
       'Content-Disposition: attachment; filename="' + fname + '"',
       'Content-Transfer-Encoding: base64',
       '',
-      wrap76(attachment.base64)
+      wrap76(f.base64)
     );
-  }
+  });
   lines.push('--' + boundary + '--', '');
-  const raw = btoa(lines.join('\r\n')).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
   const accessToken = await getGmailAccessToken(env);
-  const res = await fetch(`${GMAIL_API_BASE}/messages/send`, {
+  const res = await fetch('https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media', {
     method: 'POST',
-    headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ raw })
+    headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'message/rfc822' },
+    body: lines.join('\r\n')
   });
   if (!res.ok) {
     const t = await res.text().catch(() => '');
@@ -5147,7 +5174,7 @@ function supabaseHeaders(env) {
 }
 
 // Simple per-IP hourly counter in D1 (old buckets cleaned as we go).
-async function warrantyRateOk(DB, ip) {
+async function warrantyRateOk(DB, ip, cap) {
   await DB.prepare(`CREATE TABLE IF NOT EXISTS warranty_rate (
     ip TEXT, bucket TEXT, n INTEGER DEFAULT 0, PRIMARY KEY (ip, bucket)
   )`).run();
@@ -5158,7 +5185,7 @@ async function warrantyRateOk(DB, ip) {
     RETURNING n
   `).bind(ip, bucket).first();
   if (Math.random() < 0.05) await DB.prepare('DELETE FROM warranty_rate WHERE bucket < ?').bind(bucket).run();
-  return !row || row.n <= WARRANTY_LOOKUPS_PER_HOUR;
+  return !row || row.n <= (cap || WARRANTY_LOOKUPS_PER_HOUR);
 }
 
 // Calls the Supabase SQL function warranty_lookup() (non-personal fields
@@ -5191,6 +5218,140 @@ async function warrantyLookup(env, orderId) {
       name: it.name && it.name !== it.sku ? it.name : null
     }))
   };
+}
+
+// ── Warranty claims ───────────────────────────────────────────────
+const CLAIM_ISSUES = ['Not starting / not working', 'Battery / charging problem', 'Overheating / burning smell',
+  'Broken / damaged part', 'Noise / vibration', 'Missing part / accessory', 'Other'];
+const CLAIM_PLATFORMS = ['Amazon', 'Flipkart', 'Website (Shopify)', 'Moglix', 'Other'];
+const CLAIM_MAX_BYTES = 24 * 1024 * 1024;   // all files together (base64 size)
+
+async function ensureWarrantyClaimsTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS warranty_claims (
+    claim_id TEXT PRIMARY KEY, created_at TEXT DEFAULT (datetime('now')),
+    order_id TEXT, order_key TEXT, platform TEXT, product TEXT,
+    name TEXT, phone TEXT, email TEXT,
+    issue_type TEXT, description TEXT,
+    address TEXT, pincode TEXT, city TEXT, state TEXT,
+    warranty_status TEXT, order_date TEXT, warranty_until TEXT, order_skus TEXT,
+    file_count INTEGER, emailed_at TEXT, status TEXT DEFAULT 'new', ip TEXT
+  )`).run();
+}
+
+function claimErr(msg) { const e = new Error(msg); e.userError = true; return e; }
+
+async function submitWarrantyClaim(env, b, ip) {
+  const clean = (v, max) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, max);
+  const f = {
+    name: clean(b.name, 80), phone: clean(b.phone, 20).replace(/\D/g, '').slice(-10),
+    email: clean(b.email, 120).toLowerCase(), order_id: clean(b.order_id, 40),
+    platform: clean(b.platform, 30), product: clean(b.product, 120),
+    issue_type: clean(b.issue_type, 60), description: String(b.description || '').trim().slice(0, 2000),
+    address: clean(b.address, 300), pincode: clean(b.pincode, 6), city: clean(b.city, 60), state: clean(b.state, 60)
+  };
+  if (f.name.length < 2) throw claimErr('Please enter your full name.');
+  if (!/^[6-9]\d{9}$/.test(f.phone)) throw claimErr('Please enter a valid 10-digit mobile number.');
+  if (f.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email)) throw claimErr('Please enter a valid email or leave it empty.');
+  if (f.order_id.length < 3) throw claimErr('Please enter your order ID.');
+  if (CLAIM_PLATFORMS.indexOf(f.platform) === -1) throw claimErr('Please choose where you bought it.');
+  if (!f.product) throw claimErr('Please tell us which product.');
+  if (CLAIM_ISSUES.indexOf(f.issue_type) === -1) throw claimErr('Please choose the issue type.');
+  if (f.description.length < 20) throw claimErr('Please describe the issue in a little more detail (at least 20 characters).');
+  if (f.address.length < 10) throw claimErr('Please enter the full pickup address.');
+  if (!/^[1-9]\d{5}$/.test(f.pincode)) throw claimErr('Please enter a valid 6-digit pincode.');
+  if (b.consent !== true) throw claimErr('Please tick the confirmation box.');
+
+  const files = (Array.isArray(b.files) ? b.files : []).slice(0, 4).map((x, i) => ({
+    mime: String(x.type || ''), base64: String(x.data || ''),
+    filename: String(x.name || ('file' + (i + 1))).slice(0, 80)
+  })).filter(x => x.base64 && /^(image|video)\//.test(x.mime));
+  const photos = files.filter(x => x.mime.startsWith('image/'));
+  if (!photos.length) throw claimErr('Please add at least one photo of the product / issue.');
+  if (photos.length > 3 || files.length - photos.length > 1) throw claimErr('Up to 3 photos and 1 video, please.');
+  if (files.reduce((n, x) => n + x.base64.length, 0) > CLAIM_MAX_BYTES) throw claimErr('Files are too large — please use a shorter video or fewer photos.');
+
+  await ensureWarrantyClaimsTable(env.DB);
+  const orderKey = f.order_id.toUpperCase().replace(/[\s#]/g, '');
+
+  // One open claim per order — return the existing one instead of a duplicate.
+  const open = await env.DB.prepare(
+    "SELECT claim_id FROM warranty_claims WHERE order_key = ? AND status = 'new' AND created_at > datetime('now','-30 days') LIMIT 1"
+  ).bind(orderKey).first();
+  if (open) return { ok: true, existing: true, claim_id: open.claim_id };
+
+  // Fetch our own order facts (never trust the browser for these).
+  let w = { found: false };
+  try { w = await warrantyLookup(env, f.order_id); } catch (e) { /* lookup down — claim still goes through */ }
+  const warrantyStatus = !w.found ? 'Order not verified' : w.cancelled ? 'Order cancelled'
+    : w.under_warranty ? 'Under warranty' : 'Out of warranty';
+  const skus = w.found ? (w.items || []).map(it => it.sku + (it.qty > 1 ? ' x' + it.qty : '')).join(', ') : '';
+
+  // Claim ID: WC-YYMMDD-NN (IST date, per-day serial)
+  const ist = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString();
+  const day = ist.slice(2, 4) + ist.slice(5, 7) + ist.slice(8, 10);
+  const cnt = await env.DB.prepare("SELECT COUNT(*) AS n FROM warranty_claims WHERE claim_id LIKE ?").bind('WC-' + day + '-%').first();
+  const claimId = 'WC-' + day + '-' + String(((cnt && cnt.n) || 0) + 1).padStart(2, '0');
+
+  await env.DB.prepare(`INSERT INTO warranty_claims (claim_id, order_id, order_key, platform, product, name, phone, email,
+      issue_type, description, address, pincode, city, state, warranty_status, order_date, warranty_until, order_skus, file_count, ip)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+    claimId, f.order_id, orderKey, f.platform, f.product, f.name, f.phone, f.email || null,
+    f.issue_type, f.description, f.address, f.pincode, f.city, f.state,
+    warrantyStatus, w.order_date || null, w.warranty_until || null, skus, files.length, ip
+  ).run();
+
+  const v = x => x ? String(x) : '-';
+  const to = CC_ORDER_EMAIL_TEST_MODE ? CC_ORDER_EMAIL_TEST_TO : CC_ORDER_EMAIL_TO;
+  const text = [
+    'A new warranty claim was submitted on the website.', '',
+    'Claim ID        : ' + claimId,
+    'Warranty status : ' + warrantyStatus + (w.found ? ' (ordered ' + w.order_date + ', valid until ' + w.warranty_until + ')' : ''),
+    '', '— Customer —',
+    'Name            : ' + f.name,
+    'Mobile          : ' + f.phone,
+    'Email           : ' + v(f.email),
+    'Pickup address  : ' + f.address + ', ' + [f.city, f.state].filter(Boolean).join(', ') + ' - ' + f.pincode,
+    '', '— Order —',
+    'Order ID        : ' + f.order_id,
+    'Platform        : ' + f.platform + (w.found ? ' (our records: ' + w.platform + ')' : ''),
+    'Product (cust.) : ' + f.product,
+    'Order SKUs      : ' + v(skus),
+    '', '— Issue —',
+    'Type            : ' + f.issue_type,
+    'Description     : ' + f.description,
+    '', 'Attachments: ' + photos.length + ' photo(s)' + (files.length > photos.length ? ' + 1 video' : '') + '.',
+    '', 'To arrange a pickup, use Create Pickup → Reverse Pickup:',
+    'https://naimuddin74667.github.io/Tomahawk/Customer-Care/Create-Pickup/'
+  ].join('\n');
+  await sendGmailMessage(env, {
+    to, replyTo: f.email || undefined,
+    subject: (CC_ORDER_EMAIL_TEST_MODE ? '[TEST] ' : '') + `Warranty Claim ${claimId} · ${f.name} · ${f.order_id} · ${warrantyStatus}`,
+    text, attachments: files.map((x, i) => ({ ...x, filename: claimId + '_' + (i + 1) + '_' + x.filename }))
+  });
+  await env.DB.prepare("UPDATE warranty_claims SET emailed_at = datetime('now') WHERE claim_id = ?").bind(claimId).run();
+
+  // Confirmation to the customer (best effort — never fails the claim).
+  if (f.email) {
+    try {
+      await sendGmailMessage(env, {
+        to: [f.email], replyTo: 'support@bullet.co.in',
+        subject: `Your Tomahawk warranty claim ${claimId}`,
+        text: [
+          'Hi ' + f.name + ',', '',
+          'Thank you — we have received your warranty claim.', '',
+          'Claim ID : ' + claimId,
+          'Order ID : ' + f.order_id,
+          'Product  : ' + f.product,
+          'Issue    : ' + f.issue_type, '',
+          'Our support team will review the details and photos and contact you on ' + f.phone + ' soon.',
+          'Please keep the product and its accessories ready in case a pickup is arranged.', '',
+          'For any questions, reply to this email or write to support@bullet.co.in quoting your Claim ID.', '',
+          'Team TOMAHAWK® Tools', 'Industrial Tools & Hardware'
+        ].join('\n')
+      });
+    } catch (e) { console.error('claim confirmation email failed:', e.message); }
+  }
+  return { ok: true, claim_id: claimId, warranty_status: warrantyStatus };
 }
 
 // ── Order-data retention: delete mirror order rows older than 8 months.

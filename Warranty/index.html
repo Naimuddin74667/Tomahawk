@@ -51,6 +51,7 @@ dd { font-weight: 600; }
 .items .nm { display: block; font-weight: 500; color: var(--text2); font-size: 12px; }
 .msg { border-radius: 12px; padding: 14px 16px; background: var(--surface2); border: 1px solid var(--border); line-height: 1.55; }
 .msg b { color: var(--accent); }
+.claim-btn { display: block; margin-top: 16px; text-align: center; background: var(--accent); color: #111; font-weight: 700; text-decoration: none; border-radius: 9px; padding: 12px; }
 footer { text-align: center; color: var(--text2); font-size: 12px; padding: 18px 16px 24px; line-height: 1.6; }
 footer a { color: var(--accent); }
 @media (max-width: 460px) { .row { flex-direction: column; } button { width: 100%; } h1 { font-size: 22px; } }
@@ -102,11 +103,12 @@ function fmtDate(iso) {
   return Number(p[2]) + ' ' + m + ' ' + p[0];
 }
 
+var lastId = '';
 function render(r) {
   var box = document.getElementById('result');
   if (!r.found) {
     box.innerHTML = '<div class="msg">We couldn\'t find this order. Please check the order ID and try again.<br><br>' +
-      'If it\'s correct, email <b>support@bullet.co.in</b> with your order ID and invoice — our team will check it for you.</div>';
+      'If it\'s correct, <a href="claim/?order=' + encodeURIComponent(lastId) + '" style="color:var(--accent);font-weight:700">raise a claim</a> and our team will verify your order.</div>';
     return;
   }
   var verdict;
@@ -133,12 +135,16 @@ function render(r) {
       '<dt>Order date</dt><dd>' + esc(fmtDate(r.order_date)) + '</dd>' +
       '<dt>Warranty until</dt><dd>' + esc(fmtDate(r.warranty_until)) + '</dd>' +
       '<dt>Product</dt><dd>' + items + '</dd>' +
-    '</dl>';
+    '</dl>' +
+    (r.under_warranty
+      ? '<a class="claim-btn" href="claim/?order=' + encodeURIComponent(lastId) + '">Raise a warranty claim →</a>'
+      : '<p class="hint" style="margin-top:14px">Still facing an issue? <a href="claim/?order=' + encodeURIComponent(lastId) + '" style="color:var(--accent)">Contact us with a claim</a>.</p>');
 }
 
 document.getElementById('f').addEventListener('submit', async function (e) {
   e.preventDefault();
   var id = document.getElementById('oid').value.trim();
+  lastId = id;
   var btn = document.getElementById('go');
   var box = document.getElementById('result');
   if (!id) return;
