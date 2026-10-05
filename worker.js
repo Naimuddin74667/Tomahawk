@@ -354,6 +354,7 @@ const ACTION_TIERS = {
   // — Ekart forward orders (same flow as Delhivery above). —
   ekartCreateOrder: 'manager_up', ekartCheckPincode: 'viewer_read', ekartEstimateCharge: 'viewer_read',
   ekartGetLabel: 'viewer_read', ekartTrack: 'viewer_read',
+  ccEmailForwardOrder: 'manager_up',
   // — Reverse pickup: mark a parcel as received at the warehouse. —
   delhiveryMarkReceived: 'manager_up', delhiveryMarkRefunded: 'manager_up',
   delhiveryMarkInProcess: 'manager_up', delhiveryCancelCase: 'admin_only',
@@ -3656,6 +3657,28 @@ export default {
           return json({ ok: true });
         }
 
+        // ── CUSTOMER CARE — email a new forward order (+ its label PDF) to
+        //    the support team. Called by Create-Pickup right after a
+        //    successful forward booking. Body: { order_id, pdf_base64?, filename? }.
+        //    Order details are read from D1, not trusted from the browser.
+        if (act === 'ccEmailForwardOrder') {
+          await ensureDelhiveryTable(env.DB);
+          const oid = String(body.order_id || '').trim();
+          if (!oid) return json({ ok: false, error: 'order_id required' }, 400);
+          const row = await env.DB.prepare(
+            "SELECT * FROM delhivery_orders WHERE order_id = ? AND direction = 'forward' AND delhivery_ok = 1 ORDER BY created_at DESC LIMIT 1"
+          ).bind(oid).first();
+          if (!row) return json({ ok: false, error: 'Forward order not found: ' + oid }, 404);
+          if (row.emailed_at) return json({ ok: true, already: true }); // never email the same order twice
+          try {
+            const sent = await sendForwardOrderEmail(env, row, body.pdf_base64 || '', body.filename || '');
+            await env.DB.prepare("UPDATE delhivery_orders SET emailed_at = datetime('now') WHERE order_id = ? AND direction = 'forward'").bind(oid).run();
+            return json({ ok: true, to: sent.to, testMode: CC_ORDER_EMAIL_TEST_MODE, attached: sent.attached });
+          } catch (e) {
+            return json({ ok: false, error: e.message }, 502);
+          }
+        }
+
         // ── EKART — create a forward order (same inputs as delhiveryCreateOrder).
         if (act === 'ekartCreateOrder') {
           await ensureDelhiveryTable(env.DB);
@@ -4475,6 +4498,8 @@ async function ensureDelhiveryTable(DB) {
   // Migration for tables created before remark existed (internal note
   // from the Create-Pickup form — stored here only, not sent to Delhivery).
   try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN remark TEXT`).run(); } catch (e) { /* column already exists */ }
+  // Set when the "new forward order" email has gone to the support team.
+  try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN emailed_at TEXT`).run(); } catch (e) { /* column already exists */ }
   // Live-status columns (Create-Pickup Recent orders Status badge):
   //   rtd_at       — first label download (= packed, Ready To Dispatch)
   //   track_stage  — Created / In Transit / At Last Mile / Out For Delivery /
@@ -4968,6 +4993,113 @@ async function createDelhiveryOrder(env, o) {
 // Called fresh on every check — access tokens expire in ~1hr, and Workers
 // don't persist in-memory state between invocations anyway, so there's no
 // benefit to caching it here.
+// ══════════════════════════════════════════════════════════════════
+// CUSTOMER CARE — "New forward order" email to the support team
+// ══════════════════════════════════════════════════════════════════
+// Sent through the same Gmail account as the watchers (naimuddin@).
+// Needs the gmail.send scope on GMAIL_REFRESH_TOKEN (read-only isn't enough).
+// TEST MODE: while true, every email goes ONLY to the test address.
+// Flip to false to send to the real support recipients.
+const CC_ORDER_EMAIL_TEST_MODE = true;
+const CC_ORDER_EMAIL_TO = ['support@bullet.co.in', 'faique@bullet.co.in'];
+const CC_ORDER_EMAIL_TEST_TO = ['naimuddin+test@bullet.co.in'];
+
+// UTF-8 safe base64 (btoa alone breaks on ₹, Hindi names, etc.)
+function utf8ToBase64(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(bin);
+}
+// MIME wants base64 bodies wrapped at 76 chars per line.
+function wrap76(b64) { return String(b64).replace(/\s+/g, '').replace(/(.{76})/g, '$1\r\n'); }
+
+// Send one email (plain text + optional PDF attachment) via Gmail API.
+async function sendGmailMessage(env, { to, subject, text, attachment }) {
+  const boundary = 'tm_' + Date.now().toString(36);
+  const lines = [
+    'To: ' + to.join(', '),
+    'Subject: =?UTF-8?B?' + utf8ToBase64(subject) + '?=',
+    'MIME-Version: 1.0',
+    'Content-Type: multipart/mixed; boundary="' + boundary + '"',
+    '',
+    '--' + boundary,
+    'Content-Type: text/plain; charset="UTF-8"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    wrap76(utf8ToBase64(text))
+  ];
+  if (attachment && attachment.base64) {
+    const fname = String(attachment.filename || 'label.pdf').replace(/[^A-Za-z0-9._-]/g, '_');
+    lines.push(
+      '--' + boundary,
+      'Content-Type: application/pdf; name="' + fname + '"',
+      'Content-Disposition: attachment; filename="' + fname + '"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      wrap76(attachment.base64)
+    );
+  }
+  lines.push('--' + boundary + '--', '');
+  const raw = btoa(lines.join('\r\n')).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+  const accessToken = await getGmailAccessToken(env);
+  const res = await fetch(`${GMAIL_API_BASE}/messages/send`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw })
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    if (res.status === 403 && /scope/i.test(t)) {
+      throw new Error('Gmail send permission missing — GMAIL_REFRESH_TOKEN needs the gmail.send scope');
+    }
+    throw new Error('Gmail send failed: ' + res.status + ' ' + t.slice(0, 200));
+  }
+  return res.json();
+}
+
+async function sendForwardOrderEmail(env, row, pdfBase64, filename) {
+  let sh = {};
+  try { sh = (JSON.parse(row.payload_json || '{}').shipments || [])[0] || {}; } catch (e) { /* keep empty */ }
+  const courier = row.courier || 'Delhivery';
+  const to = CC_ORDER_EMAIL_TEST_MODE ? CC_ORDER_EMAIL_TEST_TO : CC_ORDER_EMAIL_TO;
+  const subject = (CC_ORDER_EMAIL_TEST_MODE ? '[TEST] ' : '') +
+    `New Forward Order: ${row.order_id} · ${sh.name || '-'} · ${courier} ${row.waybill || ''}`.trim();
+  const v = x => (x === undefined || x === null || x === '') ? '-' : String(x);
+  const address = [sh.add, sh.city, sh.state, sh.pin].filter(Boolean).join(', ');
+  const text = [
+    'A new forward order has been created in Create Pickup.',
+    '',
+    'Order ID   : ' + v(row.order_id),
+    'Type       : ' + v(row.job_type),
+    'Courier    : ' + courier,
+    'Waybill    : ' + v(row.waybill),
+    '',
+    'Customer   : ' + v(sh.name),
+    'Phone      : ' + v(sh.phone),
+    'Address    : ' + v(address),
+    '',
+    'Product    : ' + v(sh.products_desc),
+    'Quantity   : ' + v(sh.quantity),
+    'Value (Rs) : ' + v(sh.total_amount),
+    'Remark     : ' + v(row.remark),
+    '',
+    'Created by : ' + v(row.created_by) + ' (' + v(row.created_at) + ' UTC)',
+    '',
+    pdfBase64 ? 'The shipping label is attached.' : 'Label could not be attached — download it from Create Pickup → Recent orders.',
+    '',
+    'https://naimuddin74667.github.io/Tomahawk/Customer-Care/Create-Pickup/'
+  ].join('\n');
+  await sendGmailMessage(env, {
+    to, subject, text,
+    attachment: pdfBase64 ? { base64: pdfBase64, filename: filename || `${row.order_id}_${row.waybill}.pdf` } : null
+  });
+  return { to, attached: !!pdfBase64 };
+}
+
 async function getGmailAccessToken(env) {
   const res = await fetch(GMAIL_TOKEN_URL, {
     method: 'POST',
