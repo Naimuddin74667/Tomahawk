@@ -260,7 +260,7 @@ table.log-table tr:last-child td { border-bottom: none; }
 /* ── Customer Care Dashboard ── */
 .back-link { font-size: 12px; font-weight: 600; color: var(--text2); text-decoration: none; display: inline-block; margin-bottom: 10px; }
 .back-link:hover { color: var(--accent); }
-.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+.tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
 @media (max-width: 760px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .tile-flag { font-size: 9.5px; font-weight: 700; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 1px 6px; margin-left: 4px; }
 .tile {
@@ -909,7 +909,7 @@ async function to4x6Pdf(bytes) {
 // Stages follow the same rules as Create-Pickup's Recent lists.
 // ══════════════════════════════════════════════════════════════════
 (function () {
-  var cases = [], tileFilter = '';
+  var cases = [], tileFilter = '', tileChosen = false;
   var page = 1, PAGE_SIZE = 10;   // pagination — same 10-per-page as the Blinkit RO Ledger
 
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -1005,13 +1005,15 @@ async function to4x6Pdf(bytes) {
       '<svg class="b-ico' + (t.flip ? ' flip' : '') + '" viewBox="0 0 23 13" aria-hidden="true">' + t.icon + '</svg></span>';
   }
 
-  // Four tiles (click to filter):
+  // Five tiles (click to filter):
   //   All cases — everything
+  //   To verify — delivered back to us by the courier, receipt not yet verified
   //   Open      — not closed/refunded (red problem cases stay here)
   //   Upcoming  — amber: pickup booked until delivered to us (+ pickup problems)
   //   Going out — green: forward booked until delivered (+ delivery problems)
   var TILES = [
     { key: '', label: 'All cases', c: 'var(--text)', test: function () { return true; } },
+    { key: 'verify', label: 'To verify', c: 'var(--accent)', test: function (c) { return !!c.st.attn; } },
     { key: 'open', label: 'Open cases', c: 'var(--text)', test: function (c) { return c.st.tone !== 'closed'; } },
     { key: 'upcoming', label: 'Upcoming', c: 'var(--accent)', test: function (c) { return c.st.tone === 'in' || c.st.tone === 'bad-in'; } },
     { key: 'goingout', label: 'Going out', c: '#22c55e', test: function (c) { return c.st.tone === 'out' || c.st.tone === 'bad-out'; } }
@@ -1118,10 +1120,8 @@ async function to4x6Pdf(bytes) {
     var el = document.getElementById('tiles');
     el.innerHTML = TILES.map(function (t) {
       var n = cases.filter(t.test).length;
-      var verify = t.key === 'upcoming' ? cases.filter(function (c) { return c.st.attn; }).length : 0;
       return '<button class="tile' + (tileFilter === t.key ? ' active' : '') + '" data-f="' + t.key + '" style="--tile-c:' + t.c + '">' +
-        '<div class="tile-n">' + n + '</div><div class="tile-l">' + esc(t.label) +
-        (verify ? ' <span class="tile-flag">' + verify + ' to verify</span>' : '') + '</div></button>';
+        '<div class="tile-n">' + n + '</div><div class="tile-l">' + esc(t.label) + '</div></button>';
     }).join('');
     el.querySelectorAll('.tile').forEach(function (t) {
       t.addEventListener('click', function () { tileFilter = t.dataset.f; page = 1; renderTiles(); renderTable(); });
@@ -1853,6 +1853,12 @@ async function to4x6Pdf(bytes) {
       var res = await api('delhiveryListOrders&limit=500' + (force ? '&refresh=1' : ''));
       if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
       cases = buildCases(res.orders || []);
+      // On opening the page: land on "To verify" if anything is waiting,
+      // otherwise on "Open cases". A Refresh keeps whatever tile is selected.
+      if (!tileChosen) {
+        tileFilter = cases.some(function (c) { return c.st.attn; }) ? 'verify' : 'open';
+        tileChosen = true;
+      }
       renderTiles(); renderTable();
     } catch (e) {
       document.getElementById('case-body').innerHTML = '<tr><td colspan="5" class="muted">Couldn\'t load cases: ' + esc(e.message) + '</td></tr>';
