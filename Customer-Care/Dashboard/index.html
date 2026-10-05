@@ -1007,17 +1007,22 @@ async function to4x6Pdf(bytes) {
 
   // Five tiles (click to filter):
   //   All cases — everything
-  //   To verify — delivered back to us by the courier, receipt not yet verified
+  //   Needs attention — (a) delivered back to us, receipt not yet verified, or
+  //                     (b) still open and TAT priority High / Breached
   //   Open      — not closed/refunded (red problem cases stay here)
   //   Upcoming  — amber: pickup booked until delivered to us (+ pickup problems)
   //   Going out — green: forward booked until delivered (+ delivery problems)
   var TILES = [
     { key: '', label: 'All cases', c: 'var(--text)', test: function () { return true; } },
-    { key: 'verify', label: 'To verify', c: 'var(--accent)', test: function (c) { return !!c.st.attn; } },
+    { key: 'verify', label: 'Needs attention', c: 'var(--accent)', test: needsAttention },
     { key: 'open', label: 'Open cases', c: 'var(--text)', test: function (c) { return c.st.tone !== 'closed'; } },
     { key: 'upcoming', label: 'Upcoming', c: 'var(--accent)', test: function (c) { return c.st.tone === 'in' || c.st.tone === 'bad-in'; } },
     { key: 'goingout', label: 'Going out', c: '#22c55e', test: function (c) { return c.st.tone === 'out' || c.st.tone === 'bad-out'; } }
   ];
+  function needsAttention(c) {
+    if (c.st.attn) return true;   // to verify
+    return c.st.tone !== 'closed' && !!c.tat && !c.tat.closed && (c.tat.label === 'High' || c.tat.label === 'Breached');
+  }
   function tileTest(key) { for (var i = 0; i < TILES.length; i++) if (TILES[i].key === key) return TILES[i].test; return TILES[0].test; }
 
   // Type column: Repair / Replace / Refund / Free Of Cost. From job_type,
@@ -1853,10 +1858,10 @@ async function to4x6Pdf(bytes) {
       var res = await api('delhiveryListOrders&limit=500' + (force ? '&refresh=1' : ''));
       if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
       cases = buildCases(res.orders || []);
-      // On opening the page: land on "To verify" if anything is waiting,
+      // On opening the page: land on "Needs attention" if anything is waiting,
       // otherwise on "Open cases". A Refresh keeps whatever tile is selected.
       if (!tileChosen) {
-        tileFilter = cases.some(function (c) { return c.st.attn; }) ? 'verify' : 'open';
+        tileFilter = cases.some(needsAttention) ? 'verify' : 'open';
         tileChosen = true;
       }
       renderTiles(); renderTable();
