@@ -5000,7 +5000,7 @@ async function createDelhiveryOrder(env, o) {
 // Needs the gmail.send scope on GMAIL_REFRESH_TOKEN (read-only isn't enough).
 // TEST MODE: while true, every email goes ONLY to the test address.
 // Flip to false to send to the real support recipients.
-const CC_ORDER_EMAIL_TEST_MODE = true;
+const CC_ORDER_EMAIL_TEST_MODE = false;   // LIVE since 05-Oct-2026
 const CC_ORDER_EMAIL_TO = ['support@bullet.co.in', 'faique@bullet.co.in'];
 const CC_ORDER_EMAIL_TEST_TO = ['naimuddin+test@bullet.co.in'];
 
