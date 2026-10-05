@@ -3788,7 +3788,12 @@ export default {
         checkNewAmazonFcEmails(env)
           .then(result => recordHeartbeat(
             env, 'amazon_fc_watcher', 'Amazon FC Appointment Email Watcher (Worker cron)', 'ok',
-            `Checked ${result.checked} email(s), logged ${result.newLogged} new.`, 900
+            `Checked ${result.checked} email(s), logged ${result.newLogged} new.` +
+              (result.stage
+                ? (result.stage.error
+                    ? ` FBA stage ERROR: ${result.stage.error}`
+                    : ` FBA stage: ${result.stage.newLogged} new, ${result.stage.remaining} left.`)
+                : ''), 900
           ))
           .catch(err => {
             console.error('scheduled Amazon FC appointment email check failed:', err.message);
@@ -5298,10 +5303,57 @@ async function ensureAmazonFbaStageTable(DB) {
   )`).run();
 }
 
-// Max NEW emails fetched per run — keeps each run well inside the
-// Worker's subrequest limit. A big backlog just catches up over a few
-// 15-min cron ticks.
-const AMAZON_FBA_STAGE_MAX_PER_RUN = 40;
+// Max NEW emails read per run. They're read through Gmail's BATCH
+// endpoint (50 per HTTP call), so 100 emails = only 2 subrequests —
+// fetching them one-by-one blew the Worker's per-invocation subrequest
+// limit (the cron runs every watcher in one invocation). A bigger
+// backlog just catches up over the next 15-min cron ticks.
+const AMAZON_FBA_STAGE_MAX_PER_RUN = 100;
+const GMAIL_BATCH_SIZE = 50;
+
+// Read Subject + date for many Gmail messages in ONE HTTP call using
+// Gmail's batch endpoint (multipart/mixed). Returns
+// [{ id, subject, internalDate }]; parts that fail are just skipped.
+async function gmailBatchGetSubjects(ids, accessToken) {
+  if (!ids.length) return [];
+  const boundary = 'batch_tomahawk_' + Date.now();
+  const body = ids.map((id, i) =>
+    `--${boundary}\r\n` +
+    'Content-Type: application/http\r\n' +
+    `Content-ID: <item${i}>\r\n\r\n` +
+    `GET /gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=Subject\r\n\r\n`
+  ).join('') + `--${boundary}--`;
+
+  const res = await fetch('https://gmail.googleapis.com/batch/gmail/v1', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + accessToken,
+      'Content-Type': `multipart/mixed; boundary=${boundary}`
+    },
+    body
+  });
+  if (!res.ok) throw new Error('Gmail batch failed: ' + res.status);
+
+  // The response is multipart too — its boundary is in the Content-Type.
+  const ct = res.headers.get('Content-Type') || '';
+  const m = ct.match(/boundary=("?)([^";]+)\1/i);
+  const text = await res.text();
+  if (!m) throw new Error('Gmail batch: no boundary in response');
+  const out = [];
+  for (const part of text.split('--' + m[2])) {
+    const start = part.indexOf('{');
+    const end = part.lastIndexOf('}');
+    if (start === -1 || end <= start) continue;
+    try {
+      const msg = JSON.parse(part.slice(start, end + 1));
+      if (!msg.id) continue; // an error object, not a message
+      const headers = (msg.payload && msg.payload.headers) || [];
+      const h = headers.find(x => x.name === 'Subject');
+      out.push({ id: msg.id, subject: h ? h.value : '', internalDate: msg.internalDate });
+    } catch (e) { /* skip unparseable part */ }
+  }
+  return out;
+}
 
 async function checkAmazonFbaStageEmails(env, accessToken) {
   await ensureAmazonFbaStageTable(env.DB);
@@ -5327,17 +5379,16 @@ async function checkAmazonFbaStageEmails(env, accessToken) {
   }
 
   const fresh = messages.filter(m => !seen.has(m.id)).slice(0, AMAZON_FBA_STAGE_MAX_PER_RUN);
+  let metas = [];
+  for (let i = 0; i < fresh.length; i += GMAIL_BATCH_SIZE) {
+    const chunk = fresh.slice(i, i + GMAIL_BATCH_SIZE).map(m => m.id);
+    metas = metas.concat(await gmailBatchGetSubjects(chunk, accessToken));
+  }
+
   const stmts = [];
-  for (const m of fresh) {
-    const msgRes = await fetch(
-      `${GMAIL_API_BASE}/messages/${m.id}?format=metadata&metadataHeaders=Subject`,
-      { headers: { Authorization: 'Bearer ' + accessToken } }
-    );
-    if (!msgRes.ok) continue;
-    const msg = await msgRes.json();
-    const headers = (msg.payload && msg.payload.headers) || [];
-    const subjectHeader = headers.find(h => h.name === 'Subject');
-    const subject = subjectHeader ? subjectHeader.value : '';
+  for (const msg of metas) {
+    const m = { id: msg.id };
+    const subject = msg.subject || '';
     const emailDate = msg.internalDate ? new Date(parseInt(msg.internalDate)).toISOString() : null;
 
     const match = subject.match(/FBA Inbound Shipment\s+(Checked-In|Receiving|Received In-Full|Closed)\s*\((FBA[0-9A-Z]+)\)/i);
