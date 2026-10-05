@@ -174,6 +174,7 @@ const ACTION_TIERS = {
   scannerListPickers: 'public', // phone app's name-picker list — read-only, usernames only
   scannerPickSession: 'public', // phone app "tap your name" login — locked to picker_packer role only, see handler
   validateSession: 'viewer_read', // any authenticated role may confirm their own session
+  warrantyLookup: 'public', // public Warranty Check page — non-personal order facts only, rate-limited
 
   // — Admin only: portal user management + "wipe everything" dev actions —
   adminListUsers: 'admin_only', adminCreateUser: 'admin_only', adminUpdateUser: 'admin_only',
@@ -758,6 +759,24 @@ export default {
           });
         }
         return json({ ok: true, prices, requested: codes.length, found: Object.keys(prices).length });
+      }
+
+      // ── WARRANTY CHECK (public) — /Warranty/ page ─────────────────────
+      // GET ?action=warrantyLookup&order_id=… → platform, order date,
+      // products and 6-month warranty status. Never returns customer
+      // name / phone / address. Rate-limited per visitor IP.
+      if (request.method === 'GET' && action === 'warrantyLookup') {
+        const orderId = String(url.searchParams.get('order_id') || '').trim().slice(0, 40);
+        if (!orderId) return json({ ok: false, error: 'Enter an order ID' }, 400);
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        if (!(await warrantyRateOk(env.DB, ip))) {
+          return json({ ok: false, error: 'Too many checks — please try again in an hour.' }, 429);
+        }
+        try {
+          return json({ ok: true, ...(await warrantyLookup(env, orderId)) });
+        } catch (e) {
+          return json({ ok: false, error: 'Lookup failed — please try again later.' }, 502);
+        }
       }
 
       // ── Phone Scanner App — list Picker & Packer accounts to tap-pick from ──
@@ -3770,6 +3789,19 @@ export default {
   // every 15 minutes). Runs checkNewRoEmails() automatically with no
   // page load, no manual trigger, no Claude involvement needed.
   async scheduled(event, env, ctx) {
+    // Order-data retention (Supabase mirror) — once a day, on the tick
+    // that falls between 20:30 and 20:44 UTC (02:00–02:14 IST).
+    const tick = new Date(event.scheduledTime || Date.now());
+    if (tick.getUTCHours() === 20 && tick.getUTCMinutes() >= 30 && tick.getUTCMinutes() < 45) {
+      ctx.waitUntil(
+        purgeOldOrders(env)
+          .then(r => recordHeartbeat(env, 'order_retention', 'Order Data Retention — 8 months (daily)', 'ok',
+            `Deleted orders older than ${r.cutoff.slice(0, 10)}: ` +
+            Object.entries(r.deleted).map(([t, n]) => `${t} ${n}`).join(', ') + '.', 90000))
+          .catch(err => recordHeartbeat(env, 'order_retention', 'Order Data Retention — 8 months (daily)', 'error',
+            err.message, 90000).catch(() => {}))
+      );
+    }
     ctx.waitUntil(
       checkNewRoEmails(env)
         .then(result => recordHeartbeat(
@@ -5098,6 +5130,112 @@ async function sendForwardOrderEmail(env, row, pdfBase64, filename) {
     attachment: pdfBase64 ? { base64: pdfBase64, filename: filename || `${row.order_id}_${row.waybill}.pdf` } : null
   });
   return { to, attached: !!pdfBase64 };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// WARRANTY CHECK — public order lookup (6-month warranty from order date)
+// ══════════════════════════════════════════════════════════════════
+const WARRANTY_MONTHS = 6;
+const WARRANTY_LOOKUPS_PER_HOUR = 20;
+
+function supabaseHeaders(env) {
+  return {
+    'Content-Type': 'application/json',
+    'apikey': env.SUPABASE_SECRET_KEY,
+    'Authorization': 'Bearer ' + env.SUPABASE_SECRET_KEY
+  };
+}
+
+// Simple per-IP hourly counter in D1 (old buckets cleaned as we go).
+async function warrantyRateOk(DB, ip) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS warranty_rate (
+    ip TEXT, bucket TEXT, n INTEGER DEFAULT 0, PRIMARY KEY (ip, bucket)
+  )`).run();
+  const bucket = new Date().toISOString().slice(0, 13); // YYYY-MM-DDTHH
+  const row = await DB.prepare(`
+    INSERT INTO warranty_rate (ip, bucket, n) VALUES (?, ?, 1)
+    ON CONFLICT(ip, bucket) DO UPDATE SET n = n + 1
+    RETURNING n
+  `).bind(ip, bucket).first();
+  if (Math.random() < 0.05) await DB.prepare('DELETE FROM warranty_rate WHERE bucket < ?').bind(bucket).run();
+  return !row || row.n <= WARRANTY_LOOKUPS_PER_HOUR;
+}
+
+// Calls the Supabase SQL function warranty_lookup() (non-personal fields
+// only) and adds the warranty dates. Dates are IST calendar dates.
+async function warrantyLookup(env, orderId) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured');
+  const resp = await fetch(env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/rpc/warranty_lookup', {
+    method: 'POST', headers: supabaseHeaders(env), body: JSON.stringify({ p_order_id: orderId })
+  });
+  if (!resp.ok) throw new Error('Supabase ' + resp.status);
+  const r = await resp.json();
+  if (!r || !r.found) return { found: false };
+
+  const [y, m, d] = r.order_date.split('-').map(Number);
+  const until = new Date(Date.UTC(y, m - 1 + WARRANTY_MONTHS, d));
+  const todayIst = new Date(Date.now() + 5.5 * 3600 * 1000);
+  const today = new Date(Date.UTC(todayIst.getUTCFullYear(), todayIst.getUTCMonth(), todayIst.getUTCDate()));
+  const daysLeft = Math.round((until - today) / 86400000);
+  const cancelled = /cancel/i.test(r.status || '');
+  return {
+    found: true,
+    platform: r.platform,
+    order_date: r.order_date,
+    warranty_until: until.toISOString().slice(0, 10),
+    under_warranty: !cancelled && daysLeft >= 0,
+    days_left: daysLeft,
+    cancelled,
+    items: (r.items || []).map(it => ({
+      sku: it.sku, qty: it.qty,
+      name: it.name && it.name !== it.sku ? it.name : null
+    }))
+  };
+}
+
+// ── Order-data retention: delete mirror order rows older than 8 months.
+// Children first (items / packages) so nothing is left orphaned. Runs
+// daily from scheduled(); batches of up to 200 orders per table per run.
+const ORDER_RETENTION_MONTHS = 8;
+async function purgeOldOrders(env) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured');
+  const base = env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/';
+  const h = supabaseHeaders(env);
+  const cut = new Date();
+  cut.setUTCMonth(cut.getUTCMonth() - ORDER_RETENTION_MONTHS);
+  const cutoff = cut.toISOString();
+  const deleted = {};
+
+  async function get(path) {
+    const r = await fetch(base + path, { headers: h });
+    if (!r.ok) throw new Error('Supabase read ' + r.status + ' ' + path.split('?')[0]);
+    return r.json();
+  }
+  async function del(table, filter) {
+    const r = await fetch(base + table + '?' + filter, { method: 'DELETE', headers: { ...h, Prefer: 'return=minimal,count=exact' } });
+    if (!r.ok) throw new Error('Supabase delete ' + r.status + ' ' + table);
+    const n = Number(((r.headers.get('Content-Range') || '').split('/')[1]) || 0);
+    deleted[table] = (deleted[table] || 0) + n;
+  }
+  const inList = arr => 'in.(' + arr.map(x => '"' + String(x).replace(/"/g, '') + '"').join(',') + ')';
+
+  // Unicommerce: old order codes → their items + packages → the orders
+  const uc = await get(`uc_orders?select=code&order_created=lt.${encodeURIComponent(cutoff)}&limit=200`);
+  if (uc.length) {
+    const codes = uc.map(o => o.code);
+    await del('uc_order_items', 'sale_order_code=' + inList(codes));
+    await del('uc_shipping_packages', 'sale_order_code=' + inList(codes));
+    await del('uc_orders', 'code=' + inList(codes));
+  }
+  // Amazon: old orders → their items → the orders; report rows by date
+  const az = await get(`amz_orders?select=amazon_order_id&purchase_date=lt.${encodeURIComponent(cutoff)}&limit=200`);
+  if (az.length) {
+    const ids = az.map(o => o.amazon_order_id);
+    await del('amz_order_items', 'amazon_order_id=' + inList(ids));
+    await del('amz_orders', 'amazon_order_id=' + inList(ids));
+  }
+  await del('amz_orders_report', 'purchase_date=lt.' + encodeURIComponent(cutoff));
+  return { cutoff, deleted };
 }
 
 async function getGmailAccessToken(env) {
