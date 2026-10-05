@@ -4241,6 +4241,19 @@ async function fetchAmazonExpectedShipments(env) {
 // out of the sheet get purged too — unless the sheet fetch itself failed,
 // in which case the gate is skipped for this run rather than risking a
 // mass-purge off a transient error.
+// Normalised signature for "did anything change?" checks — D1 hands back
+// numbers stored in TEXT columns as e.g. "3.0" while fresh values are 3,
+// so numeric-looking values are compared as numbers, blanks as ''.
+function amzSig(list) {
+  const norm = v => {
+    if (v === null || v === undefined || v === '') return '';
+    if (Array.isArray(v)) return v.map(norm);
+    const n = Number(v);
+    return (typeof v !== 'boolean' && String(v).trim() !== '' && isFinite(n)) ? String(n) : String(v);
+  };
+  return JSON.stringify(list.map(norm));
+}
+
 async function rebuildAmazonShipments(env) {
   await ensureAmazonShipmentsTable(env.DB);
   await ensureAmazonShipmentItemsTable(env.DB);
@@ -4250,9 +4263,40 @@ async function rebuildAmazonShipments(env) {
   const rows = await env.DB.prepare(
     `SELECT * FROM amazon_fc_log ORDER BY COALESCE(email_date, detected_at) ASC`
   ).all();
+
+  // D1 write-budget fix (Oct 2026): this runs every 15 min, and used to
+  // rewrite every shipment + all its SKU lines on every run — once per
+  // fc_log EMAIL, so a rescheduled shipment was rewritten several times
+  // per run (~1,850 rows_written/run, ~1.8 lakh/day vs the 1 lakh free
+  // cap). Now:
+  //   1. one pass per shipment, using its LATEST email (rows are sorted
+  //      oldest-first, so the last one seen wins — same end state as
+  //      before, just without the repeated writes);
+  //   2. compare against what's already in D1 and only write when the
+  //      shipment row or its SKU lines actually changed;
+  //   3. cancelled shipments (Amazon email or manual) never have their
+  //      SKU lines recomputed once they exist.
+  const latestByShipment = new Map();
   for (const r of (rows.results || [])) {
-    const ids = splitShipmentIds(r.shipment_ids);
-    for (const shipmentId of ids) {
+    for (const id of splitShipmentIds(r.shipment_ids)) latestByShipment.set(id, r);
+  }
+  const prevShipMap = new Map();
+  (await env.DB.prepare('SELECT * FROM amazon_shipments').all()).results
+    .forEach(row => prevShipMap.set(row.shipment_id, row));
+  const prevItemsSig = new Map();
+  const prevItemRows = (await env.DB.prepare(
+    'SELECT shipment_id, product, asin, total, barcode, uc_sku, sent_qty, sent_qty_inferred, matched_sku, expected_qty FROM amazon_shipment_items ORDER BY shipment_id, id'
+  ).all()).results || [];
+  const groupedPrev = new Map();
+  prevItemRows.forEach(it => {
+    if (!groupedPrev.has(it.shipment_id)) groupedPrev.set(it.shipment_id, []);
+    groupedPrev.get(it.shipment_id).push([it.product, it.asin, it.total, it.barcode, it.uc_sku,
+      it.sent_qty, it.sent_qty_inferred, it.matched_sku, it.expected_qty]);
+  });
+  groupedPrev.forEach((list, id) => prevItemsSig.set(id, amzSig(list)));
+
+  let written = 0, skipped = 0;
+  for (const [shipmentId, r] of latestByShipment) {
       if (expectedDetails && !expectedDetails.has(shipmentId)) continue; // in the email, but not in the sheet — not one of ours
 
       // Prefer the sheet's real per-shipment SKU/unit counts over the
@@ -4267,8 +4311,12 @@ async function rebuildAmazonShipments(env) {
       // blew that cap partway through the loop, leaving the newest
       // shipments with only their first few items saved. A batch is also
       // atomic, so a shipment can never end up half-written.
-      const stmts = [];
-      stmts.push(env.DB.prepare(`
+      const prevShip = prevShipMap.get(shipmentId) || null;
+      const isCancelled = /cancel/i.test(r.appointment_status || '') || r.manual_status === 'cancelled';
+      const newShipVals = [r.appointment_id, r.destination_fc, r.no_of_boxes, noOfSkus,
+        noOfUnits, r.appointment_status, r.confirmed_slot, r.reporting_time,
+        r.email_date, r.gmail_msg_id, r.manual_status];
+      const upsertStmt = (env.DB.prepare(`
         INSERT INTO amazon_shipments (
           shipment_id, appointment_id, destination_fc, no_of_boxes, no_of_skus,
           no_of_units, appointment_status, confirmed_slot, reporting_time,
@@ -4297,9 +4345,13 @@ async function rebuildAmazonShipments(env) {
       // Persist the per-SKU line items once per shipment (delete + re-insert
       // is simplest/cheap at this volume, and self-heals if the sheet's
       // block ever legitimately changes before the appointment is over).
-      if (sheetDetail && Array.isArray(sheetDetail.items)) {
+      const itemStmts = [];
+      const newItemVals = [];
+      let haveNewItems = false;
+      if (sheetDetail && Array.isArray(sheetDetail.items) && !(isCancelled && prevItemsSig.has(shipmentId))) {
+        haveNewItems = true;
         // (table is ensured once at the top of this function, not per shipment)
-        stmts.push(env.DB.prepare('DELETE FROM amazon_shipment_items WHERE shipment_id = ?').bind(shipmentId));
+        itemStmts.push(env.DB.prepare('DELETE FROM amazon_shipment_items WHERE shipment_id = ?').bind(shipmentId));
 
         // A mutable per-shipment pool of remaining gatepass quantity,
         // keyed by Uniware SKU. The SAME SKU can be both a standalone
@@ -4382,19 +4434,31 @@ async function rebuildAmazonShipments(env) {
         for (let idx = 0; idx < sheetDetail.items.length; idx++) {
           const item = sheetDetail.items[idx];
           const res = results.get(idx) || {};
-          stmts.push(env.DB.prepare(
-            'INSERT INTO amazon_shipment_items (shipment_id, product, asin, total, barcode, uc_sku, sent_qty, sent_qty_inferred, matched_sku, expected_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-          ).bind(
-            shipmentId, item.product || null, item.asin || null, item.total, item.barcode || null,
+          const vals = [
+            item.product || null, item.asin || null, item.total, item.barcode || null,
             res.displayUcSku || null, (res.sentQty !== undefined ? res.sentQty : null),
             res.sentQtyInferred ? 1 : 0, res.matchedSku || null, (res.expectedQty !== undefined ? res.expectedQty : item.total)
-          ));
+          ];
+          newItemVals.push(vals);
+          itemStmts.push(env.DB.prepare(
+            'INSERT INTO amazon_shipment_items (shipment_id, product, asin, total, barcode, uc_sku, sent_qty, sent_qty_inferred, matched_sku, expected_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          ).bind(shipmentId, ...vals));
         }
       }
 
-      // One query-budget unit for the whole shipment (upsert + items).
+      // Only write what actually changed. All writes for a shipment still
+      // go in ONE batch (one query-budget unit, atomic).
+      const prevShipVals = prevShip ? [prevShip.appointment_id, prevShip.destination_fc, prevShip.no_of_boxes,
+        prevShip.no_of_skus, prevShip.no_of_units, prevShip.appointment_status, prevShip.confirmed_slot,
+        prevShip.reporting_time, prevShip.email_date, prevShip.gmail_msg_id, prevShip.manual_status] : null;
+      const shipChanged = !prevShipVals || amzSig(prevShipVals) !== amzSig(newShipVals);
+      const itemsChanged = haveNewItems && amzSig(newItemVals) !== (prevItemsSig.get(shipmentId) || amzSig([]));
+      const stmts = [];
+      if (shipChanged) stmts.push(upsertStmt);
+      if (itemsChanged) stmts.push(...itemStmts);
+      if (!stmts.length) { skipped++; continue; }
       await env.DB.batch(stmts);
-    }
+      written++;
   }
 
   // Purge anything already tracked that's no longer in the sheet — only
@@ -4413,6 +4477,7 @@ async function rebuildAmazonShipments(env) {
       ).bind(...idsArr)
     ]);
   }
+  return { written, skipped };
 }
 
 // ── DELHIVERY — automatic pickup request (evening slot 14:00–18:00) ─────
@@ -6438,10 +6503,13 @@ async function syncFkGatepasses(env) {
     ).bind(rec.consignment_no).first();
 
     if (existingCn) {
-      await env.DB.prepare(
-        `UPDATE fk_ledger SET gp_number = ?, updated_at = datetime('now') WHERE consignment_no = ?`
-      ).bind(rec.gatepass_code, rec.consignment_no).run();
-      updated++;
+      // `IS NOT` skips the write when gp_number is already this value —
+      // this runs every 15 min, and rewriting unchanged rows was burning
+      // ~9,500 D1 rows_written/day for nothing.
+      const upd = await env.DB.prepare(
+        `UPDATE fk_ledger SET gp_number = ?, updated_at = datetime('now') WHERE consignment_no = ? AND gp_number IS NOT ?`
+      ).bind(rec.gatepass_code, rec.consignment_no, rec.gatepass_code).run();
+      if (upd.meta && upd.meta.changes) updated++;
     } else {
       unmatched++;
     }

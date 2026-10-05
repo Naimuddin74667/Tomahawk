@@ -1235,7 +1235,10 @@ function fcCheckEmailsNow() {
     .then(function () { if (btn) { btn.disabled = false; btn.innerHTML = '&#128231; Check Gmail Now'; } });
 }
 
-function fcIsCancelled(r) { return r.manual_status === 'cancelled'; }
+// Cancelled = Amazon's own appointment email said "Cancelled" (saved by the
+// Worker in appointment_status), OR someone pressed Cancel (manual_status).
+function fcIsAmazonCancelled(r) { return /cancel/i.test(r.appointment_status || ''); }
+function fcIsCancelled(r) { return r.manual_status === 'cancelled' || fcIsAmazonCancelled(r); }
 // FBA stage comes from Amazon's own inbound emails (worker.js →
 // checkAmazonFbaStageEmails): 'at_fba' = Checked-In / Receiving email seen,
 // 'received' = "Received In-Full" email seen.
@@ -1256,7 +1259,10 @@ function fcFmtStageDate(iso) {
 // Cancelled overrides all of it. Driven entirely by Gatepass state + the
 // appointment date, same inputs already used for the Gatepass column.
 function fcStatusBadge(r) {
-  if (fcIsCancelled(r)) return '<span style="color:#ff8080;font-weight:700">Cancelled</span>';
+  if (fcIsCancelled(r)) {
+    var why = fcIsAmazonCancelled(r) ? 'Cancelled by Amazon (appointment email ' + fcFmtStageDate(r.email_date) + ')' : 'Marked cancelled manually';
+    return '<span style="color:#ff8080;font-weight:700" title="' + why + '">Cancelled</span>';
+  }
 
   // Amazon's own emails win over our gatepass/date guess — once the
   // truck has checked in at the FC, the shipment is At FBA, never Overdue.
@@ -1469,7 +1475,7 @@ function fcRender() {
   } else {
     tbody.innerHTML = pageRows.map(function (r) {
       var canEdit = window.TM_CAN_EDIT;
-      var actionsHtml = canEdit
+      var actionsHtml = (canEdit && !fcIsAmazonCancelled(r))
         ? ('<button class="btn btn-secondary btn-sm" style="width:auto;padding:3px 8px;font-size:10px" onclick="event.stopPropagation();fcToggleCancelled(\'' + fcEsc(r.appointment_id) + '\')">' +
            (fcIsCancelled(r) ? 'Unmark' : 'Cancel') + '</button>')
         : '';
