@@ -101,7 +101,10 @@ html[data-theme="light"]       .icon-moon { display: none; }
 .page-title { font-family: var(--font-display); font-size: 22px; font-weight: 800; color: var(--text); }
 .page-sub { font-size: 12.5px; color: var(--text2); margin-top: 4px; }
 
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: start; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: stretch; }
+.panel.log-panel { display: flex; flex-direction: column; }
+.panel.log-panel .log-table-wrap { flex: 1; display: flex; flex-direction: column; }
+.panel.log-panel .log-pager { margin-top: auto; }
 @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
 
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 22px; }
@@ -182,10 +185,10 @@ html[data-theme="light"]       .icon-moon { display: none; }
 .log-table-wrap { overflow-x: auto; }
 table.log-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 table.log-table th {
-  text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+  text-align: center; font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
   color: var(--text2); padding: 8px 10px; border-bottom: 1px solid var(--border);
 }
-table.log-table td { padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.log-table td { padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; text-align: center; }
 table.log-table tr:last-child td { border-bottom: none; }
 .badge { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px; text-transform: uppercase; letter-spacing: .03em; }
 .badge.created { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
@@ -280,7 +283,7 @@ table.log-table tr.log-row:hover td { background: var(--surface2); }
 .label-dl-btn.busy { opacity: .6; cursor: progress; }
 table.log-table td.dl-cell { width: 38px; padding-right: 0; }
 
-/* Recent orders pagination (15 per page) */
+/* Recent orders pagination (10 per page) */
 .log-pager { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 12px 0 2px; font-size: 12px; color: var(--text2); }
 .log-pager button { background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 12px; font: inherit; font-weight: 600; cursor: pointer; }
 .log-pager button:disabled { opacity: .4; cursor: default; }
@@ -582,7 +585,7 @@ table.log-table td.dl-cell { width: 38px; padding-right: 0; }
     </div>
 
     <!-- ── Order log panel ── -->
-    <div class="panel">
+    <div class="panel log-panel">
       <div class="panel-head-row">
         <div class="panel-title" id="log-title">Recent orders</div>
         <div class="verify-note" id="verify-note" hidden></div>
@@ -594,7 +597,9 @@ table.log-table td.dl-cell { width: 38px; padding-right: 0; }
             <tr>
               <th></th>
               <th>Order ID</th>
+              <th>Customer</th>
               <th>Waybill</th>
+              <th>Courier</th>
               <th>Type</th>
               <th>By</th>
               <th>Status</th>
@@ -1557,9 +1562,9 @@ function initDelhiveryApp() {
   }
 
   var lastOrders = [];
-  // Pagination — 15 rows per page. Page resets to 1 when switching
+  // Pagination — 10 rows per page. Page resets to 1 when switching
   // Forward/Reverse; a Refresh keeps you on the same page.
-  var LOG_PAGE_SIZE = 15;
+  var LOG_PAGE_SIZE = 10;
   var logPage = 1;
   var logPageMode = null;
   document.getElementById('log-prev').addEventListener('click', function () { logPage--; renderLog(lastOrders); });
@@ -1604,10 +1609,10 @@ function initDelhiveryApp() {
         '</button></td>' +
         '<td class="mono oid-cell">' + escapeHtml(o.order_id) +
           (!isReverse && o.linked_order_id ? '<div class="link-note">Return of ' + escapeHtml(o.linked_order_id) + '</div>' : '') +
-          (consignee ? '<div class="log-consignee">' + escapeHtml(consignee) + '</div>' : '') +
         '</td>' +
-        '<td class="mono">' + (o.waybill ? escapeHtml(o.waybill) : '&#8212;') +
-          '<div class="log-consignee">' + escapeHtml(o.courier || 'Delhivery') + '</div></td>' +
+        '<td>' + (consignee ? escapeHtml(consignee) : '&#8212;') + '</td>' +
+        '<td class="mono">' + (o.waybill ? escapeHtml(o.waybill) : '&#8212;') + '</td>' +
+        '<td>' + escapeHtml(o.courier || 'Delhivery') + '</td>' +
         '<td>' + (o.job_type ? escapeHtml(o.job_type) : '&#8212;') + '</td>' +
         '<td>' + (o.created_by ? escapeHtml(o.created_by) : '&#8212;') + '</td>' +
         '<td class="status-cell">' + stageBadgeHtml(o) + reverseActionsHtml(o) + '</td>';
