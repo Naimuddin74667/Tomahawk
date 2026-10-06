@@ -393,7 +393,11 @@ const ACTION_TIERS = {
   rsv_getSlipPhoto: 'viewer_read',
   // "GRN Verified": QC was marked complete in Uniware -> re-queue so SK's
   // script resumes on the SAME PO/GRN and does the putaway. —
-  rsv_grnVerified: 'manager_up'
+  rsv_grnVerified: 'manager_up',
+
+  // — Order-Processing: Flipkart image registry (register-on-first-sight +
+  //   read-cached-on-repeat). Same tier as getOrderPrices. —
+  syncPicklistImages: 'viewer_read'
 };
 
 function getAuthRequirement(act) {
@@ -648,6 +652,86 @@ function healthTokenOk(request, env) {
   return expected.length > 0 && supplied === expected;
 }
 
+
+// ══════════════════════════════════════════════════════════════════
+// ORDER PROCESSING — Flipkart live image registry (restored Oct 2026;
+// was accidentally dropped by commit 8f22013 on 11-Sep-2026).
+// One D1 row per combo (sorted UC SKU set). First upload that contains a
+// combo scrapes its Flipkart image once; later uploads read the cached
+// row. Flipkart blocks Cloudflare's IPs, so the fetch goes through the
+// "Tomahawk Picklist Bridge" Apps Script. Amazon columns stay untouched.
+// ══════════════════════════════════════════════════════════════════
+async function ensureImageCacheTables(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS marketplace_image_cache (
+    combo_key TEXT PRIMARY KEY,
+    uc_skus TEXT,
+    fk_sku TEXT,
+    fk_fsn TEXT,
+    fk_image_url TEXT,
+    fk_fetch_status TEXT,
+    fk_updated_at TEXT,
+    fk_consecutive_failures INTEGER DEFAULT 0,
+    fk_dormant INTEGER DEFAULT 0,
+    amz_sku TEXT,
+    amz_asin TEXT,
+    amz_image_url TEXT,
+    amz_fetch_status TEXT,
+    amz_updated_at TEXT,
+    amz_consecutive_failures INTEGER DEFAULT 0,
+    amz_dormant INTEGER DEFAULT 0,
+    created_at TEXT
+  )`).run();
+}
+
+const IMAGE_BRIDGE_URL = 'https://script.google.com/macros/s/AKfycbxvS536DNyl9c7DdcAx9PvBURUjRvUEpaSbYDQqxE7bbgUAPRP6keEU7HeEVbrmTfor2A/exec';
+const SCRAPE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+const FK_IMAGE_DORMANT_AFTER = 3;    // failures in a row before a combo is skipped by the daily refresh
+const FK_IMAGE_REFRESH_PER_RUN = 40; // stays under the Worker's per-invocation subrequest limit
+
+async function scrapeFlipkartImage(fsn) {
+  try {
+    const resp = await fetch(`${IMAGE_BRIDGE_URL}?marketplace=flipkart&ref=${encodeURIComponent(fsn)}`, {
+      headers: { 'User-Agent': SCRAPE_UA }
+    });
+    if (!resp.ok) return { url: null, status: 'bridge_http_' + resp.status };
+    const data = await resp.json();
+    return { url: data.url || null, status: data.status || (data.ok ? 'ok' : 'unknown') };
+  } catch (e) {
+    return { url: null, status: 'bridge_error:' + e.message };
+  }
+}
+
+// SQLite has no timezone — every timestamp this feature writes is IST.
+function istTimestampSql() {
+  return "datetime('now', '+5 hours', '+30 minutes')";
+}
+
+// Daily refresh (6:30pm IST cron). Takes the 40 combos that most need it —
+// never-fetched/failed first, then oldest image — so the whole list cycles
+// through over a few days without hitting the subrequest limit (the old
+// 300-per-run version failed with "Too many subrequests").
+async function refreshFlipkartImages(env) {
+  await ensureImageCacheTables(env.DB);
+  const rows = (await env.DB.prepare(`
+    SELECT combo_key, fk_fsn, fk_consecutive_failures FROM marketplace_image_cache
+    WHERE fk_fsn IS NOT NULL AND fk_fsn != '' AND fk_dormant = 0
+    ORDER BY (fk_image_url IS NOT NULL AND fk_image_url != '') ASC, fk_updated_at ASC
+    LIMIT ?`).bind(FK_IMAGE_REFRESH_PER_RUN).all()).results || [];
+  let refreshed = 0, failed = 0, wentDormant = 0;
+  for (const row of rows) {
+    const result = await scrapeFlipkartImage(row.fk_fsn);
+    const failures = result.url ? 0 : (row.fk_consecutive_failures || 0) + 1;
+    const dormant = failures >= FK_IMAGE_DORMANT_AFTER ? 1 : 0;
+    // On failure keep the last good image (COALESCE) — a blip shouldn't blank it.
+    await env.DB.prepare(`
+      UPDATE marketplace_image_cache
+      SET fk_image_url = COALESCE(?, fk_image_url), fk_fetch_status = ?, fk_updated_at = ${istTimestampSql()},
+          fk_consecutive_failures = ?, fk_dormant = ?
+      WHERE combo_key = ?`).bind(result.url, result.status, failures, dormant, row.combo_key).run();
+    if (result.url) refreshed++; else { failed++; if (dormant) wentDormant++; }
+  }
+  return { total: rows.length, refreshed, failed, wentDormant };
+}
 
 export default {
   async fetch(request, env) {
@@ -3792,6 +3876,60 @@ export default {
           return json({ ok: result.success, waybill: result.waybill, delhiveryHttpStatus: result.httpStatus, response: result.response, pickup }, result.success ? 200 : 502);
         }
 
+        // ── ORDER-PROCESSING — Flipkart live image registry ─────────────
+        // Body: { action:'syncPicklistImages', items:[{comboKey, ucSkus, fkSku, fkFsn}] }
+        // Returns { ok, images: { comboKey: { fk:{url,status} } } }.
+        if (act === 'syncPicklistImages') {
+          await ensureImageCacheTables(env.DB);
+          const items = Array.isArray(body.items) ? body.items : [];
+          const MAX_LIVE_FETCH = 15; // live scrapes allowed per request (frontend sends 6 at a time)
+          const images = {};
+          let fetches = 0;
+
+          for (const item of items.slice(0, 300)) {
+            const comboKey = item && item.comboKey;
+            if (!comboKey) continue;
+            const fsn = item.fkFsn || '';
+            const existing = await env.DB.prepare(
+              `SELECT fk_sku, fk_fsn, fk_image_url, fk_fetch_status, fk_dormant
+               FROM marketplace_image_cache WHERE combo_key = ?`
+            ).bind(comboKey).first();
+
+            // Scrape now if: new FSN for this combo (relisted), or it has an
+            // FSN but no image yet and isn't dormant (heals old failed rows).
+            const fsnChanged = existing && fsn && fsn !== existing.fk_fsn;
+            const missing = existing && !existing.fk_image_url && !existing.fk_dormant && (fsn || existing.fk_fsn);
+            if (existing && !fsnChanged && !missing) {
+              images[comboKey] = { fk: { url: existing.fk_image_url, status: existing.fk_dormant ? 'dormant' : existing.fk_fetch_status } };
+              continue;
+            }
+            const useFsn = fsn || (existing && existing.fk_fsn) || '';
+            let fk = { url: null, status: useFsn ? 'pending_first_fetch' : 'no_ref' };
+            if (useFsn && fetches < MAX_LIVE_FETCH) { fk = await scrapeFlipkartImage(useFsn); fetches++; }
+            const failures = (useFsn && fk.status !== 'pending_first_fetch' && !fk.url) ? 1 : 0;
+
+            if (existing) {
+              await env.DB.prepare(`
+                UPDATE marketplace_image_cache
+                SET fk_sku = COALESCE(?, fk_sku), fk_fsn = ?, fk_image_url = COALESCE(?, fk_image_url),
+                    fk_fetch_status = ?, fk_updated_at = ${istTimestampSql()}, fk_consecutive_failures = ?, fk_dormant = 0
+                WHERE combo_key = ?`).bind(item.fkSku || null, useFsn, fk.url, fk.status, failures, comboKey).run();
+              if (!fk.url && existing.fk_image_url && !fsnChanged) fk = { url: existing.fk_image_url, status: fk.status };
+            } else {
+              await env.DB.prepare(`
+                INSERT INTO marketplace_image_cache
+                  (combo_key, uc_skus, fk_sku, fk_fsn, fk_image_url, fk_fetch_status, fk_updated_at,
+                   fk_consecutive_failures, fk_dormant, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ${istTimestampSql()}, ?, 0, ${istTimestampSql()})
+                ON CONFLICT(combo_key) DO NOTHING`).bind(
+                comboKey, item.ucSkus || comboKey, item.fkSku || null, useFsn || null, fk.url, fk.status, failures
+              ).run();
+            }
+            images[comboKey] = { fk };
+          }
+          return json({ ok: true, images });
+        }
+
         return json({ ok: false, error: 'Unknown action' }, 400);
       }
 
@@ -3809,6 +3947,22 @@ export default {
   // every 15 minutes). Runs checkNewRoEmails() automatically with no
   // page load, no manual trigger, no Claude involvement needed.
   async scheduled(event, env, ctx) {
+    // Daily Flipkart image refresh — the separate '0 13 * * *' cron
+    // (13:00 UTC = 6:30pm IST, see wrangler.toml). That tick runs ONLY this
+    // job and returns, so its subrequest budget isn't shared with the
+    // email/gatepass watchers — those already run on the 13:00 tick of the
+    // */15 schedule anyway.
+    if (event.cron === '0 13 * * *') {
+      ctx.waitUntil(
+        refreshFlipkartImages(env)
+          .then(r => recordHeartbeat(env, 'flipkart_image_refresh', 'Flipkart Image Refresh (Worker cron, 6:30pm IST)', 'ok',
+            `Refreshed ${r.refreshed} of ${r.total} combo(s), ${r.failed} failed` +
+            (r.wentDormant ? `, ${r.wentDormant} marked dormant (3 failures in a row).` : '.'), 90000))
+          .catch(err => recordHeartbeat(env, 'flipkart_image_refresh', 'Flipkart Image Refresh (Worker cron, 6:30pm IST)', 'error',
+            err.message, 90000).catch(() => {}))
+      );
+      return;
+    }
     // Order-data retention (Supabase mirror) — once a day, on the tick
     // that falls between 20:30 and 20:44 UTC (02:00–02:14 IST).
     const tick = new Date(event.scheduledTime || Date.now());

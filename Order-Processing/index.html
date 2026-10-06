@@ -1161,12 +1161,14 @@ async function fillLiveImages(sections) {
   for (let i = 0; i < items.length; i += IMAGE_LOOKUP_CHUNK_SIZE) {
     const chunk = items.slice(i, i + IMAGE_LOOKUP_CHUNK_SIZE);
     try {
+      let token = null;
+      try { token = (JSON.parse(localStorage.getItem('tm_session_v1') || 'null') || {}).token || null; } catch (e) {}
       const resp = await fetch(IMAGE_API_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: Object.assign({ 'Content-Type': 'application/json' }, token ? { 'X-Tomahawk-Session': token } : {}),
         body: JSON.stringify({
           action: 'syncPicklistImages',
-          items: chunk.map(({comboKey, ucSkus, fkSku, fkFsn, amzSku}) => ({comboKey, ucSkus, fkSku, fkFsn, amzSku}))
+          items: chunk.map(({comboKey, ucSkus, fkSku, fkFsn}) => ({comboKey, ucSkus, fkSku, fkFsn}))
         })
       });
       const data = await resp.json();
@@ -1175,7 +1177,6 @@ async function fillLiveImages(sections) {
           const hit = data.images && data.images[comboKey];
           if (!hit) return;
           if (hit.fk && hit.fk.url) __group.imgUrl = hit.fk.url;
-          else if (hit.amz && hit.amz.url) __group.imgUrl = hit.amz.url;
         });
       }
     } catch (e) {
