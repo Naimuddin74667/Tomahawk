@@ -109,6 +109,7 @@
   textarea:focus, input:focus, button:focus-visible, a:focus-visible {
     outline: 2px solid var(--accent); outline-offset: 1px;
   }
+  [hidden] { display: none !important; }
   .row { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
   button {
     font: inherit; font-weight: 600; padding: 9px 16px;
@@ -193,8 +194,8 @@ email us at care@bullet.co.in"></textarea>
   <section>
     <p class="count" id="count"></p>
     <div id="out"></div>
-    <div class="row" id="allRow" hidden>
-      <button id="dlAll" type="button">Download all as one PDF</button>
+    <div class="row" id="dlRow" hidden>
+      <button id="dl" type="button">Download PDF</button>
     </div>
   </section>
 </main>
@@ -296,7 +297,8 @@ var labels = [];
 var $src = document.getElementById('src');
 var $out = document.getElementById('out');
 var $count = document.getElementById('count');
-var $allRow = document.getElementById('allRow');
+var $dlRow = document.getElementById('dlRow');
+var $dl = document.getElementById('dl');
 
 function esc(s) {
   return String(s).replace(/[&<>"]/g, function (c) {
@@ -326,7 +328,7 @@ function previewSvg(d) {
 function render() {
   if (!labels.length) {
     $count.textContent = '';
-    $allRow.hidden = true;
+    $dlRow.hidden = true;
     $out.innerHTML = '<div class="empty">Paste the label text on the left. The label preview appears here.</div>';
     return;
   }
@@ -345,12 +347,11 @@ function render() {
         '<label>Date of Manufacture<input data-k="date" value="' + esc(d.date) + '"></label>' +
       '</div>' +
       (p.length ? '<div class="msg">' + p.map(esc).join(' ') + '</div>' : '') +
-      '<div class="row"><button type="button" data-dl="' + i + '"' + (p.length ? ' disabled' : '') + '>Download PDF</button></div>' +
     '</div>';
   }).join('') + '</div>';
 
-  $allRow.hidden = labels.length < 2;
-  document.getElementById('dlAll').disabled = okCount !== labels.length;
+  $dlRow.hidden = false;
+  $dl.disabled = okCount !== labels.length;
 }
 
 function reparse() {
@@ -358,22 +359,15 @@ function reparse() {
   render();
 }
 
-function downloadOne(i) {
-  var d = labels[i];
-  if (!d || problems(d).length) return;
-  var doc = newDoc();
-  drawLabel(doc, d);
-  doc.save(fileName(d));
-}
-
-function downloadAll() {
+// One button: a single label saves as label-<model>.pdf, several save as one multi-page PDF
+function download() {
   if (!labels.length || labels.some(function (d) { return problems(d).length; })) return;
   var doc = newDoc();
   labels.forEach(function (d, i) {
     if (i > 0) doc.addPage([LABEL_W, LABEL_H], 'landscape');
     drawLabel(doc, d);
   });
-  doc.save('mrp-labels-' + labels.length + '.pdf');
+  doc.save(labels.length === 1 ? fileName(labels[0]) : 'mrp-labels-' + labels.length + '.pdf');
 }
 
 $src.addEventListener('input', reparse);
@@ -384,12 +378,7 @@ document.getElementById('clear').addEventListener('click', function () {
   $src.focus();
 });
 
-document.getElementById('dlAll').addEventListener('click', downloadAll);
-
-$out.addEventListener('click', function (e) {
-  var b = e.target.closest('[data-dl]');
-  if (b) downloadOne(Number(b.getAttribute('data-dl')));
-});
+$dl.addEventListener('click', download);
 
 // Edits in the small fields update just that label (no full re-render, so typing keeps focus)
 $out.addEventListener('input', function (e) {
@@ -402,15 +391,14 @@ $out.addEventListener('input', function (e) {
   var p = problems(d);
   card.classList.toggle('bad', p.length > 0);
   card.querySelector('.preview').outerHTML = previewSvg(d);
-  card.querySelector('[data-dl]').disabled = p.length > 0;
   inp.classList.toggle('err', !clean(inp.value) && inp.getAttribute('data-k') !== 'date');
   var msg = card.querySelector('.msg');
   if (p.length) {
-    if (!msg) { msg = document.createElement('div'); msg.className = 'msg'; card.querySelector('.row').before(msg); }
+    if (!msg) { msg = document.createElement('div'); msg.className = 'msg'; card.querySelector('.fields').after(msg); }
     msg.textContent = p.join(' ');
   } else if (msg) { msg.remove(); }
   var okCount = labels.filter(function (x) { return !problems(x).length; }).length;
-  document.getElementById('dlAll').disabled = okCount !== labels.length;
+  $dl.disabled = okCount !== labels.length;
   $count.textContent = labels.length + (labels.length === 1 ? ' label' : ' labels') +
     (okCount !== labels.length ? ' (' + (labels.length - okCount) + ' need attention)' : '');
 });
