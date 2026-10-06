@@ -4856,6 +4856,7 @@ async function getEkartToken(env) {
 //   payment_mode: 'Prepaid' or 'COD' (COD collects the declared value)
 //   drop_location  = customer; pickup_location = our Bhiwandi warehouse,
 //   sent in full every time (Ekart's auto-fill proved unreliable).
+//   return_location (forward only) = Customer Returns (Faique) RTO address.
 //   invoice_number/date = our Order ID / today (these are free shipments —
 //   repairs, replacements, FOC — with no separate tax invoice).
 //   Ekart rejects a consignee_alternate_phone equal to the phone, so when
@@ -4907,11 +4908,26 @@ async function createEkartForwardOrder(env, o) {
       name: o.name, address: o.add, city: o.city, state: o.state, country: 'India',
       phone: Number(phone), pin: Number(o.pin)
     },
-    pickup_location: {
+    // Forward: ships out of our E3 pickup warehouse. Reverse: Ekart reads
+    // pickup_location as where the item is DELIVERED to us — Customer Care
+    // reverse pickups go to the Customer Returns (Faique) address.
+    pickup_location: (reverse && env.EKART_RTO_NAME) ? {
+      name: env.EKART_RTO_NAME, address: env.EKART_RTO_ADDRESS,
+      city: env.EKART_RTO_CITY, state: env.EKART_RTO_STATE, country: 'India',
+      phone: Number(env.EKART_RTO_PHONE), pin: Number(env.EKART_RTO_PIN)
+    } : {
       name: env.EKART_PICKUP_NAME, address: env.EKART_PICKUP_ADDRESS,
       city: env.EKART_PICKUP_CITY, state: env.EKART_PICKUP_STATE, country: 'India',
       phone: Number(env.EKART_PICKUP_PHONE || EKART_SUPPORT_PHONE), pin: Number(env.EKART_PICKUP_PIN)
-    }
+    },
+    // RTO address — forward only (Ekart: ignore for reverse). All RTOs go
+    // to the "111- Customer Returns - Faique- ITH (REVERSE)" address
+    // registered in Ekart (Customer Care only), not the pickup.
+    return_location: (!reverse && env.EKART_RTO_NAME) ? {
+      name: env.EKART_RTO_NAME, address: env.EKART_RTO_ADDRESS,
+      city: env.EKART_RTO_CITY, state: env.EKART_RTO_STATE, country: 'India',
+      phone: Number(env.EKART_RTO_PHONE), pin: Number(env.EKART_RTO_PIN)
+    } : undefined
   };
 
   const token = await getEkartToken(env);
