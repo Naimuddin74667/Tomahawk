@@ -170,6 +170,8 @@ tr.combo-row td { background: #fffbeb !important; }
 input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor: pointer; }
 .img-cell { width: 60px; text-align: center; padding: 3px 5px !important; }
 .img-cell img { width: 46px; height: 46px; object-fit: contain; border-radius: 3px; border: 1px solid #e0e0e0; background: #fafafa; display: block; margin: 0 auto; }
+/* "NA" box shown when a product has no image — so missing images stand out and can be fixed */
+.img-na { width: 46px; height: 46px; margin: 0 auto; border: 1px dashed #c0392b; border-radius: 3px; background: #fdecea; color: #c0392b; font: 700 11px/46px Arial, sans-serif; text-align: center; }
 
 /* COMBO BOX */
 .combo-box { background: #fffbeb; border: 1px solid #f0c040; border-radius: 4px; padding: 4px 8px; display: inline-flex; flex-direction: column; gap: 2px; }
@@ -213,7 +215,7 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
   .sku-sell { font-size: 11px !important; color: #333 !important; }
   .sku-sell.diff { background: #ffe1e1 !important; color: #b71c1c !important; border: 1px solid #b71c1c !important; }
   .qty { font-size: 14px !important; color: #000 !important; }
-  .img-cell img { width: 40px !important; height: 40px !important; }
+  .img-cell img, .img-na { width: 40px !important; height: 40px !important; line-height: 40px !important; }
   tr.combo-row td { background: #fff !important; }
   tr:nth-child(even) td { background: #fff !important; }
   .combo-box { background: #fff !important; border: 1px solid #999 !important; }
@@ -965,7 +967,10 @@ function processRows(rows) {
     const comboSize = uniqueSkus.length;
 
     const imgRawUrl = imgRaw.includes('~') ? imgRaw.split('~')[1].trim() : '';
-    const imgUrl = (imgRawUrl && imgRawUrl !== 'NULL') ? imgRawUrl : (IMAGE_MAP[uniqueSkus[0]]||'');
+    // Amazon: only the live Supabase image counts (see fillLiveImages) — no
+    // static IMAGE_MAP fallback, so a missing image shows as "NA" to fix.
+    const isAmazonRow = rowChannel.includes('AMAZON');
+    const imgUrl = (imgRawUrl && imgRawUrl !== 'NULL') ? imgRawUrl : (isAmazonRow ? '' : (IMAGE_MAP[uniqueSkus[0]]||''));
     const orderFsn = extractFsnFromListingId(imgRaw);
 
     const key = uniqueSkus.slice().sort().join('|');
@@ -979,6 +984,7 @@ function processRows(rows) {
         comboKey: key,           // sorted UC SKU set — the D1 registry's primary key
         fkSku: selList[0] || '', // representative Channel SKU for this combo
         channel: rowChannel,     // first channel seen for this combo — decides fkFsn vs amzSku below
+        isAmazon: isAmazonRow,   // Amazon combos show "NA" instead of a static fallback image
         qtyPerSku: Object.fromEntries(uniqueSkus.map(s=>[s,0])),
         skuCounts: Object.fromEntries(uniqueSkus.map(s=>[s,1])),
         orders: [],          // [{ code, sets }] — for the price lookup
@@ -1014,6 +1020,23 @@ function processRows(rows) {
   return sections;
 }
 
+// Image cell: the product photo, or an "NA" box when there is none (or the
+// URL fails to load). Hover the NA box to see which Seller SKU to fix.
+function imgCellHtml(imgUrl, group) {
+  const tip = ('No image — Seller SKU: ' + (group.fkSku || '-') + (group.amzAsin ? ' · ASIN: ' + group.amzAsin : ''))
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  if (!imgUrl) return `<div class="img-na" title="${tip}">NA</div>`;
+  return `<img src="${imgUrl}" alt="" data-tip="${tip}" onerror="imgFailToNA(this)">`;
+}
+// Swaps a broken product image for the "NA" box (keeps the same tooltip).
+function imgFailToNA(img) {
+  const box = document.createElement('div');
+  box.className = 'img-na';
+  box.textContent = 'NA';
+  box.title = img.getAttribute('data-tip') || 'Image failed to load';
+  img.replaceWith(box);
+}
+
 function renderSection(groups, comboSize, rowNumStart) {
   let html = '';
   let rowNum = rowNumStart;
@@ -1045,7 +1068,8 @@ function renderSection(groups, comboSize, rowNumStart) {
 
   sorted.forEach(group => {
     const isMultiRow = group.uniqueSkus.length > 1;
-    const imgUrl = group.imgUrl || IMAGE_MAP[group.uniqueSkus[0]] || '';
+    const imgUrl = group.isAmazon ? (group.imgUrl || '') : (group.imgUrl || IMAGE_MAP[group.uniqueSkus[0]] || '');
+    const imgHtml = imgCellHtml(imgUrl, group);
     const priceHtml = formatPriceBreakdown(group.priceCounts);
 
     // combo chip html
@@ -1079,7 +1103,7 @@ function renderSection(groups, comboSize, rowNumStart) {
           <td><div class="sku">${sku}</div></td>
           ${selCell}
           ${isCombo && isFirst ? `<td rowspan="${rowspan}" style="width:200px">${comboHtml}</td>` : isCombo && !isFirst ? '' : ''}
-          ${isFirst ? `<td rowspan="${rowspan}" class="img-cell">${imgUrl ? `<img src="${imgUrl}" alt="">` : ''}</td>` : ''}
+          ${isFirst ? `<td rowspan="${rowspan}" class="img-cell">${imgHtml}</td>` : ''}
           ${isFirst ? `<td rowspan="${rowspan}" class="price-cell">${priceHtml}</td>` : ''}
           ${isFirst ? `<td rowspan="${rowspan}" class="qty">${group.qty||group.qtyPerSku[sku]}</td>` : ''}
           ${isFirst ? `<td rowspan="${rowspan}" class="check-col"><input type="checkbox"></td>` : ''}
@@ -1092,7 +1116,7 @@ function renderSection(groups, comboSize, rowNumStart) {
         <td><div class="sku">${sku}</div></td>
         <td><div class="sku-sell${skusDiffer(sku, group.selMap[sku]||'') ? ' diff' : ''}">${group.selMap[sku]||''}</div></td>
         <td style="width:200px"></td>
-        <td class="img-cell">${imgUrl ? `<img src="${imgUrl}" alt="">` : ''}</td>
+        <td class="img-cell">${imgHtml}</td>
         <td class="price-cell">${priceHtml}</td>
         <td class="qty">${group.qty||group.qtyPerSku[sku]}</td>
         <td class="check-col"><input type="checkbox"></td>
@@ -1145,8 +1169,8 @@ async function fillLiveImages(sections) {
         fkSku: group.fkSku || '',
         fkFsn: group.fsn || '',
         // Amazon channel orders carry a Seller SKU (same CSV column as
-        // Flipkart's) but never an FSN — the Worker resolves ASIN from this
-        // via the bridge's AMZ_Catalog lookup on first registration only.
+        // Flipkart's) but never an FSN — the Worker maps it to an ASIN and
+        // returns that ASIN's main image, live from the Supabase mirror.
         amzSku: isAmazon ? (group.fkSku || '') : '',
         __group: group
       });
@@ -1168,7 +1192,7 @@ async function fillLiveImages(sections) {
         headers: Object.assign({ 'Content-Type': 'application/json' }, token ? { 'X-Tomahawk-Session': token } : {}),
         body: JSON.stringify({
           action: 'syncPicklistImages',
-          items: chunk.map(({comboKey, ucSkus, fkSku, fkFsn}) => ({comboKey, ucSkus, fkSku, fkFsn}))
+          items: chunk.map(({comboKey, ucSkus, fkSku, fkFsn, amzSku}) => ({comboKey, ucSkus, fkSku, fkFsn, amzSku}))
         })
       });
       const data = await resp.json();
@@ -1177,6 +1201,7 @@ async function fillLiveImages(sections) {
           const hit = data.images && data.images[comboKey];
           if (!hit) return;
           if (hit.fk && hit.fk.url) __group.imgUrl = hit.fk.url;
+          if (hit.amz && hit.amz.url) { __group.imgUrl = hit.amz.url; __group.amzAsin = hit.amz.asin || ''; }
         });
       }
     } catch (e) {

@@ -3919,9 +3919,12 @@ export default {
           return json({ ok: result.success, waybill: result.waybill, delhiveryHttpStatus: result.httpStatus, response: result.response, pickup }, result.success ? 200 : 502);
         }
 
-        // ── ORDER-PROCESSING — Flipkart live image registry ─────────────
-        // Body: { action:'syncPicklistImages', items:[{comboKey, ucSkus, fkSku, fkFsn}] }
-        // Returns { ok, images: { comboKey: { fk:{url,status} } } }.
+        // ── ORDER-PROCESSING — live picklist images ─────────────────────
+        // Body: { action:'syncPicklistImages', items:[{comboKey, ucSkus, fkSku, fkFsn, amzSku}] }
+        // Returns { ok, images: { comboKey: { fk:{url,status} } | { amz:{url,asin} } } }.
+        // Amazon items (amzSku set): image straight from Supabase (see
+        // amzPicklistImages) — no D1 registry. Flipkart items: D1 registry
+        // + GAS-bridge scrape, as before.
         if (act === 'syncPicklistImages') {
           await ensureImageCacheTables(env.DB);
           const items = Array.isArray(body.items) ? body.items : [];
@@ -3929,9 +3932,21 @@ export default {
           const images = {};
           let fetches = 0;
 
+          let amzImgs = {};
+          const amzSkus = items.map(i => i && i.amzSku).filter(Boolean);
+          if (amzSkus.length) {
+            try { amzImgs = await amzPicklistImages(env, amzSkus); }
+            catch (e) { console.warn('Amazon picklist images failed:', e.message); }
+          }
+
           for (const item of items.slice(0, 300)) {
             const comboKey = item && item.comboKey;
             if (!comboKey) continue;
+            if (item.amzSku) {
+              const hit = amzImgs[String(item.amzSku).trim()];
+              images[comboKey] = { amz: hit ? { url: hit.url, asin: hit.asin } : { url: null, status: 'not_found' } };
+              continue;
+            }
             const fsn = item.fkFsn || '';
             const existing = await env.DB.prepare(
               `SELECT fk_sku, fk_fsn, fk_image_url, fk_fetch_status, fk_dormant
@@ -5630,6 +5645,61 @@ async function submitWarrantyClaim(env, b, ip) {
     } catch (e) { console.error('claim confirmation email failed:', e.message); }
   }
   return { ok: true, claim_id: claimId, warranty_status: warrantyStatus };
+}
+
+// ── Order-Processing: Amazon picklist images — LIVE from Supabase ──
+// Seller SKU (the "Seller SKUs" column of the UC export) → ASIN → image.
+// ASIN comes from whichever Amazon table knows the seller SKU, in order:
+// amz_listings, amz_fba_inventory, amz_order_items, amz_orders_report.
+// Image is amz_catalog.main_image_url (SK's daily Amazon catalog sync).
+// Returns { sellerSku: { url, asin } } — SKUs with no image are left out.
+async function amzPicklistImages(env, sellerSkus) {
+  const skus = [...new Set((sellerSkus || []).map(s => String(s || '').trim()).filter(Boolean))].slice(0, 100);
+  if (!skus.length || !env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) return {};
+  const base = env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/';
+  const h = supabaseHeaders(env);
+  const inList = arr => 'in.(' + arr.map(x => '"' + String(x).replace(/["\\]/g, '') + '"').join(',') + ')';
+  async function get(path) {
+    const r = await fetch(base + path, { headers: h });
+    if (!r.ok) throw new Error('Supabase read ' + r.status + ' ' + path.split('?')[0]);
+    return r.json();
+  }
+
+  // sellerSku → [asin, ...] in source-priority order
+  const asinsBySku = {};
+  const add = (sku, asin) => {
+    if (!sku || !asin) return;
+    const list = asinsBySku[sku] || (asinsBySku[sku] = []);
+    if (!list.includes(asin)) list.push(asin);
+  };
+  const sources = [
+    ['amz_listings', 'seller_sku'], ['amz_fba_inventory', 'seller_sku'],
+    ['amz_order_items', 'seller_sku'], ['amz_orders_report', 'sku']
+  ];
+  let pending = skus.slice();
+  for (const [table, col] of sources) {
+    if (!pending.length) break;
+    const rows = await get(`${table}?select=${col},asin&${col}=${encodeURIComponent(inList(pending))}&asin=not.is.null&limit=1000`);
+    rows.forEach(r => add(r[col], r.asin));
+    pending = pending.filter(s => !asinsBySku[s]);
+  }
+
+  const allAsins = [...new Set(Object.values(asinsBySku).flat())];
+  if (!allAsins.length) return {};
+  const cat = await get(`amz_catalog?select=asin,main_image_url&asin=${encodeURIComponent(inList(allAsins))}&main_image_url=neq.`);
+  const imgByAsin = {};
+  cat.forEach(c => { if (c.main_image_url) imgByAsin[c.asin] = c.main_image_url; });
+
+  const out = {};
+  skus.forEach(sku => {
+    const asin = (asinsBySku[sku] || []).find(a => imgByAsin[a]);
+    if (!asin) return;
+    // Ask Amazon's CDN for a 300px copy — plenty for a picklist thumbnail
+    // and much lighter than the full-size original.
+    const url = imgByAsin[asin].replace(/(\/images\/I\/[^./]+)\.(jpg|jpeg|png)$/i, '$1._SL300_.$2');
+    out[sku] = { url, asin };
+  });
+  return out;
 }
 
 // ── Order-data retention: delete mirror order rows older than 8 months.
