@@ -1788,33 +1788,28 @@ async function to4x6Pdf(bytes) {
     return null;
   }
 
+  // Ekart's escalation Comment box allows max 500 characters (the AWB
+  // goes in its own WBNs field), so keep this compact. If a long name /
+  // product pushes it over, drop the least useful parts, then hard-cut.
+  var TICKET_MAX = 500;
   function ticketText(o, c) {
     var sh = ship(o), rev = o.direction === 'reverse';
-    var custAddr = [sh.name, sh.city, sh.state].filter(Boolean).join(', ') + (sh.pin ? ' - ' + sh.pin : '');
-    var lines = [
-      rev ? 'Reverse shipment marked DELIVERED but NOT received at our warehouse.'
-          : 'Shipment marked DELIVERED but the customer has NOT received it.',
-      '',
-      'AWB: ' + (o.waybill || ''),
-      'Order ID: ' + o.order_id,
-      'Shipment type: ' + (rev ? 'Reverse pickup' : 'Forward'),
-      (rev ? 'Picked up from: ' : 'Shipped to: ') + custAddr,
-      rev ? 'Delivered to: ' + OUR_ADDRESS : 'Customer phone: ' + (sh.phone || ''),
-      'Marked Delivered on: ' + (fmtWhen(o.delivered_at || o.tracked_at) || '-'),
-      'Product: ' + (c.product || ''),
-      sh.total_amount ? 'Declared value: Rs. ' + sh.total_amount : '',
-      '',
-      rev ? 'This parcel has not reached our warehouse and nobody from our team has received or signed for it.'
-          : 'The customer confirms the parcel was not handed over to them.',
-      'Please:',
-      '1. Share the POD (receiver name, signature, OTP / delivery photo)',
-      '2. Share the delivery executive name, contact number and delivering hub',
-      '3. Trace the shipment and get it delivered' + (rev ? ' to us' : ' to the customer'),
-      '4. If it cannot be traced, process it as a lost-shipment claim',
-      '',
-      (rev ? 'The customer is waiting for their ' + (o.job_type === 'Refund' ? 'refund' : 'replacement / repair') + ', so this is urgent.' : 'This is urgent.')
-    ];
-    return lines.filter(function (l, i, a) { return l !== '' || a[i - 1] !== ''; }).join('\n');
+    var when = fmtWhen(o.delivered_at || o.tracked_at) || 'courier portal';
+    var place = function (n) { return [String(sh.name || '').slice(0, n), sh.city].filter(Boolean).join(', ') + (sh.pin ? ' ' + sh.pin : ''); };
+    var build = function (opt) {
+      var p = [
+        'Marked Delivered on ' + when + ' but NOT ' + (rev ? 'received at our warehouse (Industrial Tools Corp, Bhiwandi 421302).' : 'received by the customer.'),
+        'Order ' + o.order_id + ', ' + (rev ? 'reverse pickup from ' : 'shipped to ') + place(opt.name) + '.',
+        'Product: ' + String(c.product || '').slice(0, opt.prod) + (opt.value && sh.total_amount ? ', value Rs.' + sh.total_amount : '') + '.',
+        rev ? 'Nobody from our team received or signed for it.' : 'Customer confirms it was not handed over.',
+        'Please share POD (receiver name, sign, OTP/photo), delivery executive name & number, trace and deliver' + (rev ? ' to us' : '') + ', else process lost-shipment claim.',
+        rev ? 'Urgent - customer awaiting ' + (o.job_type === 'Refund' ? 'refund.' : 'replacement/repair.') : 'Urgent.'
+      ];
+      return p.join(' ');
+    };
+    var tries = [{ name: 60, prod: 80, value: true }, { name: 40, prod: 50, value: false }, { name: 25, prod: 30, value: false }];
+    for (var i = 0; i < tries.length; i++) { var t = build(tries[i]); if (t.length <= TICKET_MAX) return t; }
+    return build(tries[tries.length - 1]).slice(0, TICKET_MAX);
   }
 
   // "2d 5h left" / "Window closed" from the Delivered time.
@@ -1836,19 +1831,22 @@ async function to4x6Pdf(bytes) {
         ' <span class="mono">' + esc(o.waybill || '') + '</span> ' +
         '<span style="margin-left:8px;color:' + (w.late ? '#ef4444' : 'var(--text2)') + ';font-weight:600">' + esc(w.txt) + '</span></div>' +
       '<div class="cm-summary" style="grid-template-columns:1fr">' +
-        '<div><div class="cm-k">Ticket message (edit if needed)</div><textarea class="sb-input" id="tk-msg" rows="14">' + esc(ticketText(o, c)) + '</textarea></div>' +
+        '<div><div class="cm-k">Ticket comment (edit if needed) <span id="tk-count" style="float:right"></span></div><textarea class="sb-input" id="tk-msg" rows="6" maxlength="' + TICKET_MAX + '">' + esc(ticketText(o, c)) + '</textarea></div>' +
       '</div>' +
       '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
         '<button class="case-act primary" id="tk-copy">Copy message</button>' +
         '<button class="case-act" id="tk-copy-awb">Copy AWB</button>' +
         '<a class="case-act" target="_blank" rel="noopener" href="' + (ekart ? 'https://app.elite.ekartlogistics.in/' : 'https://one.delhivery.com/') + '">Open ' + (ekart ? 'Ekart Elite' : 'Delhivery One') + ' &#8599;</a>' +
         '<button class="case-act" data-x>Close</button>' +
-        '<span class="cm-muted" style="margin-left:auto">' + (ekart ? 'Ekart Elite &#8594; Escalations &#8594; raise on this AWB, paste the message.' : 'Raise a ticket on this AWB and paste the message.') + '</span>' +
+        '<span class="cm-muted" style="margin-left:auto">' + (ekart ? 'Ekart Elite &#8594; Create New Escalation &#8594; ' + (o.direction === 'reverse' ? 'Reverse Shipment' : 'Forward Shipment') + ' / POD required &#8594; paste AWB in WBNs + this in Comment.' : 'Raise a ticket on this AWB and paste the message.') + '</span>' +
       '</div>');
     panelCancel(panel);
     var copy = function (b, txt) {
       navigator.clipboard.writeText(txt).then(function () { var t = b.textContent; b.textContent = 'Copied ✓'; setTimeout(function () { b.textContent = t; }, 1500); });
     };
+    var msgEl = document.getElementById('tk-msg'), cnt = document.getElementById('tk-count');
+    var recount = function () { cnt.textContent = msgEl.value.length + '/' + TICKET_MAX; };
+    recount(); msgEl.addEventListener('input', recount);
     document.getElementById('tk-copy').addEventListener('click', function () { copy(this, document.getElementById('tk-msg').value); });
     document.getElementById('tk-copy-awb').addEventListener('click', function () { copy(this, o.waybill || ''); });
   }
