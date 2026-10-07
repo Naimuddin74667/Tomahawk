@@ -1695,9 +1695,10 @@ let importItems  = [];
 let factoryItems = [];
 let generatedLabels = [];
 let ucCache      = {}; // legacy external-source lookup cache — vestigial fallback only, never populated or persisted
-let ucItemMasterSkus   = []; // full list of enabled UC SKUs from UC_ItemMaster, via shared uc_sku_cache (Hub "Refresh SKU List")
+let ucItemMasterSkus   = []; // full list of enabled UC SKUs — live from Supabase (uc_item_types) via Worker ucsku_getList
 let ucItemMasterSyncedAt = null;
-let ucPiecesPerCarton = {}; // { skuCode: qty } — live "Pieces Per Carton" from UC_Catalog custom fields, via same refresh
+let ucPiecesPerCarton = {}; // { skuCode: qty } — live "Pieces Per Carton" UC custom field, same source
+let ucCategories     = {}; // { skuCode: categoryCode } — live UC category, same source
 let categories   = []; // derived from sku_master on load; new ones appended in-memory as entered
 let boxCounters  = {}; // in-memory snapshot of D1 box_counters — loaded once via loadBoxCountersFromD1()
 let gpImageCache = {}; // in-memory imageUrl lookup, populated from sku_master load — no localStorage
@@ -1757,10 +1758,10 @@ async function loadBoxCountersFromD1() {
   }
 }
 
-// Loads the shared UC Item Master SKU snapshot (uc_sku_cache, D1) — the full
-// list of currently-enabled SKUs pulled from UC_ItemMaster via the Hub's
-// "Refresh SKU List" button. This is the authoritative UC SKU list used for
-// the Warehouse Label "UC SKU" search, not just SKUs already mapped here.
+// Loads the enabled UC SKU list — live from the Supabase API mirror via the
+// Worker (synced from UC every ~15 min; Worker falls back to its last saved
+// D1 copy if Supabase is down). This is the authoritative UC SKU list used
+// for the Warehouse Label "UC SKU" search, not just SKUs already mapped here.
 async function loadUcItemMasterFromD1() {
   try {
     const res = await fetch(`${WORKER}?action=ucsku_getList`);
@@ -1768,6 +1769,7 @@ async function loadUcItemMasterFromD1() {
     if (!data.ok) throw new Error(data.error || 'Load failed');
     ucItemMasterSkus = data.skus || [];
     ucPiecesPerCarton = data.piecesPerCarton || {};
+    ucCategories = data.categories || {};
     ucItemMasterSyncedAt = data.updatedAt || null;
   } catch(e) {
     showToast('⚠ Could not load UC Item Master SKU list — ' + e.message, true);
@@ -3473,7 +3475,7 @@ function whFilterUcSkuList(query) {
   if (!matches.length) { list.style.display = 'none'; hint.style.display = 'none'; return; }
   list.innerHTML = matches.map(function(s) {
     const smEntry = skuMap.find(function(m) { return m.ucSku === s; });
-    const catRaw  = (smEntry && smEntry.category) || (ucCache[s] || {}).categoryName || '';
+    const catRaw  = (smEntry && smEntry.category) || ucCategories[s] || (ucCache[s] || {}).categoryName || '';
     const cat     = catRaw && catRaw !== 'Default' ? '  ·  ' + catRaw : '';
     const ppcVal  = ucPiecesPerCarton[s] || (smEntry && smEntry.pcsPerCarton) || null;
     const ppcTag  = ppcVal ? '  ·  ' + ppcVal + '/box' : '';
@@ -3493,14 +3495,15 @@ function whUcSkuPicked(val) {
   document.getElementById('wh-ucsku-list').style.display = 'none';
   document.getElementById('wh-ucsku-hint').style.display = 'none';
 
-  // Auto-fill from live UC Item Master (UC_Catalog) first, then skuMap
-  // (live sku_master), then ucCache, then UC_IMAGE_MAP fallback
+  // Auto-fill: sku_master (already mapped here) first, then live UC data
+  // from Supabase (category, carton size), then UC_IMAGE_MAP for images
   const smEntry = skuMap.find(function(m) { return m.ucSku === val; }) || {};
   const data = ucCache[val] || {};
   const img  = (smEntry.imageUrl && smEntry.imageUrl.length > 5) ? smEntry.imageUrl
              : (data.imageUrl && data.imageUrl.length > 5) ? data.imageUrl
              : (UC_IMAGE_MAP[val] || '');
   const cat  = (smEntry.category && smEntry.category !== 'Default') ? smEntry.category
+             : ucCategories[val] ? ucCategories[val]
              : (data.categoryName && data.categoryName !== 'Default') ? data.categoryName
              : '';
   const ppc  = ucPiecesPerCarton[val] || smEntry.pcsPerCarton || data.pcsPerCarton || null;

@@ -61,46 +61,99 @@ function findSkuMatches(query, invRows) {
   ).slice(0, 8);
 }
 
-// ── Returns Verifier: LIVE enabled SIMPLE UC SKUs ──
-// Read straight from UC_ItemMaster on the UC API (Auto Sync) sheet (synced
-// from UC every ~2h), NOT the manual uc_sku_cache snapshot — so a SKU
-// disabled in UC drops out automatically. Bundles (UC_BundleComposition via
-// the GAS bridge), Block-*/Unlinked-*/Bundle-* placeholders are removed.
-// Edge-cached 10 min. Throws if the live sheet can't be read.
-const RSV_ITEMMASTER_CSV = 'https://docs.google.com/spreadsheets/d/17gMjH2tqTRKyyRXf8pvMtZXaj0MfyUFRWtFKODGHIlw/gviz/tq?tqx=out:csv&sheet=UC_ItemMaster';
-async function rsvLiveSimpleSkus() {
+// ── Enabled UC SKUs — LIVE from the Supabase API mirror ──
+// Source: uc_item_types (SK's sync writes it from UC every ~15 min). This
+// replaced the old UC_ItemMaster Google Sheet read (Oct 2026) — no sheet
+// is involved any more. Returns:
+//   { skus:[...], piecesPerCarton:{sku:n}, categories:{sku:cat}, syncedAt }
+// Edge-cached 10 min; fresh=true skips the cache (hub "Refresh SKU List").
+// Every real Supabase read is also written to D1 uc_sku_cache, so if
+// Supabase is ever down, ucsku_getList can still serve the last good list.
+const UC_SKUS_CACHE_KEY = 'https://cache.internal/uc-enabled-skus-v1';
+async function ucEnabledSkusLive(env, fresh) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured on Worker');
   const cache = caches.default;
-  const key = new Request('https://cache.internal/rsv-live-simple-skus-v1');
+  const key = new Request(UC_SKUS_CACHE_KEY);
+  if (!fresh) { const hit = await cache.match(key); if (hit) return hit.json(); }
+
+  // Page through until an empty page — Supabase caps rows per request.
+  const base = env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/uc_item_types'
+    + '?select=sku,category_code,synced_at,cf:raw->customFieldValues&enabled=is.true&order=sku.asc';
+  const PAGE = 500, rows = [];
+  for (let from = 0; from < 20000; from += PAGE) {
+    const r = await fetch(base + '&limit=' + PAGE + '&offset=' + from, { headers: supabaseHeaders(env) });
+    if (!r.ok) throw new Error('Supabase uc_item_types read failed: HTTP ' + r.status);
+    const page = await r.json();
+    if (!page.length) break;
+    rows.push(...page);
+  }
+
+  const seen = new Set(), skus = [], piecesPerCarton = {}, categories = {};
+  let syncedAt = null;
+  rows.forEach(function (r) {
+    const sku = String(r.sku || '').trim();
+    if (!sku || seen.has(sku)) return;
+    seen.add(sku); skus.push(sku);
+    if (r.category_code && r.category_code !== 'Default') categories[sku] = r.category_code;
+    // "Pieces Per Carton" is a UC custom field — sparse, only set for some SKUs
+    const f = Array.isArray(r.cf) ? r.cf.find(x => x && x.fieldName === 'PiecesPerCarton') : null;
+    const v = f && f.fieldValue != null ? String(f.fieldValue).trim() : '';
+    if (/^\d+$/.test(v) && +v > 0) piecesPerCarton[sku] = parseInt(v, 10);
+    if (r.synced_at && (!syncedAt || r.synced_at > syncedAt)) syncedAt = r.synced_at;
+  });
+  if (!skus.length) throw new Error('Supabase uc_item_types returned 0 enabled SKUs');
+
+  const out = { skus, piecesPerCarton, categories, syncedAt };
+  await cache.put(key, new Response(JSON.stringify(out), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=600' } }));
+  // Fallback copy in D1 — best effort, never blocks the live answer.
+  try { await saveUcSkuSnapshot(env.DB, skus, piecesPerCarton); } catch (e) { console.warn('uc_sku_cache write failed:', e.message); }
+  return out;
+}
+
+// Saves the enabled-SKU list (+ carton sizes) to D1 uc_sku_cache — the
+// fallback ucsku_getList serves when Supabase can't be reached.
+async function saveUcSkuSnapshot(DB, skus, piecesPerCarton) {
+  await ensureUcSkuCacheTable(DB);
+  await DB.prepare(`
+    INSERT INTO uc_sku_cache (key, value, updated_at) VALUES ('enabled_skus', ?, datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).bind(JSON.stringify(skus)).run();
+  await DB.prepare(`
+    INSERT INTO uc_sku_cache (key, value, updated_at) VALUES ('pieces_per_carton', ?, datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).bind(JSON.stringify(piecesPerCarton || {})).run();
+}
+
+// ── Returns Verifier: LIVE enabled SIMPLE UC SKUs ──
+// Enabled SKUs from Supabase (ucEnabledSkusLive above) minus bundles
+// (Supabase uc_bundle_composition parent SKUs) and Block-*/Unlinked-*/
+// Bundle-* placeholders. Edge-cached 10 min. Throws if Supabase can't be read.
+async function rsvLiveSimpleSkus(env) {
+  const cache = caches.default;
+  const key = new Request('https://cache.internal/rsv-live-simple-skus-v2');
   const hit = await cache.match(key);
   if (hit) return hit.json();
-  const res = await fetch(RSV_ITEMMASTER_CSV);
-  if (!res.ok) throw new Error('UC_ItemMaster fetch failed: HTTP ' + res.status);
-  const text = await res.text();
-  if (text.trim().startsWith('<')) throw new Error('UC_ItemMaster sheet is not publicly readable');
-  const lines = text.split(/\r?\n/).filter(l => l.trim());
-  const header = (parseCSVRow(lines[0]) || []).map(h => h.trim());
-  const skuIdx = header.indexOf('skuCode'), enIdx = header.indexOf('enabled');
-  if (skuIdx === -1 || enIdx === -1) throw new Error('UC_ItemMaster is missing skuCode/enabled columns');
+  const live = await ucEnabledSkusLive(env);
   let bundles = new Set();
   try {
-    const b = await fetchGasCached(SA_UC_GAS_URL + '?type=bundles', 'https://cache.internal/rsv-uc-bundles-v1');
-    bundles = new Set(Object.keys((b && b.bundles) || {}));
-  } catch (e) { /* fall back to naming rule below */ }
+    const base = env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/uc_bundle_composition?select=parent_sku';
+    for (let from = 0; from < 20000; from += 500) {
+      const r = await fetch(base + '&limit=500&offset=' + from, { headers: supabaseHeaders(env) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const page = await r.json();
+      if (!page.length) break;
+      page.forEach(b => { if (b.parent_sku) bundles.add(String(b.parent_sku).trim()); });
+    }
+  } catch (e) { bundles = new Set(); /* fall back to naming rule below */ }
   const useNamingRule = bundles.size === 0;
-  const seen = new Set(), skus = [];
-  for (let i = 1; i < lines.length; i++) {
-    const c = parseCSVRow(lines[i]) || [];
-    const sku = String(c[skuIdx] || '').trim();
-    const en = String(c[enIdx] || '').trim().toUpperCase();
-    if (!sku || seen.has(sku) || (en !== 'TRUE' && en !== '1')) continue;
-    if (/^(block|unlinked|bundle)-/i.test(sku)) continue;
-    if (bundles.has(sku)) continue;
-    if (useNamingRule && sku.indexOf('_') !== -1 && !/_Bare-Tool$/i.test(sku)) continue;
-    seen.add(sku); skus.push(sku);
-  }
-  skus.sort();
-  if (!skus.length) throw new Error('UC_ItemMaster returned 0 enabled SKUs');
-  const out = { skus, bundleSource: useNamingRule ? 'naming-rule' : 'UC_BundleComposition', fetchedAt: new Date().toISOString() };
+  const skus = live.skus.filter(function (sku) {
+    if (/^(block|unlinked|bundle)-/i.test(sku)) return false;
+    if (bundles.has(sku)) return false;
+    if (useNamingRule && sku.indexOf('_') !== -1 && !/_Bare-Tool$/i.test(sku)) return false;
+    return true;
+  });
+  if (!skus.length) throw new Error('No enabled simple SKUs found in Supabase');
+  const out = { skus, bundleSource: useNamingRule ? 'naming-rule' : 'uc_bundle_composition', fetchedAt: new Date().toISOString() };
   await cache.put(key, new Response(JSON.stringify(out), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=600' } }));
   return out;
 }
@@ -307,10 +360,10 @@ const ACTION_TIERS = {
   sm_getAll: 'viewer_read',
   sm_upsert: 'manager_up', sm_upsertBulk: 'manager_up', sm_delete: 'manager_up',
 
-  // — UC SKU List cache: shared snapshot of enabled UC_ItemMaster SKUs,
-  //   refreshed on-demand from the hub (admin-only "Refresh SKU List"
-  //   button) and read by Master Sheet's Add SKU dropdown. —
-  ucsku_getList: 'viewer_read', ucsku_saveList: 'admin_only',
+  // — UC SKU List: enabled UC SKUs live from Supabase (uc_item_types), D1
+  //   uc_sku_cache as fallback. ucsku_refresh = hub's admin-only
+  //   "Refresh SKU List" button (skips the 10-min cache). —
+  ucsku_getList: 'viewer_read', ucsku_refresh: 'admin_only',
 
   // — Order-Processing: customer selling price per UC order, read from the
   //   Supabase API mirror (SK's UC sync). Read-only, same tier as above. —
@@ -1205,22 +1258,31 @@ export default {
           return json({ ok: true, rows: rows.results || [] });
         }
 
-        // ── UC SKU LIST CACHE — shared snapshot for Add SKU dropdown ────
-        if (action === 'ucsku_getList') {
-          await ensureUcSkuCacheTable(env.DB);
-          const row  = await env.DB.prepare("SELECT value, updated_at FROM uc_sku_cache WHERE key = 'enabled_skus'").first();
-          const ppcRow = await env.DB.prepare("SELECT value FROM uc_sku_cache WHERE key = 'pieces_per_carton'").first();
-          return json({
-            ok: true,
-            skus: row ? JSON.parse(row.value || '[]') : [],
-            piecesPerCarton: ppcRow ? JSON.parse(ppcRow.value || '{}') : {},
-            updatedAt: row ? row.updated_at : null
-          });
+        // ── UC SKU LIST — enabled UC SKUs, live from Supabase ──────────
+        // Falls back to the last good copy in D1 (uc_sku_cache) only if
+        // Supabase can't be read. `source` tells the app which one it got.
+        if (action === 'ucsku_getList' || action === 'ucsku_refresh') {
+          try {
+            const live = await ucEnabledSkusLive(env, action === 'ucsku_refresh');
+            return json({ ok: true, source: 'supabase', skus: live.skus, piecesPerCarton: live.piecesPerCarton, categories: live.categories, updatedAt: live.syncedAt });
+          } catch (e) {
+            if (action === 'ucsku_refresh') return json({ ok: false, error: e.message }, 502);
+            await ensureUcSkuCacheTable(env.DB);
+            const row  = await env.DB.prepare("SELECT value, updated_at FROM uc_sku_cache WHERE key = 'enabled_skus'").first();
+            const ppcRow = await env.DB.prepare("SELECT value FROM uc_sku_cache WHERE key = 'pieces_per_carton'").first();
+            return json({
+              ok: true, source: 'd1-snapshot', warning: 'Supabase unavailable (' + e.message + ') — showing last saved list',
+              skus: row ? JSON.parse(row.value || '[]') : [],
+              piecesPerCarton: ppcRow ? JSON.parse(ppcRow.value || '{}') : {},
+              categories: {},
+              updatedAt: row ? row.updated_at : null
+            });
+          }
         }
 
         // ── RETURNS VERIFIER — live enabled simple SKU list ────────────
         if (action === 'rsv_getLiveSkus') {
-          try { return json(Object.assign({ ok: true }, await rsvLiveSimpleSkus())); }
+          try { return json(Object.assign({ ok: true }, await rsvLiveSimpleSkus(env))); }
           catch (e) { return json({ ok: false, error: e.message }, 502); }
         }
 
@@ -2698,25 +2760,6 @@ export default {
           return json({ ok: true });
         }
 
-        // ── UC SKU LIST CACHE — save freshly-fetched snapshot (admin only) ──
-        if (act === 'ucsku_saveList') {
-          await ensureUcSkuCacheTable(env.DB);
-          const { skus, piecesPerCarton } = body;
-          if (!Array.isArray(skus)) return json({ ok: false, error: 'skus array required' }, 400);
-          await env.DB.prepare(`
-            INSERT INTO uc_sku_cache (key, value, updated_at) VALUES ('enabled_skus', ?, datetime('now'))
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-          `).bind(JSON.stringify(skus)).run();
-          let ppcCount = 0;
-          if (piecesPerCarton && typeof piecesPerCarton === 'object') {
-            ppcCount = Object.keys(piecesPerCarton).length;
-            await env.DB.prepare(`
-              INSERT INTO uc_sku_cache (key, value, updated_at) VALUES ('pieces_per_carton', ?, datetime('now'))
-              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-            `).bind(JSON.stringify(piecesPerCarton)).run();
-          }
-          return json({ ok: true, count: skus.length, ppcCount });
-        }
 
         // ── RETURNS VERIFIER — auto-read a slip photo (Workers AI) ────────
         // The vision model ONLY transcribes the handwriting (row, SKU text,
@@ -2937,7 +2980,7 @@ export default {
           // Hard rule: only ENABLED SIMPLE UC SKUs, checked against the live
           // UC list at save time — disabled SKUs and bundles are refused.
           let live;
-          try { live = await rsvLiveSimpleSkus(); }
+          try { live = await rsvLiveSimpleSkus(env); }
           catch (e) { return json({ ok: false, error: 'Could not check SKUs against live UC (' + e.message + ') — try again' }, 502); }
           const liveSet = new Set(live.skus);
           const bad = items.filter(i => !liveSet.has(i.sku)).map(i => i.sku);
