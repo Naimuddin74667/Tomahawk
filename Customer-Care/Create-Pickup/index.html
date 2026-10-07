@@ -684,6 +684,7 @@ function switchPickupTab(name) {
     var roleLabels = { admin: 'Admin', manager: 'Manager', viewer: 'Viewer', picker_packer: 'Picker & Packer' };
     document.getElementById('user-role-badge').textContent = roleLabels[user.role] || user.role;
     window.TM_ROLE = user.role;
+    window.TM_USER = String(user.username || '').toLowerCase();
     applyRoleGating(user.role);
   }
 
@@ -1437,7 +1438,9 @@ function initDelhiveryApp() {
     if (!o.received_at) {
       // Only once the courier says it's delivered to us: highlighted row +
       // button to verify it physically arrived. Before that, no action.
-      return needsVerify(o)
+      // "Received" = Admin + Faique only (Worker enforces CC_RECEIVE_USERS).
+      var canReceive = window.TM_ROLE === 'admin' || ['faique'].indexOf(window.TM_USER) !== -1;
+      return needsVerify(o) && canReceive
         ? '<div><button type="button" class="row-act verify" data-act="recv">Received</button></div>'
         : '';
     }

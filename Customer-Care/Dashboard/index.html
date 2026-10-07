@@ -558,6 +558,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     var roleLabels = { admin: 'Admin', manager: 'Manager', viewer: 'Viewer', picker_packer: 'Picker & Packer' };
     document.getElementById('user-role-badge').textContent = roleLabels[user.role] || user.role;
     window.TM_ROLE = user.role;
+    window.TM_USER = String(user.username || '').toLowerCase();
   }
 
   function showAccessDenied() {
@@ -1224,6 +1225,10 @@ async function to4x6Pdf(bytes) {
     var html = nextStepHtml(c);
     return html ? '<div class="case-acts">' + html + '</div>' : '';
   }
+  // "Received" (parcel physically at the warehouse) — Admin + these
+  // usernames only. Worker enforces the same list (CC_RECEIVE_USERS).
+  var CC_RECEIVE_USERS = ['faique'];
+  function canReceive() { return window.TM_ROLE === 'admin' || CC_RECEIVE_USERS.indexOf(window.TM_USER) !== -1; }
   function nextStepHtml(c) {
     if (window.TM_ROLE !== 'admin' && window.TM_ROLE !== 'manager') return '';
     var r = c.reverse, f = c.forward;
@@ -1231,7 +1236,7 @@ async function to4x6Pdf(bytes) {
     var fs = f && f.delhivery_ok ? legStage(f) : '';
     if (!r || !r.delhivery_ok || r.refunded_at) return '';
     if (fs && fs !== 'Cancelled') return '';
-    if (!r.received_at) return legStage(r) === 'Delivered' ? btn('recv', 'Received') : '';
+    if (!r.received_at) return legStage(r) === 'Delivered' && canReceive() ? btn('recv', 'Received') : '';
     // Refund path: start (reason + amount) → customer link → bank details → Refund given (UTR)
     if (r.resolution === 'refund') {
       if (r.bank_submitted_at) return btn('bank', 'View bank details') + btn('refund', 'Refund given');
@@ -1745,6 +1750,7 @@ async function to4x6Pdf(bytes) {
     if (btn.dataset.act === 'bank') return refundBankPanel(c, false);
     if (btn.dataset.act === 'refund' && c.reverse.bank_submitted_at) return refundGivenPanel(c);
     if (btn.dataset.act === 'label') return downloadLabel(c.forward, btn);
+    if (btn.dataset.act === 'ticket') return ticketPanel(c);
     var a = ACTS[btn.dataset.act];
     if (!a || !confirm(c.id + ': ' + a.ask)) return;
     btn.disabled = true;
@@ -1761,6 +1767,90 @@ async function to4x6Pdf(bytes) {
       alert("Couldn't update: " + e.message);
       btn.disabled = false;
     }
+  }
+
+  // ══ NOT RECEIVED — courier ticket text ════════════════════════════
+  // Courier shows "Delivered" but the parcel never arrived (reverse: at
+  // our warehouse; forward: at the customer). We can't raise the ticket
+  // by API, so this drafts the text to paste into the courier portal
+  // (Ekart Elite → Escalations, or Delhivery One). Ekart only accepts
+  // delivery complaints within 3 days of the Delivered scan.
+  var TICKET_WINDOW_DAYS = 3;
+  var OUR_ADDRESS = 'Industrial Tools Corporation, Bhiwandi, Maharashtra - 421302';
+
+  // Leg the ticket is about: un-received reverse pickup first, else a
+  // delivered forward/send-back. Admin/manager only (same as other actions).
+  function ticketLeg(c) {
+    if (window.TM_ROLE !== 'admin' && window.TM_ROLE !== 'manager') return null;
+    var r = c.reverse, f = c.forward;
+    if (r && r.delhivery_ok && !r.received_at && legStage(r) === 'Delivered') return r;
+    if (f && f.delhivery_ok && legStage(f) === 'Delivered') return f;
+    return null;
+  }
+
+  function ticketText(o, c) {
+    var sh = ship(o), rev = o.direction === 'reverse';
+    var custAddr = [sh.name, sh.city, sh.state].filter(Boolean).join(', ') + (sh.pin ? ' - ' + sh.pin : '');
+    var lines = [
+      rev ? 'Reverse shipment marked DELIVERED but NOT received at our warehouse.'
+          : 'Shipment marked DELIVERED but the customer has NOT received it.',
+      '',
+      'AWB: ' + (o.waybill || ''),
+      'Order ID: ' + o.order_id,
+      'Shipment type: ' + (rev ? 'Reverse pickup' : 'Forward'),
+      (rev ? 'Picked up from: ' : 'Shipped to: ') + custAddr,
+      rev ? 'Delivered to: ' + OUR_ADDRESS : 'Customer phone: ' + (sh.phone || ''),
+      'Marked Delivered on: ' + (fmtWhen(o.delivered_at || o.tracked_at) || '-'),
+      'Product: ' + (c.product || ''),
+      sh.total_amount ? 'Declared value: Rs. ' + sh.total_amount : '',
+      '',
+      rev ? 'This parcel has not reached our warehouse and nobody from our team has received or signed for it.'
+          : 'The customer confirms the parcel was not handed over to them.',
+      'Please:',
+      '1. Share the POD (receiver name, signature, OTP / delivery photo)',
+      '2. Share the delivery executive name, contact number and delivering hub',
+      '3. Trace the shipment and get it delivered' + (rev ? ' to us' : ' to the customer'),
+      '4. If it cannot be traced, process it as a lost-shipment claim',
+      '',
+      (rev ? 'The customer is waiting for their ' + (o.job_type === 'Refund' ? 'refund' : 'replacement / repair') + ', so this is urgent.' : 'This is urgent.')
+    ];
+    return lines.filter(function (l, i, a) { return l !== '' || a[i - 1] !== ''; }).join('\n');
+  }
+
+  // "2d 5h left" / "Window closed" from the Delivered time.
+  function ticketWindow(o) {
+    var d = parseTs(o.delivered_at || o.tracked_at);
+    if (!d) return { txt: 'Delivered time unknown', late: false };
+    var left = d.getTime() + TICKET_WINDOW_DAYS * 864e5 - Date.now();
+    if (left <= 0) return { txt: 'Past the ' + TICKET_WINDOW_DAYS + '-day window — raise it anyway', late: true };
+    var h = Math.floor(left / 36e5);
+    return { txt: (h >= 24 ? Math.floor(h / 24) + 'd ' : '') + (h % 24) + 'h left to report', late: h < 24 };
+  }
+
+  function ticketPanel(c) {
+    var o = ticketLeg(c);
+    if (!o) return;
+    var w = ticketWindow(o), ekart = o.courier === 'Ekart';
+    var panel = showPanel(
+      '<div class="cm-sec-title" style="margin-bottom:8px">Not received &#8212; ticket for ' + esc(o.courier || 'Delhivery') +
+        ' <span class="mono">' + esc(o.waybill || '') + '</span> ' +
+        '<span style="margin-left:8px;color:' + (w.late ? '#ef4444' : 'var(--text2)') + ';font-weight:600">' + esc(w.txt) + '</span></div>' +
+      '<div class="cm-summary" style="grid-template-columns:1fr">' +
+        '<div><div class="cm-k">Ticket message (edit if needed)</div><textarea class="sb-input" id="tk-msg" rows="14">' + esc(ticketText(o, c)) + '</textarea></div>' +
+      '</div>' +
+      '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
+        '<button class="case-act primary" id="tk-copy">Copy message</button>' +
+        '<button class="case-act" id="tk-copy-awb">Copy AWB</button>' +
+        '<a class="case-act" target="_blank" rel="noopener" href="' + (ekart ? 'https://app.elite.ekartlogistics.in/' : 'https://one.delhivery.com/') + '">Open ' + (ekart ? 'Ekart Elite' : 'Delhivery One') + ' &#8599;</a>' +
+        '<button class="case-act" data-x>Close</button>' +
+        '<span class="cm-muted" style="margin-left:auto">' + (ekart ? 'Ekart Elite &#8594; Escalations &#8594; raise on this AWB, paste the message.' : 'Raise a ticket on this AWB and paste the message.') + '</span>' +
+      '</div>');
+    panelCancel(panel);
+    var copy = function (b, txt) {
+      navigator.clipboard.writeText(txt).then(function () { var t = b.textContent; b.textContent = 'Copied ✓'; setTimeout(function () { b.textContent = t; }, 1500); });
+    };
+    document.getElementById('tk-copy').addEventListener('click', function () { copy(this, document.getElementById('tk-msg').value); });
+    document.getElementById('tk-copy-awb').addEventListener('click', function () { copy(this, o.waybill || ''); });
   }
 
   // Refund facts for the popup (only once a refund has been started).
@@ -1807,7 +1897,8 @@ async function to4x6Pdf(bytes) {
     var fl = c.forward;
     var labelBtn = fl && fl.delhivery_ok && fl.waybill && legStage(fl) !== 'Cancelled'
       ? '<button class="case-act primary" data-act="label">&#11015; Download Label</button>' : '';
-    var acts = labelBtn + actionsHtml(c) + (trackBtns ? '<span style="margin-left:auto;display:flex;gap:8px">' + trackBtns + '</span>' : '');
+    var tkBtn = ticketLeg(c) ? '<button class="case-act" data-act="ticket">Not received &#8211; raise ticket</button>' : '';
+    var acts = labelBtn + actionsHtml(c) + tkBtn + (trackBtns ? '<span style="margin-left:auto;display:flex;gap:8px">' + trackBtns + '</span>' : '');
     var box = document.getElementById('case-body-modal');
     box.innerHTML = summary +
       legs.map(function (l, i) { return legHtml(l[0], l[1], i); }).join('') +

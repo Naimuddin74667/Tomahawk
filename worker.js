@@ -3672,6 +3672,10 @@ export default {
           await ensureDelhiveryTable(env.DB);
           const oid = String(body.order_id || '').trim();
           if (!oid) return json({ ok: false, error: 'order_id required' }, 400);
+          // Only admins + the users in CC_RECEIVE_USERS may confirm receipt.
+          const rcvUser = (await resolveSession(request, env.DB)) || {};
+          if (rcvUser.role !== 'admin' && !CC_RECEIVE_USERS.includes(String(rcvUser.username || '').toLowerCase()))
+            return json({ ok: false, error: 'Only Admin or Faique can mark a parcel Received' }, 403);
           const r = await env.DB.prepare(
             // Received = straight into In Process (no separate "Received" stage)
             "UPDATE delhivery_orders SET received_at = COALESCE(received_at, datetime('now')), in_process_at = COALESCE(in_process_at, datetime('now')) WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1"
@@ -5347,6 +5351,10 @@ async function createDelhiveryOrder(env, o) {
 // Flip to false to send to the real support recipients.
 const CC_ORDER_EMAIL_TEST_MODE = false;   // LIVE since 05-Oct-2026
 const CC_ORDER_EMAIL_TO = ['support@bullet.co.in', 'faique@bullet.co.in'];
+// Customer Care: non-admin usernames allowed to mark a reverse pickup
+// "Received" (admins always can). Keep in sync with CC_RECEIVE_USERS in
+// Customer-Care/Dashboard/index.html.
+const CC_RECEIVE_USERS = ['faique'];
 const CC_ORDER_EMAIL_TEST_TO = ['naimuddin+test@bullet.co.in'];
 
 // UTF-8 safe base64 (btoa alone breaks on ₹, Hindi names, etc.)
