@@ -201,6 +201,8 @@ table.log-table tr:last-child td { border-bottom: none; }
 .badge { white-space: nowrap; }
 .badge.st-created  { background: color-mix(in srgb, var(--text2) 18%, transparent); color: var(--text2); }
 #log-table td.oid-cell { white-space: nowrap; }
+#log-table td.when-cell { white-space: nowrap; font-size: 11.5px; }
+#log-table td.when-cell .when-time { color: var(--text2); font-size: 10.5px; margin-top: 1px; }
 #log-table .status-cell .badge { white-space: nowrap; }
 .row-act {
   display: inline-block; margin: 4px 4px 0 0; padding: 3px 9px; border-radius: 6px; font-size: 10.5px; font-weight: 700;
@@ -603,6 +605,7 @@ table.log-table td.cust-cell { max-width: 170px; white-space: nowrap; overflow: 
             <tr>
               <th></th>
               <th>Order ID</th>
+              <th>Date &amp; Time</th>
               <th>Customer</th>
               <th>Waybill</th>
               <th>Courier</th>
@@ -751,6 +754,14 @@ function escapeHtml(s) {
   });
 }
 
+// Recent orders "Date & Time" cell: date on top, time below (IST).
+function whenCellHtml(iso) {
+  if (!iso) return '&#8212;';
+  var d = new Date(String(iso).replace(' ', 'T') + (/Z|[+-]\d\d:?\d\d$/.test(iso) ? '' : 'Z'));
+  if (isNaN(d)) return escapeHtml(iso);
+  return '<div>' + d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) + '</div>' +
+    '<div class="when-time">' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) + '</div>';
+}
 function fmtWhen(iso) {
   if (!iso) return '';
   try {
@@ -1590,6 +1601,7 @@ function initDelhiveryApp() {
         '<td class="mono oid-cell">' + escapeHtml(o.order_id) +
           (!isReverse && o.linked_order_id ? '<div class="link-note">Return of ' + escapeHtml(o.linked_order_id) + '</div>' : '') +
         '</td>' +
+        '<td class="when-cell">' + whenCellHtml(o.created_at) + '</td>' +
         '<td class="cust-cell" title="' + escapeHtml(consignee) + '">' + (consignee ? escapeHtml(consignee) : '&#8212;') + '</td>' +
         '<td class="mono">' + (o.waybill ? escapeHtml(o.waybill) : '&#8212;') + '</td>' +
         '<td>' + escapeHtml(o.courier || 'Delhivery') + '</td>' +
