@@ -2021,11 +2021,9 @@ export default {
               return json({ ok: false, error: 'Delhivery label request failed: ' + e.message }, 502);
             }
             const dPkg = (dJson && dJson.packages && dJson.packages[0]) || null;
-            // First label download = packed, waiting for pickup → RTD stage.
+            // Faique's first label download = packed → RTD stage (see CC_RTD_USERS).
             await ensureDelhiveryTable(env.DB);
-            await env.DB.prepare(
-              "UPDATE delhivery_orders SET rtd_at = COALESCE(rtd_at, datetime('now')) WHERE waybill = ? AND delhivery_ok = 1"
-            ).bind(wb).run();
+            await markRtdIfPacker(request, env, wb);
             // Barcode images are big base64 blobs the page redraws itself — drop them.
             if (dPkg) { delete dPkg.barcode; delete dPkg.oid_barcode; }
             // RTD → make sure it's covered by a pickup request (Delhivery One
@@ -2054,11 +2052,9 @@ export default {
           if (url.searchParams.get('file') === '1') {
             const pdfResp = await fetch(pdfUrl);
             if (!pdfResp.ok) return json({ ok: false, error: 'Label PDF download failed: ' + pdfResp.status }, 502);
-            // First label download = packed, waiting for pickup → RTD stage.
+            // Faique's first label download = packed → RTD stage (see CC_RTD_USERS).
             await ensureDelhiveryTable(env.DB);
-            await env.DB.prepare(
-              "UPDATE delhivery_orders SET rtd_at = COALESCE(rtd_at, datetime('now')) WHERE waybill = ? AND delhivery_ok = 1"
-            ).bind(wb).run();
+            await markRtdIfPacker(request, env, wb);
             try { await ensureDelhiveryPickup(env, 'label'); } catch (e) { /* never block the label */ }
             return new Response(pdfResp.body, {
               status: 200,
@@ -2251,9 +2247,7 @@ export default {
             return json({ ok: false, error: 'Ekart returned no label (' + lResp.status + ')', response: t.slice(0, 500) }, 502);
           }
           await ensureDelhiveryTable(env.DB);
-          await env.DB.prepare(
-            "UPDATE delhivery_orders SET rtd_at = COALESCE(rtd_at, datetime('now')) WHERE waybill = ? AND delhivery_ok = 1"
-          ).bind(tid).run();
+          await markRtdIfPacker(request, env, tid);
           return new Response(lResp.body, {
             status: 200,
             headers: Object.assign({}, CORS, { 'Content-Type': 'application/pdf', 'Content-Disposition': 'attachment; filename="' + tid + '.pdf"' })
@@ -5355,6 +5349,17 @@ const CC_ORDER_EMAIL_TO = ['support@bullet.co.in', 'faique@bullet.co.in'];
 // "Received" (admins always can). Keep in sync with CC_RECEIVE_USERS in
 // Customer-Care/Dashboard/index.html.
 const CC_RECEIVE_USERS = ['faique'];
+// Customer Care: usernames whose label download marks a forward order
+// "Ready To Dispatch" (rtd_at). Downloads by anyone else (admin viewing a
+// label, the new-order email building its attachment) leave the stage alone.
+const CC_RTD_USERS = ['faique'];
+async function markRtdIfPacker(request, env, waybill) {
+  const u = (await resolveSession(request, env.DB)) || {};
+  if (!CC_RTD_USERS.includes(String(u.username || '').toLowerCase())) return;
+  await env.DB.prepare(
+    "UPDATE delhivery_orders SET rtd_at = COALESCE(rtd_at, datetime('now')) WHERE waybill = ? AND delhivery_ok = 1"
+  ).bind(waybill).run();
+}
 const CC_ORDER_EMAIL_TEST_TO = ['naimuddin+test@bullet.co.in'];
 
 // UTF-8 safe base64 (btoa alone breaks on ₹, Hindi names, etc.)
