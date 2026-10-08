@@ -999,6 +999,12 @@ async function to4x6Pdf(bytes) {
     'Awaiting Bank Details': 'white', 'Refund Pending': 'amber',
     'Delivered to us': 'green', 'Delivered': 'green', 'Refunded': 'green'
   };
+  // Small date line under a "Delivered to us" badge — courier's delivered scan on the pickup leg.
+  function deliveredToUsSub(c) {
+    if (!c.st || c.st.label !== PICKUP_LABEL.Delivered || !c.reverse) return '';
+    var when = fmtWhen(c.reverse.delivered_at || c.reverse.tracked_at);
+    return when ? '<div class="sub">' + esc(when) + '</div>' : '';
+  }
   function badgeHtml(st) {
     var t = TONE[st.tone] || TONE.closed;
     var txt = /^bad/.test(st.tone) ? 'red' : (STAGE_TEXT[st.label] || 'white');
@@ -1160,7 +1166,7 @@ async function to4x6Pdf(bytes) {
         '<td>' + esc(c.customer || '—') + (c.city ? '<div class="sub">' + esc(c.city) + '</div>' : '') + '</td>' +
         '<td>' + esc(c.product || '—') + '</td>' +
         '<td>' + esc(c.type) + '</td>' +
-        '<td>' + badgeHtml(c.st) + '</td>' +
+        '<td>' + badgeHtml(c.st) + deliveredToUsSub(c) + '</td>' +
         '<td>' + tatCellHtml(c.tat) + '</td>';
       tr.addEventListener('click', function () { openCase(c); });
       body.appendChild(tr);
