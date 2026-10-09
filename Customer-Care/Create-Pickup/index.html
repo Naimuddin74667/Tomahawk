@@ -1684,42 +1684,6 @@ function initDelhiveryApp() {
       return blob;
   }
 
-  // ── New forward order → email to the support team (worker sends it via
-  // Gmail with the label attached). Never blocks or fails the booking:
-  // problems only show as a small note under the result.
-  function blobToBase64(blob) {
-    return new Promise(function (resolve, reject) {
-      var r = new FileReader();
-      r.onload = function () { resolve(String(r.result).split(',')[1] || ''); };
-      r.onerror = reject;
-      r.readAsDataURL(blob);
-    });
-  }
-  async function emailForwardOrder(orderId, waybill) {
-    var note = document.createElement('div');
-    note.style.cssText = 'margin-top:6px;color:var(--text2);';
-    note.textContent = '📧 Emailing the support team…';
-    resultBody.appendChild(note);
-    try {
-      await fetchLog();   // the new row (with its payload) is needed to draw the label
-      var row = lastOrders.filter(function (o) { return o.order_id === orderId && o.waybill === waybill; })[0];
-      var pdf = '', filename = '';
-      if (row) {
-        try {
-          pdf = await blobToBase64(await buildLabelBlob(row));
-          filename = String(orderId).replace(/[^A-Za-z0-9_-]/g, '_') + '_' + waybill + '.pdf';
-        } catch (e) { console.warn('Label for email failed — sending without it:', e); }
-      }
-      var res = await callWorker('ccEmailForwardOrder', { order_id: orderId, pdf_base64: pdf, filename: filename });
-      if (!res.ok) throw new Error(res.error || 'unknown error');
-      note.textContent = res.already ? '📧 Support team was already emailed for this order.'
-        : '📧 Emailed to ' + (res.to || []).join(', ') + (res.attached ? ' with the label.' : ' (label not attached).');
-    } catch (e) {
-      note.style.color = '#f87171';
-      note.textContent = '⚠ Support email not sent: ' + e.message;
-    }
-  }
-
   async function downloadLabel(o, btn) {
     if (btn.classList.contains('busy')) return;
     btn.classList.add('busy');
@@ -2062,7 +2026,6 @@ function initDelhiveryApp() {
             : order.courier === 'Ekart'
             ? '<div style="margin-top:6px;color:var(--text2);">Pickup: Ekart schedules it automatically for booked shipments.</div>'
             : pickupNoteHtml(res.pickup));
-        if (order.direction !== 'reverse') emailForwardOrder(order.order, res.waybill);   // runs in background
         sendBackFrom = null;
         resetFormFields();
         pinStatus.textContent = '';
