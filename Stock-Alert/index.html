@@ -665,7 +665,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   <div class="header-right">
     <div class="sys-status">
       <div class="status-dot" id="status-dot"></div>
-      <span id="status-text">Loading UC_Inventory…</span>
+      <span id="status-text">Loading stock…</span>
     </div>
     <button class="theme-toggle" id="theme-toggle" aria-label="Toggle light/dark mode">
       <svg class="icon-moon" width="18" height="18" viewBox="0 0 18 18" fill="none">
@@ -916,7 +916,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         </tr>
       </thead>
       <tbody id="table-body">
-        <tr><td colspan="10"><div class="loading-state">Fetching UC_Inventory…</div></td></tr>
+        <tr><td colspan="10"><div class="loading-state">Fetching live stock…</div></td></tr>
       </tbody>
     </table>
   </div>
@@ -1216,9 +1216,9 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   function loadData() {
     refreshBtn.classList.add('is-loading');
     statusDot.classList.remove('is-error');
-    statusText.textContent = 'Loading UC_Inventory…';
+    statusText.textContent = 'Loading stock…';
     if (!allRows.length) {
-      tableBody.innerHTML = '<tr><td colspan="10"><div class="loading-state">Fetching UC_Inventory…</div></td></tr>';
+      tableBody.innerHTML = '<tr><td colspan="10"><div class="loading-state">Fetching live stock…</div></td></tr>';
     }
 
     fetch(WORKER_URL + '?action=sa_loadAll')
@@ -1267,14 +1267,14 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         computeBundleComponents();
         populateFilterOptions();
         applyFilters();
-        statusText.textContent = allRows.length + ' SKUs · live';
+        statusText.textContent = allRows.length + ' SKUs · ' + describeSource(invData);
         var now = new Date();
         lastUpdated.textContent = 'Refreshed ' + now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
       })
       .catch(function (err) {
         statusDot.classList.add('is-error');
         statusText.textContent = 'Failed to load';
-        tableBody.innerHTML = '<tr><td colspan="10"><div class="error-state">Couldn\'t reach the data feed.<br>' + escapeHtml(err.message) + '<br><br>Try Refresh, or check the Worker/GAS deployment.</div></td></tr>';
+        tableBody.innerHTML = '<tr><td colspan="10"><div class="error-state">Couldn\'t reach the data feed.<br>' + escapeHtml(err.message) + '<br><br>Try Refresh, or check the Worker / Supabase sync.</div></td></tr>';
       })
       .finally(function () {
         refreshBtn.classList.remove('is-loading');
@@ -1295,6 +1295,20 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   }
   function saveCachedInventory(rows) {
     try { localStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(rows)); } catch (e) {}
+  }
+
+  // Header label: which feed the rows came from + when it was last synced.
+  // 'supabase' = live API mirror (primary); 'sheet-fallback' = Supabase was
+  // down so the Worker served the old GAS sheet (up to ~2 h stale).
+  function describeSource(invData) {
+    if (invData.source === 'supabase') {
+      if (!invData.syncedAt) return 'Supabase';
+      var d = new Date(invData.syncedAt);
+      if (isNaN(d)) return 'Supabase';
+      return 'Supabase · synced ' + d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+    }
+    if (invData.source === 'sheet-fallback') return 'sheet fallback (Supabase down)';
+    return 'live';
   }
 
   function buildIdleSet() {
@@ -2348,6 +2362,25 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
   }
 
   loadData();
+
+  // ---- AUTO-REFRESH (every 15 min, matches SK's Supabase sync) ----------
+  // Skips a tick while someone is mid-entry, because Transfer Box Qty values
+  // live only on screen and a re-render would wipe them.
+  var AUTO_REFRESH_MS = 15 * 60 * 1000;
+  function isUserEditing() {
+    if (Object.keys(selectedSkus).length) return true;
+    var a = document.activeElement;
+    if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT')) return true;
+    var inputs = document.querySelectorAll('.qty-input, .box-qty-input');
+    for (var i = 0; i < inputs.length; i++) {
+      if (Number(inputs[i].value) > 0) return true;
+    }
+    return false;
+  }
+  setInterval(function () {
+    if (document.hidden || isUserEditing()) return;
+    loadData();
+  }, AUTO_REFRESH_MS);
 
 })();
 </script>

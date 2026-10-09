@@ -13,7 +13,8 @@ const CORS = {
 const GSHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ6Rf-UNZQV6mN-NjbbX8YPJf-B0lEoPRWsozKmfoDTB5KpXXthHfGH_qnJDEhR_uB38gy_0n3N7fwv/pub?gid=997578035&single=true&output=csv';
 
 // Stock Alert — UC_Inventory GAS bridge (same endpoint the frontend used to
-// call directly; now proxied + edge-cached here via the sa_loadAll action).
+// call directly). Now only a FALLBACK for sa_loadAll — primary source is the
+// Supabase API mirror (stock_alert_inventory / stock_alert_bundles functions).
 const SA_UC_GAS_URL = 'https://script.google.com/macros/s/AKfycbwPnZl404I0IVHgIxy6QRxSCdep3XbqufE73w8ZdA1qugPEdygzoRhtht10RWT6fkjGTQ/exec';
 
 // Amazon FC Appointment Email Watcher — manually paused (temporary, while
@@ -1572,25 +1573,79 @@ export default {
           await ensureSaTables(env.DB);
           const cache = caches.default;
 
-          async function cachedGasFetch(gasUrl, cacheKeyUrl) {
+          // Shared edge-cache helper. `fetcher` returns the JSON text;
+          // ttlSec = how long Cloudflare keeps it before fetching fresh.
+          async function cachedJson(cacheKeyUrl, ttlSec, fetcher) {
             const cacheKey = new Request(cacheKeyUrl);
             const cached = await cache.match(cacheKey);
             if (cached) return cached.json();
-            const res = await fetch(gasUrl);
-            if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
-            const text = await res.text();
+            const text = await fetcher();
             const response = new Response(text, {
-              headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300' }
+              headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=' + ttlSec }
             });
             await cache.put(cacheKey, response.clone());
             return JSON.parse(text);
           }
 
+          // FALLBACK source — old UC_Inventory_API GAS sheet bridge (~2 h stale).
+          function gasFetch(gasUrl, cacheKeyUrl) {
+            return cachedJson(cacheKeyUrl, 300, async () => {
+              const res = await fetch(gasUrl);
+              if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
+              return res.text();
+            });
+          }
+
+          // PRIMARY source — Supabase API mirror (SK's 15-min UC sync).
+          // Calls the read-only DB functions stock_alert_inventory() /
+          // stock_alert_bundles(), which return the same JSON shape the GAS
+          // bridge did, so the frontend logic is unchanged. 60 s edge cache.
+          function supabaseRpc(fnName, cacheKeyUrl) {
+            return cachedJson(cacheKeyUrl, 60, async () => {
+              if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured on Worker');
+              const res = await fetch(env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/rpc/' + fnName, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'apikey': env.SUPABASE_SECRET_KEY,
+                  'Authorization': 'Bearer ' + env.SUPABASE_SECRET_KEY
+                },
+                body: '{}'
+              });
+              if (!res.ok) throw new Error('Supabase ' + fnName + ' failed: ' + res.status + ' ' + (await res.text()).slice(0, 200));
+              return res.text();
+            });
+          }
+
+          // Supabase first; if it errors (or returns nothing), fall back to the sheet.
+          async function withFallback(primary, fallback, isValid) {
+            try {
+              const data = await primary();
+              if (isValid(data)) return data;
+              throw new Error('Supabase returned empty data');
+            } catch (e) {
+              try {
+                const fb = await fallback();
+                fb.source = 'sheet-fallback';
+                fb.fallbackReason = e.message;
+                return fb;
+              } catch (e2) {
+                return { error: e.message + ' | fallback: ' + e2.message };
+              }
+            }
+          }
+
           const [inventory, bundles, overridesRows, archivedRows, recQtyRows, settingsRows, g4BoxRows] = await Promise.all([
-            cachedGasFetch(SA_UC_GAS_URL, 'https://cache.internal/sa-uc-inventory-v1')
-              .catch(e => ({ error: e.message })),
-            cachedGasFetch(SA_UC_GAS_URL + '?type=bundles', 'https://cache.internal/sa-uc-bundles-v1')
-              .catch(e => ({ error: e.message })),
+            withFallback(
+              () => supabaseRpc('stock_alert_inventory', 'https://cache.internal/sa-sb-inventory-v1'),
+              () => gasFetch(SA_UC_GAS_URL, 'https://cache.internal/sa-uc-inventory-v1'),
+              d => d && Array.isArray(d.rows) && d.rows.length > 0
+            ),
+            withFallback(
+              () => supabaseRpc('stock_alert_bundles', 'https://cache.internal/sa-sb-bundles-v1'),
+              () => gasFetch(SA_UC_GAS_URL + '?type=bundles', 'https://cache.internal/sa-uc-bundles-v1'),
+              d => d && d.bundles && Object.keys(d.bundles).length > 0
+            ),
             env.DB.prepare('SELECT sku_code, name, qty_per_box, confirmed, updated_at FROM sa_qty_overrides ORDER BY sku_code ASC').all(),
             env.DB.prepare('SELECT sku_code, archived_at FROM sa_archived_skus ORDER BY archived_at DESC').all(),
             env.DB.prepare('SELECT sku_code, rec_qty, updated_at FROM sa_recqty_overrides ORDER BY sku_code ASC').all(),
