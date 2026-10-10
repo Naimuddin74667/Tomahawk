@@ -508,8 +508,8 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
     </div>
     <div class="table-wrap">
       <table class="case-table">
-        <thead><tr><th>Case</th><th>Customer</th><th>Product</th><th>Type</th><th>Status</th><th>TAT</th></tr></thead>
-        <tbody id="case-body"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+        <thead><tr><th>Case</th><th>Courier</th><th>Tracking No.</th><th>Customer</th><th>Product</th><th>Type</th><th>Status</th><th>TAT</th></tr></thead>
+        <tbody id="case-body"><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
       </table>
     </div>
     <!-- Pagination footer (hidden when everything fits on one page) -->
@@ -1151,7 +1151,7 @@ async function to4x6Pdf(bytes) {
       return tileTest(tileFilter)(c) && (!kind || c.type === kind || (kind === 'Refund' && / Refund$/.test(c.type))) && (!q || c.search.indexOf(q) !== -1);
     });
     var body = document.getElementById('case-body');
-    if (!rows.length) { body.innerHTML = '<tr><td colspan="6" class="muted">No cases match.</td></tr>'; renderPager(0, 1); return; }
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="8" class="muted">No cases match.</td></tr>'; renderPager(0, 1); return; }
     var totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
     if (page > totalPages) page = totalPages;
     if (page < 1) page = 1;
@@ -1164,9 +1164,20 @@ async function to4x6Pdf(bytes) {
       var ids = c.reverse
         ? '<div class="mono">' + esc(c.reverse.order_id) + '</div>' + (c.forward ? '<div class="sub mono">&#8627; ' + esc(c.forward.order_id) + '</div>' : '')
         : '<div class="mono">' + esc(c.forward.order_id) + '</div>';
-      var kindLabel = c.reverse ? esc(c.kind) + ' · ' + esc(c.reverse.courier || 'Delhivery') : 'Forward · ' + esc(c.forward.courier || 'Delhivery');
+      var kindLabel = c.reverse ? esc(c.kind) : 'Forward';
+      // Courier + tracking number per leg, same order as the Case column:
+      // pickup leg first, send-back leg below it (↳) when there is one.
+      var legs = [c.reverse, c.forward].filter(Boolean);
+      var courierCell = legs.map(function (o, i) {
+        return '<div' + (i ? ' class="sub"' : '') + '>' + (i ? '&#8627; ' : '') + esc(o.courier || 'Delhivery') + '</div>';
+      }).join('');
+      var awbCell = legs.map(function (o, i) {
+        return '<div class="mono' + (i ? ' sub' : '') + '">' + (i ? '&#8627; ' : '') + esc(o.waybill || '—') + '</div>';
+      }).join('');
       tr.innerHTML =
         '<td>' + ids + '<div class="sub">' + kindLabel + '</div></td>' +
+        '<td>' + courierCell + '</td>' +
+        '<td>' + awbCell + '</td>' +
         '<td>' + esc(c.customer || '—') + (c.city ? '<div class="sub">' + esc(c.city) + '</div>' : '') + '</td>' +
         '<td>' + esc(c.product || '—') + '</td>' +
         '<td>' + esc(c.type) + '</td>' +
@@ -1181,7 +1192,7 @@ async function to4x6Pdf(bytes) {
       for (var i = rows.length; i < PAGE_SIZE; i++) {
         var pad = document.createElement('tr');
         pad.setAttribute('aria-hidden', 'true');
-        pad.innerHTML = '<td colspan="6">&nbsp;<div class="sub">&nbsp;</div></td>';
+        pad.innerHTML = '<td colspan="8">&nbsp;<div class="sub">&nbsp;</div></td>';
         body.appendChild(pad);
       }
     }
