@@ -1223,6 +1223,58 @@ export default {
       const imResponse = await handleInstamart(request.method, act, url, body, env);
       if (imResponse) return imResponse;
 
+      // ── STOCK ALERT — Zoho Desk WhatsApp connection (admin only) ──
+      // zohoConnect: swap a one-time Self Client code for a refresh token.
+      if (request.method === 'POST' && act === 'zohoConnect') {
+        await ensureZohoTables(env.DB);
+        const code = String((body && body.code) || '').trim();
+        if (!code) return json({ ok: false, error: 'Paste the code from Zoho API Console first' });
+        if (!env.ZOHO_CLIENT_ID || !env.ZOHO_CLIENT_SECRET) return json({ ok: false, error: 'ZOHO_CLIENT_ID / ZOHO_CLIENT_SECRET Worker secrets missing' });
+        try {
+          const data = await zohoTokenRequest({
+            grant_type: 'authorization_code', code,
+            client_id: env.ZOHO_CLIENT_ID, client_secret: env.ZOHO_CLIENT_SECRET
+          });
+          if (!data.refresh_token) return json({ ok: false, error: 'Zoho returned no refresh token — generate a fresh code and try again' });
+          await zohoSet(env.DB, 'refresh_token', data.refresh_token);
+          await zohoSet(env.DB, 'access_token', data.access_token);
+          await zohoSet(env.DB, 'access_expires', Date.now() + (Number(data.expires_in) || 3600) * 1000);
+          await zohoSet(env.DB, 'connected_by', (authResult.user && authResult.user.username) || '');
+          return json({ ok: true, connected: true });
+        } catch (err) {
+          return json({ ok: false, error: err.message });
+        }
+      }
+
+      // zohoWaInfo: org, WhatsApp channel and Stock Alert template status.
+      if (request.method === 'GET' && action === 'zohoWaInfo') {
+        try {
+          await ensureZohoTables(env.DB);
+          const connected = !!(await zohoGet(env.DB, 'refresh_token'));
+          if (!connected) return json({ ok: true, connected: false });
+          const info = await zohoWaDiscover(env);
+          return json({ ok: true, connected: true, ...info });
+        } catch (err) {
+          return json({ ok: false, error: err.message });
+        }
+      }
+
+      // zohoWaTest: send the template with dummy values to ONE number.
+      if (request.method === 'POST' && act === 'zohoWaTest') {
+        try {
+          const phone = body && body.phone;
+          if (!phone) return json({ ok: false, error: 'Enter a phone number' });
+          const info = await zohoWaDiscover(env);
+          if (!info.template) return json({ ok: false, error: 'Template "' + ZOHO_WA_TEMPLATE_TITLE + '" not found' });
+          const n = info.template.placeholders.length;
+          const values = Array.from({ length: n }, (_, i) => 'TEST-SKU-' + (i + 1) + ' (G4 : ' + (i + 1) * 10 + ' Qty)');
+          const result = await zohoWaSendTemplate(env, phone, values);
+          return json({ ok: true, ...result });
+        } catch (err) {
+          return json({ ok: false, error: err.message });
+        }
+      }
+
       if (request.method === 'GET') {
 
         // ── LABEL GENERATOR — live GSheet SKU lookup ─────────
@@ -1726,58 +1778,6 @@ export default {
         // ~2h UC sync cadence, means repeat loads across the whole team
         // hit Cloudflare's edge cache instead of Apps Script almost every
         // time. ──
-        // ── STOCK ALERT — Zoho Desk WhatsApp connection (admin only) ──
-        // zohoConnect: swap a one-time Self Client code for a refresh token.
-        if (request.method === 'POST' && act === 'zohoConnect') {
-          await ensureZohoTables(env.DB);
-          const code = String((body && body.code) || '').trim();
-          if (!code) return json({ ok: false, error: 'Paste the code from Zoho API Console first' });
-          if (!env.ZOHO_CLIENT_ID || !env.ZOHO_CLIENT_SECRET) return json({ ok: false, error: 'ZOHO_CLIENT_ID / ZOHO_CLIENT_SECRET Worker secrets missing' });
-          try {
-            const data = await zohoTokenRequest({
-              grant_type: 'authorization_code', code,
-              client_id: env.ZOHO_CLIENT_ID, client_secret: env.ZOHO_CLIENT_SECRET
-            });
-            if (!data.refresh_token) return json({ ok: false, error: 'Zoho returned no refresh token — generate a fresh code and try again' });
-            await zohoSet(env.DB, 'refresh_token', data.refresh_token);
-            await zohoSet(env.DB, 'access_token', data.access_token);
-            await zohoSet(env.DB, 'access_expires', Date.now() + (Number(data.expires_in) || 3600) * 1000);
-            await zohoSet(env.DB, 'connected_by', (authResult.user && authResult.user.username) || '');
-            return json({ ok: true, connected: true });
-          } catch (err) {
-            return json({ ok: false, error: err.message });
-          }
-        }
-
-        // zohoWaInfo: org, WhatsApp channel and Stock Alert template status.
-        if (request.method === 'GET' && action === 'zohoWaInfo') {
-          try {
-            await ensureZohoTables(env.DB);
-            const connected = !!(await zohoGet(env.DB, 'refresh_token'));
-            if (!connected) return json({ ok: true, connected: false });
-            const info = await zohoWaDiscover(env);
-            return json({ ok: true, connected: true, ...info });
-          } catch (err) {
-            return json({ ok: false, error: err.message });
-          }
-        }
-
-        // zohoWaTest: send the template with dummy values to ONE number.
-        if (request.method === 'POST' && act === 'zohoWaTest') {
-          try {
-            const phone = body && body.phone;
-            if (!phone) return json({ ok: false, error: 'Enter a phone number' });
-            const info = await zohoWaDiscover(env);
-            if (!info.template) return json({ ok: false, error: 'Template "' + ZOHO_WA_TEMPLATE_TITLE + '" not found' });
-            const n = info.template.placeholders.length;
-            const values = Array.from({ length: n }, (_, i) => 'TEST-SKU-' + (i + 1) + ' (G4 : ' + (i + 1) * 10 + ' Qty)');
-            const result = await zohoWaSendTemplate(env, phone, values);
-            return json({ ok: true, ...result });
-          } catch (err) {
-            return json({ ok: false, error: err.message });
-          }
-        }
-
         if (action === 'sa_loadAll') {
           await ensureSaTables(env.DB);
           const cache = caches.default;
