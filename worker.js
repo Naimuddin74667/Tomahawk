@@ -180,17 +180,21 @@ async function zohoWaSendTemplate(env, phone, values) {
   const ids = [info.template.id];
   if (info.template.translationId && info.template.translationId !== info.template.id) ids.push(info.template.translationId);
 
+  // Receiver formats to try: with '+' (Zoho docs page) and without (Zoho's
+  // OpenAPI example). Only the template ID is used now — the translation ID
+  // was confirmed to 404.
+  const receivers = [receiverId, receiverId.replace(/^\+/, '')];
   const attempts = [];
-  for (const cannedMessageId of ids) {
+  for (const cannedMessageId of ids.slice(0, 1)) for (const rid of receivers) {
     const payload = {
       cannedMessageId: String(cannedMessageId),
-      receiverId, receiverType: 'PHONENUMBER',
+      receiverId: rid, receiverType: 'PHONENUMBER',
       language: info.template.language || 'en',
       message
     };
     try {
       const res = await zohoDesk(env, 'POST', '/api/v1/im/channels/' + info.channel.id + '/initiateSession', payload, info.org.id);
-      return { receiverId, message, usedId: String(cannedMessageId), zohoResponse: res };
+      return { receiverId: rid, message, usedId: String(cannedMessageId), zohoResponse: res };
     } catch (e) {
       attempts.push({ payload, error: e.message });
     }
