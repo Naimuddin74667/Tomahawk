@@ -138,7 +138,7 @@ async function zohoWaDiscover(env) {
     org: { id: orgId, name: org.companyName || org.portalName || '' },
     channel: { id: wa.id, name: wa.name, number: wa.accountName, departmentId: wa.departmentId },
     template: t ? {
-      id: t.id, title: t.title, status: t.status, category: t.tags,
+      id: t.id, translationId: tr ? tr.id : null, title: t.title, status: t.status, category: t.tags,
       language: tr ? tr.language : null, translationStatus: tr ? tr.status : null,
       rejectionReason: tr ? tr.rejectionReason : null,
       header: tr && tr.templateItems ? tr.templateItems.header : null,
@@ -167,19 +167,40 @@ function fillZohoTemplate(message, values) {
 }
 
 // Sends the Stock Alert template to one phone number with the given values.
+// Tries the template ID first, then the English translation ID (Zoho's docs
+// are unclear which one initiateSession expects). Stops at the first success.
+// On failure, the thrown error carries .debug with every attempt + Zoho's raw
+// template record, so the admin test panel can show exactly what was sent.
 async function zohoWaSendTemplate(env, phone, values) {
   const info = await zohoWaDiscover(env);
   if (!info.template) throw new Error('Template "' + ZOHO_WA_TEMPLATE_TITLE + '" not found in Zoho Desk');
   if (String(info.template.status).toUpperCase() !== 'APPROVED') throw new Error('Template status is ' + info.template.status + ' — wait for Meta approval');
   const message = fillZohoTemplate(info.template.message, values);
   const receiverId = normalisePhone(phone);
-  const res = await zohoDesk(env, 'POST', '/api/v1/im/channels/' + info.channel.id + '/initiateSession', {
-    cannedMessageId: String(info.template.id),
-    receiverId, receiverType: 'PHONENUMBER',
-    language: info.template.language || 'en',
-    message
-  }, info.org.id);
-  return { receiverId, message, zohoResponse: res };
+  const ids = [info.template.id];
+  if (info.template.translationId && info.template.translationId !== info.template.id) ids.push(info.template.translationId);
+
+  const attempts = [];
+  for (const cannedMessageId of ids) {
+    const payload = {
+      cannedMessageId: String(cannedMessageId),
+      receiverId, receiverType: 'PHONENUMBER',
+      language: info.template.language || 'en',
+      message
+    };
+    try {
+      const res = await zohoDesk(env, 'POST', '/api/v1/im/channels/' + info.channel.id + '/initiateSession', payload, info.org.id);
+      return { receiverId, message, usedId: String(cannedMessageId), zohoResponse: res };
+    } catch (e) {
+      attempts.push({ payload, error: e.message });
+    }
+  }
+  let rawTemplate = null;
+  try { rawTemplate = await zohoDesk(env, 'GET', '/api/v1/im/cannedMessages/' + info.template.id, null, info.org.id); }
+  catch (e) { rawTemplate = { error: e.message }; }
+  const err = new Error(attempts[attempts.length - 1].error);
+  err.debug = { channelId: info.channel.id, orgId: info.org.id, attempts, rawTemplate };
+  throw err;
 }
 
 // ── Shared edge-cached GAS fetch — used by the Ops Chatbot (chatAsk).
@@ -1271,7 +1292,7 @@ export default {
           const result = await zohoWaSendTemplate(env, phone, values);
           return json({ ok: true, ...result });
         } catch (err) {
-          return json({ ok: false, error: err.message });
+          return json({ ok: false, error: err.message, debug: err.debug || null });
         }
       }
 
