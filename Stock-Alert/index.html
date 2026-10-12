@@ -528,6 +528,8 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .wa-info { font-size: 11.5px; color: var(--text-secondary); background: var(--bg-raised); border: 1px solid var(--border-default);
   border-radius: var(--radius-md); padding: 10px 12px; margin-bottom: 10px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 .wa-info[hidden] { display: none; }
+.wa-toggle { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-primary); margin-bottom: 6px; cursor: pointer; }
+.wa-toggle input { accent-color: var(--accent); width: 15px; height: 15px; }
 .settings-override-list { max-height: 180px; overflow-y: auto; border: 1px solid var(--border-default); border-radius: var(--radius-md); margin-top: 4px; }
 .settings-override-row {
   display: flex; align-items: center; justify-content: space-between;
@@ -986,31 +988,30 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       <div class="settings-override-list" id="recqty-override-list"></div>
     </div>
 
-    <!-- WhatsApp Alerts — admin only (shown by applyRoleUI). Connects the
-         Worker to Zoho Desk's WhatsApp channel and sends a test message. -->
+    <!-- WhatsApp Alerts — admin only (shown by applyRoleUI). The Worker's
+         15-min cron sends the Meta template "stock_alert" when a SKU newly
+         has E3 = 0 and G4 > 0. Settings here are stored in D1 sa_settings. -->
     <div class="settings-section wa-section" id="wa-settings-section" hidden>
-      <div class="settings-section-title">WhatsApp Alerts (Zoho Desk) <span class="role-badge">Admin</span></div>
-      <div class="settings-section-hint" id="wa-status">Not checked yet.</div>
+      <div class="settings-section-title">WhatsApp Alerts <span class="role-badge">Admin</span></div>
+      <div class="settings-section-hint">Sends a WhatsApp from Meta's test number (+1 555 645 8822) when a SKU newly has <b>E3 = 0 and G4 &gt; 0</b>. Checked every 15 min.</div>
+      <div class="settings-section-hint" id="wa-status">Loading…</div>
 
-      <div class="wa-step-title">1 · Connect Zoho</div>
-      <div class="settings-section-hint">API Console → Self Client → Generate Code. Scopes:
-        <code class="wa-code">Desk.InstantMessages.CREATE,Desk.InstantMessages.READ,Desk.basic.READ</code>
-        Time 10 min. Paste the code here within 10 minutes.</div>
+      <div class="wa-step-title">Alerts</div>
+      <label class="wa-toggle"><input type="checkbox" id="wa-enabled"> Send alerts automatically</label>
+
+      <div class="wa-step-title">Recipients (max 5)</div>
+      <div class="settings-section-hint">Each number must first be added + verified in Meta (WhatsApp → API Setup → Recipient). Separate with commas.</div>
       <div class="settings-row">
-        <input type="text" class="modal-input" id="wa-code-input" placeholder="1000.xxxx…" autocomplete="off">
-        <button class="btn-primary" id="wa-connect-btn" style="flex:0 0 auto;">Connect</button>
+        <input type="text" class="modal-input" id="wa-recipients" placeholder="9876543210, 9123456780">
+        <button class="btn-primary" id="wa-save-btn" style="flex:0 0 auto;">Save</button>
       </div>
 
-      <div class="wa-step-title">2 · Check setup</div>
-      <div class="settings-row">
-        <button class="btn-ghost" id="wa-info-btn">Check Zoho setup</button>
-      </div>
+      <div class="wa-step-title">Current list</div>
       <div class="wa-info" id="wa-info" hidden></div>
 
-      <div class="wa-step-title">3 · Send test (dummy data, one number)</div>
       <div class="settings-row">
-        <input type="tel" class="modal-input" id="wa-test-phone" placeholder="10-digit mobile, e.g. 9876543210">
-        <button class="btn-primary" id="wa-test-btn" style="flex:0 0 auto;">Send test</button>
+        <button class="btn-ghost" id="wa-refresh-btn">Refresh</button>
+        <button class="btn-primary" id="wa-test-btn" style="flex:0 0 auto;">Send test now</button>
       </div>
       <div class="settings-section-hint" id="wa-test-result"></div>
     </div>
@@ -2425,85 +2426,82 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
 <script>
 // ══════════════════════════════════════════════════════════════════
-// WhatsApp Alerts (Zoho Desk) — admin-only setup panel in Settings.
-// All calls go through the Worker (admin_only actions); the Zoho refresh
-// token is stored server-side in D1 and never comes back to the browser.
+// WhatsApp Alerts — admin-only panel in Settings. Talks to the Worker's
+// admin_only actions waAlertStatus / waAlertSave / waAlertTest. The Meta
+// token stays a Worker secret and never reaches the browser.
 // ══════════════════════════════════════════════════════════════════
 (function () {
   var WA_WORKER = 'https://tomahawk-returns.naimuddin.workers.dev';
   var statusEl = document.getElementById('wa-status');
   var infoEl = document.getElementById('wa-info');
   var resultEl = document.getElementById('wa-test-result');
+  var enabledEl = document.getElementById('wa-enabled');
+  var recipientsEl = document.getElementById('wa-recipients');
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function fmtTime(iso) {
+    if (!iso) return '—';
+    var d = new Date(iso);
+    return isNaN(d) ? iso : d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
   function post(action, payload) {
     return fetch(WA_WORKER, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(Object.assign({ action: action }, payload || {}))
     }).then(function (r) { return r.json(); });
   }
-
-  function showInfo(d) {
-    if (!d.connected) { statusEl.textContent = 'Not connected — do step 1.'; infoEl.hidden = true; return; }
-    var t = d.template;
-    statusEl.textContent = 'Connected to Zoho Desk. Template: ' + (t ? t.status : 'NOT FOUND');
-    var lines = [
-      'Org: ' + d.org.name + ' (' + d.org.id + ')',
-      'WhatsApp: ' + d.channel.name + ' · ' + d.channel.number,
-      '',
-      t ? ('Template "' + t.title + '" — ' + t.status + (t.rejectionReason ? ' · Reason: ' + t.rejectionReason : '')) : 'Template "Stock Alert" not found',
-    ];
-    if (t) {
-      lines.push('Placeholders: ' + t.placeholders.length + ' ' + t.placeholders.join(', '));
-      if (t.header && t.header.message) lines.push('Header: ' + t.header.message);
-      lines.push('Body:', t.message);
-      if (t.footer && t.footer.message) lines.push('Footer: ' + t.footer.message);
-    }
-    infoEl.textContent = lines.join('\n');
-    infoEl.hidden = false;
+  function recipientsDisplay(list) {
+    return (list || []).map(function (n) { return n.replace(/^91(\d{10})$/, '$1'); }).join(', ');
   }
 
-  function checkSetup() {
-    statusEl.textContent = 'Checking Zoho…';
-    fetch(WA_WORKER + '?action=zohoWaInfo').then(function (r) { return r.json(); })
+  function loadStatus() {
+    statusEl.textContent = 'Loading…';
+    fetch(WA_WORKER + '?action=waAlertStatus').then(function (r) { return r.json(); })
       .then(function (d) {
-        if (!d.ok) { statusEl.textContent = 'Error: ' + d.error; infoEl.hidden = true; return; }
-        showInfo(d);
+        if (!d.ok) { statusEl.textContent = 'Error: ' + d.error; return; }
+        enabledEl.checked = d.enabled;
+        if (document.activeElement !== recipientsEl) recipientsEl.value = recipientsDisplay(d.recipients);
+        var lc = d.lastCheck, ls = d.lastSent;
+        statusEl.innerHTML =
+          (d.tokenSet ? '' : '⚠️ META_WA_TOKEN secret missing. ') +
+          (d.recipients.length ? '' : '⚠️ No recipients yet. ') +
+          'Last check: ' + esc(lc ? fmtTime(lc.at) + ' (' + lc.reason + ')' : 'not run yet') + '<br>' +
+          'Last alert sent: ' + esc(ls ? fmtTime(ls.at) + ' — ' + ls.count + ' SKU(s), ' + ls.recipients.filter(function (x) { return x.ok; }).length + '/' + ls.recipients.length + ' delivered' : 'none yet');
+        infoEl.textContent = d.current.length + ' SKU(s) with E3 = 0 and G4 > 0:\n' + d.preview;
+        infoEl.hidden = false;
       })
       .catch(function (e) { statusEl.textContent = 'Error: ' + e.message; });
   }
 
-  document.getElementById('wa-connect-btn').addEventListener('click', function () {
-    var btn = this, code = document.getElementById('wa-code-input').value.trim();
-    if (!code) { statusEl.textContent = 'Paste the code first.'; return; }
-    btn.disabled = true; statusEl.textContent = 'Connecting…';
-    post('zohoConnect', { code: code }).then(function (d) {
-      if (!d.ok) { statusEl.textContent = 'Connect failed: ' + d.error; return; }
-      document.getElementById('wa-code-input').value = '';
-      checkSetup();
-    }).catch(function (e) { statusEl.textContent = 'Error: ' + e.message; })
+  document.getElementById('wa-save-btn').addEventListener('click', function () {
+    var btn = this; btn.disabled = true;
+    post('waAlertSave', { enabled: enabledEl.checked, recipients: recipientsEl.value })
+      .then(function (d) {
+        resultEl.textContent = d.ok ? '✅ Saved — ' + d.recipients.length + ' recipient(s), alerts ' + (d.enabled ? 'ON' : 'OFF') + '.' : '❌ ' + d.error;
+        loadStatus();
+      })
+      .catch(function (e) { resultEl.textContent = 'Error: ' + e.message; })
       .finally(function () { btn.disabled = false; });
   });
+  enabledEl.addEventListener('change', function () { document.getElementById('wa-save-btn').click(); });
 
-  document.getElementById('wa-info-btn').addEventListener('click', checkSetup);
+  document.getElementById('wa-refresh-btn').addEventListener('click', loadStatus);
 
   document.getElementById('wa-test-btn').addEventListener('click', function () {
-    var btn = this, phone = document.getElementById('wa-test-phone').value.trim();
-    if (!phone) { resultEl.textContent = 'Enter a phone number.'; return; }
-    btn.disabled = true; resultEl.textContent = 'Sending…';
-    post('zohoWaTest', { phone: phone }).then(function (d) {
-      resultEl.innerHTML = d.ok
-        ? '✅ Sent to ' + esc(d.receiverId) + '. Check WhatsApp.<br><span style="opacity:.8">' + esc(d.message).replace(/\n/g, '<br>') + '</span>'
-        : '❌ ' + esc(d.error) + (d.debug
-            ? '<div class="wa-info" style="margin-top:8px;max-height:260px;overflow:auto;">' + esc(JSON.stringify(d.debug, null, 2)) + '</div>'
-            : '');
+    var btn = this; btn.disabled = true; resultEl.textContent = 'Sending…';
+    post('waAlertTest').then(function (d) {
+      if (!d.ok) { resultEl.textContent = '❌ ' + d.error; return; }
+      resultEl.innerHTML = (d.sent.recipients || []).map(function (x) {
+        return (x.ok ? '✅ ' : '❌ ') + esc(x.to) + (x.ok ? ' — sent' : ' — ' + esc(x.error));
+      }).join('<br>');
+      loadStatus();
     }).catch(function (e) { resultEl.textContent = 'Error: ' + e.message; })
       .finally(function () { btn.disabled = false; });
   });
 
-  // Auto-check when an admin opens Settings.
+  // Load when an admin opens Settings.
   document.getElementById('settings-btn').addEventListener('click', function () {
-    if (window.TM_ROLE === 'admin') checkSetup();
+    if (window.TM_ROLE === 'admin') loadStatus();
   });
 })();
 </script>

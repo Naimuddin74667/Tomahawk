@@ -29,182 +29,171 @@ function json(data, status = 200) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// ZOHO DESK — WhatsApp (IM) via the existing Zoho Desk WhatsApp channel.
-// Used by Stock Alert's out-of-stock notifications. India data centre
-// (accounts.zoho.in / desk.zoho.in).
+// STOCK ALERT — WhatsApp out-of-stock alerts (Meta WhatsApp Cloud API)
 //
-// Auth: Shikhar's existing Zoho "Self Client". ZOHO_CLIENT_ID and
-// ZOHO_CLIENT_SECRET are Worker secrets. The long-lived refresh token is
-// obtained once via the admin-only zohoConnect action (one-time code from
-// the API Console) and stored in D1 table zoho_auth — never returned to
-// the browser. Short-lived access tokens (~1 h) are cached in the same
-// table and refreshed automatically.
+// Every 15-min cron tick: read live stock from the Supabase mirror and find
+// SKUs with E3 = 0 AND G4 > 0 (enabled, not archived) — the same rule as the
+// Stock Alert app's "No Stock in E3" card. When a NEW SKU enters that list,
+// send the approved template "stock_alert" to every recipient with:
+//   {{1}} = how many SKUs are in the list
+//   {{2}} = "1. SKU (G4: qty), 2. ..." (one line — WhatsApp forbids newlines
+//           inside a template variable)
+// SKUs that recover just drop off silently. The very first run only records
+// the current list (no message), so enabling this never floods anyone.
 //
-// Template placeholders: Zoho Desk templates use ${Module.Field}
-// placeholders. Per Zoho support, we send the FULL message text with our
-// own values in place of each placeholder (in order) — Zoho maps them.
+// Sender: Meta's free WhatsApp TEST number (+1 555 645 8822) in the
+// "Tomahawk Tools" business portfolio — max 5 verified recipient numbers.
+// Token: Worker secret META_WA_TOKEN (System User "Tomahawk_Alert", never
+// expires). Recipients + on/off switch live in D1 sa_settings and are edited
+// from the admin-only "WhatsApp Alerts" section in Stock Alert ⚙ Settings.
 // ══════════════════════════════════════════════════════════════════
-const ZOHO_ACCOUNTS_URL = 'https://accounts.zoho.in';
-const ZOHO_DESK_URL = 'https://desk.zoho.in';
-const ZOHO_WA_TEMPLATE_TITLE = 'Stock Alert'; // template name as created in Zoho Desk
+const META_GRAPH_URL = 'https://graph.facebook.com/v25.0';
+const META_WA_PHONE_NUMBER_ID = '1322615387611501'; // test number +1 555 645 8822
+const META_WA_TEMPLATE = 'stock_alert';
+const META_WA_LANG = 'en';
+const WA_LIST_MAX_CHARS = 800;   // keeps the whole message under WhatsApp's 1024-char body limit
+const WA_MAX_RECIPIENTS = 5;     // Meta test-number limit
 
-async function ensureZohoTables(DB) {
-  await DB.prepare(`CREATE TABLE IF NOT EXISTS zoho_auth (
-    key        TEXT PRIMARY KEY,
-    value      TEXT,
-    updated_at TEXT DEFAULT (datetime('now'))
+async function ensureWaAlertTables(DB) {
+  await ensureSaTables(DB); // sa_settings + sa_archived_skus live there
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS sa_oos_state (
+    sku_code TEXT PRIMARY KEY,
+    g4_qty   INTEGER DEFAULT 0,
+    since    TEXT DEFAULT (datetime('now'))
   )`).run();
 }
-async function zohoGet(DB, key) {
-  const row = await DB.prepare('SELECT value FROM zoho_auth WHERE key = ?').bind(key).first();
+async function saGetSetting(DB, key) {
+  const row = await DB.prepare('SELECT value FROM sa_settings WHERE key = ?').bind(key).first();
   return row ? row.value : null;
 }
-async function zohoSet(DB, key, value) {
-  await DB.prepare(`INSERT INTO zoho_auth (key, value, updated_at) VALUES (?, ?, datetime('now'))
+async function saSetSetting(DB, key, value) {
+  await DB.prepare(`INSERT INTO sa_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-    .bind(key, value == null ? null : String(value)).run();
+    .bind(key, value == null ? '' : String(value)).run();
 }
 
-// POST to Zoho's token endpoint with form params; returns parsed JSON.
-async function zohoTokenRequest(params) {
-  const res = await fetch(ZOHO_ACCOUNTS_URL + '/oauth/v2/token', {
+// Recipient list: digits only, 10-digit Indian numbers get the 91 prefix.
+function parseWaRecipients(raw) {
+  return String(raw || '').split(/[\s,;]+/)
+    .map(x => x.replace(/\D/g, ''))
+    .map(x => (x.length === 10 ? '91' + x : x))
+    .filter(x => x.length >= 11 && x.length <= 15)
+    .filter((x, i, a) => a.indexOf(x) === i)
+    .slice(0, WA_MAX_RECIPIENTS);
+}
+
+// Current out-of-stock list: [{ sku, g4 }] sorted by G4 qty (highest first).
+async function computeOosList(env) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured on Worker');
+  const res = await fetch(env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/rpc/stock_alert_inventory', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(params).toString()
+    headers: { 'Content-Type': 'application/json', 'apikey': env.SUPABASE_SECRET_KEY, 'Authorization': 'Bearer ' + env.SUPABASE_SECRET_KEY },
+    body: '{}'
+  });
+  if (!res.ok) throw new Error('Supabase stock_alert_inventory failed: ' + res.status);
+  const data = await res.json();
+  const archived = await env.DB.prepare('SELECT sku_code FROM sa_archived_skus').all();
+  const archivedSet = new Set((archived.results || []).map(r => r.sku_code));
+  return (data.rows || [])
+    .filter(r => r.enabled !== false && !archivedSet.has(r.skuCode))
+    .filter(r => Number(r.E3_stock) === 0 && Number(r.G4_stock) > 0)
+    .map(r => ({ sku: r.skuCode, g4: Number(r.G4_stock) }))
+    .sort((a, b) => b.g4 - a.g4 || a.sku.localeCompare(b.sku));
+}
+
+// "1. SKU (G4: 80), 2. ..." — trimmed with "+N more" to stay inside limits.
+function formatOosList(list) {
+  if (!list.length) return 'None right now';
+  const parts = [];
+  let len = 0;
+  for (let i = 0; i < list.length; i++) {
+    const item = (i + 1) + '. ' + list[i].sku + ' (G4: ' + list[i].g4 + ')';
+    const rest = list.length - i;
+    if (len + item.length + 2 > WA_LIST_MAX_CHARS - 40) {
+      parts.push('+' + rest + ' more, see Stock Alert app');
+      break;
+    }
+    parts.push(item);
+    len += item.length + 2;
+  }
+  return parts.join(', ').replace(/[\r\n\t]+/g, ' ').replace(/ {4,}/g, '   ');
+}
+
+// Sends the stock_alert template to one number. Returns Meta's response.
+async function sendWaStockAlert(env, to, count, listText) {
+  if (!env.META_WA_TOKEN) throw new Error('META_WA_TOKEN Worker secret missing');
+  const res = await fetch(META_GRAPH_URL + '/' + META_WA_PHONE_NUMBER_ID + '/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + env.META_WA_TOKEN },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'template',
+      template: {
+        name: META_WA_TEMPLATE,
+        language: { code: META_WA_LANG },
+        components: [{ type: 'body', parameters: [
+          { type: 'text', text: String(count) },
+          { type: 'text', text: listText }
+        ] }]
+      }
+    })
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.error) throw new Error('Zoho token error: ' + (data.error || res.status));
-  return data;
-}
-
-// Returns a valid access token, refreshing via the stored refresh token
-// when the cached one is missing or about to expire.
-async function getZohoAccessToken(env) {
-  await ensureZohoTables(env.DB);
-  const cached = await zohoGet(env.DB, 'access_token');
-  const expires = Number(await zohoGet(env.DB, 'access_expires') || 0);
-  if (cached && Date.now() < expires - 60000) return cached;
-
-  const refresh = await zohoGet(env.DB, 'refresh_token');
-  if (!refresh) throw new Error('Zoho not connected yet — run Connect Zoho in Stock Alert settings');
-  if (!env.ZOHO_CLIENT_ID || !env.ZOHO_CLIENT_SECRET) throw new Error('ZOHO_CLIENT_ID / ZOHO_CLIENT_SECRET Worker secrets missing');
-  const data = await zohoTokenRequest({
-    grant_type: 'refresh_token', refresh_token: refresh,
-    client_id: env.ZOHO_CLIENT_ID, client_secret: env.ZOHO_CLIENT_SECRET
-  });
-  await zohoSet(env.DB, 'access_token', data.access_token);
-  await zohoSet(env.DB, 'access_expires', Date.now() + (Number(data.expires_in) || 3600) * 1000);
-  return data.access_token;
-}
-
-// Calls a Zoho Desk API path. orgId header added when known.
-async function zohoDesk(env, method, path, bodyObj, orgId) {
-  const token = await getZohoAccessToken(env);
-  const headers = { 'Authorization': 'Zoho-oauthtoken ' + token };
-  if (orgId) headers['orgId'] = String(orgId);
-  if (bodyObj) headers['Content-Type'] = 'application/json';
-  const res = await fetch(ZOHO_DESK_URL + path, { method, headers, body: bodyObj ? JSON.stringify(bodyObj) : undefined });
-  if (res.status === 204) return { data: [] };
-  const text = await res.text();
-  let data; try { data = JSON.parse(text); } catch (e) { data = { raw: text.slice(0, 500) }; }
-  if (!res.ok) throw new Error('Zoho Desk ' + method + ' ' + path.split('?')[0] + ' → ' + res.status + ': ' + text.slice(0, 300));
-  return data;
-}
-
-// Looks up org, WhatsApp channel and the Stock Alert template; caches the IDs.
-async function zohoWaDiscover(env) {
-  const orgs = await zohoDesk(env, 'GET', '/api/v1/organizations');
-  const org = (orgs.data || [])[0];
-  if (!org) throw new Error('No Zoho Desk organization found for this account');
-  const orgId = org.id;
-
-  const ch = await zohoDesk(env, 'GET', '/api/v1/im/channels', null, orgId);
-  const wa = (ch.data || []).find(c => c.integrationServiceType === 'WHATSAPP' && c.isActive !== false);
-  if (!wa) throw new Error('No active WhatsApp channel found in Zoho Desk');
-
-  const tpl = await zohoDesk(env, 'GET',
-    '/api/v1/im/cannedMessages?type=TEMPLATE&limit=100&departmentId=' + encodeURIComponent(wa.departmentId), null, orgId);
-  const list = tpl.data || [];
-  const t = list.find(x => String(x.title || '').trim().toLowerCase() === ZOHO_WA_TEMPLATE_TITLE.toLowerCase());
-
-  await zohoSet(env.DB, 'org_id', orgId);
-  await zohoSet(env.DB, 'wa_channel_id', wa.id);
-  await zohoSet(env.DB, 'wa_department_id', wa.departmentId);
-  if (t) await zohoSet(env.DB, 'wa_template_id', t.id);
-
-  const tr = t && (t.translations || []).find(x => x.language === 'en') || (t && (t.translations || [])[0]) || null;
-  const message = t ? (t.message || (tr && tr.message) || '') : '';
-  return {
-    org: { id: orgId, name: org.companyName || org.portalName || '' },
-    channel: { id: wa.id, name: wa.name, number: wa.accountName, departmentId: wa.departmentId },
-    template: t ? {
-      id: t.id, translationId: tr ? tr.id : null, title: t.title, status: t.status, category: t.tags,
-      language: tr ? tr.language : null, translationStatus: tr ? tr.status : null,
-      rejectionReason: tr ? tr.rejectionReason : null,
-      header: tr && tr.templateItems ? tr.templateItems.header : null,
-      footer: tr && tr.templateItems ? tr.templateItems.footer : null,
-      message, placeholders: (message.match(/\$\{[^}]+\}/g) || [])
-    } : null,
-    otherTemplates: list.filter(x => x !== t).map(x => ({ id: x.id, title: x.title, status: x.status }))
-  };
-}
-
-// Normalises an Indian mobile number to +91XXXXXXXXXX.
-function normalisePhone(raw) {
-  let d = String(raw || '').replace(/[^\d+]/g, '');
-  if (/^\d{10}$/.test(d)) d = '+91' + d;
-  else if (/^91\d{10}$/.test(d)) d = '+' + d;
-  if (!/^\+\d{11,15}$/.test(d)) throw new Error('Invalid phone number: ' + raw);
-  return d;
-}
-
-// Replaces each ${...} placeholder in the template text, in order, with values[i].
-function fillZohoTemplate(message, values) {
-  const n = (message.match(/\$\{[^}]+\}/g) || []).length;
-  if (n !== values.length) throw new Error('Template has ' + n + ' placeholder(s) but ' + values.length + ' value(s) were given');
-  let i = 0;
-  return message.replace(/\$\{[^}]+\}/g, () => String(values[i++]).replace(/[\r\n\t]+/g, ' '));
-}
-
-// Sends the Stock Alert template to one phone number with the given values.
-// Tries the template ID first, then the English translation ID (Zoho's docs
-// are unclear which one initiateSession expects). Stops at the first success.
-// On failure, the thrown error carries .debug with every attempt + Zoho's raw
-// template record, so the admin test panel can show exactly what was sent.
-async function zohoWaSendTemplate(env, phone, values) {
-  const info = await zohoWaDiscover(env);
-  if (!info.template) throw new Error('Template "' + ZOHO_WA_TEMPLATE_TITLE + '" not found in Zoho Desk');
-  if (String(info.template.status).toUpperCase() !== 'APPROVED') throw new Error('Template status is ' + info.template.status + ' — wait for Meta approval');
-  const message = fillZohoTemplate(info.template.message, values);
-  const receiverId = normalisePhone(phone);
-  const ids = [info.template.id];
-  if (info.template.translationId && info.template.translationId !== info.template.id) ids.push(info.template.translationId);
-
-  // Receiver formats to try: with '+' (Zoho docs page) and without (Zoho's
-  // OpenAPI example). Only the template ID is used now — the translation ID
-  // was confirmed to 404.
-  const receivers = [receiverId, receiverId.replace(/^\+/, '')];
-  const attempts = [];
-  for (const cannedMessageId of ids.slice(0, 1)) for (const rid of receivers) {
-    const payload = {
-      cannedMessageId: String(cannedMessageId),
-      receiverId: rid, receiverType: 'PHONENUMBER',
-      language: info.template.language || 'en',
-      message
-    };
-    try {
-      const res = await zohoDesk(env, 'POST', '/api/v1/im/channels/' + info.channel.id + '/initiateSession', payload, info.org.id);
-      return { receiverId: rid, message, usedId: String(cannedMessageId), zohoResponse: res };
-    } catch (e) {
-      attempts.push({ payload, error: e.message });
-    }
+  if (!res.ok || data.error) {
+    const e = data.error || {};
+    throw new Error('Meta ' + res.status + ': ' + (e.message || 'send failed') + (e.error_data && e.error_data.details ? ' — ' + e.error_data.details : ''));
   }
-  let rawTemplate = null;
-  try { rawTemplate = await zohoDesk(env, 'GET', '/api/v1/im/cannedMessages/' + info.template.id, null, info.org.id); }
-  catch (e) { rawTemplate = { error: e.message }; }
-  const err = new Error(attempts[attempts.length - 1].error);
-  err.debug = { channelId: info.channel.id, orgId: info.org.id, attempts, rawTemplate };
-  throw err;
+  return data;
+}
+
+// Sends the current list to every recipient; returns per-number results.
+async function sendWaToAll(env, list) {
+  const recipients = parseWaRecipients(await saGetSetting(env.DB, 'wa_recipients'));
+  if (!recipients.length) throw new Error('No recipients set — add numbers in Stock Alert ⚙ Settings');
+  const listText = formatOosList(list);
+  const results = [];
+  for (const to of recipients) {
+    try { await sendWaStockAlert(env, to, list.length, listText); results.push({ to, ok: true }); }
+    catch (err) { results.push({ to, ok: false, error: err.message }); }
+  }
+  return { recipients: results, listText, count: list.length };
+}
+
+// The 15-minute check. opts.force = send even if nothing is new (test button).
+async function runStockAlertCheck(env, opts) {
+  opts = opts || {};
+  await ensureWaAlertTables(env.DB);
+  const list = await computeOosList(env);
+  const prevRows = await env.DB.prepare('SELECT sku_code FROM sa_oos_state').all();
+  const prev = new Set((prevRows.results || []).map(r => r.sku_code));
+  const seeded = (await saGetSetting(env.DB, 'wa_seeded')) === '1';
+  const enabled = (await saGetSetting(env.DB, 'wa_alerts_enabled')) !== '0';
+  const newOnes = list.filter(x => !prev.has(x.sku));
+  const nowIso = new Date().toISOString();
+
+  let sent = null, reason;
+  if (opts.force) {
+    sent = await sendWaToAll(env, list); reason = 'manual test';
+  } else if (!seeded) {
+    reason = 'first run — saved current list, no message';
+  } else if (!enabled) {
+    reason = 'alerts switched off';
+  } else if (!newOnes.length) {
+    reason = 'no new out-of-stock SKUs';
+  } else {
+    sent = await sendWaToAll(env, list); reason = newOnes.length + ' new: ' + newOnes.map(x => x.sku).join(', ');
+  }
+
+  // Replace the saved state with the current list (recovered SKUs drop off).
+  const stmts = [env.DB.prepare('DELETE FROM sa_oos_state')];
+  for (const x of list) stmts.push(env.DB.prepare('INSERT INTO sa_oos_state (sku_code, g4_qty) VALUES (?, ?)').bind(x.sku, x.g4));
+  await env.DB.batch(stmts);
+  if (!seeded) await saSetSetting(env.DB, 'wa_seeded', '1');
+
+  await saSetSetting(env.DB, 'wa_last_check', JSON.stringify({ at: nowIso, count: list.length, reason }));
+  if (sent) await saSetSetting(env.DB, 'wa_last_sent', JSON.stringify({ at: nowIso, count: sent.count, recipients: sent.recipients, reason }));
+  return { count: list.length, newCount: newOnes.length, reason, sent };
 }
 
 // ── Shared edge-cached GAS fetch — used by the Ops Chatbot (chatAsk).
@@ -632,8 +621,8 @@ const ACTION_TIERS = {
   //   read-cached-on-repeat). Same tier as getOrderPrices. —
   syncPicklistImages: 'viewer_read',
 
-  // — Stock Alert: Zoho Desk WhatsApp connection + test send (admin only) —
-  zohoConnect: 'admin_only', zohoWaInfo: 'admin_only', zohoWaTest: 'admin_only'
+  // — Stock Alert: WhatsApp out-of-stock alerts setup (admin only) —
+  waAlertStatus: 'admin_only', waAlertSave: 'admin_only', waAlertTest: 'admin_only'
 };
 
 function getAuthRequirement(act) {
@@ -1248,55 +1237,43 @@ export default {
       const imResponse = await handleInstamart(request.method, act, url, body, env);
       if (imResponse) return imResponse;
 
-      // ── STOCK ALERT — Zoho Desk WhatsApp connection (admin only) ──
-      // zohoConnect: swap a one-time Self Client code for a refresh token.
-      if (request.method === 'POST' && act === 'zohoConnect') {
-        await ensureZohoTables(env.DB);
-        const code = String((body && body.code) || '').trim();
-        if (!code) return json({ ok: false, error: 'Paste the code from Zoho API Console first' });
-        if (!env.ZOHO_CLIENT_ID || !env.ZOHO_CLIENT_SECRET) return json({ ok: false, error: 'ZOHO_CLIENT_ID / ZOHO_CLIENT_SECRET Worker secrets missing' });
+      // ── STOCK ALERT — WhatsApp out-of-stock alerts (admin only) ──
+      // waAlertStatus: settings, last check/send, and the current list.
+      if (request.method === 'GET' && action === 'waAlertStatus') {
         try {
-          const data = await zohoTokenRequest({
-            grant_type: 'authorization_code', code,
-            client_id: env.ZOHO_CLIENT_ID, client_secret: env.ZOHO_CLIENT_SECRET
+          await ensureWaAlertTables(env.DB);
+          const parse = v => { try { return v ? JSON.parse(v) : null; } catch (e) { return null; } };
+          const list = await computeOosList(env);
+          return json({
+            ok: true,
+            enabled: (await saGetSetting(env.DB, 'wa_alerts_enabled')) !== '0',
+            recipients: parseWaRecipients(await saGetSetting(env.DB, 'wa_recipients')),
+            tokenSet: !!env.META_WA_TOKEN,
+            lastCheck: parse(await saGetSetting(env.DB, 'wa_last_check')),
+            lastSent: parse(await saGetSetting(env.DB, 'wa_last_sent')),
+            current: list, preview: formatOosList(list)
           });
-          if (!data.refresh_token) return json({ ok: false, error: 'Zoho returned no refresh token — generate a fresh code and try again' });
-          await zohoSet(env.DB, 'refresh_token', data.refresh_token);
-          await zohoSet(env.DB, 'access_token', data.access_token);
-          await zohoSet(env.DB, 'access_expires', Date.now() + (Number(data.expires_in) || 3600) * 1000);
-          await zohoSet(env.DB, 'connected_by', (authResult.user && authResult.user.username) || '');
-          return json({ ok: true, connected: true });
         } catch (err) {
           return json({ ok: false, error: err.message });
         }
       }
 
-      // zohoWaInfo: org, WhatsApp channel and Stock Alert template status.
-      if (request.method === 'GET' && action === 'zohoWaInfo') {
-        try {
-          await ensureZohoTables(env.DB);
-          const connected = !!(await zohoGet(env.DB, 'refresh_token'));
-          if (!connected) return json({ ok: true, connected: false });
-          const info = await zohoWaDiscover(env);
-          return json({ ok: true, connected: true, ...info });
-        } catch (err) {
-          return json({ ok: false, error: err.message });
-        }
+      // waAlertSave: on/off switch + recipient numbers (max 5).
+      if (request.method === 'POST' && act === 'waAlertSave') {
+        await ensureWaAlertTables(env.DB);
+        const recipients = parseWaRecipients(body && body.recipients);
+        await saSetSetting(env.DB, 'wa_recipients', recipients.join(','));
+        await saSetSetting(env.DB, 'wa_alerts_enabled', body && body.enabled === false ? '0' : '1');
+        return json({ ok: true, recipients, enabled: !(body && body.enabled === false) });
       }
 
-      // zohoWaTest: send the template with dummy values to ONE number.
-      if (request.method === 'POST' && act === 'zohoWaTest') {
+      // waAlertTest: send the CURRENT list to all recipients right now.
+      if (request.method === 'POST' && act === 'waAlertTest') {
         try {
-          const phone = body && body.phone;
-          if (!phone) return json({ ok: false, error: 'Enter a phone number' });
-          const info = await zohoWaDiscover(env);
-          if (!info.template) return json({ ok: false, error: 'Template "' + ZOHO_WA_TEMPLATE_TITLE + '" not found' });
-          const n = info.template.placeholders.length;
-          const values = Array.from({ length: n }, (_, i) => 'TEST-SKU-' + (i + 1) + ' (G4 : ' + (i + 1) * 10 + ' Qty)');
-          const result = await zohoWaSendTemplate(env, phone, values);
-          return json({ ok: true, ...result });
+          const r = await runStockAlertCheck(env, { force: true });
+          return json({ ok: true, ...r });
         } catch (err) {
-          return json({ ok: false, error: err.message, debug: err.debug || null });
+          return json({ ok: false, error: err.message });
         }
       }
 
@@ -4308,6 +4285,15 @@ export default {
       );
       return;
     }
+    // Stock Alert — WhatsApp out-of-stock alerts (every 15-min tick).
+    ctx.waitUntil(
+      runStockAlertCheck(env)
+        .then(r => recordHeartbeat(env, 'stock_alert_whatsapp', 'Stock Alert WhatsApp (Worker cron)', 'ok',
+          `${r.count} SKU(s) out in E3 with G4 stock — ${r.reason}` +
+          (r.sent ? ` — sent to ${r.sent.recipients.filter(x => x.ok).length}/${r.sent.recipients.length}.` : '.'), 900))
+        .catch(err => recordHeartbeat(env, 'stock_alert_whatsapp', 'Stock Alert WhatsApp (Worker cron)', 'error',
+          err.message, 900).catch(() => {}))
+    );
     // Order-data retention (Supabase mirror) — once a day, on the tick
     // that falls between 20:30 and 20:44 UTC (02:00–02:14 IST).
     const tick = new Date(event.scheduledTime || Date.now());
