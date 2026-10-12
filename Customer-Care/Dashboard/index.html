@@ -385,6 +385,10 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .co-input { font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); min-width: 240px; }
 .co-warn { color: #f87171; font-weight: 600; }
 .co-ok { color: #22c55e; font-weight: 600; }
+.rf-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.rf-cols .cm-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; }
+.rf-cols .rf-h { grid-column: 1 / -1; font-size: 11px; font-weight: 700; color: var(--text); letter-spacing: .02em; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+@media (max-width: 760px) { .rf-cols { grid-template-columns: 1fr; } }
 .co-orders { width: 100%; border-collapse: collapse; font-size: 11.5px; }
 .co-orders th { text-align: left; font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--border); }
 .co-orders td { padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
@@ -1895,22 +1899,25 @@ async function to4x6Pdf(bytes) {
   function refundDetailsGrid(c) {
     var r = c.reverse, sh = ship(r);
     var f = function (k, v, cls) { return '<div' + (cls ? ' class="' + cls + '"' : '') + '><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
-    var todo = function (k) { return '<div><div class="cm-k">' + k + '</div><div class="cm-muted" style="font-style:italic">To be added</div></div>'; };
     var addr = [sh.add, sh.city, sh.state, sh.pin].filter(Boolean).join(', ');
     var bank;
     if (r.bank_submitted_at) bank = '<div class="span2" id="rf-bank-inline"><div class="cm-k">Bank details</div><div class="cm-muted">Loading…</div></div>';
     else bank = f('Bank details', r.refund_link_sent_at ? 'Link sent ' + fmtWhen(r.refund_link_sent_at) + ' — waiting for customer' : (r.resolution === 'refund' ? 'Link not sent yet' : 'Asked after the refund is started'), 'span2');
-    return '<div class="cm-summary">' +
-      '<div id="rf-order" style="display:contents"></div>' + todo('Issue') +
-      f('Customer', sh.name) + f('Phone', sh.phone) + f('Case', r.order_id + ' · ' + c.type) +
-      f('Address', addr, 'span2') + f('Product', c.product) +
+    // Two cards side by side: Purchase details (customer's order, filled
+    // by refreshRefundOrder) | Customer details (this case + refund progress).
+    return '<div class="rf-cols">' +
+      '<div class="cm-summary"><div class="rf-h">Purchase details</div><div id="rf-order" style="display:contents"></div></div>' +
+      '<div class="cm-summary"><div class="rf-h">Customer details</div>' +
+      f('Customer', sh.name) + f('Phone', sh.phone) +
+      f('Address', addr, 'span2') +
+      f('Case', r.order_id + ' · ' + c.type) + f('Product', c.product) +
       f('Declared value', sh.total_amount ? '₹' + sh.total_amount : '') + f('Pickup AWB', [r.courier || 'Delhivery', r.waybill].filter(Boolean).join(' · ')) +
       f('Received', [fmtWhen(r.received_at), r.received_by].filter(Boolean).join(' · ')) +
       (r.resolution === 'refund' ? f('Reason', r.refund_reason) + f('Started by', [r.refund_marked_by, fmtWhen(r.refund_marked_at)].filter(Boolean).join(' · ')) : '') +
       (r.refund_amount ? f('Amount (older entry)', '₹' + r.refund_amount) : '') +
       bank +
       (r.refunded_at ? f('UTR', r.refund_utr) + f('Refunded', [fmtWhen(r.refunded_at), r.refunded_by].filter(Boolean).join(' · ')) : '') +
-      '</div>';
+      '</div></div>';
   }
   // Fills the bank-details cell (masked account) after the popup is drawn.
   async function fillRefundBank(c) {
@@ -2029,9 +2036,6 @@ async function to4x6Pdf(bytes) {
     // Warranty: 6 months from the customer's order date (same rule as the public Warranty Check page)
     var wu = d.warranty_until, today = new Date().toISOString().slice(0, 10);
     var warranty = wu ? esc(fmtDay(wu)) + ' ' + (wu >= today ? '<span class="co-ok">· In warranty</span>' : '<span class="co-warn">· Expired</span>') : '';
-    var price = d.price != null && +d.price > 0
-      ? '&#8377;' + esc(Number(d.price).toLocaleString('en-IN')) + ' <span class="cm-muted">(' + esc(d.price_source || '') + ')</span>'
-      : '<span class="cm-muted" style="font-style:italic">Not in our data</span>';
     var items = (d.items || []).map(function (it) {
       return '<span class="mono">' + esc(it.sku || '') + '</span>' + (it.seller_sku && it.seller_sku !== it.sku ? ' <span class="cm-muted">(' + esc(it.seller_sku) + ')</span>' : '') +
         (it.name && it.name !== it.sku ? ' — ' + esc(it.name) : '') + (it.qty && +it.qty > 1 ? ' × ' + esc(it.qty) : '');
@@ -2056,7 +2060,7 @@ async function to4x6Pdf(bytes) {
           '<td class="mono">' + esc(it.invoice || '—') + '</td></tr>';
       }).join('') + '</table></div>';
     return f('Platform', esc(d.platform)) + f('Order date', esc(fmtDay(d.order_date))) + f('Warranty until', warranty) +
-      f('Purchase price', price) + f('Order status', esc(ucSt(d.status))) +
+      f('Order status', esc(ucSt(d.status))) +
       f('Replacements', ucs.length > 1 ? esc(String(ucs.length - 1)) + ' already sent' : 'None') +
       f('Item(s)', items + (match ? '<div style="margin-top:3px">' + match + '</div>' : ''), 'span3') +
       table;
@@ -2113,10 +2117,10 @@ async function to4x6Pdf(bytes) {
     var f = function (k, v, cls) { return '<div' + (cls ? ' class="' + cls + '"' : '') + '><div class="cm-k">' + k + '</div><div>' + (v || '&#8212;') + '</div></div>'; };
     var muted = function (t) { return '<span class="cm-muted" style="font-style:italic">' + t + '</span>'; };
     var edit = canEditOrder() ? '<button class="co-edit" data-co="rf-edit">' + (mid ? 'Change' : '+ Add Order ID') + '</button>' : '';
-    var html = '<div><div class="cm-k">Order ID</div><div class="co-row" id="rf-co-head">' +
+    var html = '<div class="span2"><div class="cm-k">Order ID</div><div class="co-row" id="rf-co-head">' +
       (mid ? '<span class="mono">' + esc(mid) + '</span>' : muted('Not added')) + edit + '</div></div>';
-    if (!mid) html += f('Platform', muted('Add the Order ID')) + f('Order date', '') + f('Purchase price', muted('To be added')) + f('Warranty until', '') + f('Order status', '');
-    else if (!d) html += f('Platform', '<span class="cm-muted">Fetching…</span>') + f('Order date', '') + f('Purchase price', '') + f('Warranty until', '') + f('Order status', '');
+    if (!mid) html += f('Platform', muted('Add the Order ID')) + f('Order date', '') + f('Warranty until', '') + f('Order status', '');
+    else if (!d) html += f('Platform', '<span class="cm-muted">Fetching…</span>') + f('Order date', '') + f('Warranty until', '') + f('Order status', '');
     else if (d.error || !d.found) html += '<div class="span2 co-warn">' + (d.error ? "Couldn't fetch order details: " + esc(d.error) : "This Order ID isn't in our Unicommerce / Amazon / Shopify data.") + '</div>';
     else {
       var wu = d.warranty_until, today = new Date().toISOString().slice(0, 10);
@@ -2133,10 +2137,9 @@ async function to4x6Pdf(bytes) {
       }).join('<br>');
       html += f('Platform', esc(d.platform)) +
         f('Order date', esc(fmtDay(d.order_date))) +
-        f('Purchase price', d.price != null && +d.price > 0 ? '&#8377;' + esc(Number(d.price).toLocaleString('en-IN')) : muted('Not in our data')) +
         f('Warranty until', wu ? esc(fmtDay(wu)) + ' ' + (wu >= today ? '<span class="co-ok">· In warranty</span>' : '<span class="co-warn">· Expired</span>') : '') +
         f('Order status', esc(ucSt(d.status))) +
-        f('Replacements', ucs.length > 1 ? esc(String(ucs.length - 1)) + ' already sent' : 'None') +
+        f('Replacements', ucs.length > 1 ? esc(String(ucs.length - 1)) + ' already sent' : 'None', 'span2') +
         f('Item', items + match, 'span2');
     }
     cell.innerHTML = html;
