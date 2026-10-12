@@ -3938,8 +3938,9 @@ export default {
             return json({ ok: false, error: 'Only Admin or Faique can mark a parcel Received' }, 403);
           const r = await env.DB.prepare(
             // Received = straight into In Process (no separate "Received" stage)
-            "UPDATE delhivery_orders SET received_at = COALESCE(received_at, datetime('now')), in_process_at = COALESCE(in_process_at, datetime('now')) WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1"
-          ).bind(oid).run();
+            // received_by records who confirmed it (kept from the first click, like received_at)
+            "UPDATE delhivery_orders SET received_at = COALESCE(received_at, datetime('now')), in_process_at = COALESCE(in_process_at, datetime('now')), received_by = COALESCE(received_by, ?) WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1"
+          ).bind(String(rcvUser.username || 'unknown'), oid).run();
           if (!r.meta || !r.meta.changes) return json({ ok: false, error: 'No booked reverse pickup with that Order ID' }, 404);
           return json({ ok: true });
         }
@@ -5114,6 +5115,8 @@ async function ensureDelhiveryTable(DB) {
                      // received_at — reverse pickup marked received at our warehouse (manual, wins over tracking)
                      // linked_order_id — reverse ↔ its send-back forward order
                      'received_at TEXT', 'linked_order_id TEXT',
+                     // received_by — username who clicked Verify received (audit; added 12-Oct-2026)
+                     'received_by TEXT',
                      // refunded_at — Refund case: refund given → case closed
                      'refunded_at TEXT',
                      // in_process_at — reverse parcel checked in and being worked on (manual)
