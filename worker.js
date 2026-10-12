@@ -582,6 +582,8 @@ const ACTION_TIERS = {
   // — Reverse pickup: mark a parcel as received at the warehouse. —
   delhiveryMarkReceived: 'manager_up', delhiveryMarkRefunded: 'manager_up',
   delhiveryMarkInProcess: 'manager_up', delhiveryCancelCase: 'admin_only',
+  // Customer's own order ID (Flipkart / Amazon / Shopify) on a case + live lookup.
+  ccSetOrderId: 'manager_up', ccOrderLookup: 'viewer_read',
   // Refund flow — customer bank-details form (NEFT). The two public actions
   // are gated by a single-use, 7-day link token + phone last-4 check.
   delhiveryStartRefund: 'manager_up', refundCreateLink: 'manager_up', refundGetBank: 'manager_up',
@@ -3925,6 +3927,28 @@ export default {
         // Requires DELHIVERY_API_TOKEN, DELHIVERY_PICKUP_LOCATION, and
         // DELHIVERY_SELLER_GST to be set as Worker secrets/vars — see
         // createDelhiveryOrder() above for exactly what each does.
+        // ── Customer's order ID on a case (set / change / clear). Body:
+        //   { order_id: 'RPR-…', market_order_id: 'OD…' } — empty clears it.
+        //   Returns the live order details so the popup can show them at once.
+        if (act === 'ccSetOrderId') {
+          await ensureDelhiveryTable(env.DB);
+          const oid = String(body.order_id || '').trim();
+          if (!oid) return json({ ok: false, error: 'order_id required' }, 400);
+          const mid = cleanMarketOrderId(body.market_order_id);
+          const r = await env.DB.prepare('UPDATE delhivery_orders SET market_order_id = ? WHERE order_id = ?').bind(mid || null, oid).run();
+          if (!r.meta || !r.meta.changes) return json({ ok: false, error: 'Case not found' }, 404);
+          let order = null;
+          if (mid) { try { order = await ccOrderLookup(env, mid); } catch (e) { order = { found: false, error: e.message }; } }
+          return json({ ok: true, market_order_id: mid, order });
+        }
+        // ── Live details for a customer order ID (?id=OD…) from the Supabase mirror.
+        if (act === 'ccOrderLookup') {
+          const mid = cleanMarketOrderId(url.searchParams.get('id') || body.id);
+          if (!mid) return json({ ok: false, error: 'id required' }, 400);
+          try { return json({ ok: true, order: await ccOrderLookup(env, mid) }); }
+          catch (e) { return json({ ok: false, error: e.message }, 502); }
+        }
+
         // ── Reverse pickup → mark received at our warehouse (manual). Once set,
         //   the Recent list shows "Received" whatever Delhivery tracking says,
         //   and the "Send back" button becomes available.
@@ -4140,6 +4164,7 @@ export default {
             String(o.remark || '').trim(), isReverse ? 'reverse' : 'forward'
           ).run();
           if (result.success && !isReverse && o.linked_order_id) await linkSendBack(env.DB, o.order, o.linked_order_id);
+          if (result.success && o.market_order_id) await saveMarketOrderId(env.DB, o.order, o.market_order_id);
           return json({ ok: result.success, waybill: result.trackingId, response: result.response, error: result.success ? undefined : result.error }, result.success ? 200 : 502);
         }
 
@@ -4175,6 +4200,7 @@ export default {
             String(o.remark || '').trim(), isReverse ? 'reverse' : 'forward'
           ).run();
           if (result.success && !isReverse && o.linked_order_id) await linkSendBack(env.DB, o.order, o.linked_order_id);
+          if (result.success && o.market_order_id) await saveMarketOrderId(env.DB, o.order, o.market_order_id);
 
           // Make sure a pickup request exists (today or the earliest date possible).
           // Never blocks the order — any failure is just reported back.
@@ -5119,6 +5145,8 @@ async function ensureDelhiveryTable(DB) {
                      'received_at TEXT', 'linked_order_id TEXT',
                      // received_by — username who clicked Verify received (audit; added 12-Oct-2026)
                      'received_by TEXT',
+                     // market_order_id — customer's own order ID (Flipkart OD…, Amazon 4xx-…, Shopify #…)
+                     'market_order_id TEXT',
                      // refunded_at — Refund case: refund given → case closed
                      'refunded_at TEXT',
                      // in_process_at — reverse parcel checked in and being worked on (manual)
@@ -5757,6 +5785,27 @@ function supabaseHeaders(env) {
     'apikey': env.SUPABASE_SECRET_KEY,
     'Authorization': 'Bearer ' + env.SUPABASE_SECRET_KEY
   };
+}
+
+// ── Customer Care: customer's own order ID ────────────────────────
+// Upper-cased, spaces and '#' removed (Shopify "#1234" → "1234").
+function cleanMarketOrderId(v) {
+  return String(v || '').toUpperCase().replace(/[\s#]/g, '').slice(0, 40);
+}
+async function saveMarketOrderId(DB, caseOrderId, marketId) {
+  const mid = cleanMarketOrderId(marketId);
+  if (mid) await DB.prepare('UPDATE delhivery_orders SET market_order_id = ? WHERE order_id = ?').bind(mid, caseOrderId).run();
+}
+// Supabase cc_order_lookup(): platform, order date, warranty end, price
+// (when the mirror has it), items and every UC sale order for the ID
+// (original + replacements). Non-personal fields only.
+async function ccOrderLookup(env, marketId) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured');
+  const resp = await fetch(env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/rpc/cc_order_lookup', {
+    method: 'POST', headers: supabaseHeaders(env), body: JSON.stringify({ p_order_id: marketId })
+  });
+  if (!resp.ok) throw new Error('Supabase ' + resp.status);
+  return await resp.json();
 }
 
 // Simple per-IP hourly counter in D1 (old buckets cleaned as we go).
