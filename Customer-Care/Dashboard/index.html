@@ -1620,15 +1620,14 @@ async function to4x6Pdf(bytes) {
 
   function refundStartPanel(c) {
     var r = c.reverse, isRefundCase = r.job_type === 'Refund';
-    var amt = ship(r).total_amount || '';
     var panel = showPanel(
       '<div class="cm-sec-title" style="margin-bottom:8px">' + (isRefundCase ? 'Start refund' : 'Refund instead of ' + (c.type === 'Replace' ? 'replacement' : 'repair')) + '</div>' +
-      '<div class="cm-summary">' +
+      refundDetailsGrid(c) +
+      '<div class="cm-summary" style="margin-top:10px">' +
         '<div class="span2"><div class="cm-k">Reason' + (isRefundCase ? ' (optional)' : '') + '</div>' +
           '<select class="sb-input" id="rf-reason"><option value="">' + (isRefundCase ? 'Refund case' : '— Pick a reason —') + '</option>' +
           REFUND_REASONS.map(function (x) { return '<option>' + esc(x) + '</option>'; }).join('') + '</select>' +
           '<input class="sb-input" id="rf-other" placeholder="Describe the reason" style="display:none;margin-top:6px"></div>' +
-        '<div><div class="cm-k">Refund amount (₹)</div><input class="sb-input" id="rf-amount" type="number" min="1" step="0.01" value="' + esc(amt) + '"></div>' +
       '</div>' +
       '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
         '<button class="case-act primary" id="rf-yes">Start refund</button><button class="case-act" data-x>Cancel</button>' +
@@ -1640,11 +1639,10 @@ async function to4x6Pdf(bytes) {
     document.getElementById('rf-yes').addEventListener('click', async function () {
       var reason = sel.value === 'Other' ? other.value.trim() : sel.value;
       if (!isRefundCase && !reason) { alert('Pick a reason.'); return; }
-      var amount = parseFloat(document.getElementById('rf-amount').value);
-      if (!(amount > 0)) { alert('Enter the refund amount.'); return; }
       this.disabled = true; this.textContent = 'Saving…';
       try {
-        var res = await post('delhiveryStartRefund', { order_id: r.order_id, reason: reason, amount: amount });
+        // No amount any more — the refund value comes from Purchase price (to be added)
+        var res = await post('delhiveryStartRefund', { order_id: r.order_id, reason: reason });
         if (!res.ok) throw new Error(res.error || 'failed');
         await reopenCase(c.id);
       } catch (e) { alert("Couldn't start the refund: " + e.message); this.disabled = false; this.textContent = 'Start refund'; }
@@ -1660,7 +1658,7 @@ async function to4x6Pdf(bytes) {
       if (!res.ok) throw new Error(res.error || 'failed');
       var link = REFUND_PAGE + '?t=' + encodeURIComponent(res.token);
       var first = String(sh.name || '').trim().split(/\s+/)[0] || 'there';
-      var msg = 'Hello ' + first + ', this is TOMAHAWK Tools customer care. For your refund of ₹' + r.refund_amount +
+      var msg = 'Hello ' + first + ', this is TOMAHAWK Tools customer care. For your refund' + (r.refund_amount ? ' of ₹' + r.refund_amount : '') +
         ' (case ' + r.order_id + '), please share your bank account details securely here: ' + link + '\n\nThe link is valid for 7 days.';
       var phone = String(sh.phone || '').replace(/\D/g, '').slice(-10);
       var panel = showPanel(
@@ -1699,7 +1697,7 @@ async function to4x6Pdf(bytes) {
             (res.revealed ? ' <button class="copy-btn" id="rf-cp-acct" title="Copy">&#10697;</button>' : '') + '</div></div>' +
           '<div><div class="cm-k">IFSC</div><div class="mono">' + esc(res.ifsc) + ' <button class="copy-btn" id="rf-cp-ifsc" title="Copy">&#10697;</button></div></div>' +
           f('Bank', res.bank_name) + f('Branch', res.branch) + f('Submitted', fmtWhen(res.submitted_at)) +
-          f('Refund amount', '₹' + c.reverse.refund_amount) +
+          (c.reverse.refund_amount ? f('Refund amount', '₹' + c.reverse.refund_amount) : '') +
         '</div>' +
         '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
           (res.revealed ? '' : '<button class="case-act" id="rf-reveal">Reveal account number</button>') +
@@ -1721,7 +1719,7 @@ async function to4x6Pdf(bytes) {
       '<div class="cm-sec-title" style="margin-bottom:8px">Refund given</div>' +
       '<div class="cm-summary">' +
         '<div class="span2"><div class="cm-k">NEFT UTR / reference number</div><input class="sb-input" id="rf-utr" maxlength="40" autocomplete="off"></div>' +
-        '<div><div class="cm-k">Amount</div><div>₹' + esc(c.reverse.refund_amount) + '</div></div>' +
+        (c.reverse.refund_amount ? '<div><div class="cm-k">Amount</div><div>₹' + esc(c.reverse.refund_amount) + '</div></div>' : '') +
       '</div>' +
       '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
         '<button class="case-act primary" id="rf-done">Close case as Refunded</button><button class="case-act" data-x>Cancel</button>' +
@@ -1873,17 +1871,49 @@ async function to4x6Pdf(bytes) {
     document.getElementById('tk-copy-awb').addEventListener('click', function () { copy(this, o.waybill || ''); });
   }
 
-  // Refund facts for the popup (only once a refund has been started).
+  // ══ REFUND DETAILS — everything known about a refund in one place.
+  //   Shown in the Start refund panel and, once started, in the case popup.
+  //   Marketplace Order ID / Purchase price / Issue aren't captured anywhere
+  //   yet → shown as "To be added" placeholders until we decide the source.
+  //   Bank details are fetched (masked) only after the customer submits them.
+  function refundDetailsGrid(c) {
+    var r = c.reverse, sh = ship(r);
+    var f = function (k, v, cls) { return '<div' + (cls ? ' class="' + cls + '"' : '') + '><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
+    var todo = function (k) { return '<div><div class="cm-k">' + k + '</div><div class="cm-muted" style="font-style:italic">To be added</div></div>'; };
+    var addr = [sh.add, sh.city, sh.state, sh.pin].filter(Boolean).join(', ');
+    var bank;
+    if (r.bank_submitted_at) bank = '<div class="span2" id="rf-bank-inline"><div class="cm-k">Bank details</div><div class="cm-muted">Loading…</div></div>';
+    else bank = f('Bank details', r.refund_link_sent_at ? 'Link sent ' + fmtWhen(r.refund_link_sent_at) + ' — waiting for customer' : (r.resolution === 'refund' ? 'Link not sent yet' : 'Asked after the refund is started'), 'span2');
+    return '<div class="cm-summary">' +
+      todo('Marketplace Order ID') + todo('Purchase price') + todo('Issue') +
+      f('Customer', sh.name) + f('Phone', sh.phone) + f('Case', r.order_id + ' · ' + c.type) +
+      f('Address', addr, 'span2') + f('Product', c.product) +
+      f('Declared value', sh.total_amount ? '₹' + sh.total_amount : '') + f('Pickup AWB', [r.courier || 'Delhivery', r.waybill].filter(Boolean).join(' · ')) +
+      f('Received', [fmtWhen(r.received_at), r.received_by].filter(Boolean).join(' · ')) +
+      (r.resolution === 'refund' ? f('Reason', r.refund_reason) + f('Started by', [r.refund_marked_by, fmtWhen(r.refund_marked_at)].filter(Boolean).join(' · ')) : '') +
+      (r.refund_amount ? f('Amount (older entry)', '₹' + r.refund_amount) : '') +
+      bank +
+      (r.refunded_at ? f('UTR', r.refund_utr) + f('Refunded', [fmtWhen(r.refunded_at), r.refunded_by].filter(Boolean).join(' · ')) : '') +
+      '</div>';
+  }
+  // Fills the bank-details cell (masked account) after the popup is drawn.
+  async function fillRefundBank(c) {
+    var cell = document.getElementById('rf-bank-inline');
+    if (!cell) return;
+    try {
+      var res = await post('refundGetBank', { order_id: c.reverse.order_id, reveal: false });
+      if (!res.ok) throw new Error(res.error || 'failed');
+      cell.innerHTML = '<div class="cm-k">Bank details</div><div>' + esc(res.holder_name) + ' · <span class="mono">' + esc(res.account_number) + '</span> · <span class="mono">' + esc(res.ifsc) + '</span></div>' +
+        '<div class="cm-muted">' + esc([res.bank_name, res.branch].filter(Boolean).join(', ')) + (res.submitted_at ? ' · submitted ' + esc(fmtWhen(res.submitted_at)) : '') + '</div>';
+    } catch (e) {
+      cell.innerHTML = '<div class="cm-k">Bank details</div><div class="cm-muted">Received ' + esc(fmtWhen(c.reverse.bank_submitted_at)) + ' — use "View bank details" (' + esc(e.message) + ')</div>';
+    }
+  }
+  // Popup section, only once a refund has been started.
   function refundInfoHtml(c) {
     var r = c.reverse;
     if (!r || r.resolution !== 'refund') return '';
-    var f = function (k, v) { return '<div><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
-    return '<div class="cm-sec"><div class="cm-sec-title">Refund</div></div><div class="cm-grid">' +
-      f('Amount', r.refund_amount ? '₹' + r.refund_amount : '') + f('Reason', r.refund_reason) +
-      f('Started by', [r.refund_marked_by, fmtWhen(r.refund_marked_at)].filter(Boolean).join(' · ')) +
-      f('Bank details', r.bank_submitted_at ? 'Received ' + fmtWhen(r.bank_submitted_at) : (r.refund_link_sent_at ? 'Link sent ' + fmtWhen(r.refund_link_sent_at) : 'Link not sent yet')) +
-      (r.refunded_at ? f('UTR', r.refund_utr) + f('Refunded', [fmtWhen(r.refunded_at), r.refunded_by].filter(Boolean).join(' · ')) : '') +
-      '</div>';
+    return '<div class="cm-sec"><div class="cm-sec-title">Refund details</div></div>' + refundDetailsGrid(c);
   }
 
   var openCaseId = null;
@@ -1941,6 +1971,7 @@ async function to4x6Pdf(bytes) {
       b.addEventListener('click', function () { track(legs[+b.dataset.leg][0], b); });
     });
     modal.hidden = false;
+    fillRefundBank(c);   // refund details: load masked bank details, if submitted
   }
 
   async function track(o, btn) {

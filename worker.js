@@ -3987,12 +3987,14 @@ export default {
         if (act === 'delhiveryStartRefund') {
           await ensureDelhiveryTable(env.DB);
           const oid = String(body.order_id || '').trim();
-          const amount = Number(body.amount);
+          // Amount is optional now (removed from the dashboard 12-Oct-2026 —
+          // refund value will come from Purchase price once that's captured).
+          const amount = body.amount == null || body.amount === '' ? null : Number(body.amount);
           const r = await env.DB.prepare("SELECT * FROM delhivery_orders WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1").bind(oid).first();
           if (!r) return json({ ok: false, error: 'Pickup not found' }, 404);
           if (!r.received_at) return json({ ok: false, error: 'Mark the parcel received first' }, 400);
           if (r.refunded_at) return json({ ok: false, error: 'Already refunded' }, 400);
-          if (!(amount > 0)) return json({ ok: false, error: 'Enter the refund amount' }, 400);
+          if (amount !== null && !(amount > 0)) return json({ ok: false, error: 'Refund amount must be more than 0' }, 400);
           const isRefundCase = r.job_type === 'Refund';
           const reason = String(body.reason || '').trim().slice(0, 300) || (isRefundCase ? 'Refund case' : '');
           if (!reason) return json({ ok: false, error: 'Pick a reason' }, 400);
