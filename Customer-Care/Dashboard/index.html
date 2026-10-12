@@ -1626,6 +1626,8 @@ async function to4x6Pdf(bytes) {
   function panelCancel(panel) {
     panel.querySelector('[data-x]').addEventListener('click', function () {
       panel.hidden = true; panel.innerHTML = '';
+      var sec = document.getElementById('co-sec');      // Customer order back on screen
+      if (sec && !document.getElementById('rf-order')) sec.style.display = '';
       var acts = document.getElementById('cm-main-acts');
       if (acts) acts.style.display = '';
     });
@@ -1899,8 +1901,7 @@ async function to4x6Pdf(bytes) {
     if (r.bank_submitted_at) bank = '<div class="span2" id="rf-bank-inline"><div class="cm-k">Bank details</div><div class="cm-muted">Loading…</div></div>';
     else bank = f('Bank details', r.refund_link_sent_at ? 'Link sent ' + fmtWhen(r.refund_link_sent_at) + ' — waiting for customer' : (r.resolution === 'refund' ? 'Link not sent yet' : 'Asked after the refund is started'), 'span2');
     return '<div class="cm-summary">' +
-      '<div><div class="cm-k">Order ID</div><div id="rf-order-id"></div></div>' +
-      '<div><div class="cm-k">Purchase price</div><div id="rf-price"></div></div>' + todo('Issue') +
+      '<div id="rf-order" style="display:contents"></div>' + todo('Issue') +
       f('Customer', sh.name) + f('Phone', sh.phone) + f('Case', r.order_id + ' · ' + c.type) +
       f('Address', addr, 'span2') + f('Product', c.product) +
       f('Declared value', sh.total_amount ? '₹' + sh.total_amount : '') + f('Pickup AWB', [r.courier || 'Delhivery', r.waybill].filter(Boolean).join(' · ')) +
@@ -2000,8 +2001,8 @@ async function to4x6Pdf(bytes) {
   function caseLead(c) { return c.reverse || c.forward; }
   function canEditOrder() { return window.TM_ROLE === 'admin' || window.TM_ROLE === 'manager'; }
   function customerOrderHtml(c) {
-    return '<div class="cm-sec"><div class="cm-sec-title">Customer order</div></div>' +
-      '<div class="cm-summary" id="co-box">' + customerOrderInner(c) + '</div>';
+    return '<div id="co-sec"><div class="cm-sec"><div class="cm-sec-title">Customer order</div></div>' +
+      '<div class="cm-summary" id="co-box">' + customerOrderInner(c) + '</div></div>';
   }
   function customerOrderInner(c) {
     var mid = caseLead(c).market_order_id;
@@ -2067,7 +2068,7 @@ async function to4x6Pdf(bytes) {
     var redraw = function () { if (openCaseId === c.id) { box.innerHTML = customerOrderInner(c); wire(); } refreshRefundOrder(c); };
     var wire = function () {
       var b = box.querySelector('[data-co="edit"]');
-      if (b) b.addEventListener('click', function () { editOrderId(c, box, redraw); });
+      if (b) b.addEventListener('click', function () { editOrderId(c, document.getElementById('co-head'), redraw); });
     };
     wire();
     if (mid && !orderCache[mid]) {
@@ -2077,9 +2078,8 @@ async function to4x6Pdf(bytes) {
       }, function (e) { orderCache[mid] = { error: e.message }; redraw(); });
     } else refreshRefundOrder(c);
   }
-  function editOrderId(c, box, redraw) {
+  function editOrderId(c, head, redraw) {
     var lead = caseLead(c);
-    var head = document.getElementById('co-head');
     head.innerHTML = '<input class="co-input mono" id="co-in" maxlength="40" placeholder="e.g. OD437845065271157100 / 403-1234567-1234567 / #1234" value="' + esc(lead.market_order_id || '') + '">' +
       '<button class="co-edit" data-co="save" style="border-color:var(--accent);color:var(--accent)">Save &amp; fetch</button>' +
       '<button class="co-edit" data-co="cancel">Cancel</button><span class="cm-muted" id="co-msg"></span>';
@@ -2101,14 +2101,53 @@ async function to4x6Pdf(bytes) {
     inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') save(); if (e.key === 'Escape') redraw(); });
     head.querySelector('[data-co="cancel"]').addEventListener('click', redraw);
   }
-  // Refund details block: Order ID + Purchase price from the customer order.
+  // Refund details block: the customer order details (same data as the
+  //   Customer order section, which hides while this block is on screen
+  //   so nothing shows twice). Order ID can be added / changed right here.
   function refreshRefundOrder(c) {
+    var cell = document.getElementById('rf-order');
+    var sec = document.getElementById('co-sec');
+    if (sec) sec.style.display = cell ? 'none' : '';
+    if (!cell) return;
     var lead = caseLead(c), mid = lead.market_order_id, d = mid && orderCache[mid];
-    var idEl = document.getElementById('rf-order-id'), prEl = document.getElementById('rf-price');
-    if (idEl) idEl.innerHTML = mid ? '<span class="mono">' + esc(mid) + '</span>' : '<span class="cm-muted" style="font-style:italic">Add it under Customer order</span>';
-    if (prEl) prEl.innerHTML = !mid ? '<span class="cm-muted" style="font-style:italic">To be added</span>'
-      : !d ? '<span class="cm-muted">Fetching…</span>'
-      : d.price != null && +d.price > 0 ? '&#8377;' + esc(Number(d.price).toLocaleString('en-IN')) : '<span class="cm-muted" style="font-style:italic">Not in our data</span>';
+    var f = function (k, v, cls) { return '<div' + (cls ? ' class="' + cls + '"' : '') + '><div class="cm-k">' + k + '</div><div>' + (v || '&#8212;') + '</div></div>'; };
+    var muted = function (t) { return '<span class="cm-muted" style="font-style:italic">' + t + '</span>'; };
+    var edit = canEditOrder() ? '<button class="co-edit" data-co="rf-edit">' + (mid ? 'Change' : '+ Add Order ID') + '</button>' : '';
+    var html = '<div><div class="cm-k">Order ID</div><div class="co-row" id="rf-co-head">' +
+      (mid ? '<span class="mono">' + esc(mid) + '</span>' : muted('Not added')) + edit + '</div></div>';
+    if (!mid) html += f('Platform', muted('Add the Order ID')) + f('Order date', '') + f('Purchase price', muted('To be added')) + f('Warranty until', '') + f('Order status', '');
+    else if (!d) html += f('Platform', '<span class="cm-muted">Fetching…</span>') + f('Order date', '') + f('Purchase price', '') + f('Warranty until', '') + f('Order status', '');
+    else if (d.error || !d.found) html += '<div class="span2 co-warn">' + (d.error ? "Couldn't fetch order details: " + esc(d.error) : "This Order ID isn't in our Unicommerce / Amazon / Shopify data.") + '</div>';
+    else {
+      var wu = d.warranty_until, today = new Date().toISOString().slice(0, 10);
+      var ucs = d.uc_orders || [];
+      var prodSku = String(c.product || '').trim().toUpperCase();
+      var skus = (d.items || []).map(function (it) { return String(it.sku || '').toUpperCase(); });
+      var match = !prodSku || !skus.length ? '' : (skus.indexOf(prodSku) !== -1
+        ? '<div class="co-ok" style="margin-top:3px">&#10003; Matches the case product</div>'
+        : '<div class="co-warn" style="margin-top:3px">&#9888; Case product is ' + esc(c.product) + ' — not in this order</div>');
+      var items = (d.items || []).map(function (it) {
+        return '<span class="mono">' + esc(it.sku || '') + '</span>' +
+          (it.seller_sku && it.seller_sku !== it.sku ? ' <span class="cm-muted">(' + esc(d.platform) + ' listing: ' + esc(it.seller_sku) + ')</span>' : '') +
+          (it.qty && +it.qty > 1 ? ' × ' + esc(it.qty) : '');
+      }).join('<br>');
+      html += f('Platform', esc(d.platform)) +
+        f('Order date', esc(fmtDay(d.order_date))) +
+        f('Purchase price', d.price != null && +d.price > 0 ? '&#8377;' + esc(Number(d.price).toLocaleString('en-IN')) : muted('Not in our data')) +
+        f('Warranty until', wu ? esc(fmtDay(wu)) + ' ' + (wu >= today ? '<span class="co-ok">· In warranty</span>' : '<span class="co-warn">· Expired</span>') : '') +
+        f('Order status', esc(ucSt(d.status))) +
+        f('Replacements', ucs.length > 1 ? esc(String(ucs.length - 1)) + ' already sent' : 'None') +
+        f('Item', items + match, 'span2');
+    }
+    cell.innerHTML = html;
+    var b = cell.querySelector('[data-co="rf-edit"]');
+    if (b) b.addEventListener('click', function () {
+      editOrderId(c, document.getElementById('rf-co-head'), function () {
+        var box = document.getElementById('co-box');
+        if (box) box.innerHTML = customerOrderInner(c);
+        wireCustomerOrder(c);   // re-wires the section's own button + refreshes this block
+      });
+    });
   }
 
   async function track(o, btn) {
