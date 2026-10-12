@@ -898,6 +898,156 @@ async function buildPortalLabelPdf(d) {
   return doc.output('blob');
 }
 
+// ══ REFUND FORM PDF — A4, black & white, one page. Printed from the
+// case popup's bank-details panel, signed by hand by the approver
+// (Approved / Rejected, approved amount, signature). Header matches the
+// SKU Convert Slip / Returns Slip: logo left, title right, one rule.
+// Takes a plain data object (built by refundFormData in the dashboard):
+//   { caseId, date, type, reason, caseDate, customer, phone, address,
+//     orderId, platform, orderDate, warranty, replacements, orderItem,
+//     courier, awb, pickupStatus, received,
+//     holder, account, ifsc, bank, branch, submitted, logoPng }
+// Helvetica has no ₹ or → glyphs, so those are drawn by hand.
+async function buildRefundFormPdf(d) {
+  await loadScriptOnce(JSPDF_URL, 'jspdf');
+  var doc = new window.jspdf.jsPDF({ unit: 'pt', format: 'a4' });
+  var L = 42, R = 553, W = R - L;                  // content left / right / width
+  doc.setTextColor(17, 17, 17); doc.setDrawColor(17, 17, 17);
+
+  function font(style, size) { doc.setFont('helvetica', style); doc.setFontSize(size); }
+  function wrap(str, w, size, style) { font(style || 'normal', size); return doc.splitTextToSize(String(str || ''), w); }
+  // Text that may contain "→": the arrow is drawn as a short line + head.
+  function arrowText(str, x, y, size, style) {
+    font(style || 'normal', size);
+    var parts = String(str).split('→'), cx = x;
+    parts.forEach(function (p, i) {
+      p = i ? p.replace(/^\s+/, '') : p.replace(/\s+$/, '');
+      doc.text(p, cx, y); cx += doc.getTextWidth(p);
+      if (i < parts.length - 1) {                    // arrow between parts
+        var ay = y - size * 0.32, a0 = cx + 4, a1 = cx + 14;
+        doc.setLineWidth(0.9); doc.line(a0, ay, a1, ay);
+        doc.line(a1, ay, a1 - 3.5, ay - 2.8); doc.line(a1, ay, a1 - 3.5, ay + 2.8);
+        cx = a1 + 4;
+      }
+    });
+  }
+  // Rupee sign — drawn on a canvas with the browser's font, placed as an image.
+  function rupee(x, y, h) {                         // x,y = baseline-left, h = glyph height
+    var cv = document.createElement('canvas'); cv.width = 120; cv.height = 150;
+    var g = cv.getContext('2d'); g.fillStyle = '#111'; g.font = 'bold 130px Arial, sans-serif';
+    g.textBaseline = 'alphabetic'; g.fillText('\u20B9', 8, 128);
+    doc.addImage(cv.toDataURL('image/png'), 'PNG', x, y - h * 1.15, h * 0.92, h * 1.15);
+  }
+  // A field: small grey label, bold value under it (wraps within w).
+  function field(label, value, x, y, w) {
+    font('normal', 8.5); doc.setTextColor(85, 85, 85); doc.text(label, x, y);
+    doc.setTextColor(17, 17, 17);
+    var v = value == null || value === '' ? '—' : String(value);
+    if (v === '—') { font('bold', 10); doc.text('-', x, y + 13); return 1; }
+    if (v.indexOf('→') !== -1) { arrowText(v, x, y + 13, 10, 'bold'); return 1; }
+    var lines = wrap(v, w, 10, 'bold');
+    lines.forEach(function (ln, i) { doc.text(ln, x, y + 13 + i * 12); });
+    return lines.length;
+  }
+  // A row of fields. cols = [[label, value, widthFraction], ...]. Returns next y.
+  function row(cols, y) {
+    var x = L, maxLines = 1;
+    cols.forEach(function (c) {
+      var w = W * c[2];
+      maxLines = Math.max(maxLines, field(c[0], c[1], x, y, w - 10));
+      x += w;
+    });
+    return y + 13 + maxLines * 12 + 8;
+  }
+  function section(title, y) {
+    font('bold', 10); doc.text(title, L, y);
+    doc.setLineWidth(0.8); doc.line(L, y + 5, R, y + 5);
+    return y + 21;
+  }
+
+  // ── Header: logo (left) + REFUND FORM (right), Case / Date line, rule
+  var y = 44;
+  if (d.logoPng) doc.addImage(d.logoPng, 'PNG', L, y, 150, 28);
+  font('bold', 17); doc.text('REFUND FORM', R, y + 20, { align: 'right' });
+  y += 48;
+  font('normal', 10); doc.text('Case : ', L, y);
+  font('bold', 10); doc.text(String(d.caseId || ''), L + doc.getTextWidth('Case : ') + 0, y);
+  font('normal', 10); var dl = 'Date : ', dv = String(d.date || '');
+  font('bold', 10); var dvw = doc.getTextWidth(dv); doc.text(dv, R, y, { align: 'right' });
+  font('normal', 10); doc.text(dl, R - dvw - doc.getTextWidth(dl), y);
+  doc.setLineWidth(1.4); doc.line(L, y + 8, R, y + 8);
+  y += 30;
+
+  // ── 1. Case summary
+  y = section('1. CASE SUMMARY', y);
+  y = row([['Case ID', d.caseId, .25], ['Type', d.type, .25], ['Reason', d.reason, .25], ['Case date', d.caseDate, .25]], y);
+
+  // ── 2. Customer details
+  y = section('2. CUSTOMER DETAILS', y + 6);
+  y = row([['Name', d.customer, .25], ['Phone', d.phone, .25], ['Address', d.address, .5]], y);
+
+  // ── 3. Purchase details
+  y = section('3. PURCHASE DETAILS', y + 6);
+  y = row([['Order ID', d.orderId, .4], ['Platform', d.platform, .3], ['Order date', d.orderDate, .3]], y);
+  y = row([['Warranty until', d.warranty, .4], ['Replacements sent', d.replacements, .3], ['Order item', d.orderItem, .3]], y);
+
+  // ── 4. Return pickup
+  y = section('4. RETURN PICKUP', y + 6);
+  y = row([['Courier', d.courier, .25], ['AWB', d.awb, .25], ['Status', d.pickupStatus, .25], ['Received', d.received, .25]], y);
+
+  // ── 5. Bank details (NEFT) — account number always masked
+  y = section('5. BANK DETAILS (NEFT)', y + 6);
+  y = row([['Account holder', d.holder, .25], ['Account no.', d.account, .25], ['IFSC', d.ifsc, .25], ['Bank', d.bank, .25]], y);
+  y = row([['Branch', d.branch, .5], ['Submitted', d.submitted, .5]], y);
+
+  // ── 6. Approval — filled by hand. One box, three parts.
+  y = section('6. APPROVAL', y + 10);
+  var bx = L, bw = W, bh = 124, c1 = W * 0.31, c2 = W * 0.31;
+  doc.setLineWidth(1.4); doc.rect(bx, y, bw, bh);
+  doc.setLineWidth(0.8); doc.line(bx + c1, y, bx + c1, y + bh); doc.line(bx + c1 + c2, y, bx + c1 + c2, y + bh);
+  function boxLabel(t, x) { font('normal', 8.5); doc.setTextColor(85, 85, 85); doc.text(t, x + 12, y + 16); doc.setTextColor(17, 17, 17); }
+  // Decision tick boxes
+  boxLabel('Decision (tick one)', bx);
+  doc.setLineWidth(1.2);
+  [['APPROVED', y + 52], ['REJECTED', y + 94]].forEach(function (t) {
+    doc.rect(bx + 14, t[1] - 13, 15, 15);
+    font('bold', 13); doc.text(t[0], bx + 38, t[1]);
+  });
+  // Approved amount
+  boxLabel('Approved amount', bx + c1);
+  rupee(bx + c1 + 14, y + 98, 18);
+  doc.setLineWidth(1.2); doc.line(bx + c1 + 36, y + 100, bx + c1 + c2 - 14, y + 100);
+  // Approver signature
+  boxLabel('Approver signature', bx + c1 + c2);
+  doc.line(bx + c1 + c2 + 14, y + 100, R - 14, y + 100);
+
+  // ── Footer
+  doc.setLineWidth(0.4); doc.setDrawColor(150, 150, 150); doc.line(L, 806, R, 806);
+  font('normal', 8); doc.setTextColor(85, 85, 85);
+  doc.text('System-generated from Customer Care Dashboard · Confidential', L, 818);
+  doc.text('Page 1 of 1', R, 818, { align: 'right' });
+
+  return doc.output('blob');
+}
+
+// Tomahawk logo (the header's inline SVG) → black PNG for the PDF header.
+function logoPngFromHeader() {
+  var svg = document.querySelector('.logo-svg-wrap svg');
+  if (!svg) return Promise.resolve(null);
+  var src = svg.outerHTML.replace(/fill:\s*currentColor/, 'fill:#111111')
+    .replace(/height:\s*54px;?/, '').replace('<svg ', '<svg width="1500" height="280" ');
+  return new Promise(function (resolve) {
+    var img = new Image();
+    img.onload = function () {
+      var cv = document.createElement('canvas'); cv.width = 1500; cv.height = 280;
+      cv.getContext('2d').drawImage(img, 0, 0, 1500, 280);
+      resolve(cv.toDataURL('image/png'));
+    };
+    img.onerror = function () { resolve(null); };     // no logo → title still prints
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(src);
+  });
+}
+
 async function to4x6Pdf(bytes) {
   var PDFLib = await loadScriptOnce(PDF_LIB_URL, 'PDFLib');
   var W = 288, H = 432; // 4×6 inch in points
@@ -1721,7 +1871,7 @@ async function to4x6Pdf(bytes) {
         '</div>' +
         '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
           (res.revealed ? '' : '<button class="case-act" id="rf-reveal">Reveal account number</button>') +
-          '<button class="case-act primary" id="rf-given">Refund given</button><button class="case-act" data-x>Close</button>' +
+          '<button class="case-act primary" id="rf-given">Refund given</button><button class="case-act" id="rf-pdf">&#11015; Download Refund Form</button><button class="case-act" data-x>Close</button>' +
           '<span class="cm-muted" style="margin-left:auto">Reveals are logged. Details are deleted 30 days after the refund.</span>' +
         '</div>');
       panelCancel(panel);
@@ -1731,7 +1881,67 @@ async function to4x6Pdf(bytes) {
       if (cpA) cpA.addEventListener('click', function () { navigator.clipboard.writeText(res.account_number); cpA.innerHTML = '&#10003;'; });
       document.getElementById('rf-cp-ifsc').addEventListener('click', function () { navigator.clipboard.writeText(res.ifsc); this.innerHTML = '&#10003;'; });
       document.getElementById('rf-given').addEventListener('click', function () { refundGivenPanel(c); });
+      document.getElementById('rf-pdf').addEventListener('click', function () { downloadRefundForm(c, res, this); });
     } catch (e) { alert("Couldn't load the bank details: " + e.message); }
+  }
+
+  // ── Refund Form PDF (Download Refund Form) — gathers everything on the
+  //   popup into the plain object buildRefundFormPdf() prints. Bank
+  //   details are the masked ones (never revealed for the PDF).
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function dayOf(t) {                               // D1 UTC time / ISO → "22 Sep 2026"
+    if (!t) return '';
+    var s = String(t); if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) s = s.replace(' ', 'T') + 'Z';
+    var d = new Date(s);
+    return isNaN(d) ? String(t) : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  }
+  async function refundFormData(c, bank) {
+    var r = c.reverse, lead = caseLead(c), sh = ship(lead);
+    // Order details: from the popup's cache, or fetched now if not loaded yet
+    var mid = lead.market_order_id, d = mid ? orderCache[mid] : null;
+    if (mid && !d) {
+      try {
+        var res = await post('ccOrderLookup', { id: mid });
+        d = orderCache[mid] = res && res.ok ? (res.order || { found: false }) : { error: (res && res.error) || 'failed' };
+      } catch (e) { d = { error: e.message }; }
+    }
+    var ok = d && d.found && !d.error, ucs = ok ? (d.uc_orders || []) : [];
+    var wu = ok && d.warranty_until, today = new Date().toISOString().slice(0, 10);
+    var st = legStage(r), now = new Date();
+    return {
+      caseId: c.id,
+      date: pad2(now.getDate()) + '-' + pad2(now.getMonth() + 1) + '-' + now.getFullYear(),
+      type: r.job_type === 'Refund' ? 'Refund' : c.type + ' → Refund',
+      reason: r.refund_reason || '',
+      caseDate: dayOf(lead.created_at),
+      customer: sh.name || '', phone: sh.phone || '',
+      address: [sh.add, sh.city, sh.state, sh.pin].filter(Boolean).join(', '),
+      orderId: mid || 'Not added',
+      platform: ok ? d.platform : '',
+      orderDate: ok ? fmtDay(d.order_date) : '',
+      warranty: wu ? fmtDay(wu) + (wu >= today ? ' · In warranty' : ' · Expired') : '',
+      replacements: ok ? String(Math.max(ucs.length - 1, 0)) : '',
+      orderItem: ok ? (d.items || []).map(function (it) { return it.sku; }).filter(Boolean).join(', ') : '',
+      courier: r.courier || 'Delhivery', awb: r.waybill || '',
+      pickupStatus: PICKUP_LABEL[st] || st,
+      received: fmtWhen(r.received_at),
+      holder: bank.holder_name,
+      // Always masked on paper, even after Reveal was used on screen
+      account: bank.revealed ? 'XXXXX' + String(bank.account_number || '').slice(-4) : bank.account_number, ifsc: bank.ifsc,
+      bank: bank.bank_name, branch: bank.branch, submitted: fmtWhen(bank.submitted_at),
+      logoPng: await logoPngFromHeader()
+    };
+  }
+  async function downloadRefundForm(c, bank, btn) {
+    btn.disabled = true; var label = btn.innerHTML; btn.textContent = 'Preparing…';
+    try {
+      var blob = await buildRefundFormPdf(await refundFormData(c, bank));
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = 'Refund-Form-' + c.id + '.pdf';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+    } catch (e) { alert("Couldn't make the Refund Form: " + e.message); }
+    btn.disabled = false; btn.innerHTML = label;
   }
 
   function refundGivenPanel(c) {
