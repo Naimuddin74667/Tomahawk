@@ -323,6 +323,9 @@ body.cc-fit .pager { padding-top: 8px; margin-top: 0; }
 .case-table tr.case-row:hover td { background: var(--surface2); }
 .case-table tr.attn td { background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .case-table tr.attn td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+/* Arriving soon (hub / out for delivery): lighter tint than delivered-to-verify */
+.case-table tr.attn.arriving td { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+.dlv-date.eta { color: var(--accent); }
 .mono { font-family: 'DM Mono', ui-monospace, monospace; font-size: 11.5px; }
 .sub { font-size: 10.5px; color: var(--text2); margin-top: 2px; }
 .dlv-date { font-size: 11.5px; font-weight: 700; color: var(--text); margin-top: 4px; }
@@ -1136,7 +1139,13 @@ async function to4x6Pdf(bytes) {
     }
     if (r.in_process_at || r.received_at) return { label: 'In Process', tone: 'house' }; // Received = In Process
     if (rs === 'RTO' || rs === 'Lost') return { label: 'Pickup ' + rs, tone: 'bad-in' };
-    if (rs === 'Delivered') return { label: PICKUP_LABEL.Delivered, tone: 'in', attn: true }; // needs Verify received
+    if (rs === 'Delivered') return { label: PICKUP_LABEL.Delivered, tone: 'in', attn: 'verify' }; // needs Verify received
+    // Parcel close to our warehouse → heads-up in Needs attention.
+    // Ekart pattern (checked Oct 2026): every parcel reaching Bhiwandi Hub was
+    // delivered the next working day ~12 pm; its same-evening "Out For Delivery"
+    // is usually rescheduled, so the hub stage is the reliable early signal.
+    if (rs === 'At Last Mile') return { label: PICKUP_LABEL[rs], tone: 'in', attn: 'arriving', eta: 'Expected next working day' };
+    if (rs === 'Out For Delivery') return { label: PICKUP_LABEL[rs], tone: 'in', attn: 'arriving', eta: 'Arriving today' };
     return { label: PICKUP_LABEL[rs] || rs, tone: 'in' };
   }
   function dispatchStatus(fs) {
@@ -1167,7 +1176,9 @@ async function to4x6Pdf(bytes) {
     'Delivered to us': 'green', 'Delivered': 'green', 'Refunded': 'green'
   };
   // Small date line under a "Delivered to us" badge — courier's delivered scan on the pickup leg.
+  // Arriving cases show their ETA line instead (see caseStatus).
   function deliveredToUsSub(c) {
+    if (c.st && c.st.eta) return '<div class="sub dlv-date eta">' + esc(c.st.eta) + '</div>';
     if (!c.st || c.st.label !== PICKUP_LABEL.Delivered || !c.reverse) return '';
     var when = fmtWhen(c.reverse.delivered_at || c.reverse.tracked_at);
     return when ? '<div class="sub dlv-date">' + esc(when) + '</div>' : '';
@@ -1181,8 +1192,9 @@ async function to4x6Pdf(bytes) {
 
   // Five tiles (click to filter):
   //   All cases — everything
-  //   Needs attention — delivered back to us, receipt not yet verified
-  //                     (only these; High/Breached TAT cases stay in Open)
+  //   Needs attention — delivered back to us, receipt not yet verified,
+  //                     plus incoming parcels at Bhiwandi Hub / Out For Delivery
+  //                     (arriving soon). High/Breached TAT cases stay in Open.
   //   Open      — not closed/refunded (red problem cases stay here)
   //   Upcoming  — amber: pickup booked until delivered to us (+ pickup problems)
   //   In process — blue: received at our warehouse, not yet dispatched
@@ -1197,7 +1209,7 @@ async function to4x6Pdf(bytes) {
     { key: '', label: 'All cases', c: 'var(--text)', test: function () { return true; } }
   ];
   function needsAttention(c) {
-    return !!c.st.attn;   // delivered to us, waiting for Verify received
+    return !!c.st.attn;   // 'verify' = delivered, check receipt · 'arriving' = at hub / out for delivery
   }
   function tileTest(key) { for (var i = 0; i < TILES.length; i++) if (TILES[i].key === key) return TILES[i].test; return function () { return true; }; } // unknown key → all cases
 
@@ -1315,6 +1327,8 @@ async function to4x6Pdf(bytes) {
     var rows = cases.filter(function (c) {
       return tileTest(tileFilter)(c) && (!kind || c.type === kind || (kind === 'Refund' && / Refund$/.test(c.type))) && (!q || c.search.indexOf(q) !== -1);
     });
+    // Needs attention: delivered (to verify) first, then arriving soon; newest first within each.
+    if (tileFilter === 'verify') rows.sort(function (a, b) { return (a.st.attn === 'arriving') - (b.st.attn === 'arriving'); });
     var body = document.getElementById('case-body');
     if (!rows.length) { body.innerHTML = '<tr><td colspan="8" class="muted">No cases match.</td></tr>'; renderPager(0, 1); return; }
     var totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
@@ -1325,7 +1339,7 @@ async function to4x6Pdf(bytes) {
     body.innerHTML = '';
     rows.forEach(function (c) {
       var tr = document.createElement('tr');
-      tr.className = 'case-row' + (c.st.attn ? ' attn' : '');
+      tr.className = 'case-row' + (c.st.attn ? ' attn' + (c.st.attn === 'arriving' ? ' arriving' : '') : '');
       var ids = c.reverse
         ? '<div class="mono">' + esc(c.reverse.order_id) + '</div>' + (c.forward ? '<div class="sub mono">&#8627; ' + esc(c.forward.order_id) + '</div>' : '')
         : '<div class="mono">' + esc(c.forward.order_id) + '</div>';
