@@ -147,15 +147,127 @@ async function sendWaStockAlert(env, to, count, listText) {
   return data;
 }
 
+// ── Line-by-line templates ─────────────────────────────────────────
+// WhatsApp forbids newlines inside a variable, so to show one SKU per line
+// we use a family of templates stock_alert_l1 … stock_alert_l10, where
+// template N has N numbered lines ("1. {{2}}", "2. {{3}}", …) and {{1}} is
+// the total count. The Worker picks the one matching the list size (10+ →
+// l10 with "+N more" on line 10). Any size not yet APPROVED by Meta falls
+// back to the original one-line "stock_alert" template, so alerts never stop.
+// Templates are created once via the admin action waCreateTemplates.
+const META_WA_WABA_ID = '1484177466864671';   // "Test WhatsApp Business Account"
+const WA_MULTI_PREFIX = 'stock_alert_l';
+const WA_MULTI_MAX = 10;
+const WA_HEADER_TEXT = 'Alert : SKUs need Attention.';
+const WA_FOOTER_TEXT = 'Do not reply to this message.';
+
+function waLine(x) { return x.sku + ' ...... (G4: ' + x.g4 + ')'; }
+
+// Body text for template with n lines.
+function waMultiBody(n) {
+  const lines = [];
+  for (let i = 1; i <= n; i++) lines.push(i + '. {{' + (i + 1) + '}}');
+  return '🔴 Alert: {{1}} SKU(s) are out of stock in E3 warehouse.\n\nSKU list (G4 qty):\n' +
+    lines.join('\n') + '\n\nPlease check the Stock Alert app.';
+}
+
+// { name: STATUS } for all templates on the WABA.
+async function getWaTemplateStatuses(env) {
+  if (!env.META_WA_TOKEN) throw new Error('META_WA_TOKEN Worker secret missing');
+  const res = await fetch(META_GRAPH_URL + '/' + META_WA_WABA_ID + '/message_templates?fields=name,status,language&limit=200', {
+    headers: { 'Authorization': 'Bearer ' + env.META_WA_TOKEN }
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) throw new Error('Meta templates ' + res.status + ': ' + ((data.error && data.error.message) || 'list failed'));
+  const out = {};
+  (data.data || []).forEach(t => { out[t.name] = t.status; });
+  return out;
+}
+
+// Creates any missing stock_alert_l1…l10 templates. Returns per-name result.
+async function createWaMultiTemplates(env) {
+  const existing = await getWaTemplateStatuses(env);
+  const results = [];
+  for (let n = 1; n <= WA_MULTI_MAX; n++) {
+    const name = WA_MULTI_PREFIX + n;
+    if (existing[name]) { results.push({ name, status: existing[name], created: false }); continue; }
+    const sample = ['TCD-12K-Bare', 'ARC-2001-Welding-Machine', 'TPW-A', 'TCHG-20A', 'TLL-2C',
+      'PRU-5222-Pruner-CL-02', 'TLL-16-16-Line-Level-LT', 'TCD-21K-DBK', 'TID-3628-Impact-Drill-CL', 'TLB041-Leaf-Blower-CL']
+      .slice(0, n).map((sku, i) => sku + ' ...... (G4: ' + (300 - i * 25) + ')');
+    const res = await fetch(META_GRAPH_URL + '/' + META_WA_WABA_ID + '/message_templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + env.META_WA_TOKEN },
+      body: JSON.stringify({
+        name, language: META_WA_LANG, category: 'UTILITY', parameter_format: 'POSITIONAL',
+        components: [
+          { type: 'HEADER', format: 'TEXT', text: WA_HEADER_TEXT },
+          { type: 'BODY', text: waMultiBody(n), example: { body_text: [[String(n)].concat(sample)] } },
+          { type: 'FOOTER', text: WA_FOOTER_TEXT }
+        ]
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.error) {
+      const e = data.error || {};
+      results.push({ name, created: false, error: (e.error_user_msg || e.message || ('HTTP ' + res.status)) });
+    } else {
+      results.push({ name, created: true, status: data.status || 'PENDING' });
+    }
+  }
+  return results;
+}
+
+// Sends one message using the line-by-line template for this list size.
+async function sendWaMulti(env, to, list) {
+  const n = Math.min(list.length, WA_MULTI_MAX);
+  const lines = list.length > WA_MULTI_MAX
+    ? list.slice(0, WA_MULTI_MAX - 1).map(waLine).concat(['+' + (list.length - (WA_MULTI_MAX - 1)) + ' more, see Stock Alert app'])
+    : list.map(waLine);
+  const params = [String(list.length)].concat(lines)
+    .map(t => ({ type: 'text', text: t.replace(/[\r\n\t]+/g, ' ').replace(/ {4,}/g, '   ') }));
+  const res = await fetch(META_GRAPH_URL + '/' + META_WA_PHONE_NUMBER_ID + '/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + env.META_WA_TOKEN },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp', to, type: 'template',
+      template: { name: WA_MULTI_PREFIX + n, language: { code: META_WA_LANG },
+        components: [{ type: 'body', parameters: params }] }
+    })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) {
+    const e = data.error || {};
+    throw new Error('Meta ' + res.status + ': ' + (e.message || 'send failed') + (e.error_data && e.error_data.details ? ' — ' + e.error_data.details : ''));
+  }
+  return data;
+}
+
 // Sends the current list to every recipient; returns per-number results.
+// Uses the line-by-line template when approved, else the one-line one.
 async function sendWaToAll(env, list) {
   const recipients = parseWaRecipients(await saGetSetting(env.DB, 'wa_recipients'));
   if (!recipients.length) throw new Error('No recipients set — add numbers in Stock Alert ⚙ Settings');
   const listText = formatOosList(list);
+  let multiName = null;
+  if (list.length) {
+    const want = WA_MULTI_PREFIX + Math.min(list.length, WA_MULTI_MAX);
+    try {
+      const statuses = await getWaTemplateStatuses(env);
+      if (String(statuses[want] || '').toUpperCase() === 'APPROVED') multiName = want;
+    } catch (e) { /* status lookup failed — use one-line template */ }
+  }
   const results = [];
   for (const to of recipients) {
-    try { await sendWaStockAlert(env, to, list.length, listText); results.push({ to, ok: true }); }
-    catch (err) { results.push({ to, ok: false, error: err.message }); }
+    let usedTemplate = META_WA_TEMPLATE;
+    try {
+      if (multiName) {
+        try { await sendWaMulti(env, to, list); usedTemplate = multiName; }
+        catch (e) { await sendWaStockAlert(env, to, list.length, listText); usedTemplate = META_WA_TEMPLATE + ' (fallback: ' + e.message + ')'; }
+      } else {
+        await sendWaStockAlert(env, to, list.length, listText);
+      }
+      results.push({ to, ok: true, template: usedTemplate });
+    } catch (err) { results.push({ to, ok: false, error: err.message }); }
   }
   return { recipients: results, listText, count: list.length };
 }
@@ -624,7 +736,7 @@ const ACTION_TIERS = {
   syncPicklistImages: 'viewer_read',
 
   // — Stock Alert: WhatsApp out-of-stock alerts setup (admin only) —
-  waAlertStatus: 'admin_only', waAlertSave: 'admin_only', waAlertTest: 'admin_only'
+  waAlertStatus: 'admin_only', waAlertSave: 'admin_only', waAlertTest: 'admin_only', waCreateTemplates: 'admin_only'
 };
 
 function getAuthRequirement(act) {
@@ -1253,7 +1365,8 @@ export default {
             tokenSet: !!env.META_WA_TOKEN,
             lastCheck: parse(await saGetSetting(env.DB, 'wa_last_check')),
             lastSent: parse(await saGetSetting(env.DB, 'wa_last_sent')),
-            current: list, preview: formatOosList(list)
+            current: list, preview: formatOosList(list),
+            templates: await getWaTemplateStatuses(env).catch(e => ({ _error: e.message }))
           });
         } catch (err) {
           return json({ ok: false, error: err.message });
@@ -1267,6 +1380,15 @@ export default {
         await saSetSetting(env.DB, 'wa_recipients', recipients.join(','));
         await saSetSetting(env.DB, 'wa_alerts_enabled', body && body.enabled === false ? '0' : '1');
         return json({ ok: true, recipients, enabled: !(body && body.enabled === false) });
+      }
+
+      // waCreateTemplates: one-time creation of stock_alert_l1…l10 on Meta.
+      if (request.method === 'POST' && act === 'waCreateTemplates') {
+        try {
+          return json({ ok: true, results: await createWaMultiTemplates(env) });
+        } catch (err) {
+          return json({ ok: false, error: err.message });
+        }
       }
 
       // waAlertTest: send the CURRENT list to all recipients right now.

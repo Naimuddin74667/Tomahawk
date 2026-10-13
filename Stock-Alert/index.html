@@ -1009,6 +1009,13 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       <div class="wa-step-title">Current list</div>
       <div class="wa-info" id="wa-info" hidden></div>
 
+      <div class="wa-step-title">Line-by-line format</div>
+      <div class="settings-section-hint">One SKU per line needs templates <code>stock_alert_l1</code>…<code>l10</code> approved by Meta. Until a size is approved, that size uses the one-line format.</div>
+      <div class="wa-info" id="wa-tpl-info" hidden></div>
+      <div class="settings-row">
+        <button class="btn-ghost" id="wa-create-tpl-btn">Create line-by-line templates</button>
+      </div>
+
       <div class="settings-row">
         <button class="btn-ghost" id="wa-refresh-btn">Refresh</button>
         <button class="btn-primary" id="wa-test-btn" style="flex:0 0 auto;">Send test now</button>
@@ -2454,6 +2461,25 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     return (list || []).map(function (n) { return n.replace(/^91(\d{10})$/, '$1'); }).join(', ');
   }
 
+  // Shows approval status of stock_alert (one-line) + stock_alert_l1…l10.
+  function renderTemplates(t) {
+    var el = document.getElementById('wa-tpl-info');
+    if (!t) { el.hidden = true; return; }
+    if (t._error) { el.textContent = 'Could not read templates: ' + t._error; el.hidden = false; return; }
+    var lines = ['One-line: stock_alert — ' + (t.stock_alert || 'missing')];
+    var approved = 0, missing = 0;
+    for (var n = 1; n <= 10; n++) {
+      var st = t['stock_alert_l' + n];
+      if (!st) missing++;
+      if (st === 'APPROVED') approved++;
+      lines.push('l' + n + ' (' + n + ' line' + (n > 1 ? 's' : '') + '): ' + (st || 'not created'));
+    }
+    el.textContent = lines.join('\n');
+    el.hidden = false;
+    var btn = document.getElementById('wa-create-tpl-btn');
+    btn.style.display = missing ? '' : 'none';
+  }
+
   function loadStatus() {
     statusEl.textContent = 'Loading…';
     fetch(WA_WORKER + '?action=waAlertStatus').then(function (r) { return r.json(); })
@@ -2469,6 +2495,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
           'Last alert sent: ' + esc(ls ? fmtTime(ls.at) + ' — ' + ls.count + ' SKU(s), ' + ls.recipients.filter(function (x) { return x.ok; }).length + '/' + ls.recipients.length + ' delivered' : 'none yet');
         infoEl.textContent = d.current.length + ' SKU(s) with E3 = 0 and G4 > 0:\n' + d.preview;
         infoEl.hidden = false;
+        renderTemplates(d.templates);
       })
       .catch(function (e) { statusEl.textContent = 'Error: ' + e.message; });
   }
@@ -2487,12 +2514,24 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
   document.getElementById('wa-refresh-btn').addEventListener('click', loadStatus);
 
+  document.getElementById('wa-create-tpl-btn').addEventListener('click', function () {
+    var btn = this; btn.disabled = true; resultEl.textContent = 'Creating templates on Meta…';
+    post('waCreateTemplates').then(function (d) {
+      if (!d.ok) { resultEl.textContent = '❌ ' + d.error; return; }
+      resultEl.innerHTML = d.results.map(function (r) {
+        return (r.error ? '❌ ' : '✅ ') + esc(r.name) + ' — ' + esc(r.error || (r.created ? 'submitted (' + r.status + ')' : 'already exists (' + r.status + ')'));
+      }).join('<br>');
+      loadStatus();
+    }).catch(function (e) { resultEl.textContent = 'Error: ' + e.message; })
+      .finally(function () { btn.disabled = false; });
+  });
+
   document.getElementById('wa-test-btn').addEventListener('click', function () {
     var btn = this; btn.disabled = true; resultEl.textContent = 'Sending…';
     post('waAlertTest').then(function (d) {
       if (!d.ok) { resultEl.textContent = '❌ ' + d.error; return; }
       resultEl.innerHTML = (d.sent.recipients || []).map(function (x) {
-        return (x.ok ? '✅ ' : '❌ ') + esc(x.to) + (x.ok ? ' — sent' : ' — ' + esc(x.error));
+        return (x.ok ? '✅ ' : '❌ ') + esc(x.to) + (x.ok ? ' — sent via ' + esc(x.template || 'stock_alert') : ' — ' + esc(x.error));
       }).join('<br>');
       loadStatus();
     }).catch(function (e) { resultEl.textContent = 'Error: ' + e.message; })
