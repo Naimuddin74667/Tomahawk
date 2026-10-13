@@ -536,6 +536,25 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .settings-row { display: flex; align-items: center; gap: 8px; margin-bottom: 0; }
 .settings-row .modal-input { margin-bottom: 0; flex: 1; }
 .settings-card .modal-input { background: var(--bg-surface); }
+/* Collapsible folders — closed by default, chevron opens */
+.settings-folder { border: 1px solid var(--border-default); border-radius: var(--radius-md); margin-bottom: 12px; background: var(--bg-surface); }
+.settings-folder[hidden] { display: none; }
+.settings-folder-head {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 14px 16px;
+  background: none; border: none; cursor: pointer; text-align: left; color: var(--text-primary); font-family: var(--font-body);
+}
+.settings-folder-head:hover { background: var(--bg-hover); border-radius: var(--radius-md); }
+.settings-folder-chevron { flex: 0 0 auto; color: var(--text-secondary); transition: transform .15s; }
+.settings-folder.open .settings-folder-chevron { transform: rotate(90deg); color: var(--accent); }
+.settings-folder-title { font-family: var(--font-display); font-weight: 800; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+.settings-folder-head .wa-switch { margin-left: 14px; }
+.settings-folder-sum { font-size: 12px; color: var(--text-secondary); margin-left: auto; text-align: right; }
+.settings-folder-body { display: none; padding: 0 16px 16px; }
+.settings-folder.open .settings-folder-body { display: block; }
+.settings-folder-body .settings-card { margin-bottom: 0; }
+/* Two columns on wide screens so the open folder fits without scrolling */
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+@media (max-width: 760px) { .settings-grid { grid-template-columns: minmax(0, 1fr); } }
 .settings-group-head {
   display: flex; align-items: center; justify-content: space-between;
   margin: 18px 0 10px; padding-top: 16px; border-top: 1px solid var(--border-default);
@@ -573,7 +592,7 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .wa-pill.pend { color: var(--accent); background: var(--accent-dim); border-color: var(--accent-border); }
 .wa-pill.bad { color: var(--c-red); background: var(--c-red-dim); border-color: var(--c-red-border); }
 .wa-pill.none { color: var(--text-muted); background: transparent; border-color: var(--border-default); }
-.wa-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.wa-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .wa-result { font-size: 12px; color: var(--text-secondary); margin-top: 10px; line-height: 1.5; text-align: right; }
 .wa-result:empty { display: none; }
 .wa-result .ok { color: var(--c-green); }
@@ -1011,81 +1030,96 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
      MODAL — Settings (Rec. Qty)
 ============================================================ -->
 <div class="modal-overlay" id="settings-modal-overlay" style="display:none;">
-  <div class="modal-box" style="max-width:480px;max-height:90vh;overflow-y:auto;">
+  <div class="modal-box" style="max-width:880px;max-height:92vh;overflow-y:auto;">
     <div class="modal-title">Settings</div>
-    <div class="modal-sub">Configure Rec. Qty until live sales-velocity data is wired up.</div>
+    <div class="modal-sub">Click a section to open it.</div>
 
-    <div class="settings-card">
-      <div class="settings-section-title">Default Rec. Qty</div>
-      <div class="settings-section-hint">Used for every SKU without its own value. Leave blank to show "NA".</div>
-      <div class="settings-row">
-        <input type="number" min="0" class="modal-input" id="default-recqty-input" placeholder="20">
-        <button class="btn-primary" id="save-default-recqty-btn" style="flex:0 0 auto;">Save</button>
-      </div>
-      <div class="settings-section-hint" id="default-recqty-status" style="margin:8px 0 0;"></div>
-    </div>
+    <div class="settings-folder" id="recqty-folder">
+      <button type="button" class="settings-folder-head" aria-expanded="false">
+        <svg class="settings-folder-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="settings-folder-title">Rec. Qty</span>
+        <span class="settings-folder-sum" id="recqty-folder-sum"></span>
+      </button>
+      <div class="settings-folder-body">
+        <div class="settings-grid">
+            <div class="settings-card">
+              <div class="settings-section-title">Default Rec. Qty</div>
+              <div class="settings-section-hint">Used for every SKU without its own value. Leave blank to show "NA".</div>
+              <div class="settings-row">
+                <input type="number" min="0" class="modal-input" id="default-recqty-input" placeholder="20">
+                <button class="btn-primary" id="save-default-recqty-btn" style="flex:0 0 auto;">Save</button>
+              </div>
+              <div class="settings-section-hint" id="default-recqty-status" style="margin:8px 0 0;"></div>
+            </div>
 
-    <div class="settings-card">
-      <div class="settings-section-title">SKU-specific Rec. Qty</div>
-      <div class="settings-section-hint">Overrides the default for one SKU. Also editable via ✎ in the Rec. qty column.</div>
-      <div class="settings-row">
-        <input type="text" class="modal-input" id="new-recqty-sku-input" placeholder="SKU code" style="flex:1.4;">
-        <input type="number" min="0" class="modal-input" id="new-recqty-qty-input" placeholder="Qty" style="flex:0.8;">
-        <button class="btn-primary" id="add-recqty-override-btn" style="flex:0 0 auto;">Add</button>
+            <div class="settings-card">
+              <div class="settings-section-title">SKU-specific Rec. Qty</div>
+              <div class="settings-section-hint">Overrides the default for one SKU. Also editable via ✎ in the Rec. qty column.</div>
+              <div class="settings-row">
+                <input type="text" class="modal-input" id="new-recqty-sku-input" placeholder="SKU code" style="flex:1.4;">
+                <input type="number" min="0" class="modal-input" id="new-recqty-qty-input" placeholder="Qty" style="flex:0.8;">
+                <button class="btn-primary" id="add-recqty-override-btn" style="flex:0 0 auto;">Add</button>
+              </div>
+              <div class="settings-override-list" id="recqty-override-list" style="margin-top:10px;background:var(--bg-surface);"></div>
+            </div>
+        </div>
       </div>
-      <div class="settings-override-list" id="recqty-override-list" style="margin-top:10px;background:var(--bg-surface);"></div>
     </div>
 
     <!-- WhatsApp Alerts — admin only (shown by applyRoleUI). The Worker's
          cron sends Meta templates (stock_alert / stock_alert_l1…l10) at the
          9 AM / 12 PM / 4 PM slots when a SKU newly has E3 = 0 and G4 > 0.
          Settings here are stored in D1 sa_settings. -->
-    <div class="wa-section" id="wa-settings-section" hidden>
-      <div class="settings-group-head">
-        <div class="settings-group-title">WhatsApp alerts <span class="role-badge">Admin</span></div>
-        <label class="wa-switch" title="Send alerts automatically">
+    <div class="settings-folder wa-section" id="wa-settings-section" hidden>
+      <div class="settings-folder-head" role="button" tabindex="0" aria-expanded="false">
+        <svg class="settings-folder-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="settings-folder-title">WhatsApp alerts <span class="role-badge">Admin</span></span>
+        <span class="settings-folder-sum" id="wa-folder-sum"></span>
+        <label class="wa-switch" title="Send alerts automatically" id="wa-switch">
           Auto-send
           <input type="checkbox" id="wa-enabled">
           <span class="wa-switch-track"></span>
         </label>
       </div>
+      <div class="settings-folder-body">
+        <div class="settings-grid">
+          <div class="settings-card">
+            <div class="wa-warn" id="wa-warn"></div>
+            <div class="wa-stats" id="wa-status">
+              <div class="wa-empty">Loading…</div>
+            </div>
+            <div class="wa-foot">Sent from Meta's test number (+1 555 645 8822) at <b>9 AM, 12 PM, 4 PM</b> — only when a SKU newly has <b>E3 = 0 and G4 &gt; 0</b>.</div>
+          </div>
 
-      <div class="settings-card">
-        <div class="wa-warn" id="wa-warn"></div>
-        <div class="wa-stats" id="wa-status">
-          <div class="wa-empty">Loading…</div>
+          <div class="settings-card">
+            <div class="wa-label" id="wa-recipients-label">Recipients (max 5)</div>
+            <div class="settings-row">
+              <input type="text" class="modal-input" id="wa-recipients" placeholder="9876543210, 9123456780">
+              <button class="btn-primary" id="wa-save-btn" style="flex:0 0 auto;">Save</button>
+            </div>
+            <div class="settings-section-hint" style="margin:8px 0 0;">Each number must first be verified in Meta (WhatsApp → API Setup → Recipient).</div>
+          </div>
+
+          <div class="settings-card">
+            <div class="wa-label" id="wa-info-label">Out of stock now</div>
+            <div class="wa-sku-list" id="wa-info"><div class="wa-empty">Loading…</div></div>
+          </div>
+
+          <div class="settings-card">
+            <div class="wa-label" id="wa-tpl-label">Meta templates</div>
+            <div class="wa-pills" id="wa-tpl-info"></div>
+            <div class="settings-section-hint" style="margin:0;">Line-by-line messages need templates 1–10 approved by Meta. Until a size is approved, it falls back to the one-line format.</div>
+            <div class="settings-row" style="margin-top:10px;" id="wa-create-tpl-row">
+              <button class="btn-ghost" id="wa-create-tpl-btn">Create line-by-line templates</button>
+            </div>
+          </div>
         </div>
-        <div class="wa-foot">Sent from Meta's test number (+1 555 645 8822) at <b>9 AM, 12 PM, 4 PM</b> — only when a SKU newly has <b>E3 = 0 and G4 &gt; 0</b>.</div>
-      </div>
-
-      <div class="settings-card">
-        <div class="wa-label" id="wa-recipients-label">Recipients (max 5)</div>
-        <div class="settings-row">
-          <input type="text" class="modal-input" id="wa-recipients" placeholder="9876543210, 9123456780">
-          <button class="btn-primary" id="wa-save-btn" style="flex:0 0 auto;">Save</button>
-        </div>
-        <div class="settings-section-hint" style="margin:8px 0 0;">Each number must first be verified in Meta (WhatsApp → API Setup → Recipient).</div>
-      </div>
-
-      <div class="settings-card">
-        <div class="wa-label" id="wa-info-label">Out of stock now</div>
-        <div class="wa-sku-list" id="wa-info"><div class="wa-empty">Loading…</div></div>
-      </div>
-
-      <div class="settings-card">
-        <div class="wa-label" id="wa-tpl-label">Meta templates</div>
-        <div class="wa-pills" id="wa-tpl-info"></div>
-        <div class="settings-section-hint" style="margin:0;">Line-by-line messages need templates 1–10 approved by Meta. Until a size is approved, it falls back to the one-line format.</div>
-        <div class="settings-row" style="margin-top:10px;" id="wa-create-tpl-row">
-          <button class="btn-ghost" id="wa-create-tpl-btn">Create line-by-line templates</button>
-        </div>
-      </div>
-
-      <div class="wa-actions">
+  <div class="wa-actions">
         <button class="btn-ghost" id="wa-refresh-btn">Refresh</button>
         <button class="btn-primary" id="wa-test-btn" style="flex:0 0 auto;">Send test now</button>
       </div>
       <div class="wa-result" id="wa-test-result"></div>
+      </div>
     </div>
 
     <div class="modal-actions" style="margin-top:18px;">
@@ -2649,5 +2683,43 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 })();
 </script>
 
+
+<script>
+// Settings folders: click the header (chevron) to open/close. Closed by default.
+(function () {
+  document.querySelectorAll('.settings-folder-head').forEach(function (head) {
+    function toggle(e) {
+      // Clicks on the Auto-send switch must not open/close the folder.
+      if (e.target.closest('.wa-switch')) return;
+      var folder = head.closest('.settings-folder');
+      var open = folder.classList.toggle('open');
+      head.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    head.addEventListener('click', toggle);
+    head.addEventListener('keydown', function (e) {
+      if ((e.key === 'Enter' || e.key === ' ') && !e.target.closest('.wa-switch')) { e.preventDefault(); toggle(e); }
+    });
+  });
+
+  // One-line summaries shown on the closed folder headers.
+  function updateSums() {
+    var def = document.getElementById('default-recqty-input').value;
+    var n = document.querySelectorAll('#recqty-override-list .settings-override-row').length;
+    document.getElementById('recqty-folder-sum').textContent =
+      'Default ' + (def || 'NA') + ' · ' + n + ' override' + (n === 1 ? '' : 's');
+    var label = document.getElementById('wa-info-label').textContent;
+    var m = label.match(/(\d+) SKU/);
+    var rec = document.getElementById('wa-recipients-label').textContent.match(/\((\d+) of/);
+    document.getElementById('wa-folder-sum').textContent =
+      (m ? m[1] + ' out of stock' : '') + (rec ? ' · ' + rec[1] + ' recipients' : '');
+  }
+  ['recqty-override-list', 'wa-info-label', 'wa-recipients-label'].forEach(function (id) {
+    new MutationObserver(updateSums).observe(document.getElementById(id), { childList: true, characterData: true, subtree: true });
+  });
+  document.getElementById('default-recqty-input').addEventListener('input', updateSums);
+  document.getElementById('settings-btn').addEventListener('click', function () { setTimeout(updateSums, 0); });
+  updateSums();
+})();
+</script>
 </body>
 </html>
