@@ -31,9 +31,11 @@ function json(data, status = 200) {
 // ══════════════════════════════════════════════════════════════════
 // STOCK ALERT — WhatsApp out-of-stock alerts (Meta WhatsApp Cloud API)
 //
-// Every 15-min cron tick: read live stock from the Supabase mirror and find
+// Runs only at 3 daily slots — 9:00 AM, 12:00 PM, 4:00 PM IST (on the first
+// 15-min cron tick of that hour). Reads live stock from the Supabase mirror and finds
 // SKUs with E3 = 0 AND G4 > 0 (enabled, not archived) — the same rule as the
-// Stock Alert app's "No Stock in E3" card. When a NEW SKU enters that list,
+// Stock Alert app's "No Stock in E3" card. When a NEW SKU entered that list
+// since the previous slot,
 // send the approved template "stock_alert" to every recipient with:
 //   {{1}} = how many SKUs are in the list
 //   {{2}} = "1. SKU (G4: qty), 2. ..." (one line — WhatsApp forbids newlines
@@ -53,6 +55,16 @@ const META_WA_TEMPLATE = 'stock_alert';
 const META_WA_LANG = 'en';
 const WA_LIST_MAX_CHARS = 800;   // keeps the whole message under WhatsApp's 1024-char body limit
 const WA_MAX_RECIPIENTS = 5;     // Meta test-number limit
+const WA_SLOT_HOURS_IST = [9, 12, 16]; // alert slots: 9 AM, 12 PM, 4 PM IST
+
+// Returns a slot key like "2026-10-13@9" if this cron tick is the first tick
+// (minute 0–14) of an alert hour in IST, else null.
+function waSlotForTick(ms) {
+  const ist = new Date(ms + 330 * 60000); // UTC → IST (+5:30)
+  const h = ist.getUTCHours(), m = ist.getUTCMinutes();
+  if (!WA_SLOT_HOURS_IST.includes(h) || m >= 15) return null;
+  return ist.toISOString().slice(0, 10) + '@' + h;
+}
 
 async function ensureWaAlertTables(DB) {
   await ensureSaTables(DB); // sa_settings + sa_archived_skus live there
@@ -292,7 +304,7 @@ async function runStockAlertCheck(env, opts) {
   } else if (!enabled) {
     reason = 'alerts switched off';
   } else if (!newOnes.length) {
-    reason = 'no new out-of-stock SKUs';
+    reason = 'no new out-of-stock SKUs since last slot — skipped';
   } else {
     sent = await sendWaToAll(env, list); reason = newOnes.length + ' new: ' + newOnes.map(x => x.sku).join(', ');
   }
@@ -4436,15 +4448,21 @@ export default {
       );
       return;
     }
-    // Stock Alert — WhatsApp out-of-stock alerts (every 15-min tick).
-    ctx.waitUntil(
-      runStockAlertCheck(env)
-        .then(r => recordHeartbeat(env, 'stock_alert_whatsapp', 'Stock Alert WhatsApp (Worker cron)', 'ok',
-          `${r.count} SKU(s) out in E3 with G4 stock — ${r.reason}` +
-          (r.sent ? ` — sent to ${r.sent.recipients.filter(x => x.ok).length}/${r.sent.recipients.length}.` : '.'), 900))
-        .catch(err => recordHeartbeat(env, 'stock_alert_whatsapp', 'Stock Alert WhatsApp (Worker cron)', 'error',
-          err.message, 900).catch(() => {}))
-    );
+    // Stock Alert — WhatsApp out-of-stock alerts, only at 9 AM / 12 PM / 4 PM IST.
+    // A slot key in sa_settings guards against running twice in one slot.
+    const waSlot = waSlotForTick(event.scheduledTime || Date.now());
+    if (waSlot) {
+      ctx.waitUntil((async () => {
+        await ensureWaAlertTables(env.DB);
+        if ((await saGetSetting(env.DB, 'wa_last_slot')) === waSlot) return;
+        await saSetSetting(env.DB, 'wa_last_slot', waSlot);
+        const r = await runStockAlertCheck(env);
+        await recordHeartbeat(env, 'stock_alert_whatsapp', 'Stock Alert WhatsApp (9 AM / 12 PM / 4 PM IST)', 'ok',
+          `Slot ${waSlot}: ${r.count} SKU(s) out in E3 with G4 stock — ${r.reason}` +
+          (r.sent ? ` — sent to ${r.sent.recipients.filter(x => x.ok).length}/${r.sent.recipients.length}.` : '.'), 64800);
+      })().catch(err => recordHeartbeat(env, 'stock_alert_whatsapp', 'Stock Alert WhatsApp (9 AM / 12 PM / 4 PM IST)', 'error',
+          err.message, 64800).catch(() => {})));
+    }
     // Order-data retention (Supabase mirror) — once a day, on the tick
     // that falls between 20:30 and 20:44 UTC (02:00–02:14 IST).
     const tick = new Date(event.scheduledTime || Date.now());
