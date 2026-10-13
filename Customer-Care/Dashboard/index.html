@@ -1972,12 +1972,14 @@ async function to4x6Pdf(bytes) {
   // with the declared value). Status → Refund Approved.
   function refundApprovePanel(c) {
     var r = c.reverse, sh = ship(r);
-    var pre = r.refund_approved_amount || sh.total_amount || '';
+    var od = caseLead(c).market_order_id && orderCache[caseLead(c).market_order_id];
+    var paid = od && od.found && od.price != null ? od.price : '';
+    var pre = r.refund_approved_amount || paid || sh.total_amount || '';   // purchase price first, else declared value
     var panel = showPanel(
       '<div class="cm-sec-title" style="margin-bottom:8px">Approve refund</div>' +
       '<div class="cm-summary">' +
         '<div><div class="cm-k">Approved amount (₹)</div><input class="sb-input" id="rf-amt" type="number" min="1" step="0.01" inputmode="decimal" value="' + esc(pre) + '"></div>' +
-        '<div><div class="cm-k">Declared value</div><div>' + (sh.total_amount ? '₹' + esc(sh.total_amount) : '&#8212;') + '</div></div>' +
+        '<div><div class="cm-k">Purchase price · Declared value</div><div>' + (paid !== '' ? '₹' + esc(paid) : '&#8212;') + ' · ' + (sh.total_amount ? '₹' + esc(sh.total_amount) : '&#8212;') + '</div></div>' +
       '</div>' +
       '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
         '<button class="case-act primary" id="rf-approve">Approve refund</button><button class="case-act" data-x>Cancel</button>' +
@@ -2328,6 +2330,7 @@ async function to4x6Pdf(bytes) {
       }).join('') + '</table></div>';
     return f('Platform', esc(d.platform)) + f('Order date', esc(fmtDay(d.order_date))) + f('Warranty until', warranty) +
       f('Order status', esc(ucSt(d.status))) +
+      f('Purchase price', purchasePriceHtml(d)) +
       f('Replacements', ucs.length > 1 ? esc(String(ucs.length - 1)) + ' already sent' : 'None') +
       f('Item(s)', items + (match ? '<div style="margin-top:3px">' + match + '</div>' : ''), 'span3') +
       table;
@@ -2375,6 +2378,13 @@ async function to4x6Pdf(bytes) {
   // Refund details block: the customer order details (same data as the
   //   Customer order section, which hides while this block is on screen
   //   so nothing shows twice). Order ID can be added / changed right here.
+  // Purchase price from the order lookup (Supabase cc_order_lookup gives
+  // price + price_source when the mirror has it; Flipkart often doesn't).
+  function purchasePriceHtml(d) {
+    if (d.price == null || d.price === '') return '<span class="cm-muted">Not in our data</span>';
+    return '₹' + esc(Number(d.price).toLocaleString('en-IN')) + (d.price_source ? ' <span class="cm-muted">(' + esc(d.price_source) + ')</span>' : '');
+  }
+
   function refreshRefundOrder(c) {
     var cell = document.getElementById('rf-order');
     var sec = document.getElementById('co-sec');
@@ -2406,7 +2416,8 @@ async function to4x6Pdf(bytes) {
         f('Order date', esc(fmtDay(d.order_date))) +
         f('Warranty until', wu ? esc(fmtDay(wu)) + ' ' + (wu >= today ? '<span class="co-ok">· In warranty</span>' : '<span class="co-warn">· Expired</span>') : '') +
         f('Order status', esc(ucSt(d.status))) +
-        f('Replacements', ucs.length > 1 ? esc(String(ucs.length - 1)) + ' already sent' : 'None', 'span2') +
+        f('Purchase price', purchasePriceHtml(d)) +
+        f('Replacements', ucs.length > 1 ? esc(String(ucs.length - 1)) + ' already sent' : 'None') +
         f('Item', items + match, 'span2');
     }
     cell.innerHTML = html;
