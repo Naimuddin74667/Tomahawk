@@ -705,6 +705,7 @@ const ACTION_TIERS = {
   ccEmailForwardOrder: 'manager_up',
   // — Reverse pickup: mark a parcel as received at the warehouse. —
   delhiveryMarkReceived: 'manager_up', delhiveryMarkRefunded: 'manager_up',
+  delhiveryApproveRefund: 'manager_up', // + handler allows only admins and 'shikhar' (always enforced)
   delhiveryMarkInProcess: 'manager_up', delhiveryCancelCase: 'admin_only',
   // Customer's own order ID (Flipkart / Amazon / Shopify) on a case + live lookup.
   ccSetOrderId: 'manager_up', ccOrderLookup: 'viewer_read',
@@ -768,6 +769,11 @@ function roleAllowed(role, requirement) {
 async function isEnforcementOn(DB) {
   const row = await DB.prepare("SELECT value FROM tm_settings WHERE key = 'enforce_auth'").first();
   return !!row && row.value === '1';
+}
+
+// Who may approve a refund + its amount: any admin, or Shikhar's account.
+function canApproveRefund(u) {
+  return !!u && (u.role === 'admin' || String(u.username || '').toLowerCase() === 'shikhar');
 }
 
 async function resolveSession(request, DB) {
@@ -4228,6 +4234,26 @@ export default {
             ifsc: b.ifsc, bank_name: b.bank_name, branch: b.branch, submitted_at: b.submitted_at, revealed: reveal });
         }
 
+        // ── Approve refund + approved amount. ONLY admins and Shikhar —
+        //   checked here on every call, regardless of the soft-launch flag.
+        //   Needs bank details in. Body: { order_id, amount }.
+        if (act === 'delhiveryApproveRefund') {
+          await ensureDelhiveryTable(env.DB);
+          const u = await resolveSession(request, env.DB);
+          if (!canApproveRefund(u)) return json({ ok: false, error: 'Only Admin or Shikhar can approve refunds' }, 403);
+          const oid = String(body.order_id || '').trim();
+          const amt = Math.round(Number(body.amount) * 100) / 100;
+          if (!oid) return json({ ok: false, error: 'order_id required' }, 400);
+          if (!(amt > 0) || amt > 1000000) return json({ ok: false, error: 'Enter a valid approved amount' }, 400);
+          const r = await env.DB.prepare("SELECT resolution, bank_submitted_at, refunded_at FROM delhivery_orders WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1").bind(oid).first();
+          if (!r || r.resolution !== 'refund') return json({ ok: false, error: 'Refund not started for this case' }, 400);
+          if (r.refunded_at) return json({ ok: false, error: 'Already refunded' }, 400);
+          if (!r.bank_submitted_at) return json({ ok: false, error: 'Bank details not received yet' }, 400);
+          await env.DB.prepare("UPDATE delhivery_orders SET refund_approved_amount = ?, refund_approved_by = ?, refund_approved_at = datetime('now') WHERE order_id = ? AND direction = 'reverse'")
+            .bind(amt, u.username, oid).run();
+          return json({ ok: true });
+        }
+
         // ── Refund given → case closed. Needs the parcel received. When bank
         //   details came in through the form, the NEFT UTR is required.
         //   Body: { order_id, utr }. Bank details are deleted 30 days later.
@@ -4235,8 +4261,9 @@ export default {
           await ensureDelhiveryTable(env.DB);
           const oid = String(body.order_id || '').trim();
           if (!oid) return json({ ok: false, error: 'order_id required' }, 400);
-          const row = await env.DB.prepare("SELECT received_at, bank_submitted_at FROM delhivery_orders WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1").bind(oid).first();
+          const row = await env.DB.prepare("SELECT received_at, bank_submitted_at, resolution, refund_approved_at FROM delhivery_orders WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1").bind(oid).first();
           if (!row || !row.received_at) return json({ ok: false, error: 'Mark the parcel received first' }, 400);
+          if (row.resolution === 'refund' && !row.refund_approved_at) return json({ ok: false, error: 'Refund must be approved (Admin / Shikhar) first' }, 400);
           const utr = String(body.utr || '').trim().slice(0, 40);
           if (row.bank_submitted_at && !utr) return json({ ok: false, error: 'Enter the NEFT UTR / reference number' }, 400);
           const who = ((await resolveSession(request, env.DB)) || {}).username || '';
@@ -5303,7 +5330,9 @@ async function ensureDelhiveryTable(DB) {
                      'refund_token_hash TEXT',     // SHA-256 of the customer link token (raw token never stored)
                      'refund_token_expires TEXT', 'refund_link_sent_at TEXT',
                      'refund_fail_count INTEGER DEFAULT 0',
-                     'bank_submitted_at TEXT', 'refund_utr TEXT', 'refunded_by TEXT']) {
+                     'bank_submitted_at TEXT', 'refund_utr TEXT', 'refunded_by TEXT',
+                     // Refund approval — only admins + Shikhar (added 13-Oct-2026)
+                     'refund_approved_amount REAL', 'refund_approved_by TEXT', 'refund_approved_at TEXT']) {
     try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN ${col}`).run(); } catch (e) { /* column already exists */ }
   }
   await purgeUnwantedOrders(DB);

@@ -1133,7 +1133,8 @@ async function to4x6Pdf(bytes) {
     if (r.refunded_at) return { label: 'Refunded', tone: 'closed' };
     if (fwdLive) return dispatchStatus(fs);
     if (r.resolution === 'refund') {       // refund started (Refund case or "Refund instead")
-      return r.bank_submitted_at ? { label: 'Refund Pending', tone: 'house' } : { label: 'Awaiting Bank Details', tone: 'house' };
+      if (!r.bank_submitted_at) return { label: 'Awaiting Bank Details', tone: 'house' };
+      return r.refund_approved_at ? { label: 'Refund Approved', tone: 'house' } : { label: 'Refund Pending', tone: 'house' };
     }
     if (r.in_process_at || r.received_at) return { label: 'In Process', tone: 'house' }; // Received = In Process
     if (rs === 'RTO' || rs === 'Lost') return { label: 'Pickup ' + rs, tone: 'bad-in' };
@@ -1437,13 +1438,23 @@ async function to4x6Pdf(bytes) {
     if (!r || !r.delhivery_ok || r.refunded_at) return '';
     if (fs && fs !== 'Cancelled') return '';
     if (!r.received_at) return legStage(r) === 'Delivered' && canReceive() ? btn('recv', 'Received') : '';
-    // Refund path: start (reason + amount) → customer link → bank details → Refund given (UTR)
+    // Refund path: start (reason) → customer link → bank details →
+    //   Approve refund + amount (Admin / Shikhar only) → Refund completed (UTR)
     if (r.resolution === 'refund') {
-      if (r.bank_submitted_at) return btn('bank', 'View bank details') + btn('refund', 'Refund given');
+      if (r.bank_submitted_at) return btn('bank', 'View bank details') + refundNextBtn(r);
       return btn('link', r.refund_link_sent_at ? 'Send bank details link again' : 'Send bank details link');
     }
     if (r.job_type === 'Refund') return btn('startrefund', 'Start refund');
     return btn('sendback', 'Send back &#8594;') + '<button class="case-act" data-act="startrefund">Refund instead</button>';
+  }
+
+  // Refund approval is limited to admins + Shikhar (worker enforces it too).
+  function canApproveRefund() { return window.TM_ROLE === 'admin' || window.TM_USER === 'shikhar'; }
+  // Next refund button once bank details are in: Approve → Refund completed.
+  function refundNextBtn(r) {
+    if (r.refund_approved_at) return '<button class="case-act primary" data-act="refund">Refund completed</button>';
+    if (canApproveRefund()) return '<button class="case-act primary" data-act="approve">Approve refund</button>';
+    return '<span class="cm-muted" style="align-self:center">Waiting for approval (Admin / Shikhar)</span>';
   }
 
   // ══ SEND BACK — one click books the forward shipment to the exact same
@@ -1883,7 +1894,7 @@ async function to4x6Pdf(bytes) {
         '</div>' +
         '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
           (res.revealed ? '' : '<button class="case-act" id="rf-reveal">Reveal account number</button>') +
-          '<button class="case-act primary" id="rf-given">Refund given</button><button class="case-act" id="rf-pdf">&#11015; Download Refund Form</button><button class="case-act" data-x>Close</button>' +
+          refundNextBtn(c.reverse).replace('data-act=', 'id="rf-next" data-act=') + '<button class="case-act" id="rf-pdf">&#11015; Download Refund Form</button><button class="case-act" data-x>Close</button>' +
           '<span class="cm-muted" style="margin-left:auto">Reveals are logged. Details are deleted 30 days after the refund.</span>' +
         '</div>');
       panelCancel(panel);
@@ -1892,7 +1903,8 @@ async function to4x6Pdf(bytes) {
       var cpA = document.getElementById('rf-cp-acct');
       if (cpA) cpA.addEventListener('click', function () { navigator.clipboard.writeText(res.account_number); cpA.innerHTML = '&#10003;'; });
       document.getElementById('rf-cp-ifsc').addEventListener('click', function () { navigator.clipboard.writeText(res.ifsc); this.innerHTML = '&#10003;'; });
-      document.getElementById('rf-given').addEventListener('click', function () { refundGivenPanel(c); });
+      var nx = document.getElementById('rf-next');
+      if (nx) nx.addEventListener('click', function () { if (this.dataset.act === 'approve') refundApprovePanel(c); else refundGivenPanel(c); });
       document.getElementById('rf-pdf').addEventListener('click', function () { downloadRefundForm(c, res, this); });
     } catch (e) { alert("Couldn't load the bank details: " + e.message); }
   }
@@ -1956,26 +1968,58 @@ async function to4x6Pdf(bytes) {
     btn.disabled = false; btn.innerHTML = label;
   }
 
-  function refundGivenPanel(c) {
+  // Approve refund — Admin / Shikhar enter the approved amount (pre-filled
+  // with the declared value). Status → Refund Approved.
+  function refundApprovePanel(c) {
+    var r = c.reverse, sh = ship(r);
+    var pre = r.refund_approved_amount || sh.total_amount || '';
     var panel = showPanel(
-      '<div class="cm-sec-title" style="margin-bottom:8px">Refund given</div>' +
+      '<div class="cm-sec-title" style="margin-bottom:8px">Approve refund</div>' +
       '<div class="cm-summary">' +
-        '<div class="span2"><div class="cm-k">NEFT UTR / reference number</div><input class="sb-input" id="rf-utr" maxlength="40" autocomplete="off"></div>' +
-        (c.reverse.refund_amount ? '<div><div class="cm-k">Amount</div><div>₹' + esc(c.reverse.refund_amount) + '</div></div>' : '') +
+        '<div><div class="cm-k">Approved amount (₹)</div><input class="sb-input" id="rf-amt" type="number" min="1" step="0.01" inputmode="decimal" value="' + esc(pre) + '"></div>' +
+        '<div><div class="cm-k">Declared value</div><div>' + (sh.total_amount ? '₹' + esc(sh.total_amount) : '&#8212;') + '</div></div>' +
       '</div>' +
       '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
-        '<button class="case-act primary" id="rf-done">Close case as Refunded</button><button class="case-act" data-x>Cancel</button>' +
+        '<button class="case-act primary" id="rf-approve">Approve refund</button><button class="case-act" data-x>Cancel</button>' +
+      '</div>');
+    panelCancel(panel);
+    document.getElementById('rf-approve').addEventListener('click', async function () {
+      var amt = Number(document.getElementById('rf-amt').value);
+      if (!(amt > 0)) { alert('Enter the approved amount.'); return; }
+      if (!confirm('Approve refund of ₹' + amt + ' for ' + c.id + '?')) return;
+      this.disabled = true; this.textContent = 'Saving…';
+      try {
+        var res = await post('delhiveryApproveRefund', { order_id: r.order_id, amount: amt });
+        if (!res.ok) throw new Error(res.error || 'failed');
+        await reopenCase(c.id);
+      } catch (e) { alert("Couldn't approve: " + e.message); this.disabled = false; this.textContent = 'Approve refund'; }
+    });
+  }
+
+  // Refund completed — after approval: enter the NEFT UTR and confirm.
+  function refundGivenPanel(c) {
+    var r = c.reverse;
+    var panel = showPanel(
+      '<div class="cm-sec-title" style="margin-bottom:8px">Refund completed</div>' +
+      '<div class="cm-summary">' +
+        '<div><div class="cm-k">Approved amount</div><div>' + (r.refund_approved_amount ? '₹' + esc(r.refund_approved_amount) : '&#8212;') + '</div></div>' +
+        '<div><div class="cm-k">Approved by</div><div>' + esc([r.refund_approved_by, fmtWhen(r.refund_approved_at)].filter(Boolean).join(' · ') || '—') + '</div></div>' +
+        '<div class="span2"><div class="cm-k">NEFT UTR / reference number</div><input class="sb-input" id="rf-utr" maxlength="40" autocomplete="off"></div>' +
+      '</div>' +
+      '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
+        '<button class="case-act primary" id="rf-done">Confirm refund completed</button><button class="case-act" data-x>Cancel</button>' +
       '</div>');
     panelCancel(panel);
     document.getElementById('rf-done').addEventListener('click', async function () {
       var utr = document.getElementById('rf-utr').value.trim();
       if (!utr) { alert('Enter the NEFT UTR / reference number.'); return; }
+      if (!confirm('Confirm ₹' + (r.refund_approved_amount || '') + ' refunded (UTR ' + utr + ')? This closes the case.')) return;
       this.disabled = true; this.textContent = 'Saving…';
       try {
-        var res = await post('delhiveryMarkRefunded', { order_id: c.reverse.order_id, utr: utr });
+        var res = await post('delhiveryMarkRefunded', { order_id: r.order_id, utr: utr });
         if (!res.ok) throw new Error(res.error || 'failed');
         await reopenCase(c.id);
-      } catch (e) { alert("Couldn't close it: " + e.message); this.disabled = false; this.textContent = 'Close case as Refunded'; }
+      } catch (e) { alert("Couldn't close it: " + e.message); this.disabled = false; this.textContent = 'Confirm refund completed'; }
     });
   }
 
@@ -2010,7 +2054,8 @@ async function to4x6Pdf(bytes) {
     if (btn.dataset.act === 'startrefund') return refundStartPanel(c);
     if (btn.dataset.act === 'link') return refundLinkPanel(c, btn);
     if (btn.dataset.act === 'bank') return refundBankPanel(c, false);
-    if (btn.dataset.act === 'refund' && c.reverse.bank_submitted_at) return refundGivenPanel(c);
+    if (btn.dataset.act === 'approve' && c.reverse.bank_submitted_at) return refundApprovePanel(c);
+    if (btn.dataset.act === 'refund' && c.reverse.refund_approved_at) return refundGivenPanel(c);
     if (btn.dataset.act === 'label') return downloadLabel(c.forward, btn);
     if (btn.dataset.act === 'ticket') return ticketPanel(c);
     var a = ACTS[btn.dataset.act];
@@ -2136,6 +2181,7 @@ async function to4x6Pdf(bytes) {
       f('Declared value', sh.total_amount ? '₹' + sh.total_amount : '') +
       (r.resolution === 'refund' ? f('Reason', r.refund_reason) + f('Started by', [r.refund_marked_by, fmtWhen(r.refund_marked_at)].filter(Boolean).join(' · ')) : '') +
       (r.refund_amount ? f('Amount (older entry)', '₹' + r.refund_amount) : '') +
+      (r.refund_approved_at ? f('Approved', ['₹' + r.refund_approved_amount, r.refund_approved_by, fmtWhen(r.refund_approved_at)].filter(Boolean).join(' · '), 'span2') : '') +
       bank +
       (r.refunded_at ? f('UTR', r.refund_utr) + f('Refunded', [fmtWhen(r.refunded_at), r.refunded_by].filter(Boolean).join(' · ')) : '') +
       '</div></div>';
