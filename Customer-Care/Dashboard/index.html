@@ -260,7 +260,20 @@ table.log-table tr:last-child td { border-bottom: none; }
 /* ── Customer Care Dashboard ── */
 .back-link { font-size: 12px; font-weight: 600; color: var(--text2); text-decoration: none; display: inline-block; margin-bottom: 10px; }
 .back-link:hover { color: var(--accent); }
-.tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+.tiles { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+/* New requests (service requests from the website) */
+.req-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.req-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text2); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.req-chip b { color: var(--text); }
+.req-chip.on { border-color: var(--accent); color: var(--accent); }
+#req-panel .case-table { height: auto !important; }
+#req-panel .case-table tr { height: auto !important; }
+.req-files { display: flex; flex-wrap: wrap; gap: 10px; }
+.req-files img, .req-files video { height: 150px; max-width: 100%; border-radius: 8px; border: 1px solid var(--border); object-fit: cover; background: var(--bg); }
+.req-ev { font-size: 12px; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+.req-note { white-space: pre-wrap; color: var(--text2); margin-top: 2px; }
+.req-tpls { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+#req-acts { flex-wrap: wrap; }
 @media (max-width: 760px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .tile-flag { font-size: 9.5px; font-weight: 700; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 1px 6px; margin-left: 4px; }
 .tile {
@@ -508,7 +521,25 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
   <!-- Stage tiles — click one to filter the list -->
   <div class="tiles" id="tiles"></div>
 
-  <div class="panel">
+  <!-- New requests: service requests from the website, to review and act on -->
+  <div class="panel" id="req-panel" style="display:none">
+    <div class="panel-head-row">
+      <div class="panel-title">New requests</div>
+      <div class="tools">
+        <input type="search" id="req-q" placeholder="Search request ID, customer, phone, order, product…">
+        <span class="log-refresh" id="req-refresh">&#8635; Refresh</span>
+      </div>
+    </div>
+    <div class="req-chips" id="req-chips"></div>
+    <div class="table-wrap">
+      <table class="case-table">
+        <thead><tr><th>Request</th><th>Customer</th><th>Product</th><th>Problem</th><th>Warranty</th><th>Status</th><th>Files</th></tr></thead>
+        <tbody id="req-body"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel" id="case-panel">
     <div class="panel-head-row">
       <div class="panel-title">All cases</div>
       <div class="tools">
@@ -1199,6 +1230,7 @@ async function to4x6Pdf(bytes) {
   //                (repair/replacement in progress, refund pending)
   //   Going out — green: forward booked until delivered (+ delivery problems)
   var TILES = [
+    { key: 'requests', label: 'New requests', c: '#a78bfa', test: function () { return false; } },
     { key: 'verify', label: 'Needs attention', c: 'var(--accent)', test: needsAttention },
     { key: 'open', label: 'Open cases', c: 'var(--text)', test: function (c) { return c.st.tone !== 'closed'; } },
     { key: 'upcoming', label: 'Upcoming', c: 'var(--accent)', test: function (c) { return c.st.tone === 'in' || c.st.tone === 'bad-in'; } },
@@ -1310,12 +1342,15 @@ async function to4x6Pdf(bytes) {
   function renderTiles() {
     var el = document.getElementById('tiles');
     el.innerHTML = TILES.map(function (t) {
-      var n = cases.filter(t.test).length;
+      var n = t.key === 'requests' ? reqToReview().length : cases.filter(t.test).length;
       return '<button class="tile' + (tileFilter === t.key ? ' active' : '') + '" data-f="' + t.key + '" style="--tile-c:' + t.c + '">' +
         '<div class="tile-n">' + n + '</div><div class="tile-l">' + esc(t.label) + '</div></button>';
     }).join('');
     el.querySelectorAll('.tile').forEach(function (t) {
-      t.addEventListener('click', function () { tileFilter = t.dataset.f; page = 1; renderTiles(); renderTable(); });
+      t.addEventListener('click', function () {
+        tileFilter = t.dataset.f; page = 1; renderTiles();
+        if (tileFilter === 'requests') { showView('requests'); renderRequests(); } else { showView('cases'); renderTable(); }
+      });
     });
   }
 
@@ -2397,18 +2432,209 @@ async function to4x6Pdf(bytes) {
     btn.disabled = false; btn.textContent = 'Refresh tracking';
   }
 
+  // ── NEW REQUESTS — service requests from tomahawk.tools/pages/service-request
+  // (D1 warranty_claims). The team reviews photos + details here and acts:
+  // ask for info, send a tip, send a repair quote, not covered, or approve
+  // (opens Create Pickup prefilled; booking the pickup approves it). Every
+  // action emails the customer (worker: ccClaimAction). ──
+  var requests = [], reqFilter = 'review', openReqId = null;
+  var REQ_STATUS = {
+    'new': ['To review', 'b-amber'], waiting_customer: ['Waiting for customer', 'b-blue'],
+    tip_sent: ['Tip sent', 'b-blue'], quote_sent: ['Quote sent', 'b-blue'],
+    approved: ['Pickup booked', 'b-green'], closed: ['Closed', 'b-gray'], not_covered: ['Not covered', 'b-gray']
+  };
+  var REQ_FILTERS = [
+    { key: 'review', label: 'To review', test: function (r) { return (r.status || 'new') === 'new'; } },
+    { key: 'waiting', label: 'Waiting for customer', test: function (r) { return ['waiting_customer', 'tip_sent', 'quote_sent'].indexOf(r.status) !== -1; } },
+    { key: 'approved', label: 'Pickup booked', test: function (r) { return r.status === 'approved'; } },
+    { key: 'done', label: 'Closed', test: function (r) { return r.status === 'closed' || r.status === 'not_covered'; } },
+    { key: 'all', label: 'All', test: function () { return true; } }
+  ];
+  // Ready-made messages — the team picks one and edits it before sending.
+  var REQ_TEMPLATES = {
+    ask_info: ['Please send a short video showing the problem. Switch the tool on so we can see and hear what happens.',
+               'Please send a photo of your invoice or order confirmation.',
+               'Please send a clear photo of the part that is broken.'],
+    tip: ['Please push the battery in firmly until it clicks, charge it fully, and try again.',
+          'Please try the charger in a different wall socket. The light should turn on when the battery is placed.',
+          'Please press the safety lock and the trigger together. The tool will not start with the trigger alone.'],
+    quote: ['The repair will cost Rs. ____ including pickup and return delivery. Reply YES and we will book the pickup.'],
+    not_covered: ['This part wears out with normal use (blades, chains, brushes, discs and bits are not covered). We can send you a new one: Rs. ____.',
+                  'Your product is outside the 6-month warranty.'],
+    resolve: ['Glad the tool is working again. Reply to this email if the problem comes back.'],
+    note: ['']
+  };
+  var REQ_ACT_LABEL = { ask_info: 'Ask for info / video', tip: 'Send a tip', quote: 'Repair quote', not_covered: 'Not covered', resolve: 'Resolved', note: 'Internal note' };
+  function canActReq() { return window.TM_ROLE === 'admin' || window.TM_ROLE === 'manager'; }
+  function reqToReview() { return requests.filter(REQ_FILTERS[0].test); }
+
+  async function loadRequests() {
+    try {
+      var res = await api('ccClaimsList&days=90');
+      if (res && res.ok) requests = res.requests || [];
+    } catch (e) { /* keep last list */ }
+  }
+
+  function showView(which) {
+    // style.display, not [hidden]: the fit-to-screen layout sets display on .panel
+    document.getElementById('case-panel').style.display = which === 'cases' ? '' : 'none';
+    document.getElementById('req-panel').style.display = which === 'requests' ? '' : 'none';
+  }
+
+  function warrantyBadge(w) {
+    var cls = w === 'Under warranty' ? 'b-green' : (w === 'Out of warranty' ? 'b-amber' : (w === 'Order cancelled' ? 'b-red' : 'b-gray'));
+    return '<span class="badge ' + cls + '">' + esc(w || 'Not checked') + '</span>';
+  }
+  function reqCaseStatus(r) {
+    if (!r.case_id) return '';
+    for (var i = 0; i < cases.length; i++) {
+      var c = cases[i];
+      if ((c.reverse && c.reverse.order_id === r.case_id) || (c.forward && c.forward.order_id === r.case_id) || c.id === r.case_id)
+        return c.st ? c.st.label : '';
+    }
+    return '';
+  }
+
+  function renderRequests() {
+    var chips = document.getElementById('req-chips');
+    chips.innerHTML = REQ_FILTERS.map(function (f) {
+      return '<button class="req-chip' + (reqFilter === f.key ? ' on' : '') + '" data-k="' + f.key + '">' +
+        esc(f.label) + ' <b>' + requests.filter(f.test).length + '</b></button>';
+    }).join('');
+    chips.querySelectorAll('.req-chip').forEach(function (b) {
+      b.addEventListener('click', function () { reqFilter = b.dataset.k; renderRequests(); });
+    });
+    var q = document.getElementById('req-q').value.trim().toLowerCase();
+    var test = REQ_FILTERS.filter(function (f) { return f.key === reqFilter; })[0].test;
+    var rows = requests.filter(function (r) {
+      return test(r) && (!q || [r.claim_id, r.name, r.phone, r.order_id, r.product, r.email].join(' ').toLowerCase().indexOf(q) !== -1);
+    });
+    var body = document.getElementById('req-body');
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="7" class="muted">Nothing here.</td></tr>'; return; }
+    body.innerHTML = rows.map(function (r) {
+      var st = REQ_STATUS[r.status || 'new'] || [r.status, 'b-gray'];
+      var cs = reqCaseStatus(r);
+      return '<tr class="case-row' + ((r.status || 'new') === 'new' ? ' attn' : '') + '" data-id="' + esc(r.claim_id) + '">' +
+        '<td class="mono">' + esc(r.claim_id) + '<div class="sub">' + esc(fmtWhen(r.created_at)) + '</div></td>' +
+        '<td>' + esc(r.name) + '<div class="sub">' + esc(r.city || '') + '</div></td>' +
+        '<td>' + esc(r.product) + '<div class="sub">' + esc(r.platform) + ' · ' + esc(r.order_id) + '</div></td>' +
+        '<td>' + esc(r.issue_type) + '</td>' +
+        '<td>' + warrantyBadge(r.warranty_status) + '</td>' +
+        '<td><span class="badge ' + st[1] + '">' + esc(st[0]) + '</span>' + (cs ? '<div class="sub">' + esc(r.case_id + ' · ' + cs) + '</div>' : '') + '</td>' +
+        '<td class="muted">' + (r.file_count || 0) + ' file(s)</td></tr>';
+    }).join('');
+    body.querySelectorAll('tr[data-id]').forEach(function (tr) {
+      tr.addEventListener('click', function () { openRequest(tr.dataset.id); });
+    });
+  }
+
+  function openRequest(id) {
+    var r = requests.filter(function (x) { return x.claim_id === id; })[0];
+    if (!r) return;
+    openCaseId = null; openReqId = id;
+    var st = REQ_STATUS[r.status || 'new'] || [r.status, 'b-gray'];
+    document.getElementById('case-title').textContent = r.claim_id;
+    document.getElementById('case-sub').innerHTML = 'Received ' + esc(fmtWhen(r.created_at)) + ' &nbsp; <span class="badge ' + st[1] + '">' + esc(st[0]) + '</span>';
+    var f = function (k, v, cls) { return '<div' + (cls ? ' class="' + cls + '"' : '') + '><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
+    var addr = [r.address, r.city, r.state, r.pincode].filter(Boolean).join(', ');
+    var w = r.warranty_status + (r.warranty_until ? ' (until ' + r.warranty_until + ')' : '');
+    var hist = (r.events || []).map(function (e) {
+      return '<div class="req-ev"><span class="muted">' + esc(fmtWhen(e.at)) + '</span> <b>' + esc(REQ_ACT_LABEL[e.kind] || e.kind) + '</b>' +
+        (e.by ? ' · ' + esc(e.by) : '') + (e.emailed ? ' · <span class="bt-green">emailed</span>' : '') +
+        (e.note ? '<div class="req-note">' + esc(e.note) + '</div>' : '') + '</div>';
+    }).join('');
+    var acts = '';
+    if (canActReq()) {
+      var fin = r.status === 'closed' || r.status === 'not_covered';
+      acts = (!r.case_id && !fin ? '<a class="case-act primary" target="_blank" href="../Create-Pickup/?claim=' + encodeURIComponent(r.claim_id) + '">&#10003; Approve &amp; book pickup</a>' : '') +
+        (!fin ? '<button class="case-act" data-k="ask_info">Ask for info / video</button>' +
+                '<button class="case-act" data-k="tip">Send a tip</button>' +
+                '<button class="case-act" data-k="quote">Repair quote</button>' +
+                '<button class="case-act" data-k="resolve">Resolved</button>' +
+                '<button class="case-act danger" data-k="not_covered">Not covered</button>'
+              : '<button class="case-act" data-k="reopen">Reopen</button>') +
+        '<button class="case-act" data-k="note">Internal note</button>';
+    }
+    var box = document.getElementById('case-body-modal');
+    box.innerHTML = '<div class="cm-summary">' +
+      f('Customer', r.name) + f('Mobile', r.phone) + f('Email', r.email) +
+      f('Pickup address', addr, 'span3') +
+      f('Order ID', r.order_id) + f('Bought on', r.platform + (r.order_date ? ', ' + r.order_date : '')) +
+      '<div><div class="cm-k">Warranty</div><div>' + warrantyBadge(r.warranty_status) + (r.warranty_until ? ' <span class="muted">until ' + esc(r.warranty_until) + '</span>' : '') + '</div></div>' +
+      f('Product', r.product + (r.order_skus ? '  [' + r.order_skus + ']' : ''), 'span3') +
+      f('Problem', r.issue_type) + f('Pickup case', r.case_id ? r.case_id + ' · ' + reqCaseStatus(r) : '', 'span2') +
+      f('What the customer says', r.description, 'span3') + '</div>' +
+      '<div class="cm-sec"><div class="cm-sec-title">Photos &amp; video</div></div><div class="req-files" id="req-files"><span class="muted">Loading…</span></div>' +
+      (hist ? '<div class="cm-sec"><div class="cm-sec-title">History</div></div>' + hist : '') +
+      '<div id="req-compose" style="margin-top:16px" hidden></div>' +
+      (acts ? '<div class="cm-acts" id="req-acts">' + acts + '</div>' : '');
+    box.querySelectorAll('#req-acts [data-k]').forEach(function (b) {
+      b.addEventListener('click', function () { b.dataset.k === 'reopen' ? sendReq(r, 'reopen', '', b) : compose(r, b.dataset.k); });
+    });
+    modal.hidden = false;
+    api('ccClaimFiles&claim_id=' + encodeURIComponent(r.claim_id)).then(function (res) {
+      var el = document.getElementById('req-files'); if (!el || openReqId !== r.claim_id) return;
+      var fl = (res && res.files) || [];
+      if (!fl.length) { el.innerHTML = '<span class="muted">' + (r.file_count ? 'Files were emailed to support (not stored for this older request).' : 'No files.') + '</span>'; return; }
+      el.innerHTML = fl.map(function (x) {
+        if (!x.url) return '<span class="muted">' + esc(x.name) + ' (unavailable)</span>';
+        return /^video\//.test(x.mime) ? '<video src="' + esc(x.url) + '" controls preload="metadata"></video>'
+          : '<a href="' + esc(x.url) + '" target="_blank" rel="noopener"><img src="' + esc(x.url) + '" alt="' + esc(x.name) + '"></a>';
+      }).join('');
+    }).catch(function () { var el = document.getElementById('req-files'); if (el) el.innerHTML = '<span class="muted">Could not load files.</span>'; });
+  }
+
+  function compose(r, kind) {
+    var el = document.getElementById('req-compose');
+    var t = REQ_TEMPLATES[kind] || [''];
+    var emails = kind !== 'note';
+    el.hidden = false;
+    el.innerHTML = '<div class="cm-sec-title">' + esc(REQ_ACT_LABEL[kind]) + (emails ? ' <span class="muted">· emailed to ' + esc(r.email || 'no email on file') + '</span>' : ' <span class="muted">· not sent to the customer</span>') + '</div>' +
+      (t.length > 1 ? '<div class="req-tpls">' + t.map(function (x, i) { return '<button class="req-chip" data-i="' + i + '">' + esc(x.slice(0, 48)) + '…</button>'; }).join('') + '</div>' : '') +
+      '<textarea class="sb-input" id="req-msg" rows="4">' + esc(t[0]) + '</textarea>' +
+      '<div class="cm-acts"><button class="case-act primary" id="req-send">' + (emails ? 'Send to customer' : 'Save note') + '</button>' +
+      '<button class="case-act" id="req-cancel">Cancel</button></div>';
+    el.querySelectorAll('.req-tpls [data-i]').forEach(function (b) {
+      b.addEventListener('click', function () { document.getElementById('req-msg').value = t[+b.dataset.i]; });
+    });
+    document.getElementById('req-cancel').addEventListener('click', function () { el.hidden = true; el.innerHTML = ''; });
+    document.getElementById('req-send').addEventListener('click', function () {
+      var msg = document.getElementById('req-msg').value.trim();
+      if (/_{3,}/.test(msg)) { alert('Fill in the blank (____) first.'); return; }
+      sendReq(r, kind, msg, this);
+    });
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  async function sendReq(r, kind, msg, btn) {
+    btn.disabled = true; var old = btn.textContent; btn.textContent = 'Saving…';
+    try {
+      var res = await post('ccClaimAction', { claim_id: r.claim_id, kind: kind, message: msg });
+      if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
+      await loadRequests(); renderTiles(); renderRequests(); openRequest(r.claim_id);
+      if (kind !== 'note' && kind !== 'reopen' && !res.emailed) alert('Saved, but the email to the customer could not be sent. Please contact them directly.');
+    } catch (e) {
+      alert("Couldn't save: " + e.message); btn.disabled = false; btn.textContent = old;
+    }
+  }
+  document.getElementById('req-q').addEventListener('input', renderRequests);
+  document.getElementById('req-refresh').addEventListener('click', function () { loadRequests().then(function () { renderTiles(); renderRequests(); }); });
+
   async function load(force) {
     try {
+      var reqP = loadRequests();
       var res = await api('delhiveryListOrders&limit=500' + (force ? '&refresh=1' : ''));
+      await reqP;
       if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
       cases = buildCases(res.orders || []);
       // On opening the page: land on "Needs attention" if anything is waiting,
       // otherwise on "Open cases". A Refresh keeps whatever tile is selected.
       if (!tileChosen) {
-        tileFilter = cases.some(needsAttention) ? 'verify' : 'open';
+        tileFilter = reqToReview().length ? 'requests' : (cases.some(needsAttention) ? 'verify' : 'open');
         tileChosen = true;
       }
-      renderTiles(); renderTable();
+      renderTiles();
+      if (tileFilter === 'requests') { showView('requests'); renderRequests(); } else { showView('cases'); renderTable(); }
     } catch (e) {
       document.getElementById('case-body').innerHTML = '<tr><td colspan="5" class="muted">Couldn\'t load cases: ' + esc(e.message) + '</td></tr>';
     }
