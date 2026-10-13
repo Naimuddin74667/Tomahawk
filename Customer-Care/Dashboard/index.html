@@ -1415,7 +1415,6 @@ async function to4x6Pdf(bytes) {
         f('Courier status', esc(stLabel), showRaw ? esc(raw) : '') +
         f('Booked by', esc(o.created_by || ''), esc(fmtWhen(o.created_at))) +
         // Who clicked Verify received (recorded from 12-Oct-2026; older rows show only the time)
-        (o.direction === 'reverse' && o.received_at ? f('Received by', esc(o.received_by || ''), esc(fmtWhen(o.received_at))) : '') +
       '</div><div class="track-box" id="track-' + idx + '" hidden></div>';
   }
 
@@ -2127,15 +2126,14 @@ async function to4x6Pdf(bytes) {
     if (r.bank_submitted_at) bank = '<div class="span2" id="rf-bank-inline"><div class="cm-k">Bank details</div><div class="cm-muted">Loading…</div></div>';
     else bank = f('Bank details', r.refund_link_sent_at ? 'Link sent ' + fmtWhen(r.refund_link_sent_at) + ' — waiting for customer' : (r.resolution === 'refund' ? 'Link not sent yet' : 'Asked after the refund is started'), 'span2');
     // Two cards side by side: Purchase details (customer's order, filled
-    // by refreshRefundOrder) | Customer details (this case + refund progress).
+    // by refreshRefundOrder) | Refund info (address, value, refund progress).
     return '<div class="rf-cols">' +
       '<div class="cm-summary"><div class="rf-h">Purchase details</div><div id="rf-order" style="display:contents"></div></div>' +
-      '<div class="cm-summary"><div class="rf-h">Customer details</div>' +
-      f('Customer', sh.name) + f('Phone', sh.phone) +
+      // Customer / phone / case / product / pickup AWB / received are already
+      // in the popup's summary + Reverse pickup card — not repeated here.
+      '<div class="cm-summary"><div class="rf-h">Refund info</div>' +
       f('Address', addr, 'span2') +
-      f('Case', r.order_id + ' · ' + c.type) + f('Product', c.product) +
-      f('Declared value', sh.total_amount ? '₹' + sh.total_amount : '') + f('Pickup AWB', [r.courier || 'Delhivery', r.waybill].filter(Boolean).join(' · ')) +
-      f('Received', [fmtWhen(r.received_at), r.received_by].filter(Boolean).join(' · ')) +
+      f('Declared value', sh.total_amount ? '₹' + sh.total_amount : '') +
       (r.resolution === 'refund' ? f('Reason', r.refund_reason) + f('Started by', [r.refund_marked_by, fmtWhen(r.refund_marked_at)].filter(Boolean).join(' · ')) : '') +
       (r.refund_amount ? f('Amount (older entry)', '₹' + r.refund_amount) : '') +
       bank +
