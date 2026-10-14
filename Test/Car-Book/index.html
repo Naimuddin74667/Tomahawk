@@ -186,6 +186,13 @@ td.num, th.num { text-align:right; white-space:nowrap; }
 .test-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; background:var(--blue); color:#fff; border-radius:12px; padding:10px 14px; margin-bottom:var(--gap); font-size:14px; }
 .test-banner .btn { background:#fff; color:#1c2333; border-color:#fff; white-space:nowrap; }
 html[data-theme="dark"] .test-banner { color:#0f1517; }
+.bal-card { margin-bottom:var(--gap); background:linear-gradient(135deg, var(--accent-soft), var(--surface) 60%); }
+.bal-amt { font-family:var(--font-display); font-size:34px; font-weight:700; margin-top:4px; color:var(--accent); }
+.bal-amt.neg { color:var(--red); }
+.bal-rows { display:grid; grid-template-columns:1fr; max-width:420px; gap:6px 18px; margin-top:12px; font-size:13px; }
+.bal-rows div { display:flex; justify-content:space-between; gap:8px; color:var(--text2); }
+.bal-rows b { font-variant-numeric:tabular-nums; }
+.bal-next { margin-top:12px; padding-top:10px; border-top:1px solid var(--border); font-size:13px; }
 .due-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; background:var(--red-soft); border-radius:12px; padding:12px 14px; margin-bottom:var(--gap); font-size:14px; }
 
 @media (max-width:820px) {
@@ -411,6 +418,7 @@ dashboard() {
       <div class="btn-row desk-only"><button class="btn primary" onclick="openPayment()">+ Rent received</button><button class="btn" onclick="openExpense()">+ Expense</button></div></div>
     ${dueBanner()}
     ${setupMissing ? `<div class="note">Finish the <a href="#" onclick="go('setup');return false" style="color:var(--accent)">Setup</a> page (purchase date, EMI amount, first EMI date and the driver) so every number here is accurate.</div>` : ''}
+    ${balanceCard()}
     <div class="grid kpis">
       ${kpi('Rent collected', inr(t.rent), 'pos', 'Pending from driver: ' + inr(t.pending))}
       ${kpi('Total spent so far', inr(t.cashOut), 'neg', 'Down ' + inr(t.down) + ' · EMI ' + inr(t.emiPaid) + ' · Other ' + inr(t.running))}
@@ -705,6 +713,36 @@ function openTransfer(id, type) {
     existing ? () => DB.transfers = DB.transfers.filter(t => t.id !== id) : null);
 }
 
+/* Available balance = money that should be in the car's account right now:
+   rent received − EMIs/expenses paid "From rent" − profit taken out. */
+function accountBalance() {
+  const rentIn = sum(DB.payments, p => num(p.amount));
+  const emiOut = sum(DB.expenses.filter(e => e.paidBy === FROM_RENT && e.category === 'EMI'), e => num(e.amount));
+  const otherOut = sum(DB.expenses.filter(e => e.paidBy === FROM_RENT && e.category !== 'EMI'), e => num(e.amount));
+  const profitOut = sum((DB.transfers || []).filter(t => t.type === 'withdraw'), t => num(t.amount));
+  return { rentIn, emiOut, otherOut, profitOut, balance: rentIn - emiOut - otherOut - profitOut };
+}
+function balanceCard() {
+  const b = accountBalance();
+  const next = emiSchedule().find(r => !r.expense);
+  let nextLine = '';
+  if (next) {
+    const gap = b.balance - next.amount;
+    nextLine = `<div class="bal-next">Next EMI <b>${inr(next.amount)}</b> on ${fmtDate(next.date)} ·
+      ${gap >= 0 ? '<span class="pos">covered ✓</span>' : '<span class="neg">short by ' + inr(-gap) + '</span>'}</div>`;
+  }
+  return `<div class="card bal-card">
+    <div class="bal-top"><div><div class="kpi"><div class="label">Available balance</div></div>
+      <div class="bal-amt ${b.balance >= 0 ? '' : 'neg'}">${inr(b.balance)}</div></div></div>
+    <div class="bal-rows">
+      <div><span>Rent received</span><b class="pos">+${inr(b.rentIn)}</b></div>
+      <div><span>EMIs paid</span><b class="neg">−${inr(b.emiOut)}</b></div>
+      ${b.otherOut ? `<div><span>Other costs from rent</span><b class="neg">−${inr(b.otherOut)}</b></div>` : ''}
+      ${b.profitOut ? `<div><span>Profit taken out</span><b class="neg">−${inr(b.profitOut)}</b></div>` : ''}
+    </div>
+    ${nextLine}
+  </div>`;
+}
 function rentPoolCard() {
   const rent = sum(DB.payments, p => num(p.amount));
   const spent = sum(DB.expenses.filter(e => e.paidBy === FROM_RENT), e => num(e.amount));
