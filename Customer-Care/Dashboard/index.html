@@ -1313,7 +1313,7 @@ async function to4x6Pdf(bytes) {
   var ESC_RECHECK_H = 48;     // a raised ticket hides the case this long
   var ESC_CATEGORY = {
     HELD: 'Shipment stuck / Delay in transit', NOSCAN: 'No tracking update', PICKUP: 'Pickup not done',
-    MISROUTE: 'Misroute', NDR: 'Delivery attempt failed / NDR', RTO: 'RTO query', LOST: 'Lost shipment', LATE: 'Delay in delivery'
+    MISROUTE: 'Misroute', NDR: 'Delivery attempt failed / NDR', RTO: 'RTO query', LOST: 'Lost shipment', LATE: 'Delay in delivery', MANUAL: 'Delay in delivery'
   };
   // Ekart Elite "Create New Escalation" dropdowns (Issue Type → Sub Issue Type).
   // Issue types seen on the portal (Oct 2026): Account Related, Forward Pickup,
@@ -1325,7 +1325,7 @@ async function to4x6Pdf(bytes) {
     if (rev) return { type: 'Reverse Shipment', sub: null };
     if (e.code === 'PICKUP') return { type: 'Forward Pickup', sub: null };
     if (e.code === 'RTO') return { type: 'RTO', sub: null };
-    if (e.code === 'HELD' || e.code === 'NOSCAN' || e.code === 'LATE' || e.code === 'MISROUTE') return { type: 'Forward Pre Delivery', sub: 'Delay in delivery' };
+    if (e.code === 'HELD' || e.code === 'NOSCAN' || e.code === 'LATE' || e.code === 'MISROUTE' || e.code === 'MANUAL') return { type: 'Forward Pre Delivery', sub: 'Delay in delivery' };
     return { type: 'Forward Pre Delivery', sub: null };   // NDR, LOST
   }
   var OUR_SIGNOFF = 'Regards,\nIndustrial Tools & Hardware (TOMAHAWK)\nonlinesales@bullet.co.in | +91 8928949415';
@@ -1555,8 +1555,16 @@ async function to4x6Pdf(bytes) {
   escModal.addEventListener('click', function (e) { if (e.target === escModal) closeEsc(); });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !escModal.hidden) closeEsc(); });
 
-  function openEsc(c) {
-    var e = c.esc; if (!e) return;
+  // Manual ticket from the case popup when no rule has flagged the case yet.
+  function manualEsc(c) {
+    var o = liveLeg(c);
+    if (!o || !o.waybill) return null;
+    var rev = o.direction === 'reverse';
+    return { code: 'MANUAL', short: 'Delay in shipment', facts: [], leg: o, courier: o.courier || 'Delhivery', raised: false, followup: false,
+      ask: 'Please share the current status and expedite delivery ' + (rev ? 'to our Bhiwandi warehouse.' : 'to the customer.') };
+  }
+  function openEsc(c, eArg) {
+    var e = eArg || c.esc; if (!e) return;
     var o = e.leg, txt = escTicketText(c, e);
     document.getElementById('esc-title').textContent = (e.followup ? 'Re-escalate with ' : 'Raise ticket with ') + e.courier;
     document.getElementById('esc-sub').textContent = o.order_id + ' · ' + (c.customer || '') + (c.city ? ', ' + c.city : '');
@@ -2659,6 +2667,12 @@ async function to4x6Pdf(bytes) {
     var labelBtn = fl && fl.delhivery_ok && fl.waybill && legStage(fl) !== 'Cancelled'
       ? '<button class="case-act primary" data-act="label">&#11015; Download Label</button>' : '';
     var tkBtn = ticketLeg(c) ? '<button class="case-act" data-act="ticket">Not received &#8211; raise ticket</button>' : '';
+    // Courier escalation ticket — same popup as the list's Raise ticket button.
+    var ce = c.esc || manualEsc(c), escBtn = '';
+    if (ce && !tkBtn) escBtn = ce.raised
+      ? '<span class="cm-muted" style="font-size:12px">Ticket raised ' + esc(dayLabel(ce.raisedMs)) + '</span>'
+      : '<button class="row-btn rb-red" id="cm-esc">' + (ce.followup ? 'Re-escalate' : 'Raise ticket') + '</button>';
+    tkBtn += escBtn;
     var acts = labelBtn + actionsHtml(c) + tkBtn + (trackBtns ? '<span style="margin-left:auto;display:flex;gap:8px">' + trackBtns + '</span>' : '');
     var box = document.getElementById('case-body-modal');
     box.innerHTML = summary + customerOrderHtml(c) +
@@ -2681,6 +2695,8 @@ async function to4x6Pdf(bytes) {
     box.querySelectorAll('.track-btn').forEach(function (b) {
       b.addEventListener('click', function () { track(legs[+b.dataset.leg][0], b); });
     });
+    var eb = document.getElementById('cm-esc');
+    if (eb) eb.addEventListener('click', function () { closeCase(); openEsc(c, ce); });
     modal.hidden = false;
     fillRefundBank(c);   // refund details: load masked bank details, if submitted
     wireCustomerOrder(c);  // Order ID: edit + load order details
