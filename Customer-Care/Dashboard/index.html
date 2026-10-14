@@ -1315,6 +1315,19 @@ async function to4x6Pdf(bytes) {
     HELD: 'Shipment stuck / Delay in transit', NOSCAN: 'No tracking update', PICKUP: 'Pickup not done',
     MISROUTE: 'Misroute', NDR: 'Delivery attempt failed / NDR', RTO: 'RTO query', LOST: 'Lost shipment', LATE: 'Delay in delivery'
   };
+  // Ekart Elite "Create New Escalation" dropdowns (Issue Type → Sub Issue Type).
+  // Issue types seen on the portal (Oct 2026): Account Related, Forward Pickup,
+  // Forward Post Delivery, Forward Pre Delivery, RTO, Remittance, Reverse Shipment,
+  // Tech Issues. Sub types confirmed so far: Forward Pre Delivery → Delay in delivery.
+  // sub = null → pick the closest option on the portal.
+  function ekartIssueType(e) {
+    var rev = e.leg.direction === 'reverse';
+    if (rev) return { type: 'Reverse Shipment', sub: null };
+    if (e.code === 'PICKUP') return { type: 'Forward Pickup', sub: null };
+    if (e.code === 'RTO') return { type: 'RTO', sub: null };
+    if (e.code === 'HELD' || e.code === 'NOSCAN' || e.code === 'LATE' || e.code === 'MISROUTE') return { type: 'Forward Pre Delivery', sub: 'Delay in delivery' };
+    return { type: 'Forward Pre Delivery', sub: null };   // NDR, LOST
+  }
   var OUR_SIGNOFF = 'Regards,\nIndustrial Tools & Hardware (TOMAHAWK)\nonlinesales@bullet.co.in | +91 8928949415';
 
   function scanInfo(o) { try { return o && o.scan_info ? JSON.parse(o.scan_info) : null; } catch (e) { return null; } }
@@ -1554,7 +1567,10 @@ async function to4x6Pdf(bytes) {
       '<div class="esc-issue">&#9888; ' + esc(escView(e).h) + (escView(e).age >= 1 ? ' · ' + esc(durTxt(escView(e).age)) : '') + '<div class="esc-issue-sub">' + esc(escView(e).s) + '</div></div>' + raisedNote +
       '<div class="esc-row"><div><div class="k">AWB / Tracking ID</div><div class="mono esc-awb">' + esc(o.waybill) + '</div></div>' +
         '<button class="track-btn" data-copy="awb">Copy</button></div>' +
-      '<div class="esc-row"><div><div class="k">Suggested category</div><div>' + esc(ESC_CATEGORY[e.code] || e.code) + '</div></div></div>' +
+      (e.courier === 'Ekart'
+        ? '<div class="esc-row"><div><div class="k">Issue type</div><div>' + esc(ekartIssueType(e).type) + '</div></div>' +
+          '<div><div class="k">Sub issue type</div><div>' + esc(ekartIssueType(e).sub || 'Closest match on portal') + '</div></div></div>'
+        : '<div class="esc-row"><div><div class="k">Suggested category</div><div>' + esc(ESC_CATEGORY[e.code] || e.code) + '</div></div></div>') +
       '<div class="k" style="margin-top:12px">Comment</div>' +
       '<textarea id="esc-text" class="esc-text" rows="6" maxlength="' + ESC_TICKET_MAX + '">' + esc(txt) + '</textarea>' +
       '<div class="sub" id="esc-count" style="text-align:right"></div>' +
