@@ -1337,7 +1337,7 @@ async function to4x6Pdf(bytes) {
     var lastH = info.last ? hrsSince(info.last.t) : 0;
     if (st === 'Delivered' || st === 'Cancelled' || st === 'Failed') return null;
     if (st === 'Lost') return { code: 'LOST', short: 'Marked lost by courier',
-      facts: ['Shipment is marked LOST / damaged.'], ask: 'Please confirm the status and raise the lost-shipment claim.' };
+      facts: ['Shipment is marked LOST / damaged.'], ask: 'Please confirm status and process lost-shipment claim.' };
     if (st === 'RTO') return { code: 'RTO', short: rev ? 'Pickup returned (RTO)' : 'RTO — returning to us',
       facts: ['Shipment has been marked RTO.' + (info.undel ? ' Last failed attempt: ' + info.undel.d + ' (' + fmtMs(info.undel.t) + ').' : '')],
       ask: rev ? 'Please share why the pickup was returned and reschedule the pickup.' : 'Please share the RTO reason and stop the RTO / reattempt delivery to the customer.' };
@@ -1367,12 +1367,12 @@ async function to4x6Pdf(bytes) {
     if (!rev && info.undel && st !== 'Out For Delivery' && (info.undel.n >= 2 || hrsSince(info.undel.t) >= ESC_NDR_H)) {
       return { code: 'NDR', short: 'Delivery failed: ' + info.undel.d,
         facts: ['Delivery attempted ' + info.undel.n + ' time' + (info.undel.n > 1 ? 's' : '') + '; last attempt ' + fmtMs(info.undel.t) + ' marked "' + info.undel.d + '".'],
-        ask: 'Please reattempt delivery — the customer is waiting for this shipment. Kindly call the customer before the attempt.' };
+        ask: 'Please call the customer and reattempt delivery on priority.' };
     }
     // Stuck at one hub
     if (hub && st !== 'Out For Delivery' && hubH >= ESC_HELD_H) return { code: 'HELD', short: 'Held at ' + hub + ' · ' + durShort(hubH),
       facts: ['Shipment has been at ' + hub + ' since ' + fmtMs(info.hub_since) + ' (' + durTxt(hubH) + ') with no onward movement.'],
-      ask: rev ? 'Please dispatch it to the destination hub and deliver to our Bhiwandi warehouse on priority.' : 'Please dispatch it onward and deliver to the customer on priority.' };
+      ask: rev ? 'Please dispatch onward and deliver to our Bhiwandi warehouse on priority.' : 'Please dispatch onward and deliver to customer on priority.' };
     if (info.last && lastH >= ESC_NOSCAN_H) return { code: 'NOSCAN', short: 'No scan for ' + durShort(lastH),
       facts: ['No tracking update since ' + fmtMs(info.last.t) + ' (' + durTxt(lastH) + ').'],
       ask: 'Please confirm the current location of the shipment and expedite delivery.' };
@@ -1399,22 +1399,36 @@ async function to4x6Pdf(bytes) {
     return is;
   }
 
+  // Ticket comment for the courier portal's escalation form — one short
+  // paragraph, max 500 chars (Ekart's limit). AWB goes in the portal's own
+  // WBN field, so it is not repeated here; no greeting / sign-off.
+  var ESC_TICKET_MAX = 500;
   function escTicketText(c, e) {
     var o = e.leg, info = scanInfo(o) || {}, rev = o.direction === 'reverse';
-    var lines = [
-      'AWB: ' + o.waybill,
-      'Our reference: ' + o.order_id + ' — ' + (rev ? 'reverse pickup from customer (' + (c.city || 'customer') + ') to our Bhiwandi warehouse'
-        : 'shipment from our Bhiwandi warehouse to customer (' + (c.city || 'customer') + ')'),
-      'Booked on: ' + fmtMs(tsMs(o.created_at)),
-      '',
-      'Issue: ' + e.short
-    ].concat(e.facts);
-    if (info.last && e.code !== 'NOSCAN') lines.push('Last scan: ' + scanLine(info.last));
-    if (e.followup) lines.push('', 'Follow-up: we already raised ' + (o.esc_ticket_no ? 'ticket ' + o.esc_ticket_no : 'a ticket') +
-      ' on ' + fmtMs(e.raisedMs) + ' and the issue is still not resolved. Please escalate.');
-    lines.push('', 'Request: ' + e.ask, '', OUR_SIGNOFF);
-    return lines.join('\n');
+    var short = function (ms) { return new Date(ms).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }); };
+    var fact = {
+      HELD: function () { return 'Shipment stuck at ' + info.hub + ' since ' + short(info.hub_since) + ' (' + durTxt(hrsSince(info.hub_since)) + '), no onward movement.'; },
+      NOSCAN: function () { return 'No tracking update for ' + durTxt(hrsSince(info.last.t)) + ', last scan ' + short(info.last.t) + (info.last.l ? ' at ' + info.last.l : '') + '.'; },
+      PICKUP: function () { return rev ? 'Reverse pickup booked ' + short(tsMs(o.created_at)) + ' still not picked from customer (' + durTxt(hrsSince(tsMs(o.created_at))) + ').'
+                                       : 'Packed and ready at our Bhiwandi warehouse since ' + short(tsMs(o.rtd_at)) + ', pickup not done (' + durTxt(hrsSince(tsMs(o.rtd_at))) + ').'; },
+      MISROUTE: function () { return 'Shipment misrouted (' + info.misroute.d + ', ' + short(info.misroute.t) + ')' + (info.hub ? ', now at ' + info.hub : '') + ', still not delivered.'; },
+      NDR: function () { return 'Delivery failed ' + info.undel.n + 'x, last on ' + short(info.undel.t) + ': ' + reasonText(info.undel.d) + '.'; },
+      RTO: function () { return 'Shipment marked RTO' + (info.undel ? ' after failed attempt: ' + reasonText(info.undel.d) : '') + '.'; },
+      LOST: function () { return 'Shipment marked lost/damaged.'; },
+      LATE: function () { return 'Expected delivery ' + short(Date.parse(info.edd)) + ' passed, still not delivered.'; }
+    }[e.code];
+    var parts = [
+      fact ? fact() : e.short + '.',
+      (info.last && e.code !== 'NOSCAN' && e.code !== 'PICKUP') ? 'Last scan ' + short(info.last.t) + ': ' + (info.last.d || info.last.s) + '.' : '',
+      'Our order ' + o.order_id + ', ' + (rev ? 'return from customer (' + (c.city || '') + ') to our Bhiwandi warehouse' : 'to customer in ' + (c.city || '')) + ', booked ' + dayLabel(tsMs(o.created_at)) + '.',
+      e.followup ? 'Re-escalation: ticket ' + (o.esc_ticket_no || '') + ' raised ' + dayLabel(e.raisedMs) + ' still unresolved.' : '',
+      e.ask
+    ].filter(Boolean);
+    var t = parts.join(' ');
+    if (t.length > ESC_TICKET_MAX) t = parts.filter(function (x, i) { return i !== 1; }).join(' ');  // drop last-scan line first
+    return t.slice(0, ESC_TICKET_MAX);
   }
+
 
   // ── Row cells (Courier status / What's needed / action) ──────────────
   // "Motherhub_SAI_5 Thane" → "Thane" · "Gurgaon_Tauru_GW (Haryana)" → "Gurgaon"
@@ -1537,10 +1551,11 @@ async function to4x6Pdf(bytes) {
       '<div class="esc-row"><div><div class="k">AWB / Tracking ID</div><div class="mono esc-awb">' + esc(o.waybill) + '</div></div>' +
         '<button class="track-btn" data-copy="awb">Copy</button></div>' +
       '<div class="esc-row"><div><div class="k">Suggested category</div><div>' + esc(ESC_CATEGORY[e.code] || e.code) + '</div></div></div>' +
-      '<div class="k" style="margin-top:12px">Description</div>' +
-      '<textarea id="esc-text" class="esc-text" rows="13">' + esc(txt) + '</textarea>' +
+      '<div class="k" style="margin-top:12px">Comment</div>' +
+      '<textarea id="esc-text" class="esc-text" rows="6" maxlength="' + ESC_TICKET_MAX + '">' + esc(txt) + '</textarea>' +
+      '<div class="sub" id="esc-count" style="text-align:right"></div>' +
       '<div class="cm-acts">' +
-        '<button class="track-btn" data-copy="text">Copy description</button>' +
+        '<button class="track-btn" data-copy="text">Copy comment</button>' +
         '<a class="track-btn" href="' + esc(ESC_PORTAL[e.courier] || '#') + '" target="_blank" rel="noopener">Open ' + esc(e.courier) + (e.courier === 'Ekart' ? ' Escalations' : ' portal') + ' &#8599;</a>' +
       '</div>' +
       '<div class="cm-acts">' +
@@ -1551,9 +1566,12 @@ async function to4x6Pdf(bytes) {
     escModal.querySelectorAll('[data-copy]').forEach(function (b) {
       b.addEventListener('click', function () {
         var v = b.dataset.copy === 'awb' ? o.waybill : document.getElementById('esc-text').value;
-        navigator.clipboard.writeText(v).then(function () { b.textContent = 'Copied ✓'; setTimeout(function () { b.textContent = b.dataset.copy === 'awb' ? 'Copy' : 'Copy description'; }, 1500); });
+        navigator.clipboard.writeText(v).then(function () { b.textContent = 'Copied ✓'; setTimeout(function () { b.textContent = b.dataset.copy === 'awb' ? 'Copy' : 'Copy comment'; }, 1500); });
       });
     });
+    var ta = document.getElementById('esc-text'), cnt = document.getElementById('esc-count');
+    var upd = function () { cnt.textContent = ta.value.length + ' / ' + ESC_TICKET_MAX; };
+    ta.addEventListener('input', upd); upd();
     document.getElementById('esc-save').addEventListener('click', function () { saveEsc(o, e, null, this); });
     var clr = document.getElementById('esc-clear');
     if (clr) clr.addEventListener('click', function (ev) { ev.preventDefault(); saveEsc(o, e, true, this); });
