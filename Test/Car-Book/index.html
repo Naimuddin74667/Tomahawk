@@ -243,10 +243,11 @@ const PAY_MODES = ['Cash','UPI','Bank transfer','Other'];
 const CYCLES = { daily:'Daily', weekly:'Weekly', monthly:'Monthly' };
 
 function defaultData() {
+  const me = uid(), uncle = uid();
   return {
     car: { name:'Maruti Dzire Tour S (CNG)', regNo:'', purchaseDate:'', price:830000, downPayment:200000,
-           downPaidBy:'', loanAmount:622128, netDisbursed:603000, irr:14.01, emi:21314, tenure:36, emiStartDate:'2026-11-05' },
-    partners: [ { id:uid(), name:'Me', share:50 }, { id:uid(), name:'Uncle', share:50 } ],
+           downPaidBy:uncle, loanAmount:622128, netDisbursed:603000, irr:14.01, emi:21314, tenure:36, emiStartDate:'2026-11-05' },
+    partners: [ { id:me, name:'Me', share:50 }, { id:uncle, name:'Uncle', share:50 } ],
     drivers: [], payments: [], expenses: []
   };
 }
@@ -261,6 +262,8 @@ function load() {
       if (d.car.netDisbursed === undefined) d.car.netDisbursed = 603000;
       if (d.car.irr === undefined) d.car.irr = 14.01;
       if (!d.car.emiStartDate) d.car.emiStartDate = '2026-11-05';
+      // Uncle paid the ₹2L upfront — fill it in if it was never set
+      if (!d.car.downPaidBy) { const u = d.partners.find(p => /uncle/i.test(p.name)); if (u) d.car.downPaidBy = u.id; }
       return d;
     }
   } catch (e) { console.warn('Load failed', e); }
