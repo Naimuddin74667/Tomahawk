@@ -709,6 +709,8 @@ const ACTION_TIERS = {
   delhiveryMarkInProcess: 'manager_up', delhiveryCancelCase: 'admin_only',
   // Customer's own order ID (Flipkart / Amazon / Shopify) on a case + live lookup.
   ccSetOrderId: 'manager_up', ccOrderLookup: 'viewer_read',
+  // Dashboard "Raise ticket" — record (or clear) a courier escalation ticket on one leg.
+  ccMarkEscalation: 'manager_up',
   // Refund flow — customer bank-details form (NEFT). The two public actions
   // are gated by a single-use, 7-day link token + phone last-4 check.
   delhiveryStartRefund: 'manager_up', refundCreateLink: 'manager_up', refundGetBank: 'manager_up',
@@ -2681,8 +2683,8 @@ export default {
           const dirRow = await env.DB.prepare('SELECT direction FROM delhivery_orders WHERE waybill = ? LIMIT 1').bind(tid).first();
           const d = deriveEkartStage(tr, dirRow && dirRow.direction);
           await env.DB.prepare(
-            "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now'), delivered_at = COALESCE(delivered_at, ?) WHERE waybill = ?"
-          ).bind(d.stage, d.rawStatus, d.reattempts, ekartDeliveredAt(tr, d.stage), tid).run();
+            "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now'), delivered_at = COALESCE(delivered_at, ?), scan_info = ? WHERE waybill = ?"
+          ).bind(d.stage, d.rawStatus, d.reattempts, ekartDeliveredAt(tr, d.stage), ekartScanInfo(tr), tid).run();
           const scans = (tr.details || []).map(x => ({
             status: x.status || '', detail: x.desc || '', location: x.location || '',
             at: x.ctime ? new Date(Number(x.ctime)).toISOString() : ''
@@ -4109,6 +4111,23 @@ export default {
           return json({ ok: true });
         }
 
+        // ── Courier escalation raised (Customer Care Dashboard "Raise ticket").
+        //   Body: { order_id, issue, ticket_no } on one leg; { order_id, clear: true }
+        //   removes it. The dashboard hides a raised escalation for 48h, then shows
+        //   it again as a follow-up if the problem is still there.
+        if (act === 'ccMarkEscalation') {
+          await ensureDelhiveryTable(env.DB);
+          const oid = String(body.order_id || '').trim();
+          if (!oid) return json({ ok: false, error: 'order_id required' }, 400);
+          const who = ((await resolveSession(request, env.DB)) || {}).username || 'unknown';
+          const r = body.clear
+            ? await env.DB.prepare("UPDATE delhivery_orders SET esc_raised_at = NULL, esc_raised_by = NULL, esc_ticket_no = NULL, esc_issue = NULL WHERE order_id = ? AND delhivery_ok = 1").bind(oid).run()
+            : await env.DB.prepare("UPDATE delhivery_orders SET esc_raised_at = datetime('now'), esc_raised_by = ?, esc_ticket_no = ?, esc_issue = ? WHERE order_id = ? AND delhivery_ok = 1")
+                .bind(String(who), String(body.ticket_no || '').trim().slice(0, 60) || null, String(body.issue || '').slice(0, 40) || null, oid).run();
+          if (!r.meta || !r.meta.changes) return json({ ok: false, error: 'No booked order with that Order ID' }, 404);
+          return json({ ok: true });
+        }
+
         // ── Cancel a whole case (admin only) — our side ONLY, the booking
         //   with Delhivery/Ekart is NOT cancelled. Body: { order_ids: [...] }
         //   (every leg of the case). Sets cancelled_at + track_stage
@@ -5321,6 +5340,13 @@ async function ensureDelhiveryTable(DB) {
                      // delivered_at — courier's own "Delivered" scan time (UTC ISO). Closes a
                      // forward/send-back case for the Customer Care Dashboard ticket TAT.
                      'delivered_at TEXT',
+                     // scan_info — compact JSON summary of the courier scan history
+                     // (last scan, current hub + since when, pickup time, misroute /
+                     // failed-delivery notes). Written on every tracking refresh; the
+                     // Customer Care Dashboard turns it into escalations. See summarizeScans().
+                     'scan_info TEXT',
+                     // Escalation ticket raised on the courier portal (Dashboard "Raise ticket"):
+                     'esc_raised_at TEXT', 'esc_raised_by TEXT', 'esc_ticket_no TEXT', 'esc_issue TEXT',
                      // cancelled_at — case cancelled in Tomahawk by an admin (courier booking untouched)
                      'cancelled_at TEXT',
                      // Refund flow (Refund cases + Repair/Replace converted to refund)
@@ -5425,8 +5451,8 @@ async function refreshDelhiveryStages(env, force) {
       if (!s || !s.AWB) return;
       const d = deriveDelhiveryStage(s, dirOf[String(s.AWB)]);
       stmts.push(env.DB.prepare(
-        "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now'), delivered_at = COALESCE(delivered_at, ?) WHERE waybill = ?"
-      ).bind(d.stage, d.rawStatus, d.reattempts, delhiveryDeliveredAt(s, d.stage), String(s.AWB)));
+        "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now'), delivered_at = COALESCE(delivered_at, ?), scan_info = ? WHERE waybill = ?"
+      ).bind(d.stage, d.rawStatus, d.reattempts, delhiveryDeliveredAt(s, d.stage), delhiveryScanInfo(s), String(s.AWB)));
     });
     if (stmts.length) await env.DB.batch(stmts);
   }
@@ -5673,6 +5699,73 @@ function deriveEkartStage(tr, direction) {
   return { stage, rawStatus: raw, reattempts };
 }
 
+// ── Scan-history summary (scan_info) ─────────────────────────────────
+// Both couriers' scan lists are normalised to {t: epoch ms, s: status,
+// d: detail, l: location} and boiled down to the few facts the Customer
+// Care Dashboard needs to spot stuck / misrouted / failed shipments:
+//   last      — latest scan {t,s,d,l}
+//   hub       — facility the parcel is at now (scans that only name a city,
+//               e.g. Ekart's "Thane" next to "Motherhub_SAI_5 Thane", are
+//               skipped — they belong to the facility scan beside them)
+//   hub_since — first scan of the current unbroken stay at that facility
+//   picked    — first picked-up scan (null = not picked yet)
+//   misroute  — latest misroute scan {t,d,l}
+//   undel     — failed delivery attempts {n, t, d (latest reason)}
+//   edd       — courier's expected delivery date (Delhivery only)
+// Kept small on purpose — it is sent to the dashboard with every case.
+const SCAN_FACILITY_RE = /_|hub|centre|center|odh|ipc|motherhub|facility|dc\b/i;
+function scanFacility(l) {
+  l = String(l || '').replace(/\s*\(.*\)\s*$/, '').trim();
+  return SCAN_FACILITY_RE.test(l) ? l : null;
+}
+function summarizeScans(list, edd) {
+  const sc = (list || []).filter(x => x && x.t).sort((a, b) => a.t - b.t);
+  if (!sc.length) return null;
+  const txt = x => (x.s + ' ' + x.d).toLowerCase();
+  const last = sc[sc.length - 1];
+  // current facility + when the unbroken stay there began
+  let hub = null, hubSince = null;
+  for (let i = sc.length - 1; i >= 0; i--) {
+    const f = scanFacility(sc[i].l);
+    if (!f) continue;
+    if (hub === null) hub = f;
+    if (f !== hub) break;
+    hubSince = sc[i].t;
+  }
+  const picked = sc.find(x => /picked up|pickup completed|shipment picked|picked_complete|pickup_complete/.test(txt(x)));
+  const mis = sc.filter(x => /misroute/.test(txt(x))).pop();
+  const und = sc.filter(x => /undeliver|not delivered|delivery attempt failed|consignee (not available|unavailable|refused)|customer not (available|responding)|refused/.test(txt(x)) && !/out for delivery/.test(x.s.toLowerCase()));
+  // latest attempt; prefer a line that carries the reason text (Ekart logs a bare "Undelivered" too)
+  const lastUnd = und.filter(x => x.d).pop() || und[und.length - 1];
+  const cut = v => String(v || '').slice(0, 120);
+  return JSON.stringify({
+    v: 1,
+    last: { t: last.t, s: cut(last.s), d: cut(last.d), l: cut(last.l) },
+    hub: hub, hub_since: hubSince,
+    picked: picked ? picked.t : null,
+    misroute: mis ? { t: mis.t, d: cut(mis.d || mis.s), l: cut(mis.l) } : null,
+    // distinct days with a failed attempt (couriers often log 2–3 lines per attempt)
+    undel: und.length ? { n: new Set(und.map(x => new Date(x.t + 19800000).toISOString().slice(0, 10))).size, t: lastUnd.t, d: cut(lastUnd.d || lastUnd.s) } : null,
+    edd: edd || null
+  });
+}
+function ekartScanInfo(tr) {
+  try {
+    return summarizeScans(((tr && tr.details) || []).map(x => ({
+      t: Number(x.ctime) || 0, s: String(x.status || ''), d: String(x.desc || ''), l: String(x.location || '')
+    })), null);
+  } catch (e) { return null; }
+}
+function delhiveryScanInfo(s) {
+  try {
+    const list = ((s && s.Scans) || []).map(x => x.ScanDetail || x).map(d => {
+      const iso = istToIso(d.ScanDateTime || d.StatusDateTime);
+      return { t: iso ? Date.parse(iso) : 0, s: String(d.Scan || d.Status || ''), d: String(d.Instructions || ''), l: String(d.ScannedLocation || d.StatusLocation || '') };
+    });
+    return summarizeScans(list, istToIso(s.ExpectedDeliveryDate || s.PromisedDeliveryDate));
+  } catch (e) { return null; }
+}
+
 // Refreshes stages for open Ekart orders (one public track call each,
 // max 30 per list load; skips ones tracked in the last 10 min unless forced).
 async function refreshEkartStages(env, force) {
@@ -5693,8 +5786,8 @@ async function refreshEkartStages(env, force) {
       if (!j || !j.track) return;
       const d = deriveEkartStage(j.track, r.direction);
       stmts.push(env.DB.prepare(
-        "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now'), delivered_at = COALESCE(delivered_at, ?) WHERE waybill = ?"
-      ).bind(d.stage, d.rawStatus, d.reattempts, ekartDeliveredAt(j.track, d.stage), String(r.waybill)));
+        "UPDATE delhivery_orders SET track_stage = ?, track_status = ?, reattempts = ?, tracked_at = datetime('now'), delivered_at = COALESCE(delivered_at, ?), scan_info = ? WHERE waybill = ?"
+      ).bind(d.stage, d.rawStatus, d.reattempts, ekartDeliveredAt(j.track, d.stage), ekartScanInfo(j.track), String(r.waybill)));
     } catch (e) { /* skip this one */ }
   }));
   if (stmts.length) await env.DB.batch(stmts);

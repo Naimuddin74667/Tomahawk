@@ -444,6 +444,22 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .scan-st { font-weight: 700; }
 .scan-meta { font-size: 10.5px; color: var(--text2); }
 @media (max-width: 640px) { .tools input { width: 100%; } }
+/* Courier escalations (row line + Raise ticket popup) */
+.esc-line { display: flex; align-items: center; gap: 8px; margin-top: 4px; color: var(--red); font-weight: 700; font-size: 11px; max-width: 290px; }
+.esc-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.esc-btn { flex: none; font-size: 10.5px; font-weight: 700; padding: 2px 9px; border-radius: 6px; border: 1px solid var(--red); background: transparent; color: var(--red); cursor: pointer; }
+.esc-btn:hover { background: var(--red); color: #fff; }
+.esc-raised { flex: none; font-size: 10.5px; font-weight: 600; color: var(--text2); }
+.esc-issue { font-weight: 700; color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); border: 1px solid color-mix(in srgb, var(--red) 35%, transparent); border-radius: 8px; padding: 9px 12px; font-size: 13px; }
+.esc-note { font-size: 11.5px; color: var(--text2); margin-top: 8px; }
+.esc-note a { color: var(--accent); }
+.esc-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 12px; font-size: 13px; }
+.esc-row .k, .modal .k { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: .04em; }
+.esc-awb { font-size: 14px; font-weight: 700; }
+.esc-text { width: 100%; box-sizing: border-box; margin-top: 4px; background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font: 12px/1.5 var(--font-mono, monospace); resize: vertical; }
+.esc-input { flex: 1; min-width: 160px; background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px; font-size: 12.5px; }
+.esc-save { padding: 7px 14px; border-radius: 7px; font-weight: 700; cursor: pointer; }
+a.track-btn { text-decoration: none; display: inline-block; }
 </style>
 </head>
 <body class="cc-fit">
@@ -535,6 +551,17 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
       <span class="pager-ind" id="pager-ind"></span>
       <button class="pager-btn" id="pager-next">Next &#8594;</button>
     </div>
+  </div>
+</div>
+
+<!-- Raise courier escalation ticket -->
+<div class="modal-backdrop" id="esc-modal" hidden>
+  <div class="modal" style="max-width:640px">
+    <div class="modal-head">
+      <div><div class="modal-title" id="esc-title"></div><div class="modal-sub" id="esc-sub"></div></div>
+      <button class="modal-close" id="esc-close" title="Close">&#10005;</button>
+    </div>
+    <div id="esc-body"></div>
   </div>
 </div>
 
@@ -1208,9 +1235,210 @@ async function to4x6Pdf(bytes) {
     { key: '', label: 'All cases', c: 'var(--text)', test: function () { return true; } }
   ];
   function needsAttention(c) {
-    return !!c.st.attn;   // 'verify' = delivered, check receipt · 'arriving' = at hub / out for delivery
+    // 'verify' = delivered, check receipt · 'arriving' = at hub / out for delivery
+    // + an open courier escalation (not yet raised, or raised 48h+ ago and still stuck)
+    return !!c.st.attn || !!(c.esc && !c.esc.raised);
+  }
+  // Order inside Needs attention: Delivered to us → Arriving today → Expected
+  // next working day → Escalation needed.
+  function attnRank(c) {
+    if (c.st.attn === 'verify') return 0;
+    if (c.esc && !c.esc.raised) return 3;   // e.g. "at Bhiwandi Hub" for 3 days = escalation, not arriving
+    if (c.st.attn === 'arriving') return c.st.label === 'Out For Delivery' ? 1 : 2;
+    return 3;
   }
   function tileTest(key) { for (var i = 0; i < TILES.length; i++) if (TILES[i].key === key) return TILES[i].test; return function () { return true; }; } // unknown key → all cases
+
+  // ══════════════════════════════════════════════════════════════════
+  // ESCALATIONS — courier problems worth a ticket on the courier portal.
+  // The Worker stores a scan summary per leg (scan_info, see worker.js
+  // summarizeScans). These rules turn it into one issue per case, with
+  // ticket text that names the exact hub / scan / reason.
+  // Rules come from real Ekart tracking (Oct 2026): return parcels sat at
+  // Motherhub_SAI_5 Thane 2–6 days, forward pickups from Bhiwandi took up
+  // to 6 days, and a Kerala parcel was misrouted twice.
+  // ══════════════════════════════════════════════════════════════════
+  var ESC_PORTAL = { Ekart: 'https://app.elite.ekartlogistics.in/', Delhivery: 'https://one.delhivery.com/' };
+  var ESC_HELD_H = 48;        // no movement out of the same hub
+  var ESC_NOSCAN_H = 72;      // no scan anywhere
+  var ESC_PICKUP_FWD_H = 48;  // forward: packed (label printed) but not picked
+  var ESC_PICKUP_REV_H = 72;  // reverse: booked but not picked from customer
+  var ESC_NDR_H = 24;         // failed delivery with no reattempt since
+  var ESC_RECHECK_H = 48;     // a raised ticket hides the case this long
+  var ESC_CATEGORY = {
+    HELD: 'Shipment stuck / Delay in transit', NOSCAN: 'No tracking update', PICKUP: 'Pickup not done',
+    MISROUTE: 'Misroute', NDR: 'Delivery attempt failed / NDR', RTO: 'RTO query', LOST: 'Lost shipment', LATE: 'Delay in delivery'
+  };
+  var OUR_SIGNOFF = 'Regards,\nIndustrial Tools & Hardware (TOMAHAWK)\nonlinesales@bullet.co.in | +91 8928949415';
+
+  function scanInfo(o) { try { return o && o.scan_info ? JSON.parse(o.scan_info) : null; } catch (e) { return null; } }
+  function hrsSince(ms) { return (Date.now() - ms) / 36e5; }
+  function tsMs(t) { var d = parseTs(t); return d ? d.getTime() : null; }
+  function fmtMs(ms) { return new Date(ms).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); }
+  function durTxt(h) { return h >= 48 ? Math.floor(h / 24) + ' days' : Math.round(h) + ' hours'; }
+  function durShort(h) { return h >= 48 ? Math.floor(h / 24) + 'd' : Math.round(h) + 'h'; }
+  function scanLine(x) { return x ? fmtMs(x.t) + ' — ' + x.s + (x.d && x.d !== x.s ? ' (' + x.d + ')' : '') + (x.l ? ' @ ' + x.l : '') : ''; }
+
+  // The leg that is moving right now: pickup coming to us, or the send-back going out.
+  function liveLeg(c) {
+    if (!c.st) return null;
+    if (c.st.tone === 'in' || c.st.tone === 'bad-in') return c.reverse;
+    if (c.st.tone === 'out' || c.st.tone === 'bad-out') return c.forward;
+    return null;
+  }
+
+  // One issue for a leg, most serious first; null = nothing to escalate.
+  // Returns { code, short (row text), facts (ticket lines), ask (what we want) }.
+  function legIssue(o) {
+    var st = legStage(o), info = scanInfo(o) || {}, rev = o.direction === 'reverse';
+    var hub = info.hub, hubH = info.hub_since ? hrsSince(info.hub_since) : 0;
+    var lastH = info.last ? hrsSince(info.last.t) : 0;
+    if (st === 'Delivered' || st === 'Cancelled' || st === 'Failed') return null;
+    if (st === 'Lost') return { code: 'LOST', short: 'Marked lost by courier',
+      facts: ['Shipment is marked LOST / damaged.'], ask: 'Please confirm the status and raise the lost-shipment claim.' };
+    if (st === 'RTO') return { code: 'RTO', short: rev ? 'Pickup returned (RTO)' : 'RTO — returning to us',
+      facts: ['Shipment has been marked RTO.' + (info.undel ? ' Last failed attempt: ' + info.undel.d + ' (' + fmtMs(info.undel.t) + ').' : '')],
+      ask: rev ? 'Please share why the pickup was returned and reschedule the pickup.' : 'Please share the RTO reason and stop the RTO / reattempt delivery to the customer.' };
+    // Ekart logs the misroute against the origin facility, so name where it is NOW.
+    if (info.misroute) return { code: 'MISROUTE', short: 'Misrouted' + (hub ? ' · now at ' + hub : ''),
+      facts: ['Shipment was flagged "' + info.misroute.d + '" on ' + fmtMs(info.misroute.t) + (info.misroute.l ? ' (' + info.misroute.l + ')' : '') + '.' +
+        (hub ? ' It is now at ' + hub + ' and still not delivered.' : '')],
+      ask: 'Please re-route to the correct ' + (rev ? 'destination (our Bhiwandi warehouse)' : 'delivery hub') + ' and deliver on priority.' };
+    // Not picked up yet
+    var notPicked = st === 'Created' || st === 'RTD' || st === 'Out For Pickup';
+    if (notPicked && !rev && o.rtd_at) {
+      var h = hrsSince(tsMs(o.rtd_at));
+      if (h >= ESC_PICKUP_FWD_H) return { code: 'PICKUP', short: 'Not picked up · packed ' + durShort(h) + ' ago',
+        facts: ['Shipment has been packed and ready at our Bhiwandi warehouse since ' + fmtMs(tsMs(o.rtd_at)) + ' (' + durTxt(h) + '), but pickup has not been done.'],
+        ask: 'Please arrange pickup today.' };
+    }
+    if (notPicked && rev) {
+      var hr = hrsSince(tsMs(o.created_at));
+      if (hr >= ESC_PICKUP_REV_H) return { code: 'PICKUP', short: 'Pickup from customer pending ' + durShort(hr),
+        facts: ['Reverse pickup booked on ' + fmtMs(tsMs(o.created_at)) + ' (' + durTxt(hr) + ' ago) is still not picked up from the customer.' +
+          (info.last ? ' Last update: ' + scanLine(info.last) + '.' : '')],
+        ask: 'Please complete the pickup from the customer on priority.' };
+    }
+    if (notPicked) return null;
+    // Failed delivery attempt(s) with no reattempt since (forward only — for
+    // parcels coming to us Ekart routinely logs a "rescheduled" the first evening)
+    if (!rev && info.undel && st !== 'Out For Delivery' && (info.undel.n >= 2 || hrsSince(info.undel.t) >= ESC_NDR_H)) {
+      return { code: 'NDR', short: 'Delivery failed: ' + info.undel.d,
+        facts: ['Delivery attempted ' + info.undel.n + ' time' + (info.undel.n > 1 ? 's' : '') + '; last attempt ' + fmtMs(info.undel.t) + ' marked "' + info.undel.d + '".'],
+        ask: 'Please reattempt delivery — the customer is waiting for this shipment. Kindly call the customer before the attempt.' };
+    }
+    // Stuck at one hub
+    if (hub && st !== 'Out For Delivery' && hubH >= ESC_HELD_H) return { code: 'HELD', short: 'Held at ' + hub + ' · ' + durShort(hubH),
+      facts: ['Shipment has been at ' + hub + ' since ' + fmtMs(info.hub_since) + ' (' + durTxt(hubH) + ') with no onward movement.'],
+      ask: rev ? 'Please dispatch it to the destination hub and deliver to our Bhiwandi warehouse on priority.' : 'Please dispatch it onward and deliver to the customer on priority.' };
+    if (info.last && lastH >= ESC_NOSCAN_H) return { code: 'NOSCAN', short: 'No scan for ' + durShort(lastH),
+      facts: ['No tracking update since ' + fmtMs(info.last.t) + ' (' + durTxt(lastH) + ').'],
+      ask: 'Please confirm the current location of the shipment and expedite delivery.' };
+    if (!rev && info.edd && Date.now() > Date.parse(info.edd) + 864e5) return { code: 'LATE', short: 'Past expected delivery ' + fmtMs(Date.parse(info.edd)).slice(0, 6),
+      facts: ['Expected delivery date was ' + fmtMs(Date.parse(info.edd)) + '; shipment is still not delivered.'],
+      ask: 'Please deliver on priority and share the revised delivery date.' };
+    return null;
+  }
+
+  // Case-level escalation: the live leg's issue + whether a ticket is already raised.
+  //   raised   — ticket raised < 48h ago for the same issue (kept out of Needs attention)
+  //   followup — raised earlier, problem still there → back in Needs attention
+  function caseEscalation(c) {
+    var o = liveLeg(c);
+    if (!o || !o.waybill) return null;
+    var is = legIssue(o);
+    if (!is) return null;
+    is.leg = o;
+    is.courier = o.courier || 'Delhivery';
+    var raisedMs = o.esc_raised_at && o.esc_issue === is.code ? tsMs(o.esc_raised_at) : null;
+    is.raised = !!raisedMs && hrsSince(raisedMs) < ESC_RECHECK_H;
+    is.followup = !!raisedMs && !is.raised;
+    is.raisedMs = raisedMs;
+    return is;
+  }
+
+  function ticketText(c, e) {
+    var o = e.leg, info = scanInfo(o) || {}, rev = o.direction === 'reverse';
+    var lines = [
+      'AWB: ' + o.waybill,
+      'Our reference: ' + o.order_id + ' — ' + (rev ? 'reverse pickup from customer (' + (c.city || 'customer') + ') to our Bhiwandi warehouse'
+        : 'shipment from our Bhiwandi warehouse to customer (' + (c.city || 'customer') + ')'),
+      'Booked on: ' + fmtMs(tsMs(o.created_at)),
+      '',
+      'Issue: ' + e.short
+    ].concat(e.facts);
+    if (info.last && e.code !== 'NOSCAN') lines.push('Last scan: ' + scanLine(info.last));
+    if (e.followup) lines.push('', 'Follow-up: we already raised ' + (o.esc_ticket_no ? 'ticket ' + o.esc_ticket_no : 'a ticket') +
+      ' on ' + fmtMs(e.raisedMs) + ' and the issue is still not resolved. Please escalate.');
+    lines.push('', 'Request: ' + e.ask, '', OUR_SIGNOFF);
+    return lines.join('\n');
+  }
+
+  // Row line under the status badge: issue + Raise ticket / ticket state.
+  function escLineHtml(c) {
+    var e = c.esc;
+    if (!e) return '';
+    var btn = e.raised
+      ? '<span class="esc-raised">Ticket ' + esc(e.leg.esc_ticket_no || '') + ' raised</span>'
+      : '<button class="esc-btn" data-esc="' + esc(c.id) + '">' + (e.followup ? 'Follow up' : 'Raise ticket') + '</button>';
+    return '<div class="sub esc-line"><span class="esc-txt" title="' + esc(e.short) + '">&#9888; ' + esc(e.short) + '</span>' + btn + '</div>';
+  }
+
+  // ── Raise-ticket popup ──
+  var escModal = document.getElementById('esc-modal');
+  function closeEsc() { escModal.hidden = true; }
+  document.getElementById('esc-close').addEventListener('click', closeEsc);
+  escModal.addEventListener('click', function (e) { if (e.target === escModal) closeEsc(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !escModal.hidden) closeEsc(); });
+
+  function openEsc(c) {
+    var e = c.esc; if (!e) return;
+    var o = e.leg, txt = ticketText(c, e);
+    document.getElementById('esc-title').textContent = (e.followup ? 'Follow up with ' : 'Raise ticket with ') + e.courier;
+    document.getElementById('esc-sub').textContent = o.order_id + ' · ' + (c.customer || '') + (c.city ? ', ' + c.city : '');
+    var raisedNote = o.esc_raised_at
+      ? '<div class="esc-note">Earlier ticket: <b>' + esc(o.esc_ticket_no || '—') + '</b> · raised by ' + esc(o.esc_raised_by || '—') + ' on ' + esc(fmtWhen(o.esc_raised_at)) +
+        ' · <a href="#" id="esc-clear">clear</a></div>' : '';
+    document.getElementById('esc-body').innerHTML =
+      '<div class="esc-issue">&#9888; ' + esc(e.short) + '</div>' + raisedNote +
+      '<div class="esc-row"><div><div class="k">AWB / Tracking ID</div><div class="mono esc-awb">' + esc(o.waybill) + '</div></div>' +
+        '<button class="track-btn" data-copy="awb">Copy</button></div>' +
+      '<div class="esc-row"><div><div class="k">Suggested category</div><div>' + esc(ESC_CATEGORY[e.code] || e.code) + '</div></div></div>' +
+      '<div class="k" style="margin-top:12px">Description</div>' +
+      '<textarea id="esc-text" class="esc-text" rows="13">' + esc(txt) + '</textarea>' +
+      '<div class="cm-acts">' +
+        '<button class="track-btn" data-copy="text">Copy description</button>' +
+        '<a class="track-btn" href="' + esc(ESC_PORTAL[e.courier] || '#') + '" target="_blank" rel="noopener">Open ' + esc(e.courier) + ' portal &#8599;</a>' +
+      '</div>' +
+      '<div class="cm-acts">' +
+        '<input id="esc-ticket" class="esc-input" placeholder="Ticket no. from the portal" maxlength="60">' +
+        '<button class="btn-confirm-yes esc-save" id="esc-save">Mark ticket raised</button>' +
+        '<span class="sub" id="esc-msg"></span>' +
+      '</div>';
+    escModal.querySelectorAll('[data-copy]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var v = b.dataset.copy === 'awb' ? o.waybill : document.getElementById('esc-text').value;
+        navigator.clipboard.writeText(v).then(function () { b.textContent = 'Copied ✓'; setTimeout(function () { b.textContent = b.dataset.copy === 'awb' ? 'Copy' : 'Copy description'; }, 1500); });
+      });
+    });
+    document.getElementById('esc-save').addEventListener('click', function () { saveEsc(o, e, null, this); });
+    var clr = document.getElementById('esc-clear');
+    if (clr) clr.addEventListener('click', function (ev) { ev.preventDefault(); saveEsc(o, e, true, this); });
+    escModal.hidden = false;
+  }
+
+  async function saveEsc(o, e, clear, btn) {
+    var msg = document.getElementById('esc-msg');
+    var tno = document.getElementById('esc-ticket').value.trim();
+    if (!clear && !tno) { msg.textContent = 'Enter the ticket number first.'; return; }
+    btn.disabled = true; msg.textContent = 'Saving…';
+    try {
+      var r = await post('ccMarkEscalation', clear ? { order_id: o.order_id, clear: true } : { order_id: o.order_id, issue: e.code, ticket_no: tno });
+      if (!r.ok) throw new Error(r.error || 'failed');
+      closeEsc();
+      await load(false);
+    } catch (err) { msg.textContent = "Couldn't save: " + err.message; btn.disabled = false; }
+  }
 
   // Type column: Repair / Replace / Refund / Free Of Cost. From job_type,
   // falling back to the Order ID prefix for older orders saved without one
@@ -1294,6 +1522,7 @@ async function to4x6Pdf(bytes) {
     out.forEach(function (c) {
       c.st = caseStatus(c);
       c.tat = c.st ? caseTat(c) : null;
+      c.esc = c.st ? caseEscalation(c) : null;
       var lead = c.reverse || c.forward, sh = ship(lead);
       c.customer = sh.name || '';
       c.city = [sh.city, sh.state].filter(Boolean).join(', ');
@@ -1327,7 +1556,7 @@ async function to4x6Pdf(bytes) {
       return tileTest(tileFilter)(c) && (!kind || c.type === kind || (kind === 'Refund' && / Refund$/.test(c.type))) && (!q || c.search.indexOf(q) !== -1);
     });
     // Needs attention: delivered (to verify) first, then arriving soon; newest first within each.
-    if (tileFilter === 'verify') rows.sort(function (a, b) { return (a.st.attn === 'arriving') - (b.st.attn === 'arriving'); });
+    if (tileFilter === 'verify') rows.sort(function (a, b) { return attnRank(a) - attnRank(b); });
     var body = document.getElementById('case-body');
     if (!rows.length) { body.innerHTML = '<tr><td colspan="8" class="muted">No cases match.</td></tr>'; renderPager(0, 1); return; }
     var totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
@@ -1360,9 +1589,12 @@ async function to4x6Pdf(bytes) {
         '<td>' + esc(c.customer || '—') + (c.city ? '<div class="sub">' + esc(c.city) + '</div>' : '') + '</td>' +
         '<td>' + esc(c.product || '—') + '</td>' +
         '<td>' + esc(c.type) + '</td>' +
-        '<td>' + badgeHtml(c.st) + deliveredToUsSub(c) + '</td>' +
+        // Status: badge + one line under it — escalation (if any) wins over the date/ETA line
+        '<td>' + badgeHtml(c.st) + (c.esc ? escLineHtml(c) : deliveredToUsSub(c)) + '</td>' +
         '<td>' + tatCellHtml(c.tat) + '</td>';
       tr.addEventListener('click', function () { openCase(c); });
+      var eb = tr.querySelector('.esc-btn');
+      if (eb) eb.addEventListener('click', function (ev) { ev.stopPropagation(); openEsc(c); });
       body.appendChild(tr);
     });
     // Pad a short page with blank rows so the table always has 10 equal
