@@ -1438,7 +1438,7 @@ async function to4x6Pdf(bytes) {
       fact ? fact() : e.short + '.',
       (info.last && e.code !== 'NOSCAN' && e.code !== 'PICKUP') ? 'Last scan ' + short(info.last.t) + ': ' + (info.last.d || info.last.s) + '.' : '',
       'Our order ' + o.order_id + ', ' + (rev ? 'return from customer (' + (c.city || '') + ') to our Bhiwandi warehouse' : 'to customer in ' + (c.city || '')) + ', booked ' + dayLabel(tsMs(o.created_at)) + '.',
-      e.followup ? 'Re-escalation: ticket ' + (o.esc_ticket_no || '') + ' raised ' + dayLabel(e.raisedMs) + ' still unresolved.' : '',
+      e.followup ? 'Re-escalation: ticket already raised on ' + dayLabel(e.raisedMs) + ', issue still unresolved.' : '',
       e.ask
     ].filter(Boolean);
     var t = parts.join(' ');
@@ -1513,8 +1513,8 @@ async function to4x6Pdf(bytes) {
     var e = c.esc, ico = '', h, age = 0, sub = '', muted = false;
     if (e) {
       var v = escView(e); h = v.h; age = v.age; sub = v.s;
-      if (e.raised) { sub = 'Ticket ' + (e.leg.esc_ticket_no || '') + ' raised ' + dayLabel(e.raisedMs); muted = true; age = 0; }
-      else if (e.followup) sub = 'Ticket ' + (e.leg.esc_ticket_no || '') + ' raised ' + dayLabel(e.raisedMs) + ' · still not resolved';
+      if (e.raised) { sub = 'Ticket raised ' + dayLabel(e.raisedMs) + ' · rechecking ' + dayLabel(e.raisedMs + ESC_RECHECK_H * 36e5); muted = true; age = 0; }
+      else if (e.followup) sub = 'Ticket raised ' + dayLabel(e.raisedMs) + ' · still not resolved';
       ico = ndIcon(e.code, muted ? 'grey' : 'red');
     }
     else if (c.st.attn === 'verify') {
@@ -1536,7 +1536,7 @@ async function to4x6Pdf(bytes) {
 
   function actionCellHtml(c) {
     var e = c.esc;
-    if (e && !e.raised) return '<button class="row-btn rb-red" data-act="esc">' + (e.followup ? 'Follow up' : 'Raise ticket') + '</button>';
+    if (e && !e.raised) return '<button class="row-btn rb-red" data-act="esc">' + (e.followup ? 'Re-escalate' : 'Raise ticket') + '</button>';
     if (c.st.attn === 'verify') return '<button class="row-btn rb-amber" data-act="open">Verify</button>';
     return '';
   }
@@ -1558,10 +1558,10 @@ async function to4x6Pdf(bytes) {
   function openEsc(c) {
     var e = c.esc; if (!e) return;
     var o = e.leg, txt = escTicketText(c, e);
-    document.getElementById('esc-title').textContent = (e.followup ? 'Follow up with ' : 'Raise ticket with ') + e.courier;
+    document.getElementById('esc-title').textContent = (e.followup ? 'Re-escalate with ' : 'Raise ticket with ') + e.courier;
     document.getElementById('esc-sub').textContent = o.order_id + ' · ' + (c.customer || '') + (c.city ? ', ' + c.city : '');
     var raisedNote = o.esc_raised_at
-      ? '<div class="esc-note">Earlier ticket: <b>' + esc(o.esc_ticket_no || '—') + '</b> · raised by ' + esc(o.esc_raised_by || '—') + ' on ' + esc(fmtWhen(o.esc_raised_at)) +
+      ? '<div class="esc-note">Ticket first raised by ' + esc(o.esc_raised_by || '—') + ' on ' + esc(fmtWhen(o.esc_raised_at)) +
         ' · <a href="#" id="esc-clear">clear</a></div>' : '';
     document.getElementById('esc-body').innerHTML =
       '<div class="esc-issue">&#9888; ' + esc(escView(e).h) + (escView(e).age >= 1 ? ' · ' + esc(durTxt(escView(e).age)) : '') + '<div class="esc-issue-sub">' + esc(escView(e).s) + '</div></div>' + raisedNote +
@@ -1579,8 +1579,8 @@ async function to4x6Pdf(bytes) {
         '<a class="track-btn" href="' + esc(ESC_PORTAL[e.courier] || '#') + '" target="_blank" rel="noopener">Open ' + esc(e.courier) + (e.courier === 'Ekart' ? ' Escalations' : ' portal') + ' &#8599;</a>' +
       '</div>' +
       '<div class="cm-acts">' +
-        '<input id="esc-ticket" class="esc-input" placeholder="Ticket no. from the portal" maxlength="60">' +
-        '<button class="btn-confirm-yes esc-save" id="esc-save">Mark ticket raised</button>' +
+        '<span class="sub" style="flex:1">After submitting on the portal, click here — the case hides for 48h and comes back to re-escalate if still stuck.</span>' +
+        '<button class="btn-confirm-yes esc-save" id="esc-save">' + (e.followup ? 'Re-escalated' : 'Ticket raised') + ' &#10003;</button>' +
         '<span class="sub" id="esc-msg"></span>' +
       '</div>';
     escModal.querySelectorAll('[data-copy]').forEach(function (b) {
@@ -1600,8 +1600,7 @@ async function to4x6Pdf(bytes) {
 
   async function saveEsc(o, e, clear, btn) {
     var msg = document.getElementById('esc-msg');
-    var tno = document.getElementById('esc-ticket').value.trim();
-    if (!clear && !tno) { msg.textContent = 'Enter the ticket number first.'; return; }
+    var tno = '';   // ticket no. not needed — one click marks it raised
     btn.disabled = true; msg.textContent = 'Saving…';
     try {
       var r = await post('ccMarkEscalation', clear ? { order_id: o.order_id, clear: true } : { order_id: o.order_id, issue: e.code, ticket_no: tno });
