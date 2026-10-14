@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0d7a6f">
+<title>MNS Car Book</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230d7a6f'/%3E%3Ctext x='32' y='45' font-family='Arial,sans-serif' font-weight='700' font-size='34' text-anchor='middle' fill='%23ffffff'%3E%E2%82%B9%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ── Design tokens — MNS Car Book's own look (light default, teal accent) ── */
+:root {
+  --bg:#f6f4ef; --surface:#ffffff; --surface2:#f1efe9; --border:#e4e0d6;
+  --accent:#0d7a6f; --accent-ink:#ffffff; --accent-soft:rgba(13,122,111,.10);
+  --text:#1c2333; --text2:#6b7080;
+  --green:#15803d; --green-soft:rgba(21,128,61,.10);
+  --red:#c2410c; --red-soft:rgba(194,65,12,.10);
+  --blue:#4338ca;
+  --nav-bg:#ffffff; --nav-text:#4b5163;
+  --shadow:0 1px 2px rgba(28,35,51,.05), 0 4px 14px rgba(28,35,51,.04);
+  --font-display:'Sora',sans-serif; --font-body:'Inter',sans-serif;
+  --radius:14px; --gap:16px; --sidebar:228px;
+}
+html[data-theme="dark"] {
+  --bg:#0f1517; --surface:#162024; --surface2:#1d2a2f; --border:#26353b;
+  --accent:#2dd4bf; --accent-ink:#06201d; --accent-soft:rgba(45,212,191,.12);
+  --text:#e6eef0; --text2:#8ea0a6;
+  --green:#4ade80; --green-soft:rgba(74,222,128,.12);
+  --red:#fb923c; --red-soft:rgba(251,146,60,.12);
+  --blue:#a5b4fc;
+  --nav-bg:#121b1e; --nav-text:#a9b8bd;
+  --shadow:none;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:var(--font-body); background:var(--bg); color:var(--text); font-size:14px; -webkit-font-smoothing:antialiased; }
+h1,h2,h3 { font-family:var(--font-display); font-weight:700; letter-spacing:-.2px; }
+button { font-family:inherit; cursor:pointer; }
+input,select,textarea { font-family:inherit; font-size:14px; }
+
+/* ── Layout: sidebar (desktop) / bottom nav (mobile) ── */
+.sidebar { position:fixed; inset:0 auto 0 0; width:var(--sidebar); background:var(--nav-bg); border-right:1px solid var(--border); display:flex; flex-direction:column; gap:2px; padding:20px 12px; z-index:20; }
+.brand { display:flex; align-items:center; gap:10px; padding:0 8px 20px; }
+.brand .logo { width:36px; height:36px; border-radius:10px; background:var(--accent); color:var(--accent-ink); display:grid; place-items:center; font-weight:700; font-size:18px; }
+.brand h1 { font-size:16px; color:var(--text); }
+.brand small { color:var(--text2); font-size:11px; }
+.nav-item { display:flex; align-items:center; gap:10px; padding:10px 12px; color:var(--nav-text); background:none; border:0; border-radius:10px; text-align:left; font-size:14px; font-weight:500; width:100%; }
+.nav-item:hover { background:var(--surface2); color:var(--text); }
+.nav-item.active { background:var(--accent-soft); color:var(--accent); font-weight:600; }
+.nav-item .ico { width:18px; text-align:center; }
+.side-foot { margin-top:auto; padding:8px; display:flex; gap:8px; }
+.main { margin-left:var(--sidebar); padding:28px; max-width:1220px; }
+.page-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:20px; flex-wrap:wrap; }
+.page-head h2 { font-size:24px; }
+.page-head .sub { color:var(--text2); font-size:13px; margin-top:3px; }
+
+@media (max-width:820px) {
+  .sidebar { inset:auto 0 0 0; width:100%; height:64px; flex-direction:row; padding:6px; gap:0; border-right:0; border-top:1px solid var(--border); }
+  .brand, .side-foot { display:none; }
+  .nav-item { flex-direction:column; gap:2px; justify-content:center; font-size:10px; padding:5px 2px; }
+  .nav-item .ico { font-size:17px; }
+  .main { margin-left:0; padding:16px 16px 86px; }
+  .mobile-top { display:flex !important; }
+}
+.mobile-top { display:none; align-items:center; justify-content:space-between; margin-bottom:14px; }
+.mobile-top h1 { font-size:17px; display:flex; align-items:center; gap:8px; }
+.mobile-top .logo { width:28px; height:28px; border-radius:8px; background:var(--accent); color:var(--accent-ink); display:grid; place-items:center; font-size:14px; }
+
+/* ── Cards / KPIs ── */
+.grid { display:grid; gap:var(--gap); }
+.kpis { grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); }
+.two { grid-template-columns:1fr 1fr; }
+@media (max-width:820px){ .two { grid-template-columns:1fr; } .kpis { grid-template-columns:1fr 1fr; gap:10px; } .kpi .value { font-size:19px; } .card { padding:13px; } }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow); }
+.card h3 { font-size:15px; margin-bottom:12px; }
+.kpi .label { color:var(--text2); font-size:12px; font-weight:500; }
+.kpi .value { font-family:var(--font-display); font-size:24px; font-weight:700; margin-top:6px; }
+.kpi .hint { color:var(--text2); font-size:12px; margin-top:4px; }
+.pos { color:var(--green); } .neg { color:var(--red); } .amb { color:var(--accent); }
+.section { margin-top:var(--gap); }
+
+/* progress bar */
+.bar { height:10px; background:var(--surface2); border-radius:6px; overflow:hidden; margin-top:10px; }
+.bar > span { display:block; height:100%; background:var(--accent); border-radius:6px; }
+
+/* month chart */
+.chart { display:flex; align-items:flex-end; gap:10px; height:170px; padding-top:10px; }
+.chart .col { flex:1; display:flex; flex-direction:column; align-items:center; gap:6px; height:100%; justify-content:flex-end; min-width:0; }
+.chart .bars { display:flex; gap:3px; align-items:flex-end; height:130px; width:100%; justify-content:center; }
+.chart .b { width:42%; max-width:22px; border-radius:4px 4px 0 0; min-height:2px; }
+.chart .b.in { background:var(--green); } .chart .b.out { background:var(--red); }
+.chart .m { font-size:11px; color:var(--text2); }
+.legend { display:flex; gap:14px; font-size:12px; color:var(--text2); margin-top:8px; }
+.legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
+
+/* ── Tables ── */
+.table-wrap { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; }
+th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--text2); font-weight:600; padding:9px 10px; border-bottom:1px solid var(--border); white-space:nowrap; }
+td { padding:10px; border-bottom:1px solid var(--border); vertical-align:middle; }
+tr.click { cursor:pointer; } tr.click:hover td { background:var(--surface2); }
+td.num, th.num { text-align:right; white-space:nowrap; }
+.empty { color:var(--text2); text-align:center; padding:28px 10px; }
+
+/* ── Badges ── */
+.badge { display:inline-block; padding:3px 9px; border-radius:20px; font-size:11px; font-weight:700; white-space:nowrap; }
+.b-paid { background:var(--green-soft); color:var(--green); }
+.b-due { background:var(--red-soft); color:var(--red); }
+.b-part { background:var(--accent-soft); color:var(--accent); }
+.b-up { background:var(--surface2); color:var(--text2); }
+
+/* ── Buttons ── */
+.btn { border:1px solid var(--border); background:var(--surface); color:var(--text); padding:9px 15px; border-radius:10px; font-size:13px; font-weight:600; }
+.btn:hover { border-color:var(--accent); }
+.btn.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+.btn.primary:hover { filter:brightness(1.08); }
+.btn.danger { color:var(--red); }
+.btn.sm { padding:5px 10px; font-size:12px; }
+.btn-row { display:flex; gap:8px; flex-wrap:wrap; }
+.icon-btn { background:var(--surface); border:1px solid var(--border); color:var(--text2); border-radius:10px; padding:7px 11px; font-size:13px; }
+
+/* ── Filters ── */
+.filters { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+.filters select, .filters input { background:var(--surface); border:1px solid var(--border); color:var(--text); padding:7px 10px; border-radius:8px; }
+
+/* ── Modal form ── */
+.overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; z-index:50; padding:16px; }
+.overlay.open { display:flex; }
+.modal { background:var(--surface); border:1px solid var(--border); border-radius:14px; width:100%; max-width:460px; max-height:92vh; overflow-y:auto; padding:20px; }
+.modal h3 { font-size:18px; margin-bottom:14px; }
+.field { margin-bottom:12px; }
+.field label { display:block; font-size:12px; color:var(--text2); margin-bottom:5px; font-weight:600; }
+.field input, .field select, .field textarea { width:100%; background:var(--surface2); border:1px solid var(--border); color:var(--text); padding:9px 11px; border-radius:8px; }
+.field input:focus, .field select:focus, .field textarea:focus { outline:none; border-color:var(--accent); }
+.field .help { font-size:11px; color:var(--text2); margin-top:4px; }
+.modal-actions { display:flex; justify-content:space-between; gap:8px; margin-top:16px; }
+.modal-actions .right { display:flex; gap:8px; margin-left:auto; }
+
+/* driver block */
+.driver-head { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+.driver-head .meta { color:var(--text2); font-size:13px; margin-top:3px; }
+.mini-kpis { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:12px; }
+.mini-kpis div { background:var(--surface2); border-radius:8px; padding:10px; }
+.mini-kpis small { color:var(--text2); font-size:11px; display:block; }
+.mini-kpis b { font-family:var(--font-display); font-size:17px; }
+
+.note { background:var(--accent-soft); border:1px solid transparent; color:var(--text); border-radius:8px; padding:10px 12px; font-size:13px; margin-bottom:var(--gap); }
+.muted { color:var(--text2); }
+.toast { position:fixed; bottom:80px; left:50%; transform:translateX(-50%); background:var(--text); color:var(--bg); padding:9px 16px; border-radius:8px; font-weight:700; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; z-index:60; }
+.toast.show { opacity:1; }
+
+/* ── Print: only the statement ── */
+#printArea { display:none; }
+@media print {
+  body { background:#fff; color:#000; }
+  .sidebar, .main, .overlay, .toast { display:none !important; }
+  #printArea { display:block; padding:24px; font-family:var(--font-body); color:#000; }
+  #printArea h1 { font-size:20px; margin-bottom:2px; }
+  #printArea table td, #printArea table th { border-bottom:1px solid #ccc; color:#000; }
+}
+</style>
+</head>
+<body>
+
+<nav class="sidebar" id="sidebar">
+  <div class="brand"><div class="logo">₹</div><div><h1>MNS Car Book</h1><small>MNS Tours &amp; Travels</small></div></div>
+  <button class="nav-item" data-page="dashboard"><span class="ico">◧</span>Dashboard</button>
+  <button class="nav-item" data-page="rent"><span class="ico">₹</span>Rent</button>
+  <button class="nav-item" data-page="expenses"><span class="ico">⇣</span>Expenses</button>
+  <button class="nav-item" data-page="loan"><span class="ico">▤</span>Loan</button>
+  <button class="nav-item" data-page="partners"><span class="ico">⚇</span>Partners</button>
+  <button class="nav-item" data-page="setup"><span class="ico">⚙</span>Setup</button>
+  <div class="side-foot"><button class="icon-btn" onclick="toggleTheme()" title="Light / dark">◐ Theme</button></div>
+</nav>
+
+<main class="main">
+  <div class="mobile-top"><h1><span class="logo">₹</span>MNS Car Book</h1><button class="icon-btn" onclick="toggleTheme()">◐</button></div>
+  <div id="page"></div>
+</main>
+
+<div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
+<div class="toast" id="toast"></div>
+<div id="printArea"></div>
+
+<script>
+/* ════════════════════════════════════════════════════════════
+   STORAGE LAYER
+   Everything reads/writes through load()/save(). When we move to
+   a real backend, only these two functions need to change.
+   ════════════════════════════════════════════════════════════ */
+const STORE_KEY = 'mnscar_data_v1';
+const THEME_KEY = 'mnscar_theme_v1';
+
+const EXPENSE_CATEGORIES = ['EMI','Insurance','Permit & Road Tax','Fitness / PUC','Service','Repair','Tyres & Battery',
+  'Fuel / CNG','Fine / Challan','Uber / Platform fee','Registration & Accessories','Cleaning','Other'];
+const PAY_MODES = ['Cash','UPI','Bank transfer','Other'];
+const CYCLES = { daily:'Daily', weekly:'Weekly', monthly:'Monthly' };
+
+function defaultData() {
+  return {
+    car: { name:'Maruti Dzire Tour S (CNG)', regNo:'', purchaseDate:'', price:840000, downPayment:200000,
+           downPaidBy:'', loanAmount:640000, emi:0, tenure:36, emiStartDate:'', depRate:15 },
+    partners: [ { id:uid(), name:'Me', share:50 }, { id:uid(), name:'Uncle', share:50 } ],
+    drivers: [], payments: [], expenses: []
+  };
+}
+function load() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) return Object.assign(defaultData(), JSON.parse(raw));
+  } catch (e) { console.warn('Load failed', e); }
+  return defaultData();
+}
+let saveTimer = null;
+function save() {                       // 400ms debounce, same pattern as other apps
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
+    catch (e) { alert('Could not save — browser storage is full or blocked.'); }
+  }, 400);
+}
+let DB = load();
+
+/* ════════════ Helpers ════════════ */
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+function num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
+function inr(n) { const r = Math.round(n); return (r < 0 ? '−₹' : '₹') + Math.abs(r).toLocaleString('en-IN'); }
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function todayStr() { const d = new Date(); return ymd(d); }
+function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+function parseYmd(s) { const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); }
+function fmtDate(s) { if (!s) return '—'; return parseYmd(s).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' }); }
+// Add months keeping the day where possible (31 Jan + 1 month → 28/29 Feb)
+function addMonths(d, n) {
+  const r = new Date(d.getFullYear(), d.getMonth() + n, 1);
+  const last = new Date(r.getFullYear(), r.getMonth() + 1, 0).getDate();
+  r.setDate(Math.min(d.getDate(), last)); return r;
+}
+function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
+function partnerName(id) { const p = DB.partners.find(p => p.id === id); return p ? p.name : '—'; }
+function driverName(id) { const d = DB.drivers.find(d => d.id === id); return d ? d.name : '—'; }
+function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1800); }
+function sum(arr, f) { return arr.reduce((s, x) => s + f(x), 0); }
+
+/* ════════════ Calculations ════════════ */
+
+/* Rent periods for a driver, from start date until end date (or today).
+   Rent for a period is due once that period has started. */
+function rentPeriods(drv) {
+  if (!drv.startDate || !drv.rentAmount) return [];
+  const until = parseYmd(drv.endDate && drv.endDate < todayStr() ? drv.endDate : todayStr());
+  const out = []; let from = parseYmd(drv.startDate); let i = 0;
+  while (from <= until && i < 3000) {
+    const next = drv.rentCycle === 'daily' ? addDays(from, 1)
+               : drv.rentCycle === 'weekly' ? addDays(from, 7)
+               : addMonths(parseYmd(drv.startDate), i + 1);
+    out.push({ from: ymd(from), to: ymd(addDays(next, -1)), due: num(drv.rentAmount), paid: 0 });
+    from = next; i++;
+  }
+  return out;
+}
+
+/* Spread a driver's payments over periods oldest-first (FIFO). */
+function driverLedger(drv) {
+  const periods = rentPeriods(drv);
+  const pays = DB.payments.filter(p => p.driverId === drv.id).sort((a,b) => a.date.localeCompare(b.date));
+  let pool = sum(pays, p => num(p.amount));
+  for (const p of periods) { const take = Math.min(pool, p.due); p.paid = take; pool -= take; }
+  const due = sum(periods, p => p.due), paid = sum(pays, p => num(p.amount));
+  return { periods, pays, due, paid, balance: due - paid, advance: Math.max(0, pool) };
+}
+
+function periodStatus(p) {
+  if (p.paid >= p.due) return '<span class="badge b-paid">Paid</span>';
+  if (p.paid > 0) return '<span class="badge b-part">Part ' + inr(p.paid) + '</span>';
+  return '<span class="badge b-due">Pending</span>';
+}
+
+/* EMI schedule: one row per month from first EMI date. */
+function emiSchedule() {
+  const c = DB.car; if (!c.emiStartDate || !c.tenure) return [];
+  const start = parseYmd(c.emiStartDate);
+  return Array.from({ length: num(c.tenure) }, (_, i) => {
+    const date = ymd(addMonths(start, i));
+    const exp = DB.expenses.find(e => e.category === 'EMI' && num(e.emiNo) === i + 1);
+    return { no: i + 1, date, amount: num(c.emi), expense: exp };
+  });
+}
+
+/* Straight-line-on-reducing-balance depreciation, per year (pro-rata by days). */
+function carValueToday() {
+  const c = DB.car; if (!c.purchaseDate) return num(c.price);
+  const years = (new Date() - parseYmd(c.purchaseDate)) / (365.25 * 864e5);
+  return num(c.price) * Math.pow(1 - num(c.depRate) / 100, Math.max(0, years));
+}
+
+function totals() {
+  const rent = sum(DB.payments, p => num(p.amount));
+  const emiPaid = sum(DB.expenses.filter(e => e.category === 'EMI'), e => num(e.amount));
+  const running = sum(DB.expenses.filter(e => e.category !== 'EMI'), e => num(e.amount));
+  const down = num(DB.car.downPayment);
+  const cashOut = down + emiPaid + running;
+  const sched = emiSchedule();
+  const emisLeft = sched.filter(r => !r.expense).length;
+  const loanLeft = emisLeft * num(DB.car.emi);
+  const pending = sum(DB.drivers, d => Math.max(0, driverLedger(d).balance));
+  const value = carValueToday();
+  return { rent, emiPaid, running, down, cashOut, net: rent - cashOut, operating: rent - running,
+           emisLeft, loanLeft, pending, value, worth: value - loanLeft + (rent - cashOut) };
+}
+
+/* ════════════ Router ════════════ */
+let currentPage = 'dashboard';
+function go(page) {
+  currentPage = page;
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.page === page));
+  PAGES[page](); window.scrollTo(0, 0);
+}
+document.querySelectorAll('.nav-item').forEach(b => b.addEventListener('click', () => go(b.dataset.page)));
+function render(html) { document.getElementById('page').innerHTML = html; }
+function refresh() { save(); PAGES[currentPage](); }
+
+/* ════════════ Pages ════════════ */
+const PAGES = {
+
+dashboard() {
+  const t = totals(), c = DB.car;
+  const recovered = t.cashOut > 0 ? Math.min(100, (t.rent / t.cashOut) * 100) : 0;
+  const setupMissing = !c.purchaseDate || !c.emi || !c.emiStartDate || !DB.drivers.length;
+  render(`
+    <div class="page-head"><div><h2>Dashboard</h2><div class="sub">${esc(c.name)}${c.regNo ? ' · ' + esc(c.regNo) : ''}</div></div>
+      <div class="btn-row"><button class="btn primary" onclick="openPayment()">+ Rent received</button><button class="btn" onclick="openExpense()">+ Expense</button></div></div>
+    ${setupMissing ? `<div class="note">Finish the <a href="#" onclick="go('setup');return false" style="color:var(--accent)">Setup</a> page (purchase date, EMI amount, first EMI date and the driver) so every number here is accurate.</div>` : ''}
+    <div class="grid kpis">
+      ${kpi('Rent collected', inr(t.rent), 'pos', 'Pending from driver: ' + inr(t.pending))}
+      ${kpi('Total spent', inr(t.cashOut), 'neg', 'Down ' + inr(t.down) + ' · EMI ' + inr(t.emiPaid) + ' · Running ' + inr(t.running))}
+      ${kpi('Net cash so far', inr(t.net), t.net >= 0 ? 'pos' : 'neg', 'Rent minus everything spent')}
+      ${kpi('Operating profit', inr(t.operating), t.operating >= 0 ? 'pos' : 'neg', 'Rent minus running costs (no EMI)')}
+      ${kpi('Car value today', inr(t.value), 'amb', c.depRate + '% depreciation per year')}
+      ${kpi('Loan remaining', inr(t.loanLeft), '', t.emisLeft + ' EMIs left (incl. interest)')}
+    </div>
+    <div class="grid two section">
+      <div class="card">
+        <h3>Money back progress</h3>
+        <div class="muted" style="font-size:13px">Rent collected ${inr(t.rent)} of ${inr(t.cashOut)} spent so far</div>
+        <div class="bar"><span style="width:${recovered.toFixed(1)}%"></span></div>
+        <div style="margin-top:12px;font-size:13px">Overall position (car value − loan left + net cash):
+          <b class="${t.worth >= 0 ? 'pos' : 'neg'}">${inr(t.worth)}</b></div>
+      </div>
+      <div class="card"><h3>Last 6 months</h3>${monthChart()}</div>
+    </div>
+    <div class="grid two section">
+      <div class="card"><h3>Driver rent status</h3>${driverSummaryTable()}</div>
+      <div class="card"><h3>Recent activity</h3>${recentActivity()}</div>
+    </div>`);
+},
+
+rent() {
+  const blocks = DB.drivers.map(d => {
+    const L = driverLedger(d);
+    const shown = L.periods.slice(-12).reverse();
+    return `<div class="card section">
+      <div class="driver-head">
+        <div><h3 style="margin:0">${esc(d.name)} ${d.endDate ? '<span class="badge b-up">Left ' + fmtDate(d.endDate) + '</span>' : ''}</h3>
+          <div class="meta">${inr(d.rentAmount)} ${CYCLES[d.rentCycle].toLowerCase()} · since ${fmtDate(d.startDate)}${d.phone ? ' · ' + esc(d.phone) : ''}</div></div>
+        <div class="btn-row">
+          <button class="btn primary sm" onclick="openPayment(null,'${d.id}')">+ Payment</button>
+          <button class="btn sm" onclick="shareWhatsApp('${d.id}')">WhatsApp statement</button>
+          <button class="btn sm" onclick="printStatement('${d.id}')">PDF statement</button>
+          <button class="btn sm" onclick="openDriver('${d.id}')">Edit</button>
+        </div>
+      </div>
+      <div class="mini-kpis">
+        <div><small>Total due</small><b>${inr(L.due)}</b></div>
+        <div><small>Paid</small><b class="pos">${inr(L.paid)}</b></div>
+        <div><small>${L.balance > 0 ? 'Pending' : 'Advance'}</small><b class="${L.balance > 0 ? 'neg' : 'pos'}">${inr(Math.abs(L.balance))}</b></div>
+      </div>
+      <div class="grid two">
+        <div><div class="muted" style="font-size:12px;margin-bottom:6px">Rent periods (latest ${shown.length} of ${L.periods.length})</div>
+          <div class="table-wrap"><table><thead><tr><th>Period</th><th class="num">Rent</th><th>Status</th></tr></thead><tbody>
+          ${shown.map(p => `<tr><td>${fmtDate(p.from)}${p.from !== p.to ? ' – ' + fmtDate(p.to) : ''}</td><td class="num">${inr(p.due)}</td><td>${periodStatus(p)}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">No periods yet</td></tr>'}
+          </tbody></table></div></div>
+        <div><div class="muted" style="font-size:12px;margin-bottom:6px">Payments received</div>
+          <div class="table-wrap"><table><thead><tr><th>Date</th><th>Mode</th><th class="num">Amount</th></tr></thead><tbody>
+          ${L.pays.slice().reverse().map(p => `<tr class="click" onclick="openPayment('${p.id}')"><td>${fmtDate(p.date)}</td><td>${esc(p.mode)}${p.note ? ' <span class="muted">· ' + esc(p.note) + '</span>' : ''}</td><td class="num">${inr(p.amount)}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">No payments yet</td></tr>'}
+          </tbody></table></div></div>
+      </div></div>`;
+  }).join('');
+  render(`<div class="page-head"><div><h2>Rent</h2><div class="sub">What each driver owes and has paid</div></div>
+      <div class="btn-row"><button class="btn primary" onclick="openPayment()">+ Rent received</button><button class="btn" onclick="openDriver()">+ Driver</button></div></div>
+    ${blocks || '<div class="card empty">No driver yet. Add one to start tracking rent.</div>'}`);
+},
+
+expenses() {
+  const f = window._expFilter || { cat:'', month:'' };
+  const months = [...new Set(DB.expenses.map(e => e.date.slice(0,7)))].sort().reverse();
+  const list = DB.expenses.filter(e => (!f.cat || e.category === f.cat) && (!f.month || e.date.startsWith(f.month)))
+                          .sort((a,b) => b.date.localeCompare(a.date));
+  // Category totals for the filtered list
+  const byCat = {}; list.forEach(e => byCat[e.category] = (byCat[e.category] || 0) + num(e.amount));
+  render(`<div class="page-head"><div><h2>Expenses</h2><div class="sub">Every rupee spent on the car</div></div>
+      <button class="btn primary" onclick="openExpense()">+ Expense</button></div>
+    <div class="filters">
+      <select onchange="setExpFilter('cat',this.value)"><option value="">All categories</option>${EXPENSE_CATEGORIES.map(c => `<option ${c === f.cat ? 'selected' : ''}>${c}</option>`).join('')}</select>
+      <select onchange="setExpFilter('month',this.value)"><option value="">All months</option>${months.map(m => `<option value="${m}" ${m === f.month ? 'selected' : ''}>${monthLabel(m)}</option>`).join('')}</select>
+    </div>
+    <div class="grid two">
+      <div class="card"><h3>Entries · ${inr(sum(list, e => num(e.amount)))}</h3><div class="table-wrap"><table>
+        <thead><tr><th>Date</th><th>Category</th><th>Paid by</th><th class="num">Amount</th></tr></thead><tbody>
+        ${list.map(e => `<tr class="click" onclick="openExpense('${e.id}')"><td>${fmtDate(e.date)}</td><td>${esc(e.category)}${e.note ? '<div class="muted" style="font-size:12px">' + esc(e.note) + '</div>' : ''}</td><td>${esc(partnerName(e.paidBy))}</td><td class="num">${inr(e.amount)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">No expenses</td></tr>'}
+        </tbody></table></div></div>
+      <div class="card"><h3>By category</h3><table><tbody>
+        ${Object.entries(byCat).sort((a,b) => b[1]-a[1]).map(([c,v]) => `<tr><td>${esc(c)}</td><td class="num">${inr(v)}</td></tr>`).join('') || '<tr><td class="empty">—</td></tr>'}
+      </tbody></table></div>
+    </div>`);
+},
+
+loan() {
+  const c = DB.car, s = emiSchedule(), paid = s.filter(r => r.expense).length;
+  render(`<div class="page-head"><div><h2>Loan</h2><div class="sub">${inr(c.loanAmount)} · ${inr(c.emi)} × ${c.tenure} months · ${paid} paid, ${s.length - paid} left</div></div>
+      <button class="btn" onclick="go('setup')">Edit loan details</button></div>
+    ${!s.length ? '<div class="card empty">Add the EMI amount and first EMI date on the Setup page to see the schedule.</div>' : `
+    <div class="card"><div class="bar" style="margin:0 0 14px"><span style="width:${(paid / s.length * 100).toFixed(1)}%"></span></div>
+    <div class="table-wrap"><table><thead><tr><th>#</th><th>Due date</th><th class="num">EMI</th><th>Status</th><th></th></tr></thead><tbody>
+    ${s.map(r => {
+      const late = !r.expense && r.date < todayStr();
+      return `<tr><td>${r.no}</td><td>${fmtDate(r.date)}</td><td class="num">${inr(r.expense ? r.expense.amount : r.amount)}</td>
+        <td>${r.expense ? '<span class="badge b-paid">Paid ' + fmtDate(r.expense.date) + '</span>' : late ? '<span class="badge b-due">Due</span>' : '<span class="badge b-up">Upcoming</span>'}</td>
+        <td class="num">${r.expense ? `<button class="btn sm" onclick="openExpense('${r.expense.id}')">View</button>` : `<button class="btn sm primary" onclick="markEmiPaid(${r.no})">Mark paid</button>`}</td></tr>`;
+    }).join('')}
+    </tbody></table></div></div>`}`);
+},
+
+partners() {
+  const rows = partnerSettlement();
+  render(`<div class="page-head"><div><h2>Partners</h2><div class="sub">Who put in what, and who owes whom</div></div>
+      <button class="btn" onclick="go('setup')">Edit partners</button></div>
+    <div class="card"><div class="table-wrap"><table>
+      <thead><tr><th>Partner</th><th class="num">Share</th><th class="num">Paid for car</th><th class="num">Rent kept</th><th class="num">Fair share of net cost</th><th class="num">Settlement</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td>${esc(r.name)}</td><td class="num">${r.share}%</td><td class="num">${inr(r.paidOut)}</td><td class="num">${inr(r.received)}</td><td class="num">${inr(r.fair)}</td>
+        <td class="num ${r.balance >= 0 ? 'pos' : 'neg'}">${Math.abs(r.balance) < 1 ? 'Even' : r.balance > 0 ? 'Gets ' + inr(r.balance) : 'Owes ' + inr(-r.balance)}</td></tr>`).join('')}
+    </tbody></table></div>
+    <p class="muted" style="font-size:12px;margin-top:12px">"Paid for car" = down payment + expenses/EMIs this partner paid. "Rent kept" = rent this partner received from the driver.
+      Net cost (all costs − all rent) is split by share %. Settlement shows the cash transfer needed to make it fair.</p></div>`);
+},
+
+setup() {
+  const c = DB.car;
+  const pOpts = DB.partners.map(p => `<option value="${p.id}" ${p.id === c.downPaidBy ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+  render(`<div class="page-head"><div><h2>Setup</h2><div class="sub">Car, loan, partners, drivers and backup</div></div></div>
+    <div class="grid two">
+      <div class="card"><h3>Car &amp; loan</h3>
+        ${setupField('name','Car','text')}${setupField('regNo','Registration no.','text')}
+        ${setupField('purchaseDate','Purchase date','date')}${setupField('price','On-road price (₹)','number')}
+        ${setupField('downPayment','Down payment (₹)','number')}
+        <div class="field"><label>Down payment paid by</label><select onchange="setCar('downPaidBy',this.value)"><option value="">—</option>${pOpts}</select></div>
+        ${setupField('loanAmount','Loan amount (₹)','number')}${setupField('emi','EMI amount (₹)','number')}
+        ${setupField('tenure','Tenure (months)','number')}${setupField('emiStartDate','First EMI date','date')}
+        ${setupField('depRate','Depreciation % per year','number','Used only to estimate today\'s car value. 15% is a common rule of thumb.')}
+      </div>
+      <div>
+        <div class="card"><h3>Partners</h3>
+          <table><thead><tr><th>Name</th><th class="num">Profit share %</th><th></th></tr></thead><tbody>
+          ${DB.partners.map(p => `<tr><td><input class="inline" value="${esc(p.name)}" onchange="setPartner('${p.id}','name',this.value)"></td>
+            <td class="num"><input class="inline" type="number" style="width:80px;text-align:right" value="${p.share}" onchange="setPartner('${p.id}','share',this.value)"></td>
+            <td class="num"><button class="btn sm danger" onclick="removePartner('${p.id}')">✕</button></td></tr>`).join('')}
+          </tbody></table>
+          <div class="btn-row" style="margin-top:10px"><button class="btn sm" onclick="addPartner()">+ Partner</button>
+            <span class="muted" style="font-size:12px;align-self:center">Total: ${sum(DB.partners, p => num(p.share))}%</span></div>
+        </div>
+        <div class="card section"><h3>Drivers</h3>
+          ${DB.drivers.map(d => `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
+            <div><b>${esc(d.name)}</b><div class="muted" style="font-size:12px">${inr(d.rentAmount)} ${CYCLES[d.rentCycle].toLowerCase()} from ${fmtDate(d.startDate)}</div></div>
+            <button class="btn sm" onclick="openDriver('${d.id}')">Edit</button></div>`).join('') || '<div class="muted">No driver yet.</div>'}
+          <button class="btn sm" style="margin-top:10px" onclick="openDriver()">+ Driver</button>
+        </div>
+        <div class="card section"><h3>Backup</h3>
+          <p class="muted" style="font-size:13px;margin-bottom:10px">Data lives only in this browser for now. Download a backup regularly; restore it on another device if needed.</p>
+          <div class="btn-row"><button class="btn sm" onclick="exportData()">Download backup</button>
+            <label class="btn sm">Restore backup<input type="file" accept=".json" hidden onchange="importData(this.files[0])"></label>
+            <button class="btn sm danger" onclick="resetData()">Reset all</button></div>
+        </div>
+      </div>
+    </div>
+    <style>.inline{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;width:100%}</style>`);
+}
+};
+
+/* ════════════ Dashboard pieces ════════════ */
+function kpi(label, value, cls, hint) {
+  return `<div class="card kpi"><div class="label">${label}</div><div class="value ${cls}">${value}</div><div class="hint">${hint}</div></div>`;
+}
+function monthLabel(ym) { const [y,m] = ym.split('-').map(Number); return new Date(y, m-1, 1).toLocaleDateString('en-IN', { month:'short', year:'2-digit' }); }
+function monthChart() {
+  const now = new Date(), months = [];
+  for (let i = 5; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); months.push(ymd(d).slice(0,7)); }
+  const data = months.map(m => ({ m,
+    in: sum(DB.payments.filter(p => p.date.startsWith(m)), p => num(p.amount)),
+    out: sum(DB.expenses.filter(e => e.date.startsWith(m)), e => num(e.amount)) }));
+  const max = Math.max(1, ...data.map(d => Math.max(d.in, d.out)));
+  return `<div class="chart">${data.map(d => `<div class="col" title="${monthLabel(d.m)}: rent ${inr(d.in)}, spent ${inr(d.out)}">
+      <div class="bars"><div class="b in" style="height:${d.in / max * 100}%"></div><div class="b out" style="height:${d.out / max * 100}%"></div></div>
+      <div class="m">${monthLabel(d.m)}</div></div>`).join('')}</div>
+    <div class="legend"><span><i style="background:var(--green)"></i>Rent</span><span><i style="background:var(--red)"></i>Spent (incl. EMI)</span></div>`;
+}
+function driverSummaryTable() {
+  if (!DB.drivers.length) return '<div class="empty">No driver yet</div>';
+  return `<table><thead><tr><th>Driver</th><th class="num">Paid</th><th class="num">Pending</th></tr></thead><tbody>
+    ${DB.drivers.map(d => { const L = driverLedger(d);
+      return `<tr class="click" onclick="go('rent')"><td>${esc(d.name)}</td><td class="num">${inr(L.paid)}</td>
+        <td class="num">${L.balance > 0 ? '<span class="badge b-due">' + inr(L.balance) + '</span>' : '<span class="badge b-paid">Clear</span>'}</td></tr>`; }).join('')}
+  </tbody></table>`;
+}
+function recentActivity() {
+  const items = [
+    ...DB.payments.map(p => ({ date:p.date, txt:'Rent from ' + driverName(p.driverId), amt:num(p.amount), id:p.id, kind:'p' })),
+    ...DB.expenses.map(e => ({ date:e.date, txt:e.category + (e.note ? ' · ' + e.note : ''), amt:-num(e.amount), id:e.id, kind:'e' }))
+  ].sort((a,b) => b.date.localeCompare(a.date)).slice(0, 8);
+  if (!items.length) return '<div class="empty">Nothing recorded yet</div>';
+  return `<table><tbody>${items.map(i => `<tr class="click" onclick="${i.kind === 'p' ? 'openPayment' : 'openExpense'}('${i.id}')">
+    <td class="muted" style="white-space:nowrap">${fmtDate(i.date)}</td><td>${esc(i.txt)}</td><td class="num ${i.amt >= 0 ? 'pos' : 'neg'}">${i.amt >= 0 ? '+' : '−'}${inr(Math.abs(i.amt))}</td></tr>`).join('')}</tbody></table>`;
+}
+
+/* Partner settlement: net outlay = costs paid − rent kept.
+   Fair outlay = share% × total net outlay. Balance > 0 → others owe this partner. */
+function partnerSettlement() {
+  const rows = DB.partners.map(p => {
+    const paidOut = (DB.car.downPaidBy === p.id ? num(DB.car.downPayment) : 0) + sum(DB.expenses.filter(e => e.paidBy === p.id), e => num(e.amount));
+    const received = sum(DB.payments.filter(x => x.receivedBy === p.id), x => num(x.amount));
+    return { name:p.name, share:num(p.share), paidOut, received, net: paidOut - received };
+  });
+  const totalNet = sum(rows, r => r.net), totalShare = sum(rows, r => r.share) || 100;
+  rows.forEach(r => { r.fair = totalNet * r.share / totalShare; r.balance = r.net - r.fair; });
+  return rows;
+}
+
+/* ════════════ Generic modal form ════════════ */
+function openForm(title, fields, values, onSave, onDelete) {
+  const m = document.getElementById('modal');
+  m.innerHTML = `<h3>${title}</h3><form id="frm">${fields.map(f => {
+    const v = values[f.k] ?? f.def ?? '';
+    let input;
+    if (f.type === 'select') input = `<select name="${f.k}">${f.options.map(o => { const [val,lab] = Array.isArray(o) ? o : [o,o];
+        return `<option value="${esc(val)}" ${String(val) === String(v) ? 'selected' : ''}>${esc(lab)}</option>`; }).join('')}</select>`;
+    else if (f.type === 'textarea') input = `<textarea name="${f.k}" rows="2">${esc(v)}</textarea>`;
+    else input = `<input name="${f.k}" type="${f.type || 'text'}" value="${esc(v)}" ${f.req ? 'required' : ''} ${f.type === 'number' ? 'step="any" inputmode="decimal"' : ''}>`;
+    return `<div class="field"><label>${f.label}</label>${input}${f.help ? '<div class="help">' + f.help + '</div>' : ''}</div>`;
+  }).join('')}
+  <div class="modal-actions">${onDelete ? '<button type="button" class="btn danger" id="frmDel">Delete</button>' : ''}
+    <div class="right"><button type="button" class="btn" onclick="closeModal()">Cancel</button><button class="btn primary">Save</button></div></div></form>`;
+  document.getElementById('frm').onsubmit = e => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(e.target).entries());
+    onSave(data); closeModal(); refresh(); toast('Saved');
+  };
+  if (onDelete) document.getElementById('frmDel').onclick = () => {
+    if (confirm('Delete this entry?')) { onDelete(); closeModal(); refresh(); toast('Deleted'); }
+  };
+  document.getElementById('overlay').classList.add('open');
+  setTimeout(() => { const first = m.querySelector('input,select'); if (first && window.innerWidth > 820) first.focus(); }, 50);
+}
+function closeModal() { document.getElementById('overlay').classList.remove('open'); }
+document.getElementById('overlay').addEventListener('click', e => { if (e.target.id === 'overlay') closeModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+const partnerOptions = () => [['','—'], ...DB.partners.map(p => [p.id, p.name])];
+
+/* ════════════ Entry forms ════════════ */
+function openPayment(id, driverId) {
+  if (!DB.drivers.length) { alert('Add a driver first.'); openDriver(); return; }
+  const existing = id ? DB.payments.find(p => p.id === id) : null;
+  const active = DB.drivers.find(d => !d.endDate) || DB.drivers[0];
+  openForm(existing ? 'Edit rent payment' : 'Rent received', [
+    { k:'driverId', label:'Driver', type:'select', options: DB.drivers.map(d => [d.id, d.name]) },
+    { k:'date', label:'Date', type:'date', req:true, def: todayStr() },
+    { k:'amount', label:'Amount (₹)', type:'number', req:true, def: driverId ? DB.drivers.find(d => d.id === driverId).rentAmount : active.rentAmount },
+    { k:'mode', label:'Mode', type:'select', options: PAY_MODES },
+    { k:'receivedBy', label:'Received by (partner)', type:'select', options: partnerOptions(), help:'Who got the money — used for partner settlement.' },
+    { k:'note', label:'Note', type:'text' }
+  ], existing || { driverId: driverId || active.id },
+  d => { d.amount = num(d.amount); if (existing) Object.assign(existing, d); else DB.payments.push({ id:uid(), ...d }); },
+  existing ? () => DB.payments = DB.payments.filter(p => p.id !== id) : null);
+}
+
+function openExpense(id) {
+  const existing = id ? DB.expenses.find(e => e.id === id) : null;
+  openForm(existing ? 'Edit expense' : 'Add expense', [
+    { k:'date', label:'Date', type:'date', req:true, def: todayStr() },
+    { k:'category', label:'Category', type:'select', options: EXPENSE_CATEGORIES },
+    { k:'amount', label:'Amount (₹)', type:'number', req:true },
+    { k:'paidBy', label:'Paid by (partner)', type:'select', options: partnerOptions() },
+    { k:'emiNo', label:'EMI no. (only for EMI)', type:'number', help:'Links this payment to a row in the Loan schedule.' },
+    { k:'note', label:'Note', type:'text' }
+  ], existing || { category:'Service' },
+  d => { d.amount = num(d.amount); d.emiNo = d.emiNo ? num(d.emiNo) : '';
+         if (existing) Object.assign(existing, d); else DB.expenses.push({ id:uid(), ...d }); },
+  existing ? () => DB.expenses = DB.expenses.filter(e => e.id !== id) : null);
+}
+
+function markEmiPaid(no) {
+  const row = emiSchedule().find(r => r.no === no);
+  openForm('EMI #' + no + ' paid', [
+    { k:'date', label:'Paid on', type:'date', req:true, def: row.date <= todayStr() ? row.date : todayStr() },
+    { k:'amount', label:'Amount (₹)', type:'number', req:true, def: row.amount },
+    { k:'paidBy', label:'Paid by (partner)', type:'select', options: partnerOptions() },
+    { k:'note', label:'Note', type:'text' }
+  ], {}, d => DB.expenses.push({ id:uid(), category:'EMI', emiNo:no, ...d, amount:num(d.amount) }));
+}
+
+function openDriver(id) {
+  const existing = id ? DB.drivers.find(d => d.id === id) : null;
+  openForm(existing ? 'Edit driver' : 'Add driver', [
+    { k:'name', label:'Name', type:'text', req:true },
+    { k:'phone', label:'WhatsApp number', type:'tel', help:'10-digit mobile, used for the WhatsApp statement.' },
+    { k:'rentCycle', label:'Rent cycle', type:'select', options: Object.entries(CYCLES) },
+    { k:'rentAmount', label:'Rent per cycle (₹)', type:'number', req:true },
+    { k:'startDate', label:'Rent starts from', type:'date', req:true, def: todayStr() },
+    { k:'endDate', label:'Left on (blank if still driving)', type:'date' },
+    { k:'note', label:'Note (licence, address, deposit…)', type:'textarea' }
+  ], existing || { rentCycle:'weekly' },
+  d => { d.rentAmount = num(d.rentAmount); if (existing) Object.assign(existing, d); else DB.drivers.push({ id:uid(), ...d }); },
+  existing ? () => {
+    if (DB.payments.some(p => p.driverId === id)) { alert('This driver has payments recorded. Set a "Left on" date instead of deleting.'); return; }
+    DB.drivers = DB.drivers.filter(d => d.id !== id);
+  } : null);
+}
+
+/* ════════════ Setup handlers ════════════ */
+function setupField(k, label, type, help) {
+  return `<div class="field"><label>${label}</label><input type="${type}" value="${esc(DB.car[k])}" ${type === 'number' ? 'step="any"' : ''}
+    onchange="setCar('${k}',this.value)">${help ? '<div class="help">' + help + '</div>' : ''}</div>`;
+}
+function setCar(k, v) {
+  DB.car[k] = ['price','downPayment','loanAmount','emi','tenure','depRate'].includes(k) ? num(v) : v;
+  // Keep loan amount in step with price − down payment unless edited directly
+  if (k === 'price' || k === 'downPayment') DB.car.loanAmount = Math.max(0, num(DB.car.price) - num(DB.car.downPayment));
+  save(); toast('Saved'); if (k === 'price' || k === 'downPayment') PAGES.setup();
+}
+function setPartner(id, k, v) { const p = DB.partners.find(p => p.id === id); p[k] = k === 'share' ? num(v) : v; refresh(); }
+function addPartner() { DB.partners.push({ id:uid(), name:'Partner ' + (DB.partners.length + 1), share:0 }); refresh(); }
+function removePartner(id) {
+  const used = DB.expenses.some(e => e.paidBy === id) || DB.payments.some(p => p.receivedBy === id) || DB.car.downPaidBy === id;
+  if (used) { alert('This partner is linked to entries. Rename instead of removing.'); return; }
+  if (confirm('Remove partner?')) { DB.partners = DB.partners.filter(p => p.id !== id); refresh(); }
+}
+function setExpFilter(k, v) { window._expFilter = Object.assign(window._expFilter || {}, { [k]: v }); PAGES.expenses(); }
+
+function exportData() {
+  const blob = new Blob([JSON.stringify(DB, null, 2)], { type:'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'car-book-backup-' + todayStr() + '.json'; a.click();
+}
+function importData(file) {
+  if (!file) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try { const d = JSON.parse(r.result); if (!d.car || !d.partners) throw 0;
+      if (!confirm('Replace all current data with this backup?')) return;
+      DB = Object.assign(defaultData(), d); refresh(); toast('Backup restored'); }
+    catch { alert('That file is not a valid Car Book backup.'); }
+  };
+  r.readAsText(file);
+}
+function resetData() {
+  if (prompt('Type DELETE to erase all data in this browser.') === 'DELETE') { DB = defaultData(); refresh(); toast('All data cleared'); }
+}
+
+/* ════════════ Driver statement (WhatsApp + PDF) ════════════ */
+function statementLines(d) {
+  const L = driverLedger(d);
+  const last = L.pays.slice(-5).reverse().map(p => `  ${fmtDate(p.date)} — ${inr(p.amount)} (${p.mode})`).join('\n') || '  none';
+  const pendingPeriods = L.periods.filter(p => p.paid < p.due);
+  return { L, text:
+`*MNS Tours & Travels — Rent statement*
+Driver: ${d.name}
+Car: ${DB.car.name}${DB.car.regNo ? ' (' + DB.car.regNo + ')' : ''}
+Rent: ${inr(d.rentAmount)} ${CYCLES[d.rentCycle].toLowerCase()}, from ${fmtDate(d.startDate)}
+
+Total due till ${fmtDate(todayStr())}: ${inr(L.due)}
+Paid: ${inr(L.paid)}
+*${L.balance > 0 ? 'Pending: ' + inr(L.balance) + ' (' + pendingPeriods.length + ' period' + (pendingPeriods.length === 1 ? '' : 's') + ')' : L.balance < 0 ? 'Advance: ' + inr(-L.balance) : 'All clear ✅'}*
+
+Last payments:
+${last}` };
+}
+function shareWhatsApp(id) {
+  const d = DB.drivers.find(x => x.id === id), { text } = statementLines(d);
+  const phone = (d.phone || '').replace(/\D/g, '').slice(-10);
+  window.open('https://wa.me/' + (phone ? '91' + phone : '') + '?text=' + encodeURIComponent(text), '_blank');
+}
+function printStatement(id) {
+  const d = DB.drivers.find(x => x.id === id), { L } = statementLines(d);
+  document.getElementById('printArea').innerHTML = `
+    <h1>MNS Tours &amp; Travels</h1><div style="color:#555;margin-bottom:16px">Rent statement · generated ${fmtDate(todayStr())}</div>
+    <table style="width:auto;margin-bottom:16px"><tbody>
+      <tr><td><b>Driver</b></td><td>${esc(d.name)}${d.phone ? ' · ' + esc(d.phone) : ''}</td></tr>
+      <tr><td><b>Car</b></td><td>${esc(DB.car.name)}${DB.car.regNo ? ' (' + esc(DB.car.regNo) + ')' : ''}</td></tr>
+      <tr><td><b>Rent</b></td><td>${inr(d.rentAmount)} ${CYCLES[d.rentCycle].toLowerCase()} from ${fmtDate(d.startDate)}</td></tr>
+      <tr><td><b>Total due</b></td><td>${inr(L.due)}</td></tr><tr><td><b>Paid</b></td><td>${inr(L.paid)}</td></tr>
+      <tr><td><b>${L.balance > 0 ? 'Pending' : 'Advance'}</b></td><td><b>${inr(Math.abs(L.balance))}</b></td></tr></tbody></table>
+    <h3 style="margin:10px 0 6px">Payments</h3>
+    <table><thead><tr><th>Date</th><th>Mode</th><th>Note</th><th class="num">Amount</th></tr></thead><tbody>
+      ${L.pays.map(p => `<tr><td>${fmtDate(p.date)}</td><td>${esc(p.mode)}</td><td>${esc(p.note)}</td><td class="num">${inr(p.amount)}</td></tr>`).join('') || '<tr><td colspan="4">No payments</td></tr>'}
+    </tbody></table>`;
+  const old = document.title; document.title = 'Rent statement - ' + d.name + ' - ' + todayStr();
+  window.print(); document.title = old;
+}
+
+/* ════════════ Theme + boot ════════════ */
+function toggleTheme() {
+  const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem(THEME_KEY, t); } catch {}
+}
+try { const t = localStorage.getItem(THEME_KEY); if (t) document.documentElement.dataset.theme = t; } catch {}
+go('dashboard');
+</script>
+</body>
+</html>
