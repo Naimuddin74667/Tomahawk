@@ -309,7 +309,8 @@ function addMonths(d, n) {
   r.setDate(Math.min(d.getDate(), last)); return r;
 }
 function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
-function partnerName(id) { const p = DB.partners.find(p => p.id === id); return p ? p.name : '—'; }
+const FROM_RENT = 'rent';   // special payer: paid out of rent collected, not by a partner
+function partnerName(id) { if (id === FROM_RENT) return 'From rent'; const p = DB.partners.find(p => p.id === id); return p ? p.name : '—'; }
 function driverName(id) { const d = DB.drivers.find(d => d.id === id); return d ? d.name : '—'; }
 function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1800); }
 function sum(arr, f) { return arr.reduce((s, x) => s + f(x), 0); }
@@ -525,10 +526,11 @@ partners() {
         <span class="badge ${Math.abs(r.balance) < 1 ? 'b-up' : r.balance > 0 ? 'b-paid' : 'b-due'}" style="font-size:12px">${Math.abs(r.balance) < 1 ? 'Even' : r.balance > 0 ? 'Gets ' + inr(r.balance) : 'Owes ' + inr(-r.balance)}</span>
       </div>
       <div class="list">
-        ${lrow('Paid for car', 'Down payment + expenses + EMIs', inr(r.paidOut))}
+        ${lrow('Paid for car', 'Own money' + (r.fromRentShare ? ' + ' + inr(r.fromRentShare) + ' paid from rent held' : ''), inr(r.paidOut))}
         ${lrow('Rent kept', 'Rent this partner received', inr(r.received))}
         ${lrow('Fair share of net cost', r.share + '% of (all costs − all rent)', inr(r.fair))}
-      </div></div>`).join('')}</div>`);
+      </div></div>`).join('')}</div>
+    ${rentPoolCard()}`);
 },
 
 setup() {
@@ -543,6 +545,9 @@ setup() {
         <div class="field"><label>Upfront paid by</label><select onchange="setCar('downPaidBy',this.value)"><option value="">—</option>${pOpts}</select></div>
         ${setupField('loanAmount','Total loan amount (₹)','number','Incl. loan protection.')}${setupField('netDisbursed','Net disbursed (₹)','number','Loan minus processing charges.')}${setupField('irr','Interest rate IRR (%)','number')}${setupField('emi','EMI amount (₹)','number')}
         ${setupField('tenure','Tenure (months)','number')}${setupField('emiStartDate','First EMI date','date')}
+        <div class="field"><label>EMI usually paid by</label><select onchange="setCar('emiPaidBy',this.value)">
+          ${payerOptions().filter(o => o[0]).map(([v,l]) => `<option value="${v}" ${(c.emiPaidBy || FROM_RENT) === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
+          <div class="help">Each EMI is marked paid automatically the day after it's due, using this. Tap an EMI to change who paid it.</div></div>
         <div class="note" id="costNote" style="margin:4px 0 0">${costNoteHtml()}</div>
       </div>
       <div>
@@ -625,10 +630,16 @@ function toggleRentAll(id) { window._rentAll = window._rentAll || {}; window._re
 /* Partner settlement: net outlay = costs paid − rent kept.
    Fair outlay = share% × total net outlay. Balance > 0 → others owe this partner. */
 function partnerSettlement() {
+  // Spending marked "From rent" comes out of the rent cash a partner is holding,
+  // so it's split across partners in proportion to the rent each one kept.
+  const fromRent = sum(DB.expenses.filter(e => e.paidBy === FROM_RENT), e => num(e.amount));
+  const totalKept = sum(DB.payments.filter(x => DB.partners.some(p => p.id === x.receivedBy)), x => num(x.amount));
   const rows = DB.partners.map(p => {
-    const paidOut = (DB.car.downPaidBy === p.id ? num(DB.car.downPayment) : 0) + sum(DB.expenses.filter(e => e.paidBy === p.id), e => num(e.amount));
     const received = sum(DB.payments.filter(x => x.receivedBy === p.id), x => num(x.amount));
-    return { name:p.name, share:num(p.share), paidOut, received, net: paidOut - received };
+    // Can't spend more rent than was collected — any shortfall stays unassigned (shown in the Rent money card)
+    const fromRentShare = totalKept ? Math.min(fromRent, totalKept) * received / totalKept : 0;
+    const paidOut = (DB.car.downPaidBy === p.id ? num(DB.car.downPayment) : 0) + sum(DB.expenses.filter(e => e.paidBy === p.id), e => num(e.amount)) + fromRentShare;
+    return { name:p.name, share:num(p.share), paidOut, received, fromRentShare, net: paidOut - received };
   });
   const totalNet = sum(rows, r => r.net), totalShare = sum(rows, r => r.share) || 100;
   rows.forEach(r => { r.fair = totalNet * r.share / totalShare; r.balance = r.net - r.fair; });
@@ -636,6 +647,16 @@ function partnerSettlement() {
 }
 
 /* ════════════ Generic modal form ════════════ */
+function rentPoolCard() {
+  const rent = sum(DB.payments, p => num(p.amount));
+  const spent = sum(DB.expenses.filter(e => e.paidBy === FROM_RENT), e => num(e.amount));
+  const left = rent - spent;
+  return `<div class="card section"><h3>Rent money</h3><div class="list">
+    ${lrow('Rent collected', '', inr(rent))}
+    ${lrow('Paid from rent', 'EMIs and expenses marked "From rent"', inr(spent))}
+    ${lrow(left >= 0 ? 'Rent left in hand' : 'Rent fell short by', left < 0 ? 'Someone covered this from their own pocket — set "Paid by"' : '', '<span class="' + (left >= 0 ? 'pos' : 'neg') + '">' + inr(Math.abs(left)) + '</span>')}
+  </div></div>`;
+}
 function openForm(title, fields, values, onSave, onDelete) {
   const m = document.getElementById('modal');
   m.innerHTML = `<h3>${title}</h3><form id="frm">${fields.map(f => {
@@ -745,6 +766,7 @@ document.getElementById('overlay').addEventListener('click', e => { if (e.target
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
 const partnerOptions = () => [['','—'], ...DB.partners.map(p => [p.id, p.name])];
+const payerOptions = () => [...partnerOptions(), [FROM_RENT, 'From rent']];
 
 /* ════════════ Entry forms ════════════ */
 function openPayment(id, driverId) {
@@ -771,22 +793,38 @@ function openExpense(id) {
     { k:'category', label:'Category', type:'select', options: EXPENSE_CATEGORIES },
     { k:'emiNo', label:'EMI no.', type:'number', showIf:['category','EMI'], help:'Links this payment to a row in the Loan schedule.' },
     { k:'date', label:'Date', type:'date', req:true, def: todayStr() },
-    { k:'paidBy', label:'Paid by (partner)', type:'select', options: partnerOptions() },
+    { k:'paidBy', label:'Paid by', type:'select', options: payerOptions(), help:'"From rent" = paid out of the rent collected; no partner share.' },
     { k:'note', label:'Note', type:'text' }
   ], existing || { category:'Service' },
   d => { d.amount = num(d.amount); d.emiNo = d.emiNo ? num(d.emiNo) : '';
          if (existing) Object.assign(existing, d); else DB.expenses.push({ id:uid(), ...d }); },
-  existing ? () => DB.expenses = DB.expenses.filter(e => e.id !== id) : null);
+  existing ? () => {
+    if (existing.category === 'EMI' && existing.emiNo) DB.emiNoAuto = [...new Set([...(DB.emiNoAuto || []), num(existing.emiNo)])];
+    DB.expenses = DB.expenses.filter(e => e.id !== id);
+  } : null);
 }
 
+function autoMarkEmis() {
+  const skip = DB.emiNoAuto || [], today = todayStr(); let added = 0;
+  for (const r of emiSchedule()) {
+    const markOn = ymd(addDays(parseYmd(r.date), 1));
+    if (!r.expense && markOn <= today && !skip.includes(r.no)) {
+      DB.expenses.push({ id:uid(), category:'EMI', emiNo:r.no, date:markOn, amount:r.amount,
+                         paidBy: DB.car.emiPaidBy || FROM_RENT, note:'Auto-marked' });
+      added++;
+    }
+  }
+  if (added) save();
+  return added;
+}
 function markEmiPaid(no) {
   const row = emiSchedule().find(r => r.no === no);
   openForm('EMI #' + no + ' paid', [
     { k:'date', label:'Paid on', type:'date', req:true, def: row.date <= todayStr() ? row.date : todayStr() },
     { k:'amount', label:'Amount (₹)', type:'number', req:true, def: row.amount },
-    { k:'paidBy', label:'Paid by (partner)', type:'select', options: partnerOptions() },
+    { k:'paidBy', label:'Paid by', type:'select', options: payerOptions() },
     { k:'note', label:'Note', type:'text' }
-  ], {}, d => DB.expenses.push({ id:uid(), category:'EMI', emiNo:no, ...d, amount:num(d.amount) }));
+  ], { paidBy: DB.car.emiPaidBy || FROM_RENT }, d => { DB.emiNoAuto = (DB.emiNoAuto || []).filter(n => n !== no); DB.expenses.push({ id:uid(), category:'EMI', emiNo:no, ...d, amount:num(d.amount) }); });
 }
 
 function openDriver(id) {
@@ -904,7 +942,9 @@ function toggleTheme() {
   try { localStorage.setItem(THEME_KEY, t); } catch {}
 }
 try { const t = localStorage.getItem(THEME_KEY); if (t) document.documentElement.dataset.theme = t; } catch {}
+const autoAdded = autoMarkEmis();
 go('dashboard');
+if (autoAdded) setTimeout(() => toast(autoAdded + ' EMI' + (autoAdded > 1 ? 's' : '') + ' marked paid'), 300);
 setTimeout(checkRentPrompt, 400);
 </script>
 </body>
