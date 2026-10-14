@@ -1403,6 +1403,20 @@ async function to4x6Pdf(bytes) {
     return null;
   }
 
+  // Ekart return SLA: they only investigate a return 15 days after pickup
+  // (their reply, 14 Oct 2026) — earlier tickets get closed. For Ekart return
+  // legs with a delay-type issue inside that window, returns the date it
+  // becomes escalatable; null otherwise.
+  var EKART_RETURN_SLA_D = 15;
+  var DELAY_CODES = ['HELD', 'NOSCAN', 'LATE', 'MISROUTE'];
+  function ekartPickedMs(o) { var i = scanInfo(o) || {}; return i.picked || tsMs(o.created_at); }
+  function ekartReturnWindow(o, is) {
+    if (!o || o.direction !== 'reverse' || (o.courier || 'Delhivery') !== 'Ekart') return null;
+    if (is && DELAY_CODES.indexOf(is.code) === -1) return null;
+    var eligible = ekartPickedMs(o) + EKART_RETURN_SLA_D * 864e5;
+    return Date.now() < eligible ? eligible : null;
+  }
+
   // Case-level escalation: the live leg's issue + whether a ticket is already raised.
   //   raised   — ticket raised < 48h ago for the same issue (kept out of Needs attention)
   //   followup — raised earlier, problem still there → back in Needs attention
@@ -1411,6 +1425,7 @@ async function to4x6Pdf(bytes) {
     if (!o || !o.waybill) return null;
     var is = legIssue(o);
     if (!is) return null;
+    if (ekartReturnWindow(o, is)) return null;   // Ekart won't act on a return within 15 days of pickup
     is.leg = o;
     is.courier = o.courier || 'Delhivery';
     var raisedMs = o.esc_raised_at && o.esc_issue === is.code ? tsMs(o.esc_raised_at) : null;
@@ -1458,13 +1473,15 @@ async function to4x6Pdf(bytes) {
     var parts = [
       'Hi team,',
       body ? body() : what + '.',
+      (rev && (o.courier || '') === 'Ekart' && DELAY_CODES.indexOf(e.code) !== -1)
+        ? 'It was picked up on ' + day(ekartPickedMs(o)) + ' and is now past the ' + EKART_RETURN_SLA_D + '-day return delivery time.' : '',
       e.followup ? 'We raised this on ' + day(e.raisedMs) + ' and it is still not resolved.' : '',
       (rev ? 'Our customer is waiting for ' + waitingFor + ', so this is urgent for us.' : 'The customer is waiting for ' + waitingFor + '.'),
       ask,
       'Thank you.'
     ].filter(Boolean);
     var t = parts.join(' ');
-    if (t.length > ESC_TICKET_MAX) t = parts.filter(function (x, i) { return i !== 3; }).join(' ');  // drop the "waiting" line first
+    if (t.length > ESC_TICKET_MAX) t = parts.filter(function (x) { return !/ is waiting for /.test(x); }).join(' ');  // drop the "waiting" line first
     return t.slice(0, ESC_TICKET_MAX);
   }
 
@@ -1548,6 +1565,10 @@ async function to4x6Pdf(bytes) {
     else if (c.st.attn === 'arriving') {
       var ofd = c.st.label === 'Out For Delivery';
       h = ofd ? 'Arriving today' : 'Expected next working day'; sub = ofd ? 'Usually by 12–1 pm' : 'At Bhiwandi hub'; ico = ndIcon('arriving', 'amber');
+    }
+    else if (c.st.tone === 'in' && liveLeg(c) && ekartReturnWindow(liveLeg(c), legIssue(liveLeg(c)))) {
+      var elig = ekartReturnWindow(liveLeg(c), legIssue(liveLeg(c)));
+      return '<div class="nd-plain" title="Ekart only acts on returns 15 days after pickup">In Ekart\u2019s 15-day window \u00b7 eligible ' + esc(dayLabel(elig)) + '</div>';
     }
     else {
       h = { 'in': 'On the way to us', 'bad-in': 'Pickup problem', house: 'With us — ' + c.st.label, out: 'On the way to customer', 'bad-out': 'Delivery problem', closed: 'Closed' }[c.st.tone] || '—';
