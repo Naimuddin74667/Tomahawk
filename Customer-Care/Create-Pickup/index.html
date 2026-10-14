@@ -219,6 +219,10 @@ table.log-table tr:last-child td { border-bottom: none; }
 }
 .verify-note[hidden] { display: none; }
 .link-note { font-size: 10.5px; color: var(--text2); margin-top: 3px; white-space: nowrap; }
+/* Self-ship (customer sends it themselves): booking-only fields hidden */
+#order-form.self-ship .booking-only { display: none; }
+.trk-link { color: var(--accent); cursor: pointer; text-decoration: underline dotted; }
+.trk-link:hover { text-decoration: underline; }
 .badge.st-rtd      { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 .badge.st-transit  { background: color-mix(in srgb, #60a5fa 18%, transparent); color: #60a5fa; }
 .badge.st-lastmile { background: color-mix(in srgb, #a78bfa 18%, transparent); color: #a78bfa; }
@@ -459,9 +463,29 @@ table.log-table td.cust-cell { max-width: 170px; white-space: nowrap; overflow: 
             <select id="f-courier">
               <option value="Ekart" selected>Ekart</option>
               <option value="Delhivery">Delhivery</option>
+              <option value="Self-ship" id="opt-self-ship" hidden disabled>Self-ship (customer)</option>
               <option value="Other">Other</option>
             </select>
             <div class="field-hint bad" id="courier-hint" style="display:none;">Booking via this courier isn't live yet — use Delhivery or Ekart.</div>
+          </div>
+        </div>
+
+        <!-- Self-ship only: the customer sends the parcel via their own courier -->
+        <div class="form-row" id="self-ship-wrap" style="display:none;">
+          <div class="field">
+            <label>Shipped via</label>
+            <select id="f-self-courier">
+              <option value="" selected>&#8212; Select courier &#8212;</option>
+              <option value="Speed Post">Speed Post (India Post)</option>
+              <option value="DTDC">DTDC</option>
+              <option value="Professional">Professional Couriers</option>
+              <option value="Other">Other</option>
+            </select>
+            <input type="text" id="f-self-courier-other" autocomplete="off" maxlength="40" placeholder="Courier name" style="display:none;margin-top:6px;">
+          </div>
+          <div class="field">
+            <label>Tracking No. <span class="opt">optional &#8212; add later if not shared yet</span></label>
+            <input type="text" id="f-self-tracking" autocomplete="off" maxlength="40" placeholder="e.g. EE123456789IN">
           </div>
         </div>
 
@@ -540,7 +564,7 @@ table.log-table td.cust-cell { max-width: 170px; white-space: nowrap; overflow: 
         </div>
 
         <div class="form-row three">
-          <div class="field" id="payment-field">
+          <div class="field booking-only" id="payment-field">
             <label>Payment Mode</label>
             <select id="f-payment">
               <option value="Prepaid" selected>Prepaid</option>
@@ -551,13 +575,13 @@ table.log-table td.cust-cell { max-width: 170px; white-space: nowrap; overflow: 
             <label>Quantity</label>
             <input type="number" id="f-qty" required min="1" value="1">
           </div>
-          <div class="field">
+          <div class="field booking-only">
             <label>Declared Value (&#8377;)</label>
             <input type="number" id="f-amount" required min="1" step="0.01">
           </div>
         </div>
 
-        <div class="form-row three">
+        <div class="form-row three booking-only">
           <div class="field">
             <label>HSN Code</label>
             <input type="text" id="f-hsn" required value="8467">
@@ -1111,12 +1135,26 @@ function initDelhiveryApp() {
     // Delhivery and Ekart both book forward orders AND reverse pickups.
     return LIVE_COURIERS[courierField.value] || '';
   }
+  // Self-ship = reverse case where the customer sends the parcel themselves
+  // (Speed Post / any courier). Nothing is booked — the case is just saved.
+  function isSelfShip() { return pickupMode === 'reverse' && courierField.value === 'Self-ship'; }
+  var selfCourierField = document.getElementById('f-self-courier');
+  var selfCourierOther = document.getElementById('f-self-courier-other');
+  selfCourierField.addEventListener('change', function () {
+    selfCourierOther.style.display = selfCourierField.value === 'Other' ? '' : 'none';
+  });
   function updateCourierMode() {
-    var live = !!courierPrefix();
+    var self = isSelfShip();
+    var live = !!courierPrefix() || self;
+    document.getElementById('order-form').classList.toggle('self-ship', self);
+    document.getElementById('self-ship-wrap').style.display = self ? '' : 'none';
+    // City/State: still auto-filled from the pincode, but editable for
+    // self-ship (any pincode is fine — no courier serviceability needed).
+    document.getElementById('f-city').readOnly = !self; document.getElementById('f-state').readOnly = !self;
     courierHint.style.display = live ? 'none' : '';
     courierHint.textContent = "Booking via this courier isn't live yet — use Delhivery or Ekart.";
     submitBtn.disabled = !live;
-    submitBtn.textContent = live ? 'Create Order' : 'Create Order (' + courierField.value + ' coming soon)';
+    submitBtn.textContent = self ? 'Save Self-ship Case' : live ? 'Create Order' : 'Create Order (' + courierField.value + ' coming soon)';
     confirmBox.className = 'confirm-box'; // an open estimate was for the other courier
     pendingOrder = null;
   }
@@ -1147,6 +1185,8 @@ function initDelhiveryApp() {
       ? '<option value="Pickup">Pickup (no payment)</option>'
       : '<option value="Prepaid" selected>Prepaid</option><option value="COD">COD</option>';
     pay.disabled = m === 'reverse';
+    var selfOpt = document.getElementById('opt-self-ship');
+    selfOpt.hidden = selfOpt.disabled = m !== 'reverse';
     document.getElementById('f-remark').placeholder = m === 'reverse'
       ? 'Internal note — saved in the pickup log only'
       : 'Printed on the label under the product name';
@@ -1361,6 +1401,13 @@ function initDelhiveryApp() {
       var res = await fetch(window.TM_WORKER + '?action=' + (courierPrefix() || 'delhivery') + 'CheckPincode&pin=' + pin).then(function (r) { return r.json(); });
       if (courier !== courierField.value) return; // courier switched mid-check
       if (!res.ok) { pinStatus.textContent = ''; return; }
+      if (isSelfShip()) {
+        // No courier booking — only City/State matter (type them if blank).
+        cityField.value = res.city || ''; stateField.value = res.state || '';
+        pinStatus.className = 'field-hint' + (res.city ? ' ok' : '');
+        pinStatus.textContent = res.city ? '✓ City/State filled' : 'Type City and State below';
+        return;
+      }
       if (!res.serviceable) {
         pinStatus.className = 'field-hint bad';
         pinStatus.textContent = '✗ Not a serviceable ' + (courierPrefix() ? courier : 'Delhivery') + ' pincode — double-check it before submitting.';
@@ -1420,7 +1467,7 @@ function initDelhiveryApp() {
     'Failed': 'failed', 'Created': 'st-created', 'RTD': 'st-rtd', 'In Transit': 'st-transit',
     'At Last Mile': 'st-lastmile', 'Out For Delivery': 'st-ofd', 'Delivered': 'created', 'Received': 'created', 'Closed': 'created',
     'Out For Pickup': 'st-ofd', 'Picked': 'st-transit', 'In Process': 'st-rtd',
-    'RTO': 'failed', 'Cancelled': 'failed', 'Lost': 'failed'
+    'RTO': 'failed', 'Cancelled': 'failed', 'Lost': 'failed', 'Awaiting Dispatch': 'st-created'
   };
   function orderStage(o) {
     if (!o.delhivery_ok) return 'Failed';
@@ -1435,7 +1482,8 @@ function initDelhiveryApp() {
     var st = orderStage(o);
     var n = parseInt(o.reattempts, 10) || 0;
     var STAGE_LABEL = o.direction === 'reverse'
-      ? { 'Created': 'Pickup Scheduled', 'Picked': 'Picked Up', 'At Last Mile': 'At Bhiwandi Hub', 'Delivered': 'Delivered' }
+      ? { 'Created': 'Pickup Scheduled', 'Picked': 'Picked Up', 'At Last Mile': 'At Bhiwandi Hub', 'Delivered': 'Delivered',
+          'Awaiting Dispatch': 'Awaiting Customer Dispatch' }
       : { 'RTD': 'RTD' };
     return '<span class="badge ' + (STAGE_CLASS[st] || 'st-created') + '">' + escapeHtml(STAGE_LABEL[st] || st) + '</span>' +
       (n > 0 ? '<span class="reattempt-ico" title="Reattempt ×' + n + '">&#8635;' + (n > 1 ? n : '') + '</span>' : '');
@@ -1450,6 +1498,11 @@ function initDelhiveryApp() {
   function reverseActionsHtml(o) {
     if (o.direction !== 'reverse' || !o.delhivery_ok) return '';
     if (o.linked_order_id) return '<div class="link-note">Sent back as ' + escapeHtml(o.linked_order_id) + '</div>';
+    if (!o.received_at && isSelfShipRow(o) && o.track_stage !== 'Delivered') {
+      // Self-ship: no courier tracking — the team marks it when it reaches us.
+      var canAct = window.TM_ROLE === 'admin' || window.TM_ROLE === 'manager';
+      return canAct ? '<div><button type="button" class="row-act" data-act="arrived">Mark arrived</button></div>' : '';
+    }
     if (!o.received_at) {
       // Only once the courier says it's delivered to us: highlighted row +
       // button to verify it physically arrived. Before that, no action.
@@ -1475,7 +1528,8 @@ function initDelhiveryApp() {
   }
 
   async function markReceived(o, btn) {
-    if (!confirm((o.courier || 'Delhivery') + ' shows ' + o.order_id + ' delivered to us.\n\nConfirm the parcel has physically arrived at the warehouse?')) return;
+    var who = isSelfShipRow(o) ? 'Self-ship case ' + o.order_id + ' is marked arrived.' : (o.courier || 'Delhivery') + ' shows ' + o.order_id + ' delivered to us.';
+    if (!confirm(who + '\n\nConfirm the parcel has physically arrived at the warehouse?')) return;
     btn.classList.add('busy');
     try {
       var res = await callWorker('delhiveryMarkReceived', { order_id: o.order_id });
@@ -1485,6 +1539,44 @@ function initDelhiveryApp() {
       alert("Couldn't mark it received: " + e.message);
       btn.classList.remove('busy');
     }
+  }
+
+  // ── Self-ship rows (courier = 'Self-ship') ─────────────────────────
+  function isSelfShipRow(o) { return o.courier === 'Self-ship'; }
+  // "Speed Post (Self)" — what the Courier column shows.
+  function courierLabel(o) { return isSelfShipRow(o) ? (o.self_courier || 'Other') + ' (Self)' : (o.courier || 'Delhivery'); }
+  // Where the team checks a self-ship tracking no. These pages don't take
+  // the number in the link, so clicking copies it to paste there.
+  var SELF_TRACK_URL = {
+    'Speed Post': 'https://www.indiapost.gov.in/',
+    'DTDC': 'https://www.dtdc.in/',
+    'Professional': 'https://www.tpcindia.com/'
+  };
+  function selfTrackHtml(o) {
+    var url = SELF_TRACK_URL[o.self_courier];
+    if (!url) return '<span class="mono">' + escapeHtml(o.waybill) + '</span>';
+    return '<a class="trk-link mono" data-act="track" href="' + url + '" target="_blank" rel="noopener" title="Copies the tracking no. and opens ' +
+      escapeHtml(o.self_courier) + ' tracking — paste it there">' + escapeHtml(o.waybill) + ' &#8599;</a>';
+  }
+  async function selfShipUpdate(o, btn, body) {
+    btn.classList.add('busy');
+    try {
+      var res = await callWorker('selfShipUpdate', Object.assign({ order_id: o.order_id }, body));
+      if (!res.ok) throw new Error(res.error || 'failed');
+      fetchLog(true);
+    } catch (e) {
+      alert("Couldn't update it: " + e.message);
+      btn.classList.remove('busy');
+    }
+  }
+  function addSelfTracking(o, btn) {
+    var t = prompt('Tracking no. for ' + o.order_id + ' (' + (o.self_courier || 'customer courier') + '):', o.waybill || '');
+    if (t === null || !t.trim()) return;
+    selfShipUpdate(o, btn, { tracking: t.trim() });
+  }
+  function markSelfArrived(o, btn) {
+    if (!confirm(o.order_id + ' — has the customer\'s parcel reached our warehouse?\n\nIt then shows for Received (Admin / Faique) as usual.')) return;
+    selfShipUpdate(o, btn, { arrived: true });
   }
 
   async function markInProcess(o, btn) {
@@ -1565,6 +1657,17 @@ function initDelhiveryApp() {
   document.getElementById('log-prev').addEventListener('click', function () { logPage--; renderLog(lastOrders); });
   document.getElementById('log-next').addEventListener('click', function () { logPage++; renderLog(lastOrders); });
 
+  // Waybill column: courier waybill, or for self-ship the customer's
+  // tracking no. (click = copy + open tracking page) / an Add tracking button.
+  function waybillCellHtml(o) {
+    if (isSelfShipRow(o)) {
+      if (o.waybill) return selfTrackHtml(o);
+      var canAct = (window.TM_ROLE === 'admin' || window.TM_ROLE === 'manager') && !o.received_at;
+      return canAct ? '<button type="button" class="row-act" data-act="addtrk">Add tracking</button>' : '&#8212;';
+    }
+    return o.waybill ? escapeHtml(o.waybill) : '&#8212;';
+  }
+
   function renderLog(allOrders) {
     var orders = (allOrders || []).filter(function (o) { return (o.direction || 'forward') === pickupMode; });
     if (logPageMode !== pickupMode) { logPage = 1; logPageMode = pickupMode; }
@@ -1608,8 +1711,8 @@ function initDelhiveryApp() {
         '</td>' +
         '<td class="when-cell">' + whenCellHtml(o.created_at) + '</td>' +
         '<td class="cust-cell" title="' + escapeHtml(consignee) + '">' + (consignee ? escapeHtml(consignee) : '&#8212;') + '</td>' +
-        '<td class="mono">' + (o.waybill ? escapeHtml(o.waybill) : '&#8212;') + '</td>' +
-        '<td>' + escapeHtml(o.courier || 'Delhivery') + '</td>' +
+        '<td class="mono">' + waybillCellHtml(o) + '</td>' +
+        '<td>' + escapeHtml(courierLabel(o)) + '</td>' +
         '<td>' + (o.job_type ? escapeHtml(o.job_type) : '&#8212;') + '</td>' +
         '<td class="status-cell">' + stageBadgeHtml(o) + reverseActionsHtml(o) + '</td>';
       tbody.appendChild(tr);
@@ -1620,7 +1723,15 @@ function initDelhiveryApp() {
           if (b.dataset.act === 'sendback') startSendBack(o);
           if (b.dataset.act === 'refund') markRefunded(o, b);
           if (b.dataset.act === 'process') markInProcess(o, b);
+          if (b.dataset.act === 'arrived') markSelfArrived(o, b);
+          if (b.dataset.act === 'addtrk') addSelfTracking(o, b);
         });
+      });
+
+      var trk = tr.querySelector('[data-act="track"]');
+      if (trk) trk.addEventListener('click', function (e) {
+        e.stopPropagation();   // opens the courier page in a new tab, not the popup
+        try { navigator.clipboard.writeText(o.waybill); } catch (err) {}
       });
 
       var dlBtn = tr.querySelector('.label-dl-btn');
@@ -1631,7 +1742,7 @@ function initDelhiveryApp() {
       tr.className = 'log-row' + (needsVerify(o) ? ' needs-verify' : '');
       tr.title = 'Click to view details';
       tr.addEventListener('click', function (e) {
-        if (e.target.closest('.label-dl-btn') || e.target.closest('.row-act')) return;
+        if (e.target.closest('.label-dl-btn') || e.target.closest('.row-act') || e.target.closest('.trk-link')) return;
         openOrderModal(o);
       });
     });
@@ -1791,8 +1902,8 @@ function initDelhiveryApp() {
 
     orderModalBody.innerHTML =
       omSection('Shipment', [
-        omField('Waybill (AWB)', o.waybill, { mono: true }),
-        omField('Courier', o.courier || 'Delhivery'),
+        omField(isSelfShipRow(o) ? 'Tracking No.' : 'Waybill (AWB)', o.waybill, { mono: true }),
+        omField('Courier', courierLabel(o)),
         omField('Sort code', pkg.sort_code, { mono: true }),
         omField('Delhivery status', o.track_status || pkg.status || (o.delhivery_ok ? 'Success' : 'Failed'), { bad: !o.delhivery_ok }),
         omField('Payment', sh.payment_mode),
@@ -1817,7 +1928,7 @@ function initDelhiveryApp() {
       ]) +
       '<div class="om-actions">' +
         '<button type="button" class="om-btn primary" id="om-dl-btn"' + (o.delhivery_ok && o.waybill ? '' : ' disabled') + '>&#11015; Download label (4×6)</button>' +
-        '<button type="button" class="om-btn" id="om-track-btn"' + (o.delhivery_ok && o.waybill ? '' : ' disabled') + '>&#128205; Track now</button>' +
+        '<button type="button" class="om-btn" id="om-track-btn"' + (o.delhivery_ok && o.waybill && !isSelfShipRow(o) ? '' : ' disabled title="No live tracking for self-ship — use the tracking link in the list"') + '>&#128205; Track now</button>' +
       '</div>' +
       '<div class="om-track" id="om-track" hidden></div>';
 
@@ -1864,18 +1975,23 @@ function initDelhiveryApp() {
       weight: ceilVal(document.getElementById('f-weight').value) || undefined,
       width: ceilVal(document.getElementById('f-width').value) || undefined,
       height: ceilVal(document.getElementById('f-height').value) || undefined,
-      length: ceilVal(document.getElementById('f-length').value) || undefined
+      length: ceilVal(document.getElementById('f-length').value) || undefined,
+      // Self-ship only (ignored by the courier bookings)
+      self_courier: selfCourierField.value === 'Other' ? selfCourierOther.value.trim() : selfCourierField.value,
+      tracking: document.getElementById('f-self-tracking').value.trim()
     };
   }
 
   // Manual equivalent of form.reset() — needed because this is now a
   // plain <div>, not a <form> (see the click-vs-submit comment below).
   function resetFormFields() {
-    ['f-name', 'f-phone', 'f-add', 'f-pin', 'f-city', 'f-state', 'f-amount', 'f-product-search', 'f-product-other', 'f-remark', 'f-market-order'].forEach(function (id) {
+    ['f-name', 'f-phone', 'f-add', 'f-pin', 'f-city', 'f-state', 'f-amount', 'f-product-search', 'f-product-other', 'f-remark', 'f-market-order',
+     'f-self-courier', 'f-self-courier-other', 'f-self-tracking'].forEach(function (id) {
       document.getElementById(id).value = '';
     });
     document.getElementById('f-type').value = '';
     courierField.value = 'Ekart';   // default courier for forward AND reverse
+    selfCourierOther.style.display = 'none';
     selectedProduct = '';
     autoUnitPrice = null;
     productOtherWrap.style.display = 'none';
@@ -1902,9 +2018,22 @@ function initDelhiveryApp() {
   // individual elements regardless of whether they're inside a <form>.
   var requiredFieldIds = ['f-name', 'f-phone', 'f-add', 'f-pin', 'f-city', 'f-state', 'f-type', 'f-qty', 'f-amount', 'f-hsn', 'f-weight', 'f-length', 'f-width', 'f-height'];
   // Everything on the forward form is mandatory except Remark.
+  // Self-ship: no booking, so no value/HSN/weight/size — but the courier used is required.
+  var SELF_SHIP_SKIP = ['f-amount', 'f-hsn', 'f-weight', 'f-length', 'f-width', 'f-height'];
   function validateRequiredFields() {
-    for (var i = 0; i < requiredFieldIds.length; i++) {
-      var el = document.getElementById(requiredFieldIds[i]);
+    var ids = isSelfShip()
+      ? requiredFieldIds.filter(function (id) { return SELF_SHIP_SKIP.indexOf(id) === -1; })
+      : requiredFieldIds;
+    if (isSelfShip()) {
+      var scEl = selfCourierField.value === 'Other' ? selfCourierOther : selfCourierField;
+      if (!scEl.value.trim()) {
+        scEl.setCustomValidity('Select the courier the customer will use.');
+        scEl.reportValidity(); scEl.setCustomValidity('');
+        return false;
+      }
+    }
+    for (var i = 0; i < ids.length; i++) {
+      var el = document.getElementById(ids[i]);
       // Read-only boxes (City/State, filled from the pincode) are skipped by
       // the browser's own required check, so test them by hand.
       if (el.readOnly && !el.value.trim()) {
@@ -1950,6 +2079,8 @@ function initDelhiveryApp() {
       return;
     }
 
+    if (isSelfShip()) { saveSelfShip(); return; }
+
     pendingOrder = gatherOrder();
 
     submitBtn.disabled = true;
@@ -1982,6 +2113,40 @@ function initDelhiveryApp() {
     submitBtn.disabled = false;
     submitBtn.textContent = 'Create Order';
   });
+
+  // Self-ship: no estimate / courier booking — save the case straight away
+  // (fresh Order ID right before saving; duplicate → next serial, like bookings).
+  async function saveSelfShip() {
+    var order = gatherOrder();
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Saving…';
+    try {
+      if (!(await refreshOrderId())) throw new Error("Couldn't get the next Order ID from the server — try again.");
+      var res, attempts = 0;
+      while (true) {
+        order.order = orderIdField.value.trim();
+        res = await callWorker('selfShipCreate', { order: order });
+        if (res.ok || !/duplicate/i.test(res.error || '') || ++attempts >= 5) break;
+        bumpOrderIdSerial();
+      }
+      if (!res.ok) throw new Error(res.error || 'Unknown error');
+      resultBox.className = 'result-box show success';
+      resultTitle.textContent = 'Self-ship case saved';
+      resultBody.innerHTML = 'Case <span class="result-waybill">' + escapeHtml(order.order) + '</span> — customer sends it via ' + escapeHtml(order.self_courier) + '.' +
+        '<div style="margin-top:6px;color:var(--text2);">' + (order.tracking
+          ? 'Tracking no. saved. Click "Mark arrived" in the list when the parcel reaches us.'
+          : 'Add the tracking no. from the list once the customer shares it.') + '</div>';
+      resetFormFields();
+      pinStatus.textContent = ''; pinStatus.className = 'field-hint';
+      // Stay on Self-ship isn't useful — resetFormFields put the courier back to Ekart.
+    } catch (err) {
+      resultBox.className = 'result-box show error';
+      resultTitle.textContent = 'Couldn\'t save the case';
+      resultBody.textContent = err.message;
+    }
+    updateCourierMode();   // restores the button text/state for the current courier
+    fetchLog();
+  }
 
   confirmNoBtn.addEventListener('click', function () {
     confirmBox.className = 'confirm-box';

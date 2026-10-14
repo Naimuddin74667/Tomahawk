@@ -711,6 +711,11 @@ const ACTION_TIERS = {
   ccSetOrderId: 'manager_up', ccOrderLookup: 'viewer_read',
   // Dashboard "Raise ticket" — record (or clear) a courier escalation ticket on one leg.
   ccMarkEscalation: 'manager_up',
+  // Self-ship reverse case (customer sends it via Speed Post / any courier — no booking)
+  // + update its tracking no. / mark it arrived at our warehouse.
+  selfShipCreate: 'manager_up', selfShipUpdate: 'manager_up',
+  // Dashboard "Called" — team phoned the customer after a failed delivery attempt.
+  ccMarkCalled: 'manager_up',
   // Refund flow — customer bank-details form (NEFT). The two public actions
   // are gated by a single-use, 7-day link token + phone last-4 check.
   delhiveryStartRefund: 'manager_up', refundCreateLink: 'manager_up', refundGetBank: 'manager_up',
@@ -4348,6 +4353,91 @@ export default {
           return json({ ok: result.success, waybill: result.trackingId, response: result.response, error: result.success ? undefined : result.error }, result.success ? 200 : 502);
         }
 
+        // ── SELF-SHIP — reverse case where the customer sends the parcel
+        //   themselves (Speed Post / DTDC / any courier). Nothing is booked; the
+        //   row lives in delhivery_orders like any reverse pickup so the case flow
+        //   (Received → In Process → Send back / Refund) works unchanged.
+        //   courier = 'Self-ship', self_courier = what they used, waybill = their
+        //   tracking no. (optional). Stages are set by hand:
+        //     no tracking → 'Awaiting Dispatch' · tracking added → 'In Transit'
+        //     Mark arrived → 'Delivered' (then Received as usual).
+        //   Tracking refreshers skip it (they only pick Delhivery / Ekart rows).
+        if (act === 'selfShipCreate') {
+          await ensureDelhiveryTable(env.DB);
+          const o = body.order || {};
+          const required = ['name', 'add', 'pin', 'phone', 'order', 'products_desc', 'job_type', 'self_courier'];
+          const missing = required.filter(f => o[f] === undefined || o[f] === null || String(o[f]).trim() === '');
+          if (missing.length) return json({ ok: false, error: 'Missing required field(s): ' + missing.join(', ') }, 400);
+          const dup = await env.DB.prepare('SELECT 1 FROM delhivery_orders WHERE order_id = ? AND delhivery_ok = 1 LIMIT 1').bind(o.order).first();
+          if (dup) return json({ ok: false, error: 'Order ID already exists (duplicate)' }, 409);
+          const tracking = String(o.tracking || '').trim().slice(0, 40);
+          const selfCourier = String(o.self_courier).trim().slice(0, 40);
+          // Same payload shape as a booked pickup, so name/address/product are read
+          // back the same way (consignee name, Send back pre-fill, Dashboard).
+          const payload = { shipments: [{
+            name: o.name, phone: o.phone, add: o.add, pin: o.pin, city: o.city || '', state: o.state || '',
+            order: o.order, payment_mode: 'Self-ship', products_desc: o.products_desc,
+            quantity: o.quantity || '1', total_amount: o.total_amount || '', hsn_code: o.hsn_code || '',
+            weight: o.weight || '', shipment_length: o.length || '', shipment_width: o.width || '', shipment_height: o.height || ''
+          }] };
+          const sessionUser = await resolveSession(request, env.DB);
+          await env.DB.prepare(`
+            INSERT INTO delhivery_orders (order_id, waybill, status, delhivery_ok, payload_json, response_json, created_by, job_type, remark,
+                                          courier, direction, self_courier, track_stage, track_status, tracked_at, created_at)
+            VALUES (?, ?, 'created', 1, ?, '{}', ?, ?, ?, 'Self-ship', 'reverse', ?, ?, ?, datetime('now'), datetime('now'))
+          `).bind(
+            o.order, tracking || null, JSON.stringify(payload),
+            (sessionUser && sessionUser.username) || 'unauthenticated', o.job_type, String(o.remark || '').trim(),
+            selfCourier, tracking ? 'In Transit' : 'Awaiting Dispatch',
+            tracking ? 'Sent by customer via ' + selfCourier : 'Waiting for the customer to send it'
+          ).run();
+          if (o.market_order_id) await saveMarketOrderId(env.DB, o.order, o.market_order_id);
+          return json({ ok: true, waybill: tracking || null });
+        }
+
+        // Body: { order_id, tracking?, self_courier? } → save tracking (moves
+        //       Awaiting Dispatch → In Transit), or { order_id, arrived: true } →
+        //       parcel reached our warehouse ('Delivered', then Received as usual).
+        if (act === 'selfShipUpdate') {
+          await ensureDelhiveryTable(env.DB);
+          const oid = String(body.order_id || '').trim();
+          if (!oid) return json({ ok: false, error: 'order_id required' }, 400);
+          const where = " WHERE order_id = ? AND courier = 'Self-ship' AND direction = 'reverse' AND delhivery_ok = 1 AND received_at IS NULL AND cancelled_at IS NULL";
+          const sessionUser = (await resolveSession(request, env.DB)) || {};
+          let r;
+          if (body.arrived === true) {
+            r = await env.DB.prepare(
+              "UPDATE delhivery_orders SET track_stage = 'Delivered', track_status = ?, delivered_at = COALESCE(delivered_at, ?), tracked_at = datetime('now')" + where
+            ).bind('Arrived at our warehouse (marked by ' + (sessionUser.username || 'unknown') + ')', new Date().toISOString(), oid).run();
+          } else {
+            const tracking = String(body.tracking || '').trim().slice(0, 40);
+            if (!tracking) return json({ ok: false, error: 'tracking required' }, 400);
+            const sc = String(body.self_courier || '').trim().slice(0, 40) || null;
+            r = await env.DB.prepare(
+              "UPDATE delhivery_orders SET waybill = ?, self_courier = COALESCE(?, self_courier), " +
+              "track_stage = CASE WHEN COALESCE(track_stage, 'Awaiting Dispatch') = 'Awaiting Dispatch' THEN 'In Transit' ELSE track_stage END, " +
+              "track_status = CASE WHEN COALESCE(track_stage, 'Awaiting Dispatch') = 'Awaiting Dispatch' THEN 'Sent by customer' ELSE track_status END, " +
+              "tracked_at = datetime('now')" + where
+            ).bind(tracking, sc, oid).run();
+          }
+          if (!r.meta || !r.meta.changes) return json({ ok: false, error: 'No open self-ship case with that Order ID' }, 404);
+          return json({ ok: true });
+        }
+
+        // ── Dashboard "Called" — the team phoned the customer after a failed
+        //   delivery attempt on a forward shipment. Body: { order_id }.
+        if (act === 'ccMarkCalled') {
+          await ensureDelhiveryTable(env.DB);
+          const oid = String(body.order_id || '').trim();
+          if (!oid) return json({ ok: false, error: 'order_id required' }, 400);
+          const sessionUser = (await resolveSession(request, env.DB)) || {};
+          const r = await env.DB.prepare(
+            "UPDATE delhivery_orders SET cust_called_at = ?, cust_called_by = ? WHERE order_id = ? AND COALESCE(direction, 'forward') = 'forward' AND delhivery_ok = 1"
+          ).bind(new Date().toISOString(), sessionUser.username || 'unknown', oid).run();
+          if (!r.meta || !r.meta.changes) return json({ ok: false, error: 'No forward shipment with that Order ID' }, 404);
+          return json({ ok: true });
+        }
+
         if (act === 'delhiveryCreateOrder') {
           await ensureDelhiveryTable(env.DB);
           const o = body.order || {};
@@ -5358,7 +5448,13 @@ async function ensureDelhiveryTable(DB) {
                      'refund_fail_count INTEGER DEFAULT 0',
                      'bank_submitted_at TEXT', 'refund_utr TEXT', 'refunded_by TEXT',
                      // Refund approval — only admins + Shikhar (added 13-Oct-2026)
-                     'refund_approved_amount REAL', 'refund_approved_by TEXT', 'refund_approved_at TEXT']) {
+                     'refund_approved_amount REAL', 'refund_approved_by TEXT', 'refund_approved_at TEXT',
+                     // Self-ship reverse case (courier = 'Self-ship'): which courier the customer
+                     // used (Speed Post / DTDC / …). waybill = their tracking no. (may be blank).
+                     'self_courier TEXT',
+                     // Forward leg: team phoned the customer after a failed delivery attempt
+                     // (Dashboard "Called"). A newer failed attempt brings the case back.
+                     'cust_called_at TEXT', 'cust_called_by TEXT']) {
     try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN ${col}`).run(); } catch (e) { /* column already exists */ }
   }
   await purgeUnwantedOrders(DB);
