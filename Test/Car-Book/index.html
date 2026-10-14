@@ -260,7 +260,7 @@ function defaultData() {
     car: { name:'Maruti Dzire Tour S (CNG)', regNo:'', purchaseDate:'', price:830000, downPayment:200000,
            downPaidBy:uncle, loanAmount:622128, netDisbursed:603000, irr:14.01, emi:21314, tenure:36, emiStartDate:'2026-11-05' },
     partners: [ { id:me, name:'Me', share:50 }, { id:uncle, name:'Uncle', share:50 } ],
-    drivers: [], payments: [], expenses: []
+    drivers: [], payments: [], expenses: [], transfers: []
   };
 }
 function load() {
@@ -518,6 +518,7 @@ loan() {
 
 partners() {
   const rows = partnerSettlement();
+  const tr = (DB.transfers || []).slice().sort((a,b) => b.date.localeCompare(a.date));
   render(`<div class="page-head"><div><h2>Partners</h2><div class="sub">Who put in what, and who owes whom</div></div>
       <button class="btn" onclick="go('setup')">Edit partners</button></div>
     <div class="grid two">${rows.map(r => `<div class="card">
@@ -527,9 +528,23 @@ partners() {
       </div>
       <div class="list">
         ${lrow('Paid for car', 'Own money' + (r.fromRentShare ? ' + ' + inr(r.fromRentShare) + ' paid from rent held' : ''), inr(r.paidOut))}
-        ${lrow('Rent kept', 'Rent this partner received', inr(r.received))}
+        ${lrow('Rent kept', 'Rent this partner received', inr(r.rentKept))}
+        ${r.wdHandedOut >= 1 ? lrow('Profit paid out of rent held', 'Rent cash used for profit taken', inr(r.wdHandedOut)) : ''}
+        ${r.profitTaken ? lrow('Profit taken', 'Taken out for personal use', inr(r.profitTaken)) : ''}
+        ${r.settleOut ? lrow('Paid to partner', 'Settlement given', inr(r.settleOut)) : ''}
+        ${r.settleIn ? lrow('Received from partner', 'Settlement received', inr(r.settleIn)) : ''}
         ${lrow('Fair share of net cost', r.share + '% of (all costs − all rent)', inr(r.fair))}
       </div></div>`).join('')}</div>
+    <div class="card section"><h3>Money between partners</h3>
+      <div class="btn-row" style="margin-bottom:6px">
+        <button class="btn primary sm" onclick="openTransfer(null,'settle')">+ Paid to partner</button>
+        <button class="btn sm" onclick="openTransfer(null,'withdraw')">+ Took profit</button>
+      </div>
+      <div class="list">${tr.map(t => lrow(
+          t.type === 'settle' ? esc(partnerName(t.from)) + ' → ' + esc(partnerName(t.to)) : esc(partnerName(t.to)) + ' took profit',
+          fmtDate(t.date) + (t.note ? ' · ' + esc(t.note) : ''), inr(t.amount), '', `openTransfer('${t.id}')`)).join('')
+        || '<div class="empty">Nothing yet. Use these when one partner pays the other to even up, or when profit is taken out.</div>'}</div>
+    </div>
     ${rentPoolCard()}`);
 },
 
@@ -630,30 +645,70 @@ function toggleRentAll(id) { window._rentAll = window._rentAll || {}; window._re
 /* Partner settlement: net outlay = costs paid − rent kept.
    Fair outlay = share% × total net outlay. Balance > 0 → others owe this partner. */
 function partnerSettlement() {
-  // Spending marked "From rent" comes out of the rent cash a partner is holding,
-  // so it's split across partners in proportion to the rent each one kept.
-  const fromRent = sum(DB.expenses.filter(e => e.paidBy === FROM_RENT), e => num(e.amount));
+  const T = DB.transfers || [];
+  const settles = T.filter(t => t.type === 'settle'), withdraws = T.filter(t => t.type === 'withdraw');
+  // Money that leaves the rent cash: expenses paid "From rent" + profit taken out.
+  // It comes from whoever is holding the rent, in proportion to the rent each kept
+  // (capped at what was collected — any shortfall stays unassigned, see Rent money card).
+  const expFromRent = sum(DB.expenses.filter(e => e.paidBy === FROM_RENT), e => num(e.amount));
+  const wdTotal = sum(withdraws, t => num(t.amount)), outOfRent = expFromRent + wdTotal;
   const totalKept = sum(DB.payments.filter(x => DB.partners.some(p => p.id === x.receivedBy)), x => num(x.amount));
   const rows = DB.partners.map(p => {
-    const received = sum(DB.payments.filter(x => x.receivedBy === p.id), x => num(x.amount));
-    // Can't spend more rent than was collected — any shortfall stays unassigned (shown in the Rent money card)
-    const fromRentShare = totalKept ? Math.min(fromRent, totalKept) * received / totalKept : 0;
-    const paidOut = (DB.car.downPaidBy === p.id ? num(DB.car.downPayment) : 0) + sum(DB.expenses.filter(e => e.paidBy === p.id), e => num(e.amount)) + fromRentShare;
-    return { name:p.name, share:num(p.share), paidOut, received, fromRentShare, net: paidOut - received };
+    const rentKept = sum(DB.payments.filter(x => x.receivedBy === p.id), x => num(x.amount));
+    const outShare = totalKept ? Math.min(outOfRent, totalKept) * rentKept / totalKept : 0;
+    // Split this partner's outflow into "spent on the car" vs "handed out as profit" (display only)
+    const fromRentShare = outOfRent ? outShare * expFromRent / outOfRent : 0, wdHandedOut = outShare - fromRentShare;
+    const profitTaken = sum(withdraws.filter(t => t.to === p.id), t => num(t.amount));
+    const settleOut = sum(settles.filter(t => t.from === p.id), t => num(t.amount));
+    const settleIn = sum(settles.filter(t => t.to === p.id), t => num(t.amount));
+    const paidOut = (DB.car.downPaidBy === p.id ? num(DB.car.downPayment) : 0)
+                  + sum(DB.expenses.filter(e => e.paidBy === p.id), e => num(e.amount)) + fromRentShare;
+    const net = paidOut + wdHandedOut + settleOut - rentKept - profitTaken - settleIn;
+    return { name:p.name, share:num(p.share), paidOut, rentKept, received: rentKept, fromRentShare, wdHandedOut, profitTaken, settleOut, settleIn, net };
   });
   const totalNet = sum(rows, r => r.net), totalShare = sum(rows, r => r.share) || 100;
   rows.forEach(r => { r.fair = totalNet * r.share / totalShare; r.balance = r.net - r.fair; });
   return rows;
 }
 
-/* ════════════ Generic modal form ════════════ */
+/* Partner → partner payment ("settle") or profit taken out of rent ("withdraw"). */
+function openTransfer(id, type) {
+  if (DB.partners.length < 1) { alert('Add partners first.'); return; }
+  const existing = id ? (DB.transfers || []).find(t => t.id === id) : null;
+  type = existing ? existing.type : type;
+  const P = DB.partners.map(p => [p.id, p.name]);
+  const me = defaultReceiver(), other = (DB.partners.find(p => p.id !== me) || {}).id || me;
+  const fields = type === 'settle' ? [
+    { k:'amount', label:'Amount (₹)', type:'number', req:true },
+    { k:'from', label:'Paid by', type:'select', options:P },
+    { k:'to', label:'Paid to', type:'select', options:P },
+    { k:'date', label:'Date', type:'date', req:true, def: todayStr() },
+    { k:'note', label:'Note', type:'text', help:'e.g. from salary, to even up 50-50' }
+  ] : [
+    { k:'amount', label:'Amount (₹)', type:'number', req:true },
+    { k:'to', label:'Taken by', type:'select', options:P },
+    { k:'date', label:'Date', type:'date', req:true, def: todayStr() },
+    { k:'note', label:'Note', type:'text', help:'Taken out of the rent money — not a car expense.' }
+  ];
+  openForm(existing ? 'Edit' : type === 'settle' ? 'Paid to partner' : 'Took profit', fields,
+    existing || { from: me, to: type === 'settle' ? other : me },
+    d => {
+      if (type === 'settle' && d.from === d.to) { alert('Paid by and Paid to must be different.'); return false; }
+      d.amount = num(d.amount); DB.transfers = DB.transfers || [];
+      if (existing) Object.assign(existing, d); else DB.transfers.push({ id:uid(), type, ...d });
+    },
+    existing ? () => DB.transfers = DB.transfers.filter(t => t.id !== id) : null);
+}
+
 function rentPoolCard() {
   const rent = sum(DB.payments, p => num(p.amount));
   const spent = sum(DB.expenses.filter(e => e.paidBy === FROM_RENT), e => num(e.amount));
-  const left = rent - spent;
+  const taken = sum((DB.transfers || []).filter(t => t.type === 'withdraw'), t => num(t.amount));
+  const left = rent - spent - taken;
   return `<div class="card section"><h3>Rent money</h3><div class="list">
     ${lrow('Rent collected', '', inr(rent))}
     ${lrow('Paid from rent', 'EMIs and expenses marked "From rent"', inr(spent))}
+    ${taken ? lrow('Profit taken out', 'Personal use by partners', inr(taken)) : ''}
     ${lrow(left >= 0 ? 'Rent left in hand' : 'Rent fell short by', left < 0 ? 'Someone covered this from their own pocket — set "Paid by"' : '', '<span class="' + (left >= 0 ? 'pos' : 'neg') + '">' + inr(Math.abs(left)) + '</span>')}
   </div></div>`;
 }
@@ -673,7 +728,8 @@ function openForm(title, fields, values, onSave, onDelete) {
   document.getElementById('frm').onsubmit = e => {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(e.target).entries());
-    onSave(data); closeModal(); refresh(); toast('Saved');
+    if (onSave(data) === false) return;   // onSave can veto (e.g. validation failed)
+    closeModal(); refresh(); toast('Saved');
   };
   if (onDelete) document.getElementById('frmDel').onclick = () => {
     if (confirm('Delete this entry?')) { onDelete(); closeModal(); refresh(); toast('Deleted'); }
@@ -757,6 +813,8 @@ function openQuickAdd() {
     <div class="quick">
       <button class="btn primary" onclick="closeModal();openPayment()"><b>₹ Rent received</b><span>From driver</span></button>
       <button class="btn" onclick="closeModal();openExpense()"><b>⇣ Expense</b><span>Fuel, service, EMI…</span></button>
+      <button class="btn" onclick="closeModal();openTransfer(null,'settle')"><b>⇄ Paid to partner</b><span>Evening up 50-50</span></button>
+      <button class="btn" onclick="closeModal();openTransfer(null,'withdraw')"><b>↥ Took profit</b><span>Personal use</span></button>
     </div>
     <div class="modal-actions"><div class="right"><button class="btn" onclick="closeModal()">Cancel</button></div></div>`;
   document.getElementById('overlay').classList.add('open');
