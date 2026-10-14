@@ -450,6 +450,10 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .case-table .mono { font-size: 13px; }
 .case-table th { font-size: 10.5px; }
 .st-sub { margin-top: 4px; }
+.tat-b { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+.tat-b b { font-size: 15px; font-weight: 700; }
+.tat-b span { font-size: 12px; color: var(--text2); }
+.tat-green b { color: #22c55e; } .tat-amber b { color: var(--accent); } .tat-red b { color: #f87171; } .tat-grey b { color: var(--text2); }
 .case-table td.name-cell { max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 body.cc-fit .case-table.grouped { height: auto; }
 .case-table td.prod-cell { max-width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1643,13 +1647,16 @@ async function to4x6Pdf(bytes) {
     return { days: days, closed: closed, breach: days > SLA_DAYS, label: pr.label, cls: pr.cls };
   }
   function dayWord(n) { return n === 1 ? '1 day' : n + ' days'; }
+  // TAT cell (option B): coloured days + a short note, one line.
+  //   green "On track" · amber "Due in 4d" (from day 11) · red "5d over" · grey "Closed" / "Closed late"
   function tatCellHtml(t) {
     if (!t) return '<span class="sub">&#8212;</span>';
-    // Two lines (days + priority pill, then Open/Closed) — same height as
-    // the other cells, so 10 rows fit the panel without an inner scrollbar.
-    return '<div class="tat-line"><span class="tat-d' + (t.breach ? ' breach' : '') + '">' + t.days + 'd</span>' +
-      '<span class="badge tat-pill ' + t.cls + '">' + t.label + '</span></div>' +
-      '<div class="sub">' + (t.closed ? 'Closed' : 'Open') + '</div>';
+    var cls, note;
+    if (t.closed) { cls = 'tat-grey'; note = t.breach ? 'Closed late' : 'Closed'; }
+    else if (t.breach) { cls = 'tat-red'; note = (t.days - SLA_DAYS) + 'd over'; }
+    else if (t.days >= HIGH_FROM) { cls = 'tat-amber'; note = SLA_DAYS - t.days === 0 ? 'Due today' : 'Due in ' + (SLA_DAYS - t.days) + 'd'; }
+    else { cls = 'tat-green'; note = 'On track'; }
+    return '<div class="tat-b ' + cls + '" title="' + esc(tatText(t)) + '"><b>' + t.days + 'd</b><span>' + note + '</span></div>';
   }
   function tatText(t) {
     if (!t) return '';
