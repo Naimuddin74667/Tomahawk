@@ -244,8 +244,8 @@ const CYCLES = { daily:'Daily', weekly:'Weekly', monthly:'Monthly' };
 
 function defaultData() {
   return {
-    car: { name:'Maruti Dzire Tour S (CNG)', regNo:'', purchaseDate:'', price:840000, downPayment:200000,
-           downPaidBy:'', loanAmount:640000, emi:0, tenure:36, emiStartDate:'', depRate:15 },
+    car: { name:'Maruti Dzire Tour S (CNG)', regNo:'', purchaseDate:'', price:830000, downPayment:200000,
+           downPaidBy:'', loanAmount:630000, emi:21314, tenure:36, emiStartDate:'' },
     partners: [ { id:uid(), name:'Me', share:50 }, { id:uid(), name:'Uncle', share:50 } ],
     drivers: [], payments: [], expenses: []
   };
@@ -253,7 +253,11 @@ function defaultData() {
 function load() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
-    if (raw) return Object.assign(defaultData(), JSON.parse(raw));
+    if (raw) {
+      const d = Object.assign(defaultData(), JSON.parse(raw));
+      if (d.car.price === 840000 && !num(d.car.emi)) Object.assign(d.car, { price:830000, loanAmount:630000, emi:21314 });
+      return d;
+    }
   } catch (e) { console.warn('Load failed', e); }
   return defaultData();
 }
@@ -333,11 +337,12 @@ function emiSchedule() {
   });
 }
 
-/* Straight-line-on-reducing-balance depreciation, per year (pro-rata by days). */
-function carValueToday() {
-  const c = DB.car; if (!c.purchaseDate) return num(c.price);
-  const years = (new Date() - parseYmd(c.purchaseDate)) / (365.25 * 864e5);
-  return num(c.price) * Math.pow(1 - num(c.depRate) / 100, Math.max(0, years));
+/* Real cost of the car = down payment + every EMI over the full tenure.
+   Interest = that total − cash price. */
+function carCost() {
+  const c = DB.car;
+  const total = num(c.downPayment) + num(c.emi) * num(c.tenure);
+  return { total, interest: Math.max(0, total - num(c.price)) };
 }
 
 function totals() {
@@ -350,9 +355,11 @@ function totals() {
   const emisLeft = sched.filter(r => !r.expense).length;
   const loanLeft = emisLeft * num(DB.car.emi);
   const pending = sum(DB.drivers, d => Math.max(0, driverLedger(d).balance));
-  const value = carValueToday();
+  const cc = carCost();
+  // Break-even = full car cost (incl. interest) + running costs so far, all covered by rent
+  const toBreakEven = Math.max(0, cc.total + running - rent);
   return { rent, emiPaid, running, down, cashOut, net: rent - cashOut, operating: rent - running,
-           emisLeft, loanLeft, pending, value, worth: value - loanLeft + (rent - cashOut) };
+           emisLeft, loanLeft, pending, carTotal: cc.total, interest: cc.interest, toBreakEven };
 }
 
 /* ════════════ Router ════════════ */
@@ -379,10 +386,10 @@ dashboard() {
     ${setupMissing ? `<div class="note">Finish the <a href="#" onclick="go('setup');return false" style="color:var(--accent)">Setup</a> page (purchase date, EMI amount, first EMI date and the driver) so every number here is accurate.</div>` : ''}
     <div class="grid kpis">
       ${kpi('Rent collected', inr(t.rent), 'pos', 'Pending from driver: ' + inr(t.pending))}
-      ${kpi('Total spent', inr(t.cashOut), 'neg', 'Down ' + inr(t.down) + ' · EMI ' + inr(t.emiPaid) + ' · Running ' + inr(t.running))}
+      ${kpi('Total spent so far', inr(t.cashOut), 'neg', 'Down ' + inr(t.down) + ' · EMI ' + inr(t.emiPaid) + ' · Other ' + inr(t.running))}
       ${kpi('Net cash so far', inr(t.net), t.net >= 0 ? 'pos' : 'neg', 'Rent minus everything spent')}
       ${kpi('Operating profit', inr(t.operating), t.operating >= 0 ? 'pos' : 'neg', 'Rent minus running costs (no EMI)')}
-      ${kpi('Car value today', inr(t.value), 'amb', c.depRate + '% depreciation per year')}
+      ${kpi('Car cost (incl. interest)', inr(t.carTotal), 'amb', 'Cash price ' + inr(c.price) + ' + interest ' + inr(t.interest))}
       ${kpi('Loan remaining', inr(t.loanLeft), '', t.emisLeft + ' EMIs left (incl. interest)')}
     </div>
     <div class="grid two section">
@@ -390,8 +397,9 @@ dashboard() {
         <h3>Money back progress</h3>
         <div class="muted" style="font-size:13px">Rent collected ${inr(t.rent)} of ${inr(t.cashOut)} spent so far</div>
         <div class="bar"><span style="width:${recovered.toFixed(1)}%"></span></div>
-        <div style="margin-top:12px;font-size:13px">Overall position (car value − loan left + net cash):
-          <b class="${t.worth >= 0 ? 'pos' : 'neg'}">${inr(t.worth)}</b></div>
+        <div style="margin-top:14px;font-size:13px;line-height:1.6">
+          Full business cost (car ${inr(t.carTotal)} + other costs ${inr(t.running)}): <b>${inr(t.carTotal + t.running)}</b><br>
+          ${t.toBreakEven > 0 ? 'Rent still needed to break even: <b class="neg">' + inr(t.toBreakEven) + '</b>' : '<b class="pos">Broken even — everything from here is profit</b>'}</div>
       </div>
       <div class="card"><h3>Last 6 months</h3>${monthChart()}</div>
     </div>
@@ -466,7 +474,7 @@ loan() {
   const today = todayStr();
   let rows = s;
   if (!all) { const due = s.filter(r => !r.expense && r.date <= today); const up = s.filter(r => !r.expense && r.date > today).slice(0, 3); rows = [...due, ...up]; }
-  render(`<div class="page-head"><div><h2>Loan</h2><div class="sub">${inr(c.loanAmount)} · ${inr(c.emi)} × ${c.tenure} months</div></div>
+  render(`<div class="page-head"><div><h2>Loan</h2><div class="sub">Loan ${inr(c.loanAmount)} · ${inr(c.emi)} × ${c.tenure} months · interest ${inr(carCost().interest)}</div></div>
       <button class="btn" onclick="go('setup')">Edit loan</button></div>
     ${!s.length ? '<div class="card empty">Add the EMI amount and first EMI date on the Setup page to see the schedule.</div>' : `
     <div class="card">
@@ -507,12 +515,12 @@ setup() {
     <div class="grid two">
       <div class="card"><h3>Car &amp; loan</h3>
         ${setupField('name','Car','text')}${setupField('regNo','Registration no.','text')}
-        ${setupField('purchaseDate','Purchase date','date')}${setupField('price','On-road price (₹)','number')}
+        ${setupField('purchaseDate','Purchase date','date')}${setupField('price','Cash price (₹)','number','What the car costs if bought in cash.')}
         ${setupField('downPayment','Down payment (₹)','number')}
         <div class="field"><label>Down payment paid by</label><select onchange="setCar('downPaidBy',this.value)"><option value="">—</option>${pOpts}</select></div>
         ${setupField('loanAmount','Loan amount (₹)','number')}${setupField('emi','EMI amount (₹)','number')}
         ${setupField('tenure','Tenure (months)','number')}${setupField('emiStartDate','First EMI date','date')}
-        ${setupField('depRate','Depreciation % per year','number','Used only to estimate today\'s car value. 15% is a common rule of thumb.')}
+        <div class="note" id="costNote" style="margin:4px 0 0">${costNoteHtml()}</div>
       </div>
       <div>
         <div class="card"><h3>Partners</h3>
@@ -711,14 +719,21 @@ function openDriver(id) {
 
 /* ════════════ Setup handlers ════════════ */
 function setupField(k, label, type, help) {
-  return `<div class="field"><label>${label}</label><input type="${type}" value="${esc(DB.car[k])}" ${type === 'number' ? 'step="any"' : ''}
+  return `<div class="field"><label>${label}</label><input id="car_${k}" type="${type}" value="${esc(DB.car[k])}" ${type === 'number' ? 'step="any"' : ''}
     onchange="setCar('${k}',this.value)">${help ? '<div class="help">' + help + '</div>' : ''}</div>`;
 }
 function setCar(k, v) {
-  DB.car[k] = ['price','downPayment','loanAmount','emi','tenure','depRate'].includes(k) ? num(v) : v;
+  DB.car[k] = ['price','downPayment','loanAmount','emi','tenure'].includes(k) ? num(v) : v;
   // Keep loan amount in step with price − down payment unless edited directly
   if (k === 'price' || k === 'downPayment') DB.car.loanAmount = Math.max(0, num(DB.car.price) - num(DB.car.downPayment));
-  save(); toast('Saved'); if (k === 'price' || k === 'downPayment') PAGES.setup();
+  save(); toast('Saved');
+  // Update in place (no full re-render, so the next field you tapped keeps focus on the phone)
+  const loanEl = document.getElementById('car_loanAmount'); if (loanEl) loanEl.value = DB.car.loanAmount;
+  const note = document.getElementById('costNote'); if (note) note.innerHTML = costNoteHtml();
+}
+function costNoteHtml() {
+  const c = DB.car, cc = carCost();
+  return `Car cost incl. interest: <b>${inr(cc.total)}</b><br><span class="muted">${inr(c.downPayment)} down + ${inr(c.emi)} × ${c.tenure} EMIs · interest ${inr(cc.interest)}</span>`;
 }
 function setPartner(id, k, v) { const p = DB.partners.find(p => p.id === id); p[k] = k === 'share' ? num(v) : v; refresh(); }
 function addPartner() { DB.partners.push({ id:uid(), name:'Partner ' + (DB.partners.length + 1), share:0 }); refresh(); }
