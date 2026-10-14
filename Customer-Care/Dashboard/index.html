@@ -1322,12 +1322,16 @@ async function to4x6Pdf(bytes) {
   // sub = null → pick the closest option on the portal.
   function ekartIssueType(e) {
     var rev = e.leg.direction === 'reverse';
-    if (rev) return { type: 'Reverse Shipment', sub: null };
+    var delay = ['HELD', 'NOSCAN', 'LATE', 'MISROUTE', 'MANUAL'].indexOf(e.code) !== -1;
+    // Ekart closes tickets filed under the wrong type (14 Oct: "raise under
+    // Reverse shipment - delay in delivery"), so returns must use Reverse Shipment.
+    if (rev) return { type: 'Reverse Shipment', sub: delay ? 'Delay in delivery' : null };
     if (e.code === 'PICKUP') return { type: 'Forward Pickup', sub: null };
     if (e.code === 'RTO') return { type: 'RTO', sub: null };
-    if (e.code === 'HELD' || e.code === 'NOSCAN' || e.code === 'LATE' || e.code === 'MISROUTE' || e.code === 'MANUAL') return { type: 'Forward Pre Delivery', sub: 'Delay in delivery' };
+    if (delay) return { type: 'Forward Pre Delivery', sub: 'Delay in delivery' };
     return { type: 'Forward Pre Delivery', sub: null };   // NDR, LOST
   }
+
   var OUR_SIGNOFF = 'Regards,\nIndustrial Tools & Hardware (TOMAHAWK)\nonlinesales@bullet.co.in | +91 8928949415';
 
   function scanInfo(o) { try { return o && o.scan_info ? JSON.parse(o.scan_info) : null; } catch (e) { return null; } }
@@ -1422,29 +1426,48 @@ async function to4x6Pdf(bytes) {
   var ESC_TICKET_MAX = 500;
   function escTicketText(c, e) {
     var o = e.leg, info = scanInfo(o) || {}, rev = o.direction === 'reverse';
-    var short = function (ms) { return new Date(ms).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }); };
-    var fact = {
-      HELD: function () { return 'Shipment stuck at ' + info.hub + ' since ' + short(info.hub_since) + ' (' + durTxt(hrsSince(info.hub_since)) + '), no onward movement.'; },
-      NOSCAN: function () { return 'No tracking update for ' + durTxt(hrsSince(info.last.t)) + ', last scan ' + short(info.last.t) + (info.last.l ? ' at ' + info.last.l : '') + '.'; },
-      PICKUP: function () { return rev ? 'Reverse pickup booked ' + short(tsMs(o.created_at)) + ' still not picked from customer (' + durTxt(hrsSince(tsMs(o.created_at))) + ').'
-                                       : 'Packed and ready at our Bhiwandi warehouse since ' + short(tsMs(o.rtd_at)) + ', pickup not done (' + durTxt(hrsSince(tsMs(o.rtd_at))) + ').'; },
-      MISROUTE: function () { return 'Shipment misrouted (' + info.misroute.d + ', ' + short(info.misroute.t) + ')' + (info.hub ? ', now at ' + info.hub : '') + ', still not delivered.'; },
-      NDR: function () { return 'Delivery failed ' + info.undel.n + 'x, last on ' + short(info.undel.t) + ': ' + reasonText(info.undel.d) + '.'; },
-      RTO: function () { return 'Shipment marked RTO' + (info.undel ? ' after failed attempt: ' + reasonText(info.undel.d) : '') + '.'; },
-      LOST: function () { return 'Shipment marked lost/damaged.'; },
-      LATE: function () { return 'Expected delivery ' + short(Date.parse(info.edd)) + ' passed, still not delivered.'; }
+    var day = function (ms) { return dayLabel(ms); };
+    var city = c.city || 'the customer\'s city';
+    var jt = String(o.job_type || c.type || '').toLowerCase();
+    var waitingFor = /refund/.test(jt) ? 'their refund' : /replace/.test(jt) ? 'their replacement' : /repair/.test(jt) ? 'their repaired product' : 'this order';
+    var what = rev ? 'this is a return pickup from our customer in ' + city + ' (our ref ' + o.order_id + ')'
+                   : 'this is our shipment to a customer in ' + city + ' (our ref ' + o.order_id + ')';
+    var body = {
+      HELD: function () { return what + '. It has been at ' + info.hub + ' since ' + day(info.hub_since) + ' — ' + durTxt(hrsSince(info.hub_since)) + ' now with no movement.'; },
+      NOSCAN: function () { return what + '. We have not seen any tracking update for ' + durTxt(hrsSince(info.last.t)) + '; the last scan was on ' + day(info.last.t) + (info.last.l ? ' at ' + info.last.l : '') + '.'; },
+      PICKUP: function () { return rev ? what + '. The pickup was booked on ' + day(tsMs(o.created_at)) + ' but has still not been collected from the customer.'
+                                       : what + '. It has been packed and ready at our Bhiwandi warehouse since ' + day(tsMs(o.rtd_at)) + ', but no one has come to pick it up yet.'; },
+      MISROUTE: function () { return what + '. It looks like it was misrouted on ' + day(info.misroute.t) + (info.hub ? ' and is now at ' + info.hub : '') + '.'; },
+      NDR: function () { return what + '. The delivery attempt on ' + day(info.undel.t) + ' was marked "' + reasonText(info.undel.d) + '".'; },
+      RTO: function () { return what + '. It has been marked RTO' + (info.undel ? ' after the attempt was marked "' + reasonText(info.undel.d) + '"' : '') + ', which we did not expect.'; },
+      LOST: function () { return what + '. It has been marked as lost.'; },
+      LATE: function () { return what + '. It was expected by ' + day(Date.parse(info.edd)) + ' but has still not been delivered.'; },
+      MANUAL: function () { return what + '. It is taking longer than expected' + (info.last ? ' — the last update was on ' + day(info.last.t) + (info.last.l ? ' at ' + info.last.l : '') : '') + '.'; }
     }[e.code];
+    var ask = {
+      HELD: rev ? 'Could you please get it moving and delivered to our Bhiwandi warehouse as soon as possible?' : 'Could you please get it moving and delivered at the earliest?',
+      NOSCAN: 'Could you please check where it is and share an update?',
+      PICKUP: rev ? 'Could you please arrange the pickup at the earliest?' : 'Could you please arrange the pickup today?',
+      MISROUTE: 'Could you please send it back on the right route and deliver it on priority?',
+      NDR: 'Could you please call the customer and try the delivery again?',
+      RTO: 'Could you please let us know the reason and reattempt delivery instead of returning it?',
+      LOST: 'Could you please check and process the lost-shipment claim?',
+      LATE: 'Could you please deliver it on priority and share a new delivery date?',
+      MANUAL: rev ? 'Could you please check and get it delivered to our Bhiwandi warehouse soon?' : 'Could you please check and get it delivered soon?'
+    }[e.code] || e.ask;
     var parts = [
-      fact ? fact() : e.short + '.',
-      (info.last && e.code !== 'NOSCAN' && e.code !== 'PICKUP') ? 'Last scan ' + short(info.last.t) + ': ' + (info.last.d || info.last.s) + '.' : '',
-      'Our order ' + o.order_id + ', ' + (rev ? 'return from customer (' + (c.city || '') + ') to our Bhiwandi warehouse' : 'to customer in ' + (c.city || '')) + ', booked ' + dayLabel(tsMs(o.created_at)) + '.',
-      e.followup ? 'Re-escalation: ticket already raised on ' + dayLabel(e.raisedMs) + ', issue still unresolved.' : '',
-      e.ask
+      'Hi team,',
+      body ? body() : what + '.',
+      e.followup ? 'We raised this on ' + day(e.raisedMs) + ' and it is still not resolved.' : '',
+      (rev ? 'Our customer is waiting for ' + waitingFor + ', so this is urgent for us.' : 'The customer is waiting for ' + waitingFor + '.'),
+      ask,
+      'Thank you.'
     ].filter(Boolean);
     var t = parts.join(' ');
-    if (t.length > ESC_TICKET_MAX) t = parts.filter(function (x, i) { return i !== 1; }).join(' ');  // drop last-scan line first
+    if (t.length > ESC_TICKET_MAX) t = parts.filter(function (x, i) { return i !== 3; }).join(' ');  // drop the "waiting" line first
     return t.slice(0, ESC_TICKET_MAX);
   }
+
 
 
   // ── Row cells (Courier status / What's needed / action) ──────────────
@@ -2672,8 +2695,9 @@ async function to4x6Pdf(bytes) {
     var tkBtn = ticketLeg(c) ? '<button class="case-act" data-act="ticket">Not received &#8211; raise ticket</button>' : '';
     // Courier escalation ticket — same popup as the list's Raise ticket button.
     var ce = c.esc || manualEsc(c), escBtn = '';
+    // Raised < 48h ago: still allow "Raise again" (e.g. the courier closed the ticket).
     if (ce && !tkBtn) escBtn = ce.raised
-      ? '<span class="cm-muted" style="font-size:12px">Ticket raised ' + esc(dayLabel(ce.raisedMs)) + '</span>'
+      ? '<span class="cm-muted" style="font-size:12px">Ticket raised ' + esc(dayLabel(ce.raisedMs)) + '</span> <button class="row-btn" id="cm-esc" style="background:var(--surface2);border:1px solid var(--border);color:var(--text)">Raise again</button>'
       : '<button class="row-btn rb-red" id="cm-esc">' + (ce.followup ? 'Re-escalate' : 'Raise ticket') + '</button>';
     tkBtn += escBtn;
     var acts = labelBtn + actionsHtml(c) + tkBtn + (trackBtns ? '<span style="margin-left:auto;display:flex;gap:8px">' + trackBtns + '</span>' : '');
