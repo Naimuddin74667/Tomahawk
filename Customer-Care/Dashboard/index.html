@@ -445,6 +445,11 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .scan-meta { font-size: 10.5px; color: var(--text2); }
 @media (max-width: 640px) { .tools input { width: 100%; } }
 /* Case list cells (redesign Oct 2026) */
+.case-table { font-size: 13.5px; }
+.case-table .sub { font-size: 12px; }
+.case-table .mono { font-size: 13px; }
+.case-table th { font-size: 10.5px; }
+.case-table td.name-cell { max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 body.cc-fit .case-table.grouped { height: auto; }
 .case-table td.prod-cell { max-width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .st-dot { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; white-space: nowrap; }
@@ -570,8 +575,8 @@ a.track-btn { text-decoration: none; display: inline-block; }
     </div>
     <div class="table-wrap">
       <table class="case-table">
-        <thead><tr><th>Case</th><th>Customer</th><th>Product</th><th>Shipment</th><th>Courier status</th><th>What&#8217;s needed</th><th>TAT</th><th></th></tr></thead>
-        <tbody id="case-body"><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
+        <thead><tr><th>Case</th><th>Type</th><th>Customer</th><th>Product</th><th>Courier</th><th>AWB</th><th>Courier status</th><th>What&#8217;s needed</th><th>TAT</th><th></th></tr></thead>
+        <tbody id="case-body"><tr><td colspan="10" class="muted">Loading…</td></tr></tbody>
       </table>
     </div>
     <!-- Pagination footer (hidden when everything fits on one page) -->
@@ -1699,7 +1704,7 @@ async function to4x6Pdf(bytes) {
     var table = document.querySelector('.case-table');
     table.classList.toggle('grouped', grouped);
     var body = document.getElementById('case-body');
-    if (!rows.length) { body.innerHTML = '<tr><td colspan="8" class="muted">' + (grouped ? 'Nothing needs attention right now.' : 'No cases match.') + '</td></tr>'; renderPager(0, 1); return; }
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="10" class="muted">' + (grouped ? 'Nothing needs attention right now.' : 'No cases match.') + '</td></tr>'; renderPager(0, 1); return; }
     var total = rows.length, totalPages = 1;
     if (!grouped) {
       totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
@@ -1715,20 +1720,22 @@ async function to4x6Pdf(bytes) {
         lastGroup = attnGroup(c);
         var g = ATTN_GROUPS[lastGroup], gh = document.createElement('tr');
         gh.className = 'grp-row';
-        gh.innerHTML = '<td colspan="8"><div class="grp" style="--gc:' + g.c + '"><i></i><span class="grp-l">' + esc(g.label) + '</span>' +
+        gh.innerHTML = '<td colspan="10"><div class="grp" style="--gc:' + g.c + '"><i></i><span class="grp-l">' + esc(g.label) + '</span>' +
           '<span class="grp-n">' + counts[lastGroup] + '</span><span class="grp-h">' + esc(g.hint) + '</span></div></td>';
         body.appendChild(gh);
       }
       var tr = document.createElement('tr');
       tr.className = 'case-row' + (c.st.attn === 'verify' ? ' attn' : '');
-      var ids = c.reverse
-        ? '<div class="mono">' + esc(c.reverse.order_id) + '</div>' + (c.forward ? '<div class="sub mono">&#8627; ' + esc(c.forward.order_id) + '</div>' : '')
-        : '<div class="mono">' + esc(c.forward.order_id) + '</div>';
+      // One line per column: Case · Type · Customer · Product · Courier · AWB
+      // (AWB/courier = the leg moving now; full details in the case popup).
+      var lg = liveLeg(c) || c.forward || c.reverse;
       tr.innerHTML =
-        '<td>' + ids + '<div class="sub">' + esc(c.type) + '</div></td>' +
-        '<td>' + esc(c.customer || '—') + (c.city ? '<div class="sub">' + esc(c.city) + '</div>' : '') + '</td>' +
+        '<td class="mono">' + esc(c.id) + '</td>' +
+        '<td>' + esc(c.type) + '</td>' +
+        '<td class="name-cell" title="' + esc(c.city || '') + '">' + esc(c.customer || '—') + '</td>' +
         '<td class="prod-cell" title="' + esc(c.product || '') + '">' + esc(c.product || '—') + '</td>' +
-        '<td>' + shipmentCellHtml(c) + '</td>' +
+        '<td>' + esc(lg.courier || 'Delhivery') + '</td>' +
+        '<td class="mono">' + esc(lg.waybill || '—') + '</td>' +
         '<td>' + statusCellHtml(c) + '</td>' +
         '<td>' + neededCellHtml(c) + '</td>' +
         '<td>' + tatCellHtml(c.tat) + '</td>' +
@@ -1743,7 +1750,7 @@ async function to4x6Pdf(bytes) {
       for (var i = rows.length; i < PAGE_SIZE; i++) {
         var pad = document.createElement('tr');
         pad.setAttribute('aria-hidden', 'true');
-        pad.innerHTML = '<td colspan="8">&nbsp;<div class="sub">&nbsp;</div></td>';
+        pad.innerHTML = '<td colspan="10">&nbsp;<div class="sub">&nbsp;</div></td>';
         body.appendChild(pad);
       }
     }
