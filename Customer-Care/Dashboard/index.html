@@ -445,11 +445,14 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .scan-meta { font-size: 10.5px; color: var(--text2); }
 @media (max-width: 640px) { .tools input { width: 100%; } }
 /* Courier escalations (row line + Raise ticket popup) */
-.esc-line { display: flex; align-items: center; gap: 8px; margin-top: 4px; color: var(--red); font-weight: 700; font-size: 11px; max-width: 290px; }
-.esc-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.esc-btn { flex: none; font-size: 10.5px; font-weight: 700; padding: 2px 9px; border-radius: 6px; border: 1px solid var(--red); background: transparent; color: var(--red); cursor: pointer; }
-.esc-btn:hover { background: var(--red); color: #fff; }
-.esc-raised { flex: none; font-size: 10.5px; font-weight: 600; color: var(--text2); }
+.esc-line { display: flex; align-items: center; gap: 7px; margin-top: 5px; font-size: 11px; white-space: nowrap; }
+.esc-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red); text-transform: uppercase; letter-spacing: .03em; }
+.esc-chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.esc-detail { color: var(--text2); overflow: hidden; text-overflow: ellipsis; max-width: 190px; }
+.case-table td.esc-cell { width: 1%; white-space: nowrap; text-align: right; vertical-align: middle; }
+.esc-btn { font-size: 11px; font-weight: 700; padding: 6px 12px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); cursor: pointer; transition: border-color .15s, color .15s; }
+.esc-btn:hover { border-color: var(--red); color: var(--red); }
+.esc-raised { display: inline-block; font-size: 10.5px; line-height: 1.3; color: var(--text2); text-align: right; }
 .esc-issue { font-weight: 700; color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); border: 1px solid color-mix(in srgb, var(--red) 35%, transparent); border-radius: 8px; padding: 9px 12px; font-size: 13px; }
 .esc-note { font-size: 11.5px; color: var(--text2); margin-top: 8px; }
 .esc-note a { color: var(--accent); }
@@ -541,8 +544,8 @@ a.track-btn { text-decoration: none; display: inline-block; }
     </div>
     <div class="table-wrap">
       <table class="case-table">
-        <thead><tr><th>Case</th><th>Courier</th><th>Tracking No.</th><th>Customer</th><th>Product</th><th>Type</th><th>Status</th><th>TAT</th></tr></thead>
-        <tbody id="case-body"><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
+        <thead><tr><th>Case</th><th>Courier</th><th>Tracking No.</th><th>Customer</th><th>Product</th><th>Type</th><th>Status</th><th>TAT</th><th></th></tr></thead>
+        <tbody id="case-body"><tr><td colspan="9" class="muted">Loading…</td></tr></tbody>
       </table>
     </div>
     <!-- Pagination footer (hidden when everything fits on one page) -->
@@ -1374,14 +1377,37 @@ async function to4x6Pdf(bytes) {
     return lines.join('\n');
   }
 
-  // Row line under the status badge: issue + Raise ticket / ticket state.
+  // Row display: a short red chip ("Stuck 2d") + one plain detail ("at Thane")
+  // under the status badge; the Raise ticket button sits in its own last column.
+  var ESC_CHIP = { HELD: 'Stuck', NOSCAN: 'No scan', PICKUP: 'Not picked', MISROUTE: 'Misrouted', NDR: 'Delivery failed', RTO: 'Returning', LOST: 'Lost', LATE: 'Late' };
+  // "Motherhub_SAI_5 Thane" → "Thane" · "Gurgaon_Tauru_GW (Haryana)" → "Gurgaon"
+  function placeName(l) {
+    l = String(l || '').replace(/\s*\(.*\)\s*$/, '').trim();
+    if (!l) return '';
+    var w = / /.test(l) ? l.split(' ').pop() : l.split('_')[0];
+    return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+  }
+  // "Delivery attempt failed(No response from customer)" → "No response from customer"
+  function reasonText(d) { var m = /\(([^)]+)\)?\s*$/.exec(String(d || '')); return (m ? m[1] : String(d || '')).replace(/_/g, ' ').toLowerCase().replace(/^./, function (x) { return x.toUpperCase(); }); }
+  function escChip(e) {
+    var info = scanInfo(e.leg) || {}, age = '', detail = '';
+    if (e.code === 'HELD') { age = info.hub_since ? durShort(hrsSince(info.hub_since)) : ''; detail = 'at ' + placeName(info.hub); }
+    else if (e.code === 'NOSCAN') { age = info.last ? durShort(hrsSince(info.last.t)) : ''; detail = info.last && info.last.l ? 'last at ' + placeName(info.last.l) : ''; }
+    else if (e.code === 'PICKUP') { var t = e.leg.direction === 'reverse' ? tsMs(e.leg.created_at) : tsMs(e.leg.rtd_at); age = t ? durShort(hrsSince(t)) : ''; detail = e.leg.direction === 'reverse' ? 'from customer' : 'from our warehouse'; }
+    else if (e.code === 'MISROUTE') { detail = info.hub ? 'now at ' + placeName(info.hub) : ''; }
+    else if (e.code === 'NDR' || e.code === 'RTO') { detail = info.undel ? reasonText(info.undel.d) : ''; }
+    return { label: ESC_CHIP[e.code] + (age ? ' ' + age : ''), detail: detail };
+  }
   function escLineHtml(c) {
+    var ch = escChip(c.esc);
+    return '<div class="esc-line"><span class="esc-chip">' + esc(ch.label) + '</span>' +
+      (ch.detail ? '<span class="esc-detail" title="' + esc(c.esc.short) + '">' + esc(ch.detail) + '</span>' : '') + '</div>';
+  }
+  function escActionHtml(c) {
     var e = c.esc;
     if (!e) return '';
-    var btn = e.raised
-      ? '<span class="esc-raised">Ticket ' + esc(e.leg.esc_ticket_no || '') + ' raised</span>'
-      : '<button class="esc-btn" data-esc="' + esc(c.id) + '">' + (e.followup ? 'Follow up' : 'Raise ticket') + '</button>';
-    return '<div class="sub esc-line"><span class="esc-txt" title="' + esc(e.short) + '">&#9888; ' + esc(e.short) + '</span>' + btn + '</div>';
+    if (e.raised) return '<span class="esc-raised" title="Ticket raised ' + esc(fmtMs(e.raisedMs)) + '">Ticket ' + esc(e.leg.esc_ticket_no || '') + '<br>raised</span>';
+    return '<button class="esc-btn" data-esc="1">' + (e.followup ? 'Follow up' : 'Raise ticket') + '</button>';
   }
 
   // ── Raise-ticket popup ──
@@ -1558,7 +1584,7 @@ async function to4x6Pdf(bytes) {
     // Needs attention: delivered (to verify) first, then arriving soon; newest first within each.
     if (tileFilter === 'verify') rows.sort(function (a, b) { return attnRank(a) - attnRank(b); });
     var body = document.getElementById('case-body');
-    if (!rows.length) { body.innerHTML = '<tr><td colspan="8" class="muted">No cases match.</td></tr>'; renderPager(0, 1); return; }
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="9" class="muted">No cases match.</td></tr>'; renderPager(0, 1); return; }
     var totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
     if (page > totalPages) page = totalPages;
     if (page < 1) page = 1;
@@ -1591,7 +1617,8 @@ async function to4x6Pdf(bytes) {
         '<td>' + esc(c.type) + '</td>' +
         // Status: badge + one line under it — escalation (if any) wins over the date/ETA line
         '<td>' + badgeHtml(c.st) + (c.esc ? escLineHtml(c) : deliveredToUsSub(c)) + '</td>' +
-        '<td>' + tatCellHtml(c.tat) + '</td>';
+        '<td>' + tatCellHtml(c.tat) + '</td>' +
+        '<td class="esc-cell">' + escActionHtml(c) + '</td>';
       tr.addEventListener('click', function () { openCase(c); });
       var eb = tr.querySelector('.esc-btn');
       if (eb) eb.addEventListener('click', function (ev) { ev.stopPropagation(); openEsc(c); });
@@ -1603,7 +1630,7 @@ async function to4x6Pdf(bytes) {
       for (var i = rows.length; i < PAGE_SIZE; i++) {
         var pad = document.createElement('tr');
         pad.setAttribute('aria-hidden', 'true');
-        pad.innerHTML = '<td colspan="8">&nbsp;<div class="sub">&nbsp;</div></td>';
+        pad.innerHTML = '<td colspan="9">&nbsp;<div class="sub">&nbsp;</div></td>';
         body.appendChild(pad);
       }
     }
