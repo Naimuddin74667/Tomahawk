@@ -173,6 +173,18 @@ td.num, th.num { text-align:right; white-space:nowrap; }
 .quick .btn { display:flex; flex-direction:column; align-items:flex-start; gap:4px; padding:18px 14px; text-align:left; font-size:15px; }
 .quick .btn span { font-weight:400; font-size:12px; opacity:.8; }
 
+/* ── Daily rent confirm popup ── */
+.rc-driver { background:var(--surface2); border-radius:12px; padding:14px; margin-bottom:12px; }
+.rc-driver .who { font-weight:700; font-size:15px; }
+.rc-driver .what { color:var(--text2); font-size:13px; margin-top:2px; }
+.rc-amt { font-family:var(--font-display); font-size:28px; font-weight:700; margin:10px 0 12px; }
+.chips { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+.chip { border:1px solid var(--border); background:var(--surface); color:var(--text); border-radius:20px; padding:8px 16px; font-size:14px; font-weight:600; }
+.chip.on { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+.rc-yes { width:100%; min-height:52px; font-size:16px !important; }
+.rc-links { display:flex; justify-content:space-between; margin-top:8px; }
+.due-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; background:var(--red-soft); border-radius:12px; padding:12px 14px; margin-bottom:var(--gap); font-size:14px; }
+
 @media (max-width:820px) {
   .desk-only { display:none !important; }
   .fab { display:block; }
@@ -393,6 +405,7 @@ dashboard() {
   render(`
     <div class="page-head"><div><h2>Dashboard</h2><div class="sub">${esc(c.name)}${c.regNo ? ' · ' + esc(c.regNo) : ''}</div></div>
       <div class="btn-row desk-only"><button class="btn primary" onclick="openPayment()">+ Rent received</button><button class="btn" onclick="openExpense()">+ Expense</button></div></div>
+    ${dueBanner()}
     ${setupMissing ? `<div class="note">Finish the <a href="#" onclick="go('setup');return false" style="color:var(--accent)">Setup</a> page (purchase date, EMI amount, first EMI date and the driver) so every number here is accurate.</div>` : ''}
     <div class="grid kpis">
       ${kpi('Rent collected', inr(t.rent), 'pos', 'Pending from driver: ' + inr(t.pending))}
@@ -652,6 +665,72 @@ function openForm(title, fields, values, onSave, onDelete) {
   document.getElementById('overlay').classList.add('open');
   setTimeout(() => { const first = m.querySelector('input[name="amount"]') || m.querySelector('input,select'); if (first && !first.value) first.focus(); }, 80);
 }
+/* ════════════ Daily rent confirm ════════════
+   On opening the app, pop up any rent that has fallen due and isn't paid.
+   One tap records it. "Not yet" hides the popup until tomorrow. */
+const SNOOZE_KEY = 'mnscar_rentprompt_v1';
+
+function pendingRent() {
+  return DB.drivers.filter(d => !d.endDate).map(d => {
+    const pend = driverLedger(d).periods.filter(p => p.paid < p.due);
+    return { d, pend, total: sum(pend, p => p.due - p.paid) };
+  }).filter(x => x.pend.length);
+}
+function dueBanner() {
+  const list = pendingRent(); if (!list.length) return '';
+  const total = sum(list, x => x.total);
+  return `<div class="due-banner"><div><b>${inr(total)}</b> rent pending${list.length === 1 ? ' from ' + esc(list[0].d.name) : ''}</div>
+    <button class="btn primary sm" onclick="openRentConfirm(true)">Confirm</button></div>`;
+}
+function checkRentPrompt() {
+  let snoozed = ''; try { snoozed = localStorage.getItem(SNOOZE_KEY) || ''; } catch {}
+  if (snoozed !== todayStr() && pendingRent().length) openRentConfirm();
+}
+function greeting() { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; }
+
+function openRentConfirm(manual) {
+  const list = pendingRent();
+  if (!list.length) { closeModal(); if (manual) toast('No rent pending'); return; }
+  const prefs = DB.prefs || {}; const mode = prefs.mode || 'Cash'; const by = defaultReceiver();
+  document.getElementById('modal').innerHTML = `<h3>${greeting()} 👋</h3>
+    <p class="muted" style="margin:-6px 0 14px;font-size:13px">Did you receive the rent?</p>
+    <div class="list-title">Paid by</div>
+    <div class="chips" id="rcMode">${['Cash','UPI'].map(m => `<button class="chip ${m === mode ? 'on' : ''}" data-v="${m}" onclick="pickPref('mode','${m}','rcMode')">${m}</button>`).join('')}</div>
+    ${DB.partners.length > 1 ? `<div class="list-title">Received by</div>
+    <div class="chips" id="rcBy">${DB.partners.map(p => `<button class="chip ${p.id === by ? 'on' : ''}" data-v="${p.id}" onclick="pickPref('receivedBy','${p.id}','rcBy')">${esc(p.name)}</button>`).join('')}</div>` : ''}
+    ${list.map(x => {
+      const p = x.pend[0], left = p.due - p.paid, more = x.pend.length - 1;
+      return `<div class="rc-driver">
+        <div class="who">${esc(x.d.name)}</div>
+        <div class="what">Rent for ${fmtRange(p.from, p.to)}${p.paid ? ' (balance)' : ''}${more ? ` · ${more} more pending, total ${inr(x.total)}` : ''}</div>
+        <div class="rc-amt">${inr(left)}</div>
+        <button class="btn primary rc-yes" onclick="confirmRent('${x.d.id}', ${left})">✓ Received ${inr(left)}</button>
+        ${more ? `<button class="btn rc-yes" style="margin-top:8px" onclick="confirmRent('${x.d.id}', ${x.total})">Received all ${inr(x.total)}</button>` : ''}
+        <div class="rc-links"><button class="link-btn" onclick="closeModal();openPayment(null,'${x.d.id}')">Different amount</button></div>
+      </div>`;
+    }).join('')}
+    <button class="btn rc-yes" onclick="snoozeRent()">Not yet — remind me tomorrow</button>`;
+  document.getElementById('overlay').classList.add('open');
+}
+function pickPref(k, v, boxId) {
+  DB.prefs = Object.assign(DB.prefs || {}, { [k]: v }); save();
+  document.querySelectorAll('#' + boxId + ' .chip').forEach(c => c.classList.toggle('on', c.dataset.v === v));
+}
+// Who usually collects the rent: last choice, else the partner called "Me", else the first partner
+function defaultReceiver() {
+  const pref = (DB.prefs || {}).receivedBy;
+  if (pref && DB.partners.some(p => p.id === pref)) return pref;
+  const me = DB.partners.find(p => /^me$/i.test(p.name)); return (me || DB.partners[0] || {}).id || '';
+}
+function confirmRent(driverId, amount) {
+  const prefs = DB.prefs || {};
+  DB.payments.push({ id: uid(), driverId, date: todayStr(), amount, mode: prefs.mode || 'Cash',
+                     receivedBy: defaultReceiver(), note: 'Confirmed from reminder' });
+  save(); PAGES[currentPage](); toast('Rent ' + inr(amount) + ' added');
+  openRentConfirm();   // shows the next pending one, or closes when all clear
+}
+function snoozeRent() { try { localStorage.setItem(SNOOZE_KEY, todayStr()); } catch {} closeModal(); }
+
 function openQuickAdd() {
   document.getElementById('modal').innerHTML = `<h3>Add</h3>
     <div class="quick">
@@ -679,8 +758,9 @@ function openPayment(id, driverId) {
     { k:'mode', label:'Mode', type:'select', options: PAY_MODES },
     { k:'receivedBy', label:'Received by (partner)', type:'select', options: partnerOptions(), help:'Who got the money — used for partner settlement.' },
     { k:'note', label:'Note', type:'text' }
-  ], existing || { driverId: driverId || active.id },
-  d => { d.amount = num(d.amount); if (existing) Object.assign(existing, d); else DB.payments.push({ id:uid(), ...d }); },
+  ], existing || { driverId: driverId || active.id, mode: (DB.prefs || {}).mode || 'Cash', receivedBy: defaultReceiver() },
+  d => { d.amount = num(d.amount); DB.prefs = Object.assign(DB.prefs || {}, { receivedBy: d.receivedBy, mode: d.mode });
+         if (existing) Object.assign(existing, d); else DB.payments.push({ id:uid(), ...d }); },
   existing ? () => DB.payments = DB.payments.filter(p => p.id !== id) : null);
 }
 
@@ -825,6 +905,7 @@ function toggleTheme() {
 }
 try { const t = localStorage.getItem(THEME_KEY); if (t) document.documentElement.dataset.theme = t; } catch {}
 go('dashboard');
+setTimeout(checkRentPrompt, 400);
 </script>
 </body>
 </html>
