@@ -245,7 +245,7 @@ const CYCLES = { daily:'Daily', weekly:'Weekly', monthly:'Monthly' };
 function defaultData() {
   return {
     car: { name:'Maruti Dzire Tour S (CNG)', regNo:'', purchaseDate:'', price:830000, downPayment:200000,
-           downPaidBy:'', loanAmount:630000, emi:21314, tenure:36, emiStartDate:'' },
+           downPaidBy:'', loanAmount:622128, netDisbursed:603000, irr:14.01, emi:21314, tenure:36, emiStartDate:'2026-11-05' },
     partners: [ { id:uid(), name:'Me', share:50 }, { id:uid(), name:'Uncle', share:50 } ],
     drivers: [], payments: [], expenses: []
   };
@@ -255,7 +255,12 @@ function load() {
     const raw = localStorage.getItem(STORE_KEY);
     if (raw) {
       const d = Object.assign(defaultData(), JSON.parse(raw));
-      if (d.car.price === 840000 && !num(d.car.emi)) Object.assign(d.car, { price:830000, loanAmount:630000, emi:21314 });
+      if (d.car.price === 840000 && !num(d.car.emi)) Object.assign(d.car, { price:830000, emi:21314 });
+      // Apply the confirmed KMPL scheme to earlier placeholder values (only if not edited by hand)
+      if ([630000, 640000].includes(num(d.car.loanAmount))) d.car.loanAmount = 622128;
+      if (d.car.netDisbursed === undefined) d.car.netDisbursed = 603000;
+      if (d.car.irr === undefined) d.car.irr = 14.01;
+      if (!d.car.emiStartDate) d.car.emiStartDate = '2026-11-05';
       return d;
     }
   } catch (e) { console.warn('Load failed', e); }
@@ -389,7 +394,7 @@ dashboard() {
       ${kpi('Total spent so far', inr(t.cashOut), 'neg', 'Down ' + inr(t.down) + ' · EMI ' + inr(t.emiPaid) + ' · Other ' + inr(t.running))}
       ${kpi('Net cash so far', inr(t.net), t.net >= 0 ? 'pos' : 'neg', 'Rent minus everything spent')}
       ${kpi('Operating profit', inr(t.operating), t.operating >= 0 ? 'pos' : 'neg', 'Rent minus running costs (no EMI)')}
-      ${kpi('Car cost (incl. interest)', inr(t.carTotal), 'amb', 'Cash price ' + inr(c.price) + ' + interest ' + inr(t.interest))}
+      ${kpi('Car cost (incl. interest)', inr(t.carTotal), 'amb', 'Cash price ' + inr(c.price) + ' + extra for loan ' + inr(t.interest))}
       ${kpi('Loan remaining', inr(t.loanLeft), '', t.emisLeft + ' EMIs left (incl. interest)')}
     </div>
     <div class="grid two section">
@@ -474,7 +479,7 @@ loan() {
   const today = todayStr();
   let rows = s;
   if (!all) { const due = s.filter(r => !r.expense && r.date <= today); const up = s.filter(r => !r.expense && r.date > today).slice(0, 3); rows = [...due, ...up]; }
-  render(`<div class="page-head"><div><h2>Loan</h2><div class="sub">Loan ${inr(c.loanAmount)} · ${inr(c.emi)} × ${c.tenure} months · interest ${inr(carCost().interest)}</div></div>
+  render(`<div class="page-head"><div><h2>Loan</h2><div class="sub">Loan ${inr(c.loanAmount)}${num(c.irr) ? ' @ ' + c.irr + '%' : ''} · ${inr(c.emi)} × ${c.tenure} months · interest ${inr(Math.max(0, num(c.emi) * num(c.tenure) - num(c.loanAmount)))}</div></div>
       <button class="btn" onclick="go('setup')">Edit loan</button></div>
     ${!s.length ? '<div class="card empty">Add the EMI amount and first EMI date on the Setup page to see the schedule.</div>' : `
     <div class="card">
@@ -516,9 +521,9 @@ setup() {
       <div class="card"><h3>Car &amp; loan</h3>
         ${setupField('name','Car','text')}${setupField('regNo','Registration no.','text')}
         ${setupField('purchaseDate','Purchase date','date')}${setupField('price','Cash price (₹)','number','What the car costs if bought in cash.')}
-        ${setupField('downPayment','Down payment (₹)','number')}
-        <div class="field"><label>Down payment paid by</label><select onchange="setCar('downPaidBy',this.value)"><option value="">—</option>${pOpts}</select></div>
-        ${setupField('loanAmount','Loan amount (₹)','number')}${setupField('emi','EMI amount (₹)','number')}
+        ${setupField('downPayment','Upfront paid (₹)','number','Down payment + tax, permit, registration, insurance — everything paid at purchase.')}
+        <div class="field"><label>Upfront paid by</label><select onchange="setCar('downPaidBy',this.value)"><option value="">—</option>${pOpts}</select></div>
+        ${setupField('loanAmount','Total loan amount (₹)','number','Incl. loan protection.')}${setupField('netDisbursed','Net disbursed (₹)','number','Loan minus processing charges.')}${setupField('irr','Interest rate IRR (%)','number')}${setupField('emi','EMI amount (₹)','number')}
         ${setupField('tenure','Tenure (months)','number')}${setupField('emiStartDate','First EMI date','date')}
         <div class="note" id="costNote" style="margin:4px 0 0">${costNoteHtml()}</div>
       </div>
@@ -723,17 +728,19 @@ function setupField(k, label, type, help) {
     onchange="setCar('${k}',this.value)">${help ? '<div class="help">' + help + '</div>' : ''}</div>`;
 }
 function setCar(k, v) {
-  DB.car[k] = ['price','downPayment','loanAmount','emi','tenure'].includes(k) ? num(v) : v;
+  DB.car[k] = ['price','downPayment','loanAmount','netDisbursed','irr','emi','tenure'].includes(k) ? num(v) : v;
   // Keep loan amount in step with price − down payment unless edited directly
-  if (k === 'price' || k === 'downPayment') DB.car.loanAmount = Math.max(0, num(DB.car.price) - num(DB.car.downPayment));
   save(); toast('Saved');
   // Update in place (no full re-render, so the next field you tapped keeps focus on the phone)
-  const loanEl = document.getElementById('car_loanAmount'); if (loanEl) loanEl.value = DB.car.loanAmount;
   const note = document.getElementById('costNote'); if (note) note.innerHTML = costNoteHtml();
 }
 function costNoteHtml() {
   const c = DB.car, cc = carCost();
-  return `Car cost incl. interest: <b>${inr(cc.total)}</b><br><span class="muted">${inr(c.downPayment)} down + ${inr(c.emi)} × ${c.tenure} EMIs · interest ${inr(cc.interest)}</span>`;
+  const emis = num(c.emi) * num(c.tenure);
+  return `Car cost incl. interest: <b>${inr(cc.total)}</b><br>
+    <span class="muted">${inr(c.downPayment)} upfront + ${inr(c.emi)} × ${c.tenure} EMIs (${inr(emis)})<br>
+    Interest on loan ${inr(Math.max(0, emis - num(c.loanAmount)))} · loan charges + protection ${inr(Math.max(0, num(c.loanAmount) - num(c.netDisbursed)))}<br>
+    Extra vs cash price ${inr(c.price)}: ${inr(cc.interest)}</span>`;
 }
 function setPartner(id, k, v) { const p = DB.partners.find(p => p.id === id); p[k] = k === 'share' ? num(v) : v; refresh(); }
 function addPartner() { DB.partners.push({ id:uid(), name:'Partner ' + (DB.partners.length + 1), share:0 }); refresh(); }
