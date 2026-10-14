@@ -183,6 +183,9 @@ td.num, th.num { text-align:right; white-space:nowrap; }
 .chip.on { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
 .rc-yes { width:100%; min-height:52px; font-size:16px !important; }
 .rc-links { display:flex; justify-content:space-between; margin-top:8px; }
+.test-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; background:var(--blue); color:#fff; border-radius:12px; padding:10px 14px; margin-bottom:var(--gap); font-size:14px; }
+.test-banner .btn { background:#fff; color:#1c2333; border-color:#fff; white-space:nowrap; }
+html[data-theme="dark"] .test-banner { color:#0f1517; }
 .due-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; background:var(--red-soft); border-radius:12px; padding:12px 14px; margin-bottom:var(--gap); font-size:14px; }
 
 @media (max-width:820px) {
@@ -393,7 +396,7 @@ function go(page) {
   PAGES[page](); window.scrollTo(0, 0);
 }
 document.querySelectorAll('.nav-item').forEach(b => b.addEventListener('click', () => go(b.dataset.page)));
-function render(html) { document.getElementById('page').innerHTML = html; }
+function render(html) { document.getElementById('page').innerHTML = testBanner() + html; }
 function refresh() { save(); PAGES[currentPage](); }
 
 /* ════════════ Pages ════════════ */
@@ -586,6 +589,8 @@ setup() {
           <div class="btn-row"><button class="btn sm" onclick="exportData()">Download backup</button>
             <label class="btn sm">Restore backup<input type="file" accept=".json" hidden onchange="importData(this.files[0])"></label>
             <button class="btn sm danger" onclick="resetData()">Reset all</button></div>
+          ${getSnapshot() ? '' : `<button class="btn sm" style="margin-top:10px" onclick="restartTesting()">Start testing mode</button>
+            <div class="help" style="font-size:11px;color:var(--text2);margin-top:4px">Saves current entries; "Testing completed" brings them back later.</div>`}
         </div>
       </div>
     </div>
@@ -808,6 +813,45 @@ function confirmRent(driverId, amount) {
 }
 function snoozeRent() { try { localStorage.setItem(SNOOZE_KEY, todayStr()); } catch {} closeModal(); }
 
+/* ════════════ Testing mode ════════════
+   A snapshot of the real entries is kept while you try things out.
+   "Testing completed" puts the real entries back and throws away test data. */
+const SNAP_KEY = 'mnscar_snapshot_v1', TESTFLOW_KEY = 'mnscar_testflow_v1';
+function getSnapshot() { try { return JSON.parse(localStorage.getItem(SNAP_KEY) || 'null'); } catch { return null; } }
+function startTesting() {
+  try { localStorage.setItem(SNAP_KEY, JSON.stringify({ at: new Date().toISOString(), data: DB })); }
+  catch { alert('Could not save a snapshot — storage is full or blocked.'); return false; }
+  return true;
+}
+function testBanner() {
+  const s = getSnapshot(); if (!s) return '';
+  const at = new Date(s.at).toLocaleString('en-IN', { day:'2-digit', month:'short', hour:'numeric', minute:'2-digit' });
+  return `<div class="test-banner"><div><b>Testing mode</b><div style="font-size:12px;opacity:.85">Real entries saved ${at}. Add anything you like.</div></div>
+    <button class="btn sm" onclick="finishTesting()">Testing completed</button></div>`;
+}
+function finishTesting() {
+  const s = getSnapshot(); if (!s) return;
+  const m = document.getElementById('modal');
+  m.innerHTML = `<h3>Testing completed?</h3>
+    <p class="muted" style="font-size:14px;margin-bottom:16px">Remove everything added during testing and go back to your real entries from ${new Date(s.at).toLocaleString('en-IN', { day:'2-digit', month:'short', hour:'numeric', minute:'2-digit' })}.</p>
+    <button class="btn primary rc-yes" onclick="restoreSnapshot()">Remove test entries</button>
+    <button class="btn rc-yes" style="margin-top:8px" onclick="keepTestData()">Keep everything (end testing)</button>
+    <button class="btn rc-yes" style="margin-top:8px" onclick="closeModal()">Cancel</button>`;
+  document.getElementById('overlay').classList.add('open');
+}
+function restoreSnapshot() {
+  const s = getSnapshot(); if (!s) return;
+  try {
+    clearTimeout(saveTimer);
+    localStorage.setItem(STORE_KEY, JSON.stringify(s.data));
+    localStorage.removeItem(SNAP_KEY); localStorage.removeItem(SNOOZE_KEY);
+    localStorage.setItem(TESTFLOW_KEY, 'done');
+  } catch { alert('Could not restore.'); return; }
+  location.reload();
+}
+function keepTestData() { try { localStorage.removeItem(SNAP_KEY); localStorage.setItem(TESTFLOW_KEY, 'done'); } catch {} closeModal(); refresh(); toast('Testing ended'); }
+function restartTesting() { if (startTesting()) { refresh(); toast('Real entries saved — testing mode on'); } }
+
 function openQuickAdd() {
   document.getElementById('modal').innerHTML = `<h3>Add</h3>
     <div class="quick">
@@ -1000,6 +1044,8 @@ function toggleTheme() {
   try { localStorage.setItem(THEME_KEY, t); } catch {}
 }
 try { const t = localStorage.getItem(THEME_KEY); if (t) document.documentElement.dataset.theme = t; } catch {}
+// First open of this version: everything entered so far is real — snapshot it and start testing mode
+try { if (!localStorage.getItem(TESTFLOW_KEY) && !getSnapshot()) { startTesting(); localStorage.setItem(TESTFLOW_KEY, 'started'); } } catch {}
 const autoAdded = autoMarkEmis();
 go('dashboard');
 if (autoAdded) setTimeout(() => toast(autoAdded + ' EMI' + (autoAdded > 1 ? 's' : '') + ' marked paid'), 300);
