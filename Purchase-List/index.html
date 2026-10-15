@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%231a1a1a'/%3E%3Ctext x='32' y='48' font-family='Arial Black,sans-serif' font-weight='900' font-size='52' text-anchor='middle' fill='%23F5A800'%3ET%3C/text%3E%3C/svg%3E">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<title>Purchase List — Tomahawk</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+/* ── Design tokens (matches the rest of the Tomahawk suite) ── */
+:root {
+  --bg:       #0c0c14;
+  --surface:  #13131e;
+  --surface2: #1a1a28;
+  --border:   #3a3a54;
+  --accent:   #F5A800;
+  --accent-dim: #F5A80018;
+  --text:     #e8e8f0;
+  --text2:    #a9a9bd;
+  --placeholder: #8a8aa2;
+  --green:    #4ade80;
+  --green-dim:#4ade8018;
+  --yellow:   #facc15;
+  --yellow-dim:#facc151c;
+  --red:      #f87171;
+  --red-dim:  #f871711c;
+  --strike:   #6b6b80;
+  --font-display: 'Syne', sans-serif;
+  --font-body:    'DM Sans', sans-serif;
+  --font-mono:    'DM Mono', monospace;
+}
+html[data-theme="light"] {
+  --bg:       #f4f5f7;
+  --surface:  #ffffff;
+  --surface2: #f0f1f4;
+  --border:   #d0d4e0;
+  --accent:   #c98a00;
+  --accent-dim: #c98a0014;
+  --text:     #111118;
+  --text2:    #555566;
+  --placeholder: #8a8a9a;
+  --green:    #16a34a;
+  --green-dim:#16a34a12;
+  --yellow:   #a16207;
+  --yellow-dim:#fff4d6;
+  --red:      #dc2626;
+  --red-dim:  #fde2e2;
+  --strike:   #9a9aaa;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-body); background: var(--bg); color: var(--text); font-size: 13px; transition: background .2s, color .2s; }
+
+/* ── Portal header (shared pattern) ── */
+.site-header { position: sticky; top: 0; z-index: 100; height: 62px; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 36px; justify-content: space-between; gap: 20px; }
+.header-logo { display: flex; align-items: center; gap: 14px; text-decoration: none; flex-shrink: 0; }
+.logo-svg-wrap { display: flex; align-items: center; color: var(--accent); }
+.logo-divider { width: 2px; height: 36px; background: rgba(255,255,255,0.5); border-radius: 2px; }
+html[data-theme="light"] .logo-divider { background: rgba(0,0,0,0.25); }
+.logo-tagline { font-size: 16px; font-weight: 600; color: var(--text2); letter-spacing: .04em; }
+.header-right { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
+.header-theme-toggle { width: 36px; height: 36px; border-radius: 50%; background: var(--surface2); border: 1px solid var(--border); cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text2); }
+.header-theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+html:not([data-theme="light"]) .icon-sun  { display: none; }
+html[data-theme="light"]       .icon-moon { display: none; }
+.header-user { display: flex; align-items: center; gap: 9px; background: var(--surface2); border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px 6px 6px; }
+.header-user[hidden] { display: none; }
+.user-avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #111; }
+.user-name { font-size: 13px; color: var(--text2); }
+.role-badge { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 2px 7px; border-radius: 20px; background: var(--surface2); color: var(--accent); border: 1px solid var(--border); margin-left: 2px; }
+.header-logout-btn { width: 34px; height: 34px; border-radius: 50%; background: var(--surface2); border: 1px solid var(--border); color: var(--text2); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.header-logout-btn:hover { border-color: var(--red); color: var(--red); }
+.header-logout-btn[hidden] { display: none; }
+@media (max-width: 640px) {
+  .site-header { padding: 12px 16px; height: auto; flex-wrap: wrap; gap: 10px; }
+  .logo-tagline { font-size: 11px; }
+  .user-name { display: none; }
+  .header-user { padding: 5px; }
+}
+
+/* ── Auth gate (shared pattern) ── */
+.auth-gate { position: fixed; inset: 0; z-index: 500; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.auth-gate[hidden] { display: none; }
+.auth-card { width: 100%; max-width: 340px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 32px 28px 28px; }
+.auth-logo-row { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
+.auth-logo-mark { width: 34px; height: 34px; border-radius: 8px; background: var(--accent); color: #111; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 16px; }
+.auth-title { font-weight: 700; font-size: 16px; }
+.auth-sub { font-size: 11px; color: var(--text2); margin-top: 1px; }
+.access-denied-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 14px; color: var(--text); background: var(--bg); text-align: center; padding: 20px; }
+
+/* ── Page layout ── */
+.page { max-width: 1400px; margin: 0 auto; padding: 18px 32px 40px; }
+.page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
+.page-title { font-family: var(--font-display); font-size: 22px; font-weight: 800; }
+.page-sub { font-size: 12.5px; color: var(--text2); margin-top: 4px; }
+.sku-status { font-size: 12px; color: var(--text2); display: flex; align-items: center; gap: 7px; }
+.sku-status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text2); }
+.sku-status.ok .dot { background: var(--green); }
+.sku-status.warn .dot { background: var(--yellow); }
+.sku-status.err .dot { background: var(--red); }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; margin-bottom: 16px; }
+.panel-title { font-family: var(--font-display); font-size: 13px; font-weight: 800; color: var(--accent); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.panel-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+/* ── Upload ── */
+.drop { border: 1.5px dashed var(--border); border-radius: 10px; padding: 28px 16px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
+.drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-dim); }
+.drop-title { font-weight: 700; font-size: 14px; }
+.drop-sub { color: var(--text2); font-size: 12px; margin-top: 4px; }
+.drop input { display: none; }
+.msg { margin-top: 10px; font-size: 12.5px; padding: 9px 12px; border-radius: 8px; }
+.msg[hidden] { display: none; }
+.msg.err { background: var(--red-dim); color: var(--red); border: 1px solid var(--red); }
+.msg.info { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
+
+/* ── Summary strip ── */
+.summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.stat { background: var(--surface2); border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; }
+.stat-label { font-size: 10px; font-weight: 700; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; }
+.stat-value { font-size: 15px; font-weight: 700; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.stat.good .stat-value { color: var(--green); }
+.stat.bad { border-color: var(--red); }
+.stat.bad .stat-value { color: var(--red); }
+.stat.warn .stat-value { color: var(--yellow); }
+.total-banner { margin-bottom: 12px; }
+
+.toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.toolbar .spacer { flex: 1; }
+.btn { font-family: var(--font-body); font-size: 12.5px; font-weight: 600; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); cursor: pointer; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.primary { background: var(--accent); color: #111; border-color: var(--accent); }
+.btn.primary:hover { filter: brightness(1.08); color: #111; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.toggle { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text2); cursor: pointer; user-select: none; }
+
+/* ── Items table ── */
+.tbl-wrap { overflow-x: auto; }
+table.items { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.items th { text-align: left; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text2); padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+table.items td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.items td.num, table.items th.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.items tr.st-OK td:first-child { box-shadow: inset 3px 0 var(--green); }
+table.items tr.st-CHECK td { background: var(--yellow-dim); }
+table.items tr.st-CHECK td:first-child { box-shadow: inset 3px 0 var(--yellow); }
+table.items tr.st-NEW td { background: var(--red-dim); }
+table.items tr.st-NEW td:first-child { box-shadow: inset 3px 0 var(--red); }
+table.items tr.other td { color: var(--strike); text-decoration: line-through; }
+table.items tr.other td .note { text-decoration: none; display: inline-block; }
+table.items tfoot td { font-weight: 700; border-bottom: none; }
+table.items tfoot tr.sub td { font-weight: 500; color: var(--text2); font-size: 12px; }
+.desc-cell { min-width: 260px; }
+.note { font-size: 11px; color: var(--text2); margin-top: 3px; }
+.sku-cell { min-width: 300px; }
+.sku-input { width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; color: var(--text); font-family: var(--font-mono); font-size: 12px; padding: 6px 10px; outline: none; }
+.sku-input:focus { border-color: var(--accent); }
+.sku-input.invalid { border-color: var(--red); }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.chip { font-family: var(--font-mono); font-size: 11px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; }
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+.chip.picked { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+.chip.none { font-family: var(--font-body); color: var(--red); }
+.pill { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.pill.OK { background: var(--green-dim); color: var(--green); }
+.pill.CHECK { background: var(--yellow-dim); color: var(--yellow); border: 1px solid var(--yellow); }
+.pill.NEW { background: var(--red-dim); color: var(--red); border: 1px solid var(--red); }
+.pill.GB { color: var(--strike); border: 1px solid var(--border); }
+.saved-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--accent); margin-top: 5px; }
+.link { background: none; border: none; color: var(--text2); text-decoration: underline; cursor: pointer; font-size: 10.5px; font-family: var(--font-body); padding: 0; }
+.link:hover { color: var(--accent); }
+
+/* ── Open items + saved picks ── */
+.open-list { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.open-list h4 { font-size: 12px; margin-bottom: 6px; }
+.open-list ul { list-style: none; font-size: 12.5px; }
+.open-list li { padding: 4px 0; border-bottom: 1px dashed var(--border); }
+@media (max-width: 760px) { .open-list { grid-template-columns: 1fr; } .page { padding: 14px 16px 32px; } }
+.modal-bg { position: fixed; inset: 0; background: #0009; z-index: 300; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.modal-bg[hidden] { display: none; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; width: 100%; max-width: 760px; max-height: 80vh; display: flex; flex-direction: column; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+.modal-head .t { font-family: var(--font-display); font-weight: 800; font-size: 15px; }
+.modal-body { padding: 12px 18px; overflow: auto; }
+.modal-foot { padding: 12px 18px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+table.saved { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.saved td { padding: 7px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.saved td.mono { font-family: var(--font-mono); }
+.empty { color: var(--text2); text-align: center; padding: 24px 0; }
+</style>
+</head>
+<body>
+
+<div class="auth-gate" id="auth-gate">
+  <div class="auth-card">
+    <div class="auth-logo-row">
+      <div class="auth-logo-mark">T</div>
+      <div><div class="auth-title">Tomahawk Operations</div><div class="auth-sub">Sign in to continue</div></div>
+    </div>
+    <div style="font-size:11.5px;color:var(--text2);">Login happens once on the <a href="../index.html" style="color:var(--accent)">Tomahawk hub</a>. Redirecting you there&#8230;</div>
+  </div>
+</div>
+
+<header class="site-header">
+  <div class="header-logo">
+    <a href="../index.html" class="logo-svg-wrap" style="text-decoration:none">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="474 509 6803 1270" style="height:54px;width:auto;display:block;fill:currentColor;">
+        <path d="M796.6 803.57l625.42 0c4.17,0.55 6.71,2.65 7.48,6.14l-84.8 151.21 -181.47 0c-16.1,25.18 -100.16,178.13 -252.2,458.77l-203.52 0 -0.67 -3.08c109.72,-202.64 190.86,-354.55 243.59,-455.69l-240.46 0 -0.77 -3.7c47.6,-91.52 76.61,-142.78 87.4,-153.65zm-14.19 821.74l-287.36 153.05 187.35 -278.86 1362.49 0 -8.53 5.99 -1253.95 119.82zm6102.31 -1005.2l131.69 -113.42 0 215.51 -960.53 0 8.48 -6 820.36 -96.09zm-574.92 183.46l298.9 0 1.32 6.14c-45.66,84.33 -70.46,131.58 -74.1,141.4 160.29,-96.44 243.35,-144.55 249.31,-144.55l224.51 0 1.32 6.11c-3.09,0.39 -163.87,96.95 -482.4,289.8l215.31 314.14 -5.44 3.08 -212.81 0c-5.17,-3.62 -50.38,-70.48 -135.48,-200.49l-3.14 0c-57.01,115.32 -92.82,182.15 -107.4,200.49l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.77,-24.7l-1.96 -9.09c-2.91,-13.47 -17.46,-33.95 -43.92,-61.58l5.47 -2.99zm-900.24 0.38l295.21 0 0.67 3.13 -177.4 332.67 0.7 3.15 3.15 0 281.78 -191.3c5.47,6.84 8.72,12.09 9.42,15.42l50.56 191.26 2.97 0c-0.06,-5.07 62.84,-123.21 188.62,-354.33l199.85 0 7 3.13c-2.97,8.9 -110.79,213.14 -323.65,612.64l-212.28 0c-4.01,0 -6.55,-2.09 -7.43,-6.09l-8.67 -40.1c-6.4,-29.71 -17.38,-75.75 -32.99,-138.44l-289.68 184.63 -221.52 0 -0.69 -3.12 276.81 -529.56 -3.98 -18.37c-2.88,-13.46 -17.46,-33.93 -43.89,-61.59l5.44 -3.13zm-792.78 -0.38l758.24 0 0.66 2.99c-195.43,377.28 -303.39,581.65 -323.9,613.13l-197.37 0c-4.22,0 -6.58,-2.06 -7.45,-6.06 5.76,-4.89 46.12,-79.83 121.01,-225.06l-249.55 0c-5.54,7.52 -48.45,84.55 -128.62,231.12l-203.51 0 -0.67 -3.08c178.19,-329 269.43,-500.66 273.89,-514.68 2.75,-6.83 3.49,-17.15 2.64,-30.81 -2.41,-11.19 -17.16,-31.67 -44.05,-61.41l-1.32 -6.14zm185.18 228.04l249.02 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.73 0c-2.8,0 -16.07,23.62 -40.03,70.69zm-991.54 -228.04l298.86 0 1.32 6.14 -118.16 221.9 0.69 3.15 249.5 0c81.88,-151.73 124.55,-228.88 128.62,-231.19l191.28 0c4.13,0.55 6.7,2.65 7.45,6.14 -213.25,402.5 -322.44,606 -327.72,609.98l-196.86 0 -0.67 -3.08 112.7 -218.93 -252.85 0c-6.07,5.96 -41.47,70.68 -105.58,194.4 -11.11,18.37 -17.29,27.61 -18.72,27.61l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.79,-24.7l-1.98 -9.09c-2.9,-13.47 -17.45,-33.95 -43.92,-61.58l5.51 -2.99zm-792.75 0l758.27 0 0.64 2.99c-195.44,377.28 -303.38,581.65 -323.89,613.13l-197.37 0c-4.24,0 -6.6,-2.06 -7.45,-6.06 5.75,-4.89 46.12,-79.83 120.97,-225.06l-249.51 0c-5.56,7.52 -48.47,84.55 -128.62,231.12l-203.49 0 -0.69 -3.08c178.16,-329 269.38,-500.66 273.91,-514.68 2.71,-6.83 3.45,-17.15 2.6,-30.81 -2.39,-11.19 -17.15,-31.67 -44.05,-61.41l-1.32 -6.14zm185.2 228.04l249 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.72 0c-2.81,0 -16.06,23.62 -40.02,70.69zm-1103.91 -228.04l298.89 0c4.16,0.55 6.74,2.81 7.57,6.66l9.27 43.04c6.44,29.76 17.44,75.82 32.88,138.45 190.96,-123.03 291.13,-185.84 300.97,-188.15l206.5 0c4.3,0.55 6.73,2.81 7.55,6.66 -212.8,402.15 -321.84,605.48 -327.27,609.46l-203.52 0 -0.69 -3.08 175.45 -329.54 -0.68 -3.15 -2.97 0 -282.28 191.28c-5.52,-6.84 -8.76,-12.07 -9.47,-15.4l-50.55 -191.26 -2.98 0c-112.09,216.6 -175.21,333.7 -189.29,351.15l-202.99 0 -0.71 -3.08 274.04 -514.16c2.58,-7.52 2.71,-15.74 0.78,-24.65l-1.95 -9.11c-2.91,-13.47 -17.46,-33.95 -43.93,-61.59l5.38 -3.53zm-496.95 0l400.37 0c23.26,0 40.99,20.47 53.34,61.46 5.96,27.63 -9.61,69.81 -46.53,126.69 -44.77,80.33 -115.53,214.7 -211.82,403.33 -9.73,16.45 -24.43,24.64 -43.84,24.64l-517.82 0c-14.01,-8.19 -22.34,-17.45 -24.49,-27.61 -6.2,-28.7 27.81,-103.76 102.25,-225.02 91.52,-179.21 152.8,-290.15 184.01,-332.87 24.3,-20.48 59.21,-30.62 104.53,-30.62zm-137.63 461.82l203.51 0c1.89,-7.52 54.92,-107.99 159.41,-301.53l-0.63 -2.94 -196.86 0c-5.24,4 -60.32,105.51 -165.43,304.47z"/>
+        <path d="M7160.73 529.99c52.95,0 95.89,42.94 95.89,95.95 0,52.95 -42.94,95.89 -95.89,95.89 -53,0 -95.97,-42.94 -95.97,-95.89 0,-53.01 42.97,-95.95 95.97,-95.95zm-42.35 149.95l0 -110.28 46.91 0c11.77,0 20.35,1.01 25.65,3.01 5.34,1.97 9.65,5.52 12.86,10.57 3.22,5.05 4.8,10.81 4.8,17.39 0,8.2 -2.44,15.09 -7.3,20.45 -4.85,5.38 -12.16,8.8 -21.83,10.2 4.84,2.81 8.84,5.9 11.95,9.27 3.13,3.36 7.34,9.3 12.66,17.89l13.46 21.5 -26.6 0 -16.09 -23.99c-5.74,-8.56 -9.67,-13.99 -11.76,-16.2 -2.1,-2.26 -4.33,-3.73 -6.7,-4.58 -2.37,-0.83 -6.08,-1.25 -11.2,-1.25l-4.5 0 0 46.02 -22.31 0zm22.31 -63.65l16.45 0c10.69,0 17.35,-0.44 20.02,-1.32 2.65,-0.87 4.74,-2.48 6.23,-4.68 1.53,-2.18 2.3,-4.96 2.3,-8.25 0,-3.76 -1.01,-6.69 -3,-8.99 -1.97,-2.32 -4.75,-3.73 -8.39,-4.34 -1.8,-0.25 -7.21,-0.37 -16.25,-0.37l-17.36 0 0 27.95zm20.04 -72.89c45.53,0 82.45,36.94 82.45,82.54 0,45.52 -36.92,82.49 -82.45,82.49 -45.59,0 -82.53,-36.97 -82.53,-82.49 0,-45.6 36.94,-82.54 82.53,-82.54z"/>
+      </svg>
+    </a>
+    <div class="logo-divider"></div>
+    <span class="logo-tagline">Purchase List</span>
+  </div>
+  <div class="header-right">
+    <button class="header-theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">
+      <svg class="icon-moon" width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M15.5 10.5A7 7 0 017.5 2.5a7 7 0 000 13 7 7 0 008-5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+      <svg class="icon-sun" width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="3.5" stroke="currentColor" stroke-width="1.4"/><path d="M9 1v2M9 15v2M1 9h2M15 9h2M3.22 3.22l1.42 1.42M13.36 13.36l1.42 1.42M3.22 14.78l1.42-1.42M13.36 4.64l1.42-1.42" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+    </button>
+    <div class="header-user" id="header-user" hidden>
+      <div class="user-avatar" id="user-avatar">--</div>
+      <span class="user-name" id="user-name-display">&#8212;</span>
+      <span class="role-badge" id="user-role-badge">&#8212;</span>
+    </div>
+    <button class="header-logout-btn" id="header-logout-btn" hidden title="Log out">
+      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M8 17H4.5a1.5 1.5 0 01-1.5-1.5v-11A1.5 1.5 0 014.5 3H8M13.5 14l3.5-4-3.5-4M17 10H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+</header>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Purchase List</div>
+      <div class="page-sub">Upload a Landmark Exim (LME) invoice PDF → Tomahawk &amp; Konrad items matched to enabled UC SKUs → download the Purchase List PDF</div>
+    </div>
+    <div class="sku-status" id="sku-status"><span class="dot"></span><span id="sku-status-text">Loading enabled UC SKUs…</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">LME invoice</div>
+    <label class="drop" id="drop">
+      <input type="file" id="file-input" accept="application/pdf,.pdf">
+      <div class="drop-title">Drop the LME invoice PDF here, or click to choose</div>
+      <div class="drop-sub">All Commercial Invoice pages are read (Packing List / Certificate of Origin pages are only used for the carton count)</div>
+    </label>
+    <div class="msg info" id="load-msg" hidden></div>
+  </div>
+
+  <div id="result" hidden>
+    <div class="summary" id="summary"></div>
+    <div class="msg err total-banner" id="total-banner" hidden></div>
+
+    <div class="panel">
+      <div class="panel-title">Items</div>
+      <div class="toolbar">
+        <label class="toggle"><input type="checkbox" id="hide-other" checked> Hide other brands (Golden Bullet etc.)</label>
+        <div class="spacer"></div>
+        <button class="btn" id="saved-btn" type="button">Saved picks (0)</button>
+        <button class="btn primary" id="pdf-btn" type="button">Download PDF</button>
+      </div>
+      <div class="tbl-wrap">
+        <table class="items">
+          <thead><tr><th>Sr</th><th>Description</th><th>Brand</th><th class="num">Qty</th><th>UC SKU</th><th>Status</th></tr></thead>
+          <tbody id="items-body"></tbody>
+          <tfoot id="items-foot"></tfoot>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel" id="open-panel">
+      <div class="panel-title">Open items</div>
+      <div class="open-list">
+        <div><h4>Needs confirmation</h4><ul id="open-check"></ul></div>
+        <div><h4>Not in UC — create the SKU before the PO</h4><ul id="open-new"></ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<datalist id="sku-list"></datalist>
+
+<div class="modal-bg" id="saved-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="saved-title">
+    <div class="modal-head"><div class="t" id="saved-title">Saved SKU picks</div><button class="btn" id="saved-close" type="button">Close</button></div>
+    <div class="modal-body"><div class="note" style="margin:0 0 8px">Picks you confirm are re-used the next time the same invoice line appears. Saved in this browser.</div><div id="saved-body"></div></div>
+    <div class="modal-foot"><span class="note" id="saved-count"></span><button class="btn" id="saved-clear" type="button">Forget all</button></div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+// AUTH — session comes from the Tomahawk hub, same pattern as every
+// other sub-app. Admin / manager / viewer (and Custom users who have
+// this app ticked) can use it; picker_packer can't.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var TM_SESSION_KEY = 'tm_session_v1';
+  var TM_WORKER = 'https://tomahawk-returns.naimuddin.workers.dev';
+  function getSession() { try { return JSON.parse(localStorage.getItem(TM_SESSION_KEY) || 'null'); } catch (e) { return null; } }
+  function clearSession() { localStorage.removeItem(TM_SESSION_KEY); }
+  function goToHub() { window.location.href = '../index.html'; }
+  window.TM_WORKER = TM_WORKER;
+  window.TM_getSession = getSession;
+
+  function allowed(user) {
+    if (user.role === 'admin' || user.role === 'manager' || user.role === 'viewer') return true;
+    return user.role === 'custom' && Array.isArray(user.allowedApps) && user.allowedApps.indexOf('Purchase-List') !== -1;
+  }
+  function showApp(user) {
+    document.getElementById('auth-gate').hidden = true;
+    document.getElementById('header-user').hidden = false;
+    document.getElementById('header-logout-btn').hidden = false;
+    var label = user.display_name || user.username;
+    document.getElementById('user-avatar').textContent = label.slice(0, 2).toUpperCase();
+    document.getElementById('user-name-display').textContent = label;
+    var roleLabels = { admin: 'Admin', manager: 'Manager', viewer: 'Viewer', custom: 'Custom' };
+    document.getElementById('user-role-badge').textContent = roleLabels[user.role] || user.role;
+  }
+  function showAccessDenied() {
+    document.body.innerHTML = '<div class="access-denied-screen"><div style="font-size:15px;font-weight:700;">You don\'t have access to this app</div>' +
+      '<a href="../index.html" style="margin-top:8px;color:var(--accent);font-size:13px;text-decoration:none;">&#8592; Back to Tomahawk Operations</a></div>';
+  }
+  document.getElementById('header-logout-btn').addEventListener('click', async function () {
+    var session = getSession();
+    if (session && session.token) {
+      try { await fetch(TM_WORKER + '?action=logout', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tomahawk-Session': session.token }, body: JSON.stringify({ action: 'logout' }) }); } catch (e) {}
+    }
+    clearSession(); goToHub();
+  });
+  (async function initAuth() {
+    var session = getSession();
+    if (!session || !session.token) { goToHub(); return; }
+    if (!allowed(session)) { showAccessDenied(); return; }
+    showApp(session);
+    try {
+      var res = await fetch(TM_WORKER + '?action=validateSession', { headers: { 'X-Tomahawk-Session': session.token } }).then(function (r) { return r.json(); });
+      if (!res.ok || !res.user) { clearSession(); goToHub(); return; }
+      if (!allowed(res.user)) { showAccessDenied(); return; }
+      session.username = res.user.username; session.role = res.user.role; session.display_name = res.user.display_name;
+      if (res.user.allowedApps !== undefined) session.allowedApps = res.user.allowedApps;
+      localStorage.setItem(TM_SESSION_KEY, JSON.stringify(session));
+      showApp(res.user);
+    } catch (e) { /* network hiccup — keep the optimistic render */ }
+    window.PL_init();
+  })();
+
+  if (localStorage.getItem('tm_theme') === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  window.toggleTheme = function () {
+    var isLight = document.documentElement.getAttribute('data-theme') === 'light';
+    document.documentElement.setAttribute('data-theme', isLight ? 'dark' : 'light');
+    localStorage.setItem('tm_theme', isLight ? 'dark' : 'light');
+  };
+})();
+</script>
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+// LME PARSER — turns a Landmark Exim invoice PDF (pdf.js document)
+// into header details + line items.
+// The Commercial Invoice runs over several pages (pages 1, 4, 7 … —
+// each followed by its Packing List and Certificate of Origin page),
+// so every page titled "COMMERCIAL INVOICE" is read, not just page 1.
+// Column positions shift a little per page, so each page's own
+// header row ("Description of Goods / Catalog no / Brand / Quantity …")
+// decides which column a piece of text belongs to.
+// ══════════════════════════════════════════════════════════════════
+
+// Reads one page's text as lines: [{ y, items:[{x, x2, str}] }], top to bottom.
+async function pdReadLines(page) {
+  var tc = await page.getTextContent();
+  var seen = {}, items = [];
+  tc.items.forEach(function (it) {
+    var s = (it.str || '').trim();
+    if (!s) return;
+    var x = it.transform[4], y = it.transform[5];
+    // LME PDFs sometimes draw the same row twice — drop exact duplicates.
+    var key = s + '|' + x.toFixed(1) + '|' + y.toFixed(1);
+    if (seen[key]) return;
+    seen[key] = true;
+    items.push({ x: x, x2: x + it.width, y: y, str: s });
+  });
+  items.sort(function (a, b) { return b.y - a.y || a.x - b.x; });
+  var lines = [];
+  items.forEach(function (it) {
+    var last = lines[lines.length - 1];
+    if (last && Math.abs(last.y - it.y) <= 2) last.items.push(it);
+    else lines.push({ y: it.y, items: [it] });
+  });
+  lines.forEach(function (l) { l.items.sort(function (a, b) { return a.x - b.x; }); l.text = l.items.map(function (i) { return i.str; }).join(' '); });
+  return lines;
+}
+
+function pdParseInt(s) {
+  var t = String(s || '').replace(/,/g, '').trim();
+  return /^\d+$/.test(t) ? parseInt(t, 10) : null;
+}
+
+// "16th September 2026" → "16-Sep-2026"
+function pdFormatDate(s) {
+  var m = String(s || '').match(/(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3})[A-Za-z]*,?\s+(\d{4})/);
+  if (!m) return String(s || '').trim();
+  return ('0' + m[1]).slice(-2) + '-' + m[2].charAt(0).toUpperCase() + m[2].slice(1, 3).toLowerCase() + '-' + m[3];
+}
+
+// Finds the column header row and returns the x-centre of each column.
+function pdFindColumns(lines) {
+  for (var i = 0; i < lines.length; i++) {
+    var l = lines[i];
+    if (!/Description of Goods/i.test(l.text) || !/Brand/.test(l.text)) continue;
+    var cols = { headerIndex: i };
+    l.items.forEach(function (it) {
+      var c = (it.x + it.x2) / 2;
+      if (/Description of Goods/i.test(it.str)) cols.descX = it.x;
+      else if (/^Catalog/i.test(it.str)) { cols.catalog = c; cols.catalogX = it.x; }
+      else if (/^Brand$/i.test(it.str)) cols.brand = c;
+      else if (/^Quantity$/i.test(it.str)) cols.qty = c;
+      else if (/^unit$/i.test(it.str)) cols.unit = c;
+      else if (/Unit price/i.test(it.str)) cols.price = c;
+      else if (/^Amount$/i.test(it.str)) cols.amount = c;
+      else if (/No\. of (ctn|package)/i.test(it.str)) cols.ctn = c;
+    });
+    if (cols.descX != null && cols.brand != null && cols.qty != null) return cols;
+  }
+  return null;
+}
+
+// Puts each text item of a line into a column: marks / desc / catalog / brand / qty / other.
+function pdSplitLine(line, cols) {
+  var out = { marks: [], desc: [], catalog: [], brand: [], qty: [], other: [] };
+  line.items.forEach(function (it) {
+    if (it.x < cols.descX - 3) { out.marks.push(it.str); return; }
+    // Anything starting left of the Catalog column is description text
+    // (long descriptions run up to the Catalog column).
+    if (it.x < (cols.catalogX != null ? cols.catalogX : cols.brand) - 10) { out.desc.push(it.str); return; }
+    var c = (it.x + it.x2) / 2, best = null, bestD = Infinity;
+    ['catalog', 'brand', 'qty', 'unit', 'price', 'amount', 'ctn'].forEach(function (k) {
+      if (cols[k] == null) return;
+      var d = Math.abs(cols[k] - c);
+      if (d < bestD) { bestD = d; best = k; }
+    });
+    (out[best] || out.other).push(it.str);
+  });
+  return {
+    marks: out.marks.join(' '), desc: out.desc.join(' ').replace(/\s+/g, ' ').trim(),
+    catalog: out.catalog.join(' ').trim(), brand: out.brand.join(' ').trim(),
+    qtyText: out.qty.join(' ').trim()
+  };
+}
+
+// Main entry. Returns { header, items:[{desc, catalog, brand, qty, page}], invoiceTotal, pageTitles }
+async function parseLmeInvoice(pdfDoc) {
+  var header = { invoiceNo: '', date: '', bl: '', cartons: '' };
+  var items = [], invoiceTotal = null, ciPages = 0, lastPackingTotalLine = null, lastPackingCols = null;
+
+  for (var p = 1; p <= pdfDoc.numPages; p++) {
+    var lines = await pdReadLines(await pdfDoc.getPage(p));
+    var title = '';
+    for (var t = 0; t < Math.min(lines.length, 12); t++) {
+      if (/COMMERCIAL INVOICE|DETAILED PACKING LIST|CERTIFICATE OF ORIGIN/i.test(lines[t].text)) { title = lines[t].text.toUpperCase(); break; }
+    }
+    var cols = pdFindColumns(lines);
+
+    // Packing List: remember its Total line — the last one carries the carton count.
+    if (/PACKING LIST/.test(title) && cols) {
+      lines.forEach(function (l) { if (l.items.some(function (i) { return i.str === 'Total'; })) { lastPackingTotalLine = l; lastPackingCols = cols; } });
+      continue;
+    }
+    if (!/COMMERCIAL INVOICE/.test(title) || !cols) continue;
+    ciPages++;
+
+    if (!header.invoiceNo) {
+      lines.forEach(function (l) {
+        var m;
+        if ((m = l.text.match(/Invoice no:\s*(\S+)/i))) header.invoiceNo = m[1];
+        if ((m = l.text.match(/Date:\s*(.+)$/i)) && !header.date) header.date = pdFormatDate(m[1]);
+        if ((m = l.text.match(/B\/L No:\s*(\S+)/i))) header.bl = m[1];
+      });
+    }
+
+    var pendingDesc = null; // a description line that had no quantity (wrapped row or section heading)
+    for (var i = cols.headerIndex + 1; i < lines.length; i++) {
+      var line = lines[i];
+      if (/^Total (Quantity|Amount|Packages|Cartons)/i.test(line.text) || /E & O\.E/.test(line.text)) break;
+      var parts = pdSplitLine(line, cols);
+      var qty = pdParseInt(parts.qtyText);
+      // The Total row: "Total" sits left of the Catalog column, quantity under Quantity.
+      if (/(^|\s)Total$/.test(parts.desc) || line.items.some(function (it) { return it.str === 'Total'; })) {
+        if (qty != null) invoiceTotal = qty; // running total — last CI page holds the grand total
+        break;
+      }
+      if (/\bB\/F\b/.test(line.text)) continue; // brought-forward row on continuation pages
+      if (qty == null) {
+        // No quantity: section heading ("Carbon Brush"), Freight, or the first half of a wrapped row.
+        pendingDesc = (parts.desc || parts.catalog) ? parts : null;
+        continue;
+      }
+      var desc = parts.desc, catalog = parts.catalog;
+      if (!desc && pendingDesc) { desc = pendingDesc.desc; catalog = catalog || pendingDesc.catalog; }
+      pendingDesc = null;
+      items.push({ desc: desc, catalog: catalog, brand: parts.brand, qty: qty, page: p });
+    }
+  }
+
+  if (lastPackingTotalLine && lastPackingCols && lastPackingCols.ctn != null) {
+    var nums = lastPackingTotalLine.items.filter(function (it) { return pdParseInt(it.str) != null; });
+    var best = null, bestD = Infinity;
+    nums.forEach(function (it) { var d = Math.abs((it.x + it.x2) / 2 - lastPackingCols.ctn); if (d < bestD) { bestD = d; best = it; } });
+    if (best) header.cartons = pdParseInt(best.str).toLocaleString('en-IN');
+  }
+  return { header: header, items: items, invoiceTotal: invoiceTotal, ciPages: ciPages };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ROWS — brand rules + merging split lines
+// ══════════════════════════════════════════════════════════════════
+var OUR_BRANDS = /^(tomahawk|konrad)$/i;
+
+// Applies the brand rules and merges split lines of the same item.
+// Row: { desc, catalog, brand, qty, parts:[qty…], ours, brandNote }
+function buildRows(items) {
+  var rows = [], byKey = {}, prevBrand = '';
+  items.forEach(function (it) {
+    var brand = it.brand, brandNote = '';
+    if (!brand) {
+      // Blank brand: almost always a spare/accessory of the item above it
+      // (e.g. "CHR 2765 Nozzle Set" under the Golden Bullet CHR 2765).
+      brand = prevBrand || '';
+      brandNote = brand ? 'Brand blank on invoice — taken from the row above (' + brand + ')' : 'Brand blank on invoice';
+    } else prevBrand = brand;
+    var ours = OUR_BRANDS.test(brand);
+    // Split lines (same item, two qty lines) merge into one row.
+    var key = (brand + '|' + (it.catalog || it.desc)).toUpperCase().replace(/\s+/g, ' ');
+    if (byKey[key]) { byKey[key].qty += it.qty; byKey[key].parts.push(it.qty); return; }
+    var row = { desc: it.desc, catalog: it.catalog, brand: brand, brandBlank: !it.brand, brandNote: brandNote, qty: it.qty, parts: [it.qty], ours: ours };
+    byKey[key] = row; rows.push(row);
+  });
+  rows.forEach(function (r) {
+    r.displayDesc = r.desc + (r.parts.length > 1 ? ' (' + r.parts.map(function (q) { return q.toLocaleString('en-IN'); }).join(' + ') + ')' : '');
+  });
+  return rows;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// SKU MATCHING — invoice row → enabled UC SKU
+// 1) Pull model codes out of the description + catalog no
+//    (TCS-8A, BMT-1666, "HR 061" → HR061, TPER-A …).
+// 2) Candidates = enabled SKUs that START with one of those codes.
+// 3) Drop candidates that clash with the description (Bare-Tool vs kit,
+//    combo, battery pack, "Power-Point" battery, spares).
+// 4) Exactly one clean candidate → matched. Several, or a battery
+//    variant the invoice doesn't settle → yellow, user confirms.
+// ══════════════════════════════════════════════════════════════════
+
+// Confirmed decisions that override matching (from past invoices).
+var FIXED_PICKS = { 'SAW6001': 'SAW-6001-Chiansaw-CL' };
+
+function codeTokens(text) {
+  var raw = String(text || '').toUpperCase().replace(/["“”]/g, ' ').split(/[\s+,/()]+/).filter(Boolean);
+  var out = [];
+  raw.forEach(function (tok, i) {
+    var t = tok.replace(/^[^A-Z0-9]+|[^A-Z0-9]+$/g, '');
+    if (!t) return;
+    var alnum = t.replace(/[^A-Z0-9]/g, '');
+    var hasL = /[A-Z]/.test(alnum), hasD = /\d/.test(alnum);
+    // Code with letters + digits (TCS-8A, KON-1288, TLL-B-02-N, CBN19)
+    if (hasL && hasD && alnum.length >= 4) out.push(alnum);
+    // Hyphenated letters-only code (TPER-A)
+    else if (hasL && !hasD && /-/.test(t) && alnum.length >= 5 && alnum.length <= 8) out.push(alnum);
+    // "HR 061": a bare number joins the letters right before it
+    if (/^\d{2,5}$/.test(t) && i > 0) {
+      var prev = raw[i - 1].replace(/[^A-Z0-9-]/g, '').split('-').pop();
+      if (/^[A-Z]{2,5}$/.test(prev)) out.push(prev + t);
+    }
+  });
+  return out.filter(function (v, i, a) { return a.indexOf(v) === i; });
+}
+
+// "TLL16" → /^T[-_ ]?L[-_ ]?L[-_ ]?1[-_ ]?6(?![A-Z0-9])/i  (so TLL-16-… and TLL16-… both match, TLL-160 doesn't)
+function codeRegex(code) {
+  return new RegExp('^' + code.split('').join('[-_ ]?') + '(?![A-Za-z0-9])', 'i');
+}
+
+function featuresOf(text) {
+  var t = String(text || '').toUpperCase();
+  var combo = /COMBO/.test(t);
+  return {
+    bare: /WITHOUT BATTER|BARE/.test(t),
+    combo: combo,
+    kit: !combo && /\bKIT\b|\bSET\b/.test(t),
+    battery: /WITH BATTER|\d(\.\d)?\s?AH\b|[-_ ]\dB\b|\b\dB[-_]/.test(t),
+    power: /POWER-POINT|POWER POINT|\bBATTERY\b(?!.*WITHOUT)/.test(t) && !/WITHOUT BATTER/.test(t),
+    spare: /SPARE|^SPR[-_]/.test(t)
+  };
+}
+
+// Returns { status:'OK'|'CHECK'|'NEW', sku, candidates:[…], note }
+function matchSku(row, enabledSkus) {
+  var text = row.desc + ' ' + (row.catalog || '');
+  var codes = codeTokens(text);
+  for (var f in FIXED_PICKS) {
+    if (codes.indexOf(f) !== -1 && enabledSkus.indexOf(FIXED_PICKS[f]) !== -1)
+      return { status: 'OK', sku: FIXED_PICKS[f], candidates: [FIXED_PICKS[f]], note: 'Confirmed rule' };
+  }
+  var want = featuresOf(text);
+  var cands = [];
+  enabledSkus.forEach(function (sku) {
+    if (/^(Unlinked|Block)/i.test(sku)) return;
+    if (codes.some(function (c) { return codeRegex(c).test(sku); })) cands.push(sku);
+  });
+  if (!want.spare) cands = cands.filter(function (s) { return !/^SPR[-_]/i.test(s); });
+  if (!cands.length) return { status: 'NEW', sku: '', candidates: [], note: codes.length ? 'No enabled UC SKU for ' + codes.join(' / ') : 'No model code found in description' };
+
+  // A candidate is "clean" when it has no feature the invoice doesn't
+  // mention, and the invoice has no feature the SKU lacks.
+  var clean = cands.filter(function (sku) {
+    var has = featuresOf(sku.replace(/_/g, '-'));
+    if (has.bare !== want.bare) return false;
+    if (has.combo !== want.combo) return false;
+    if (want.kit && !has.kit && !/-CL\b|-CL$/i.test(sku)) return false;
+    if (has.kit && !want.kit && !want.combo) return false;
+    if (has.battery && !want.battery) return false;
+    if (has.power && !want.power) return false;
+    return true;
+  });
+  // Does the invoice say whether batteries are included? If not, and the
+  // model has Bare-Tool / battery-pack variants, a person must confirm.
+  var batteryStated = want.bare || want.battery;
+  var hasBatteryVariants = cands.some(function (s) { var h = featuresOf(s); return h.bare || h.battery; });
+  var ordered = clean.concat(cands.filter(function (s) { return clean.indexOf(s) === -1; }));
+
+  if (clean.length === 1 && (batteryStated || !hasBatteryVariants || want.combo))
+    return { status: 'OK', sku: clean[0], candidates: ordered, note: '' };
+  if (clean.length === 1)
+    return { status: 'CHECK', sku: clean[0], candidates: ordered, note: 'Invoice doesn\'t say with/without battery — confirm' };
+  if (clean.length > 1)
+    return { status: 'CHECK', sku: '', candidates: ordered, note: clean.length + ' enabled SKUs fit — choose one' };
+  return { status: 'CHECK', sku: '', candidates: ordered, note: 'Only similar SKUs found — confirm or mark Not in UC' };
+}
+
+</script>
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+// APP — upload → parse → match → editable table → PDF
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var PICKS_KEY = 'pl_skupicks_v1';   // remembered SKU picks (this browser)
+  var NOT_IN_UC = '__NOT_IN_UC__';     // saved choice meaning "no UC SKU yet"
+  var enabledSkus = [], enabledSet = {};
+  var state = null;                    // { header, invoiceTotal, rows:[…] }
+
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function fmt(n) { return Number(n || 0).toLocaleString('en-IN'); }
+
+  // ── Remembered picks ─────────────────────────────────────────────
+  function loadPicks() { try { return JSON.parse(localStorage.getItem(PICKS_KEY) || '{}') || {}; } catch (e) { return {}; } }
+  function savePicks(p) { try { localStorage.setItem(PICKS_KEY, JSON.stringify(p)); } catch (e) {} updateSavedBtn(); }
+  // One key per invoice line wording, so "TLL-02-C" and "TLL-02-C with tripod" stay separate.
+  function pickKey(row) { return (row.brand + '|' + row.catalog + '|' + row.desc).toUpperCase().replace(/[^A-Z0-9|]+/g, ' ').replace(/\s+/g, ' ').trim(); }
+  function rememberPick(row, sku) {
+    var p = loadPicks();
+    p[pickKey(row)] = { sku: sku || NOT_IN_UC, desc: row.desc, brand: row.brand, at: new Date().toISOString().slice(0, 10) };
+    savePicks(p);
+  }
+  function forgetPick(key) { var p = loadPicks(); delete p[key]; savePicks(p); }
+  function updateSavedBtn() { $('saved-btn').textContent = 'Saved picks (' + Object.keys(loadPicks()).length + ')'; }
+
+  // ── Enabled UC SKU list (Worker → Supabase mirror) ───────────────
+  async function loadSkus() {
+    var st = $('sku-status'), tx = $('sku-status-text');
+    try {
+      var session = window.TM_getSession();
+      var res = await fetch(window.TM_WORKER + '?action=ucsku_getList', { headers: { 'X-Tomahawk-Session': (session && session.token) || '' } }).then(function (r) { return r.json(); });
+      if (!res || !res.ok) throw new Error((res && res.error) || 'no response');
+      enabledSkus = (res.skus || []).filter(function (s) { return !/^(Unlinked|Block)/i.test(s); }).sort();
+      enabledSet = {}; enabledSkus.forEach(function (s) { enabledSet[s] = true; });
+      $('sku-list').innerHTML = enabledSkus.map(function (s) { return '<option value="' + esc(s) + '">'; }).join('');
+      var when = res.updatedAt ? new Date(res.updatedAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+      st.className = 'sku-status ' + (res.source === 'supabase' ? 'ok' : 'warn');
+      tx.textContent = fmt(enabledSkus.length) + ' enabled UC SKUs' + (when ? ' · synced ' + when : '') + (res.source !== 'supabase' ? ' (saved copy — Supabase unreachable)' : '');
+    } catch (e) {
+      st.className = 'sku-status err';
+      tx.textContent = 'Could not load the UC SKU list (' + e.message + ') — reload to retry';
+    }
+  }
+
+  // ── Upload ───────────────────────────────────────────────────────
+  function bindUpload() {
+    var drop = $('drop'), input = $('file-input');
+    input.addEventListener('change', function () { if (input.files[0]) handleFile(input.files[0]); input.value = ''; });
+    ['dragenter', 'dragover'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('over'); }); });
+    ['dragleave', 'drop'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('over'); }); });
+    drop.addEventListener('drop', function (e) { var f = e.dataTransfer.files[0]; if (f) handleFile(f); });
+  }
+
+  function showMsg(text, kind) { var m = $('load-msg'); m.className = 'msg ' + (kind || 'info'); m.textContent = text; m.hidden = !text; }
+
+  async function handleFile(file) {
+    if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') { showMsg('Please upload the invoice as a PDF.', 'err'); return; }
+    if (!enabledSkus.length) { showMsg('The UC SKU list hasn\'t loaded yet — wait a moment or reload, then upload again.', 'err'); return; }
+    showMsg('Reading ' + file.name + '…');
+    try {
+      var buf = await file.arrayBuffer();
+      var doc = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
+      var parsed = await parseLmeInvoice(doc);
+      if (!parsed.ciPages) throw new Error('No "Commercial Invoice" page found — is this an LME invoice?');
+      if (!parsed.items.length) throw new Error('Found the Commercial Invoice but no item lines could be read.');
+      var rows = buildRows(parsed.items);
+      rows.forEach(autoMatch);
+      state = { header: parsed.header, invoiceTotal: parsed.invoiceTotal, ciPages: parsed.ciPages, rows: rows, fileName: file.name };
+      showMsg('');
+      render();
+    } catch (e) {
+      console.error(e);
+      showMsg('Could not read this PDF: ' + e.message, 'err');
+    }
+  }
+
+  // ── Matching a row (saved pick first, then the matcher) ──────────
+  function autoMatch(row) {
+    row.saved = false; row.confirmed = false;
+    if (!row.ours) { row.status = 'GB'; row.sku = ''; row.candidates = []; return; }
+    var m = matchSku(row, enabledSkus);
+    row.candidates = m.candidates; row.note = m.note; row.status = m.status; row.sku = m.sku;
+    row.autoSku = m.sku;
+    var saved = loadPicks()[pickKey(row)];
+    if (saved) {
+      if (saved.sku === NOT_IN_UC) { row.sku = ''; row.status = 'NEW'; row.saved = true; row.note = 'Saved as Not in UC'; }
+      else if (enabledSet[saved.sku]) { row.sku = saved.sku; row.status = 'OK'; row.saved = true; row.note = ''; if (row.candidates.indexOf(saved.sku) === -1) row.candidates = [saved.sku].concat(row.candidates); }
+      else { row.status = 'CHECK'; row.note = 'Saved pick ' + saved.sku + ' is no longer an enabled UC SKU — choose again'; }
+    }
+    // Blank brand that landed on one of our brands → a person must confirm.
+    if (row.brandBlank && row.status === 'OK' && !row.saved) { row.status = 'CHECK'; row.note = row.brandNote; }
+  }
+
+  // ── User sets a SKU on a row (chip click or typed) ──────────────
+  function setRowSku(i, sku) {
+    var row = state.rows[i];
+    if (sku === NOT_IN_UC) { row.sku = ''; row.status = 'NEW'; row.note = 'Marked Not in UC'; }
+    else if (enabledSet[sku]) { row.sku = sku; row.status = 'OK'; row.note = ''; }
+    else return false;
+    row.saved = true;
+    rememberPick(row, sku === NOT_IN_UC ? '' : sku);
+    return true;
+  }
+
+  // ── Render ───────────────────────────────────────────────────────
+  function counts() {
+    var c = { ours: 0, all: 0, OK: 0, CHECK: 0, NEW: 0 };
+    state.rows.forEach(function (r) { c.all += r.qty; if (r.ours) { c.ours += r.qty; c[r.status]++; } });
+    return c;
+  }
+
+  function render() {
+    $('result').hidden = false;
+    var h = state.header, c = counts();
+    var totalOk = state.invoiceTotal != null && state.invoiceTotal === c.all;
+    $('summary').innerHTML = [
+      ['Invoice', h.invoiceNo || '—'], ['Date', h.date || '—'], ['B/L', h.bl || '—'], ['Cartons', h.cartons || '—'],
+      ['Invoice total qty', fmt(state.invoiceTotal), totalOk ? 'good' : 'bad'],
+      ['Our total (Tomahawk + Konrad)', fmt(c.ours)],
+      ['Matched', c.OK, 'good'], ['To confirm', c.CHECK, c.CHECK ? 'warn' : ''], ['Not in UC', c.NEW, c.NEW ? 'bad' : '']
+    ].map(function (s) { return '<div class="stat ' + (s[2] || '') + '"><div class="stat-label">' + esc(s[0]) + '</div><div class="stat-value">' + esc(s[1]) + '</div></div>'; }).join('');
+    var tb = $('total-banner');
+    tb.hidden = totalOk;
+    if (!totalOk) tb.textContent = 'Total check failed: the rows add up to ' + fmt(c.all) + ' but the invoice total is ' + (state.invoiceTotal == null ? 'not found' : fmt(state.invoiceTotal)) + '. Some lines may not have been read — compare with the PDF before using this list.';
+    renderRows();
+    renderOpen();
+    updateSavedBtn();
+  }
+
+  function renderRows() {
+    var hideOther = $('hide-other').checked, html = '', sr = 0;
+    state.rows.forEach(function (r, i) {
+      sr++;
+      if (!r.ours && hideOther) return;
+      if (!r.ours) {
+        html += '<tr class="other"><td>' + sr + '</td><td class="desc-cell">' + esc(r.displayDesc) + (r.brandNote ? '<div class="note">' + esc(r.brandNote) + '</div>' : '') + '</td><td>' + esc(r.brand || '—') + '</td><td class="num">' + fmt(r.qty) + '</td><td>—</td><td><span class="pill GB">Not ours</span></td></tr>';
+        return;
+      }
+      var showChips = r.status !== 'OK' || r.showChips;
+      var chips = '';
+      if (showChips) {
+        chips = '<div class="chips">' + r.candidates.slice(0, 8).map(function (s) {
+          return '<button type="button" class="chip' + (s === r.sku ? ' picked' : '') + '" data-i="' + i + '" data-sku="' + esc(s) + '">' + esc(s) + '</button>';
+        }).join('') + '<button type="button" class="chip none" data-i="' + i + '" data-sku="' + NOT_IN_UC + '">Not in UC</button></div>';
+      }
+      var meta = '';
+      if (r.saved) meta = '<div class="saved-tag">&#9733; Saved pick <button type="button" class="link" data-forget="' + i + '">forget</button></div>';
+      else if (r.status === 'OK') meta = '<div class="saved-tag" style="color:var(--text2)"><button type="button" class="link" data-change="' + i + '">' + (r.showChips ? 'hide options' : 'change') + '</button></div>';
+      var label = { OK: 'Matched', CHECK: 'Confirm', NEW: 'Not in UC' }[r.status];
+      html += '<tr class="st-' + r.status + '"><td>' + sr + '</td>' +
+        '<td class="desc-cell">' + esc(r.displayDesc) + (r.catalog ? '<div class="note">Catalog no: ' + esc(r.catalog) + '</div>' : '') + (r.note ? '<div class="note">' + esc(r.note) + '</div>' : '') + '</td>' +
+        '<td>' + esc(r.brand) + '</td><td class="num">' + fmt(r.qty) + '</td>' +
+        '<td class="sku-cell"><input class="sku-input" list="sku-list" data-i="' + i + '" value="' + esc(r.sku) + '" placeholder="' + (r.status === 'NEW' ? 'NOT IN UC — type a SKU if it exists' : 'Type or pick a UC SKU') + '">' + chips + meta + '</td>' +
+        '<td><span class="pill ' + r.status + '">' + label + '</span></td></tr>';
+    });
+    $('items-body').innerHTML = html;
+    var c = counts();
+    $('items-foot').innerHTML = '<tr><td></td><td>TOTAL (excl. other brands)</td><td></td><td class="num">' + fmt(c.ours) + '</td><td colspan="2"></td></tr>' +
+      '<tr class="sub"><td></td><td>Invoice total (incl. other brands)</td><td></td><td class="num">' + fmt(c.all) + '</td><td colspan="2"></td></tr>';
+  }
+
+  function renderOpen() {
+    var chk = [], nw = [];
+    state.rows.forEach(function (r, i) {
+      if (!r.ours) return;
+      var line = '<li><b>#' + (i + 1) + '</b> ' + esc(r.displayDesc) + ' — ' + fmt(r.qty) + (r.sku ? ' → <code>' + esc(r.sku) + '?</code>' : '') + '</li>';
+      if (r.status === 'CHECK') chk.push(line);
+      if (r.status === 'NEW') nw.push('<li><b>#' + (i + 1) + '</b> ' + esc(r.displayDesc) + ' — ' + fmt(r.qty) + '</li>');
+    });
+    $('open-check').innerHTML = chk.join('') || '<li style="color:var(--text2)">None</li>';
+    $('open-new').innerHTML = nw.join('') || '<li style="color:var(--text2)">None</li>';
+  }
+
+  function bindTable() {
+    $('items-body').addEventListener('click', function (e) {
+      var t = e.target;
+      if (t.dataset.sku != null && t.dataset.i != null) { setRowSku(+t.dataset.i, t.dataset.sku); state.rows[+t.dataset.i].showChips = false; render(); }
+      else if (t.dataset.forget != null) { var r = state.rows[+t.dataset.forget]; forgetPick(pickKey(r)); autoMatch(r); render(); }
+      else if (t.dataset.change != null) { var r2 = state.rows[+t.dataset.change]; r2.showChips = !r2.showChips; renderRows(); }
+    });
+    $('items-body').addEventListener('change', function (e) {
+      var t = e.target;
+      if (!t.classList.contains('sku-input')) return;
+      var i = +t.dataset.i, v = t.value.trim();
+      if (!v) { setRowSku(i, NOT_IN_UC); render(); return; }
+      if (!setRowSku(i, v)) { t.classList.add('invalid'); t.title = v + ' is not an enabled UC SKU'; return; }
+      render();
+    });
+    $('hide-other').addEventListener('change', renderRows);
+  }
+
+  // ── Saved picks modal ────────────────────────────────────────────
+  function openSaved() {
+    var p = loadPicks(), keys = Object.keys(p).sort(function (a, b) { return (p[b].at || '').localeCompare(p[a].at || ''); });
+    $('saved-body').innerHTML = keys.length ? '<table class="saved">' + keys.map(function (k) {
+      var v = p[k];
+      return '<tr><td>' + esc(v.desc) + '<div class="note">' + esc(v.brand) + ' · saved ' + esc(v.at || '') + '</div></td><td class="mono">' + (v.sku === NOT_IN_UC ? '<span style="color:var(--red)">Not in UC</span>' : esc(v.sku)) + '</td><td><button type="button" class="link" data-k="' + esc(k) + '">forget</button></td></tr>';
+    }).join('') + '</table>' : '<div class="empty">No saved picks yet. Confirm a SKU on any row and it\'s remembered here.</div>';
+    $('saved-count').textContent = keys.length + ' saved';
+    $('saved-modal').hidden = false;
+  }
+  function bindSaved() {
+    $('saved-btn').addEventListener('click', openSaved);
+    $('saved-close').addEventListener('click', function () { $('saved-modal').hidden = true; });
+    $('saved-modal').addEventListener('click', function (e) { if (e.target === $('saved-modal')) $('saved-modal').hidden = true; });
+    $('saved-body').addEventListener('click', function (e) {
+      var k = e.target.dataset.k; if (!k) return;
+      forgetPick(k); openSaved(); rematchAll();
+    });
+    $('saved-clear').addEventListener('click', function () {
+      if (!confirm('Forget all saved SKU picks in this browser?')) return;
+      savePicks({}); openSaved(); rematchAll();
+    });
+  }
+  function rematchAll() { if (state) { state.rows.forEach(autoMatch); render(); } }
+
+  // ── PDF (A4 portrait, same layout as the old Purchase_LME-ITC-xxxx.pdf) ──
+  function downloadPdf() {
+    if (!state) return;
+    var c = counts();
+    if (c.CHECK && !confirm(c.CHECK + ' row(s) still need confirmation. They will print yellow with a "?". Download anyway?')) return;
+    var jsPDF = window.jspdf.jsPDF;
+    var doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    var h = state.header, inv = h.invoiceNo || 'LME';
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(15);
+    doc.text('PURCHASE LIST — ' + inv, 12, 16);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(68);
+    doc.text('Vendor: Landmark Exim (HK) Co. | Consignee: Industrial Tools Corporation, E3 Bhiwandi | Invoice date: ' + (h.date || '—') + ' | B/L: ' + (h.bl || '—') + ' | Cartons: ' + (h.cartons || '—'), 12, 21.5);
+    doc.setTextColor(0);
+
+    var body = [], styles = [];
+    state.rows.forEach(function (r, i) {
+      var skuText = !r.ours ? '-' : r.status === 'NEW' ? 'NOT IN UC' : r.status === 'CHECK' ? (r.sku ? r.sku + ' ?' : (r.candidates[0] ? r.candidates[0] + ' ?' : '?')) : r.sku;
+      body.push([String(i + 1), r.displayDesc, r.brand || '', fmt(r.qty), skuText]);
+      styles.push(r.ours ? r.status : 'GB');
+    });
+    body.push(['', 'TOTAL (excl. Golden Bullet / other brands)', '', fmt(c.ours), '']);
+    body.push(['', 'Invoice total (incl. Golden Bullet / other brands)', '', fmt(c.all), '']);
+    styles.push('TOTAL', 'SUB');
+
+    doc.autoTable({
+      startY: 25, margin: { left: 12, right: 12 },
+      head: [['Sr No.', 'Description', 'Brand', 'Qty', 'UC SKU']], body: body,
+      theme: 'grid',
+      styles: { font: 'helvetica', fontSize: 8, cellPadding: 1.4, lineColor: [136, 136, 136], lineWidth: 0.15, textColor: [0, 0, 0], valign: 'middle' },
+      headStyles: { fillColor: [245, 168, 0], textColor: [0, 0, 0], fontStyle: 'bold' },
+      columnStyles: { 0: { cellWidth: 13, halign: 'center' }, 1: { cellWidth: 68 }, 2: { cellWidth: 24 }, 3: { cellWidth: 15, halign: 'right' }, 4: { cellWidth: 66 } },
+      didParseCell: function (d) {
+        if (d.section !== 'body') return;
+        var s = styles[d.row.index];
+        if (s === 'GB') d.cell.styles.textColor = [153, 153, 153];
+        if (s === 'CHECK') d.cell.styles.fillColor = [255, 244, 214];
+        if (s === 'NEW') d.cell.styles.fillColor = [253, 226, 226];
+        if (s === 'OK' && d.column.index === 4) d.cell.styles.fontStyle = 'bold';
+        if (s === 'TOTAL') { d.cell.styles.fillColor = [238, 238, 238]; d.cell.styles.fontStyle = 'bold'; }
+        if (s === 'SUB') { d.cell.styles.fontSize = 7.5; d.cell.styles.textColor = [68, 68, 68]; }
+      },
+      didDrawCell: function (d) {
+        // Strike-through for other-brand rows (jsPDF has no strike style).
+        if (d.section !== 'body' || styles[d.row.index] !== 'GB') return;
+        var txt = d.cell.text.join(' ');
+        if (!txt) return;
+        doc.setDrawColor(153); doc.setLineWidth(0.2);
+        var lines = d.cell.text.length, lh = d.cell.height / Math.max(lines, 1);
+        for (var k = 0; k < lines; k++) {
+          var w = doc.getTextWidth(d.cell.text[k]);
+          var x0 = d.cell.styles.halign === 'right' ? d.cell.x + d.cell.width - d.cell.padding('right') - w : d.cell.styles.halign === 'center' ? d.cell.x + (d.cell.width - w) / 2 : d.cell.x + d.cell.padding('left');
+          var y = d.cell.y + lh * k + lh / 2;
+          doc.line(x0, y, x0 + w, y);
+        }
+      }
+    });
+    var y = doc.lastAutoTable.finalY + 5;
+    doc.setFontSize(7.5); doc.setTextColor(68);
+    var legend = 'Legend: white = matched in UC (SKU in bold) • yellow = confirm • red = not in UC item master (create SKU first) • struck-through grey = Golden Bullet / other brand, not our product. Split invoice lines of the same item are merged.';
+    doc.text(doc.splitTextToSize(legend, 186), 12, y);
+    doc.save('Purchase_' + inv.replace(/\//g, '-') + '.pdf');
+  }
+
+  window.PL_init = function () {
+    if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    bindUpload(); bindTable(); bindSaved();
+    $('pdf-btn').addEventListener('click', downloadPdf);
+    updateSavedBtn();
+    loadSkus();
+  };
+})();
+</script>
+</body>
+</html>
