@@ -200,6 +200,42 @@ tr:hover .icon-btn, .icon-btn:focus { opacity: 1; border-color: var(--border); }
 .link:hover { color: var(--accent); }
 .btn.mini { font-size: 11.5px; padding: 4px 10px; }
 .tag { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px; border-radius: 4px; background: var(--accent-dim); color: var(--accent); margin-top: 3px; }
+.stepbar { display: flex; align-items: center; gap: 0; margin-bottom: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; overflow-x: auto; }
+.stp { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; color: var(--text2); white-space: nowrap; padding: 2px 4px; }
+.stp .n { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+.stp.done { color: var(--text); }
+.stp.done .n { background: var(--green); border-color: var(--green); color: #0c0c14; }
+.stp.now { color: var(--accent); }
+.stp.now .n { border-color: var(--accent); background: var(--accent); color: #111; }
+.stp.bad { color: var(--red); }
+.stp.bad .n { border-color: var(--red); color: var(--red); }
+.stp-line { flex: 1; min-width: 24px; height: 1.5px; background: var(--border); margin: 0 10px; }
+.stp-line.done { background: var(--green); }
+.kpi-line { display: flex; flex-wrap: wrap; gap: 6px 22px; padding: 11px 20px; border-top: 1px solid var(--border); font-size: 13px; align-items: center; }
+.kpi-line .k { color: var(--text2); }
+.kpi-line .k b { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.kpi-line .k.ok b { color: var(--green); }
+.kpi-line .k.chk b { color: var(--yellow); }
+.kpi-line .k.new b { color: var(--red); }
+.kpi-line .k.bad b { color: var(--red); }
+.kpi-line .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+.kpi-line .ok .dot { background: var(--green); } .kpi-line .chk .dot { background: var(--yellow); } .kpi-line .new .dot { background: var(--red); }
+.more { position: relative; }
+.more-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 50; min-width: 220px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 6px; box-shadow: 0 10px 30px #0006; }
+.more-menu[hidden] { display: none; }
+.more-menu button { display: block; width: 100%; text-align: left; background: none; border: none; color: var(--text); font-family: var(--font-body); font-size: 13px; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+.more-menu button:hover { background: var(--surface2); color: var(--accent); }
+.more-file { font-size: 11px; color: var(--text2); padding: 6px 10px 2px; border-top: 1px solid var(--border); margin-top: 4px; word-break: break-all; }
+tr.group-row td { background: var(--surface2); padding: 9px 12px; }
+.group-toggle { background: none; border: none; color: var(--text); font-family: var(--font-body); font-size: 12.5px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; padding: 0; }
+.group-toggle:hover { color: var(--accent); }
+.group-toggle .chev { display: inline-block; transition: transform .15s; color: var(--text2); }
+.group-toggle.open .chev { transform: rotate(90deg); }
+.history-row { cursor: pointer; }
+.history-row:hover td { background: var(--surface2); }
+.st-badge { font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.st-badge::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.st-badge.s-draft { color: var(--text2); } .st-badge.s-po { color: var(--accent); } .st-badge.s-ok { color: var(--green); } .st-badge.s-bad { color: var(--red); }
 .head-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .save-state { font-size: 11.5px; color: var(--text2); display: flex; align-items: center; gap: 6px; }
 .save-state.dirty { color: var(--yellow); }
@@ -218,6 +254,7 @@ tr:hover .icon-btn, .icon-btn:focus { opacity: 1; border-color: var(--border); }
 .step.now { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
 .step.bad { color: var(--red); border-color: var(--red); }
 .step-sep { color: var(--border); }
+.btn[hidden] { display: none; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 .btn:disabled:hover { border-color: var(--border); color: var(--text); }
 .btn.primary:disabled:hover { color: #111; filter: none; }
@@ -290,9 +327,11 @@ table.saved td.mono { font-family: var(--font-mono); }
     </div>
     <div class="head-right">
       <div class="sku-status" id="sku-status"><span class="dot"></span><span id="sku-status-text">Loading enabled UC SKUs…</span></div>
-      <button class="btn" id="lists-btn" type="button">Saved invoices</button>
+      <button class="btn" id="lists-btn" type="button">All invoices</button>
     </div>
   </div>
+
+  <div class="stepbar" id="stepbar"></div>
 
   <input type="file" id="file-input" class="file-hidden" accept="application/pdf,.pdf">
 
@@ -305,6 +344,11 @@ table.saved td.mono { font-family: var(--font-mono); }
     <div class="msg info" id="load-msg" hidden></div>
   </div>
 
+  <div class="panel" id="history-panel">
+    <div class="panel-title">Saved invoices</div>
+    <div id="history-body"><div class="empty">Loading…</div></div>
+  </div>
+
   <div id="result" hidden>
     <div class="doc">
       <div class="doc-top">
@@ -314,17 +358,20 @@ table.saved td.mono { font-family: var(--font-mono); }
           <div class="doc-meta" id="doc-meta"></div>
         </div>
         <div class="doc-actions">
-          <span class="file-name" id="file-name"></span>
-          <button class="btn ghost" id="upload-again" type="button">Upload another</button>
-          <button class="btn" id="saved-btn" type="button">Saved picks (0)</button>
-          <button class="btn" id="pdf-btn" type="button">
-            <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M10 3v10M6 9.5l4 4 4-4M4 16.5h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Download PDF
-          </button>
+          <span class="save-state" id="save-state"></span>
+          <div class="more">
+            <button class="btn" id="more-btn" type="button" aria-haspopup="true">⋯ More</button>
+            <div class="more-menu" id="more-menu" hidden>
+              <button type="button" id="pdf-btn">Download PDF</button>
+              <button type="button" id="upload-again">Upload another invoice</button>
+              <button type="button" id="saved-btn">Saved picks (0)</button>
+              <div class="more-file" id="file-name"></div>
+            </div>
+          </div>
           <button class="btn primary" id="save-btn" type="button">Save</button>
         </div>
       </div>
-      <div class="kpis" id="kpis"></div>
+      <div class="kpi-line" id="kpis"></div>
       <div class="po-bar" id="po-bar"></div>
       <div class="msg err total-banner" id="total-banner" hidden></div>
     </div>
@@ -350,13 +397,6 @@ table.saved td.mono { font-family: var(--font-mono); }
 </div>
 
 <datalist id="sku-list"></datalist>
-
-<div class="modal-bg" id="lists-modal" hidden>
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="lists-title">
-    <div class="modal-head"><div class="t" id="lists-title">Saved invoices</div><button class="btn" id="lists-close" type="button">Close</button></div>
-    <div class="modal-body" id="lists-body"><div class="empty">Loading…</div></div>
-  </div>
-</div>
 
 <div class="modal-bg" id="saved-modal" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="saved-title">
@@ -888,6 +928,8 @@ function matchSku(row, enabledSkus) {
 
   function render() {
     $('result').hidden = false;
+    $('upload-panel').hidden = true;
+    $('history-panel').hidden = true;
     var h = state.header, c = counts();
     var totalOk = state.invoiceTotal != null && state.invoiceTotal === c.all;
     $('doc-no').textContent = h.invoiceNo || 'LME invoice';
@@ -896,11 +938,11 @@ function matchSku(row, enabledSkus) {
     $('file-name').textContent = state.fileName;
 
     $('kpis').innerHTML =
-      kpi('Invoice total qty', fmt(state.invoiceTotal), totalOk ? '<span class="check-ok">✓ matches line total</span>' : '<span class="check-bad">✗ lines add up to ' + fmt(c.all) + '</span>', totalOk ? '' : 'bad') +
-      kpi('Our qty · Tomahawk + Konrad', fmt(c.ours), c.oursLines + ' line' + (c.oursLines === 1 ? '' : 's') + (c.included ? ' · ' + c.included + ' other-brand included' : ''), '') +
-      kpi('<span class="dot"></span>Matched', c.OK, 'ready for PO', 'ok') +
-      kpi('<span class="dot"></span>To confirm', c.CHECK, c.CHECK ? 'pick the right SKU' : 'nothing pending', 'chk') +
-      kpi('<span class="dot"></span>Not in UC', c.NEW, c.NEW ? 'create SKU before PO' : 'all exist in UC', 'new');
+      '<span class="k' + (totalOk ? '' : ' bad') + '">Invoice <b>' + fmt(state.invoiceTotal) + '</b> ' + (totalOk ? '<span class="check-ok">✓</span>' : '<span class="check-bad">✗ lines = ' + fmt(c.all) + '</span>') + '</span>' +
+      '<span class="k">Tomahawk <b>' + fmt(c.ours) + '</b> · ' + c.oursLines + ' line' + (c.oursLines === 1 ? '' : 's') + (c.included ? ' (' + c.included + ' included)' : '') + '</span>' +
+      '<span class="k ok"><span class="dot"></span><b>' + c.OK + '</b> matched</span>' +
+      '<span class="k chk"><span class="dot"></span><b>' + c.CHECK + '</b> to confirm</span>' +
+      '<span class="k new"><span class="dot"></span><b>' + c.NEW + '</b> not in UC</span>';
     var tb = $('total-banner');
     tb.hidden = totalOk;
     if (!totalOk) tb.textContent = 'Total check failed: the lines add up to ' + fmt(c.all) + ' but the invoice total is ' + (state.invoiceTotal == null ? 'not found' : fmt(state.invoiceTotal)) + '. Some lines may not have been read — compare with the PDF before using this list.';
@@ -911,10 +953,11 @@ function matchSku(row, enabledSkus) {
     $('c-action').className = 'count' + (act ? ' warn' : '');
     $('c-all').textContent = state.rows.length;
     Array.prototype.forEach.call($('seg').children, function (b) { b.classList.toggle('on', b.dataset.f === filter); });
-    $('seg-note').textContent = filter === 'all' ? 'Other brands are struck through — use "Include" to add one to our list' : 'The PDF always lists every invoice line';
+    $('seg-note').textContent = filter === 'all' ? 'Every line in invoice order — other brands struck through' : filter === 'ours' ? 'Golden Bullet & other brands are grouped at the bottom' : 'Lines that still need a SKU decision';
     renderRows();
     renderSaveState();
     renderPo();
+    renderStepbar();
     updateSavedBtn();
   }
   function kpi(label, value, sub, cls) {
@@ -944,9 +987,11 @@ function matchSku(row, enabledSkus) {
 
   function renderRows() {
     var html = '', shown = 0;
-    state.rows.forEach(function (r, i) {
-      var sr = i + 1;
-      if (filter === 'ours' && !r.ours) return;
+    // Tomahawk view: our lines first, then other brands in one collapsible group.
+    var order = state.rows.map(function (r, i) { return i; });
+    var others = [];
+    if (filter === 'ours') { others = order.filter(function (i) { return !state.rows[i].ours; }); order = order.filter(function (i) { return state.rows[i].ours; }); }
+    var renderOne = function (i) { var r = state.rows[i], sr = i + 1;
       if (filter === 'action' && !(r.ours && (r.status === 'CHECK' || r.status === 'NEW'))) return;
       shown++;
       var qtyCell = '<td class="num' + (r.ours ? '' : ' strike') + '">' + fmt(r.qty) + (r.splitText ? '<div class="sub-line">' + esc(r.splitText) + '</div>' : '') + '</td>';
@@ -965,7 +1010,16 @@ function matchSku(row, enabledSkus) {
         '<td class="brand">' + esc(r.brand || '—') + (r.included ? '<div><span class="tag">Included</span>' + (editable() ? ' <button type="button" class="link" data-exclude="' + i + '">remove</button>' : '') + '</div>' : '') + '</td>' + qtyCell +
         '<td class="sku-cell">' + skuCell(r, i) + '</td>' +
         '<td><span class="pill ' + r.status + '">' + label + '</span></td></tr>';
-    });
+    };
+    order.forEach(renderOne);
+    if (others.length) {
+      var oq = others.reduce(function (a, i) { return a + state.rows[i].qty; }, 0);
+      var brands = []; others.forEach(function (i) { var b = state.rows[i].brand || 'No brand'; if (brands.indexOf(b) === -1) brands.push(b); });
+      html += '<tr class="group-row"><td colspan="6"><button type="button" class="group-toggle' + (state.showOthers ? ' open' : '') + '" data-toggle-others="1"><span class="chev">▸</span>' +
+        esc(brands.join(', ')) + ' — ' + others.length + ' line' + (others.length === 1 ? '' : 's') + ' · ' + fmt(oq) + ' pcs</button>' +
+        ' <span class="note">&nbsp;not ours · open to Include a line in our list</span></td></tr>';
+      if (state.showOthers) others.forEach(renderOne);
+    }
     if (!shown) html = '<tr class="empty-row"><td colspan="6">' + (filter === 'action' ? 'Nothing needs action — every Tomahawk / Konrad line has a UC SKU.' : 'No lines to show.') + '</td></tr>';
     $('items-body').innerHTML = html;
     var c = counts();
@@ -982,6 +1036,7 @@ function matchSku(row, enabledSkus) {
       else if (t.dataset.edit != null) { state.rows[+t.dataset.edit].editing = true; renderRows(); var inp = document.querySelector('.sku-input[data-i="' + t.dataset.edit + '"]'); if (inp) inp.focus(); }
       else if (t.dataset.include != null) { rememberInclude(state.rows[+t.dataset.include], true); autoMatch(state.rows[+t.dataset.include]); markDirty(); render(); }
       else if (t.dataset.exclude != null) { rememberInclude(state.rows[+t.dataset.exclude], false); autoMatch(state.rows[+t.dataset.exclude]); markDirty(); render(); }
+      else if (t.dataset.toggleOthers != null) { state.showOthers = !state.showOthers; renderRows(); }
       else if (t.dataset.cancel != null) { state.rows[+t.dataset.cancel].editing = false; renderRows(); }
     });
     $('items-body').addEventListener('change', function (e) {
@@ -1140,12 +1195,14 @@ function matchSku(row, enabledSkus) {
   }
 
   function renderSaveState() {
-    var b = $('save-btn');
-    b.hidden = !canWrite();
+    var b = $('save-btn'), info = $('save-state');
     var locked = state.saved && ['draft', 'po_failed'].indexOf(state.saved.uc_status) === -1;
-    b.disabled = !!locked || (!state.dirty && !!state.saved);
-    b.textContent = locked ? 'Saved' : state.dirty ? (state.saved ? 'Save changes' : 'Save') : 'Saved ✓';
-    b.title = locked ? 'PO already sent to UC — lines are locked' : '';
+    b.hidden = !canWrite() || !!locked || (!state.dirty && !!state.saved);
+    b.disabled = false;
+    b.textContent = state.saved ? 'Save changes' : 'Save';
+    info.className = 'save-state' + (state.dirty ? ' dirty' : '');
+    info.textContent = state.dirty ? (state.saved ? '● Unsaved changes' : '● Not saved yet')
+      : state.saved ? '✓ Saved · ' + (state.saved.saved_by || '') + ' · ' + fmtWhen(state.saved.updated_at || state.saved.saved_at) + (locked ? ' · locked' : '') : '';
   }
 
   async function saveList() {
@@ -1179,21 +1236,11 @@ function matchSku(row, enabledSkus) {
     return base;
   }
 
-  function stepsHtml(status) {
-    var order = ['saved', 'po', 'grn'];
-    var at = { draft: 'po', po_failed: 'po', po_queued: 'po', po_pushing: 'po', po_created: 'grn', grn_queued: 'grn', grn_pushing: 'grn', grn_failed: 'grn', grn_partial: 'grn', grn_done: 'end' }[status] || 'saved';
-    var labels = { saved: 'Saved', po: 'PO created', grn: 'GRN · received' };
-    return '<div class="steps">' + order.map(function (k, i) {
-      var cls = (order.indexOf(at) > i || at === 'end') ? 'done' : (at === k ? ((status === 'po_failed' || status === 'grn_failed') ? 'bad' : 'now') : '');
-      return (i ? '<span class="step-sep">›</span>' : '') + '<span class="step ' + cls + '">' + labels[k] + '</span>';
-    }).join('') + '</div>';
-  }
-
   function renderPo() {
     var bar = $('po-bar');
     if (!state.saved) {
       bar.innerHTML = '<div class="grow"><div class="po-title">Purchase order</div><div class="po-main">Save this purchase list first</div>' +
-        '<div class="po-sub">Saving keeps every invoice line and the Tomahawk lines with their UC SKUs. Then you can create the PO in UC.</div></div>' + stepsHtml('none');
+        '<div class="po-sub">Saving keeps every invoice line and the Tomahawk lines with their UC SKUs. Then you can create the PO in UC.</div></div>';
       return;
     }
     var L = state.saved, st = L.uc_status || 'draft', items = poItems(), c = counts(), w = canWrite();
@@ -1235,7 +1282,7 @@ function matchSku(row, enabledSkus) {
         '<button type="button" class="btn" data-po="done">Mark done (finished in UC)</button>';
     }
     bar.innerHTML = '<div class="grow"><div class="po-title">Purchase order · ' + esc(STATUS_LABEL[st] || st) + '</div><div class="po-main">' + main + '</div>' + sub + '</div>' +
-      stepsHtml(st) + actions + '<button type="button" class="btn ghost" data-po="refresh" title="Refresh status">↻</button>';
+      actions + '<button type="button" class="btn ghost" data-po="refresh" title="Refresh status">↻</button>';
     var codeInp = $('po-code'); if (codeInp) codeInp.addEventListener('input', function () { codeInp.dataset.touched = '1'; });
     // Keep the status fresh while the push script is working on it.
     clearTimeout(pollTimer);
@@ -1279,37 +1326,73 @@ function matchSku(row, enabledSkus) {
     refreshStatus();
   }
 
-  // ── Saved invoices list ──────────────────────────────────────────
-  async function openLists() {
-    $('lists-modal').hidden = false;
-    $('lists-body').innerHTML = '<div class="empty">Loading…</div>';
+  // ── Step bar: ① Upload → ② Review → ③ Save → ④ Create PO → ⑤ GRN ──
+  function renderStepbar() {
+    var steps = ['Upload', 'Review', 'Save', 'Create PO', 'GRN'];
+    var at = 0, bad = -1, allDone = false;
+    if (state) {
+      var c = counts(), st = state.saved ? state.saved.uc_status : null;
+      if (!state.saved || state.dirty) at = c.CHECK ? 1 : 2;
+      else if (st === 'draft') at = 3;
+      else if (st === 'po_failed') { at = 3; bad = 3; }
+      else if (/^po_(queued|pushing)$/.test(st)) at = 3;
+      else if (st === 'po_created' || /^grn_(queued|pushing|partial)$/.test(st)) at = 4;
+      else if (st === 'grn_failed') { at = 4; bad = 4; }
+      else if (st === 'grn_done') { at = 5; allDone = true; }
+    }
+    $('stepbar').innerHTML = steps.map(function (name, i) {
+      var cls = i < at || allDone ? 'done' : i === at ? (i === bad ? 'bad' : 'now') : '';
+      return (i ? '<span class="stp-line' + (i <= at ? ' done' : '') + '"></span>' : '') +
+        '<span class="stp ' + cls + '"><span class="n">' + (cls === 'done' ? '✓' : i + 1) + '</span>' + name + '</span>';
+    }).join('');
+  }
+
+  // ── Opening screen: upload box + saved invoices register ─────────
+  function statusClass(st) {
+    if (st === 'grn_done') return 's-ok';
+    if (/failed$/.test(st)) return 's-bad';
+    if (st === 'draft') return 's-draft';
+    return 's-po';
+  }
+  async function loadHistory() {
+    var body = $('history-body');
     var res = await api('pl_list');
-    if (!res.ok) { $('lists-body').innerHTML = '<div class="empty">Could not load: ' + esc(res.error) + '</div>'; return; }
-    if (!res.lists.length) { $('lists-body').innerHTML = '<div class="empty">No saved invoices yet.</div>'; return; }
-    $('lists-body').innerHTML = '<table class="lists"><thead><tr><th>Invoice</th><th>Date</th><th class="num">Our qty</th><th>PO</th><th>Status</th><th>Saved</th><th></th></tr></thead><tbody>' +
+    if (!res.ok) { body.innerHTML = '<div class="empty">Could not load saved invoices: ' + esc(res.error) + '</div>'; return; }
+    if (!res.lists.length) { body.innerHTML = '<div class="empty">No saved invoices yet — upload an LME invoice to start.</div>'; return; }
+    body.innerHTML = '<div class="tbl-wrap"><table class="lists"><thead><tr><th>Invoice</th><th>Date</th><th>B/L</th><th class="num">PO qty</th><th>PO</th><th>Status</th><th>Last saved</th></tr></thead><tbody>' +
       res.lists.map(function (l) {
-        return '<tr><td><b>' + esc(l.invoice_no) + '</b></td><td>' + esc(l.invoice_date || '') + '</td><td class="num">' + fmt(l.our_total) + '</td>' +
-          '<td class="mono">' + esc(l.uc_status === 'draft' ? '—' : (l.po_code || '') + ' · ' + (l.facility || '')) + '</td><td>' + esc(STATUS_LABEL[l.uc_status] || l.uc_status) + '</td>' +
-          '<td class="note">' + esc(l.saved_by || '') + ' · ' + esc(fmtWhen(l.updated_at || l.saved_at)) + '</td>' +
-          '<td><button type="button" class="btn mini" data-open="' + l.id + '">Open</button></td></tr>';
-      }).join('') + '</tbody></table>';
+        return '<tr class="history-row" data-open="' + l.id + '"><td><b>' + esc(l.invoice_no) + '</b></td><td>' + esc(l.invoice_date || '') + '</td><td>' + esc(l.bl_no || '') + '</td>' +
+          '<td class="num">' + fmt(l.our_total) + '</td><td class="mono">' + esc(l.uc_status === 'draft' ? '—' : (l.po_code || '') + ' · ' + (l.facility || '')) + '</td>' +
+          '<td><span class="st-badge ' + statusClass(l.uc_status) + '">' + esc(STATUS_LABEL[l.uc_status] || l.uc_status) + '</span></td>' +
+          '<td class="note">' + esc(l.saved_by || '') + ' · ' + esc(fmtWhen(l.updated_at || l.saved_at)) + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+  function goHome() {
+    if (state && state.dirty && !confirm('You have unsaved changes on this invoice. Leave without saving?')) return;
+    state = null;
+    clearTimeout(pollTimer);
+    $('result').hidden = true;
+    $('upload-panel').hidden = false;
+    $('history-panel').hidden = false;
+    showMsg('');
+    renderStepbar();
+    loadHistory();
   }
   function bindLists() {
-    $('lists-btn').addEventListener('click', openLists);
-    $('lists-close').addEventListener('click', function () { $('lists-modal').hidden = true; });
-    $('lists-modal').addEventListener('click', function (e) { if (e.target === $('lists-modal')) $('lists-modal').hidden = true; });
-    $('lists-body').addEventListener('click', async function (e) {
-      var b = e.target.closest('button[data-open]'); if (!b) return;
-      if (state && state.dirty && !confirm('You have unsaved changes on the open invoice. Open another one anyway?')) return;
+    $('lists-btn').addEventListener('click', goHome);
+    $('history-body').addEventListener('click', async function (e) {
+      var tr = e.target.closest('tr[data-open]'); if (!tr) return;
       if (!enabledSkus.length) { alert('The UC SKU list hasn\'t loaded yet — try again in a moment.'); return; }
-      var res = await api('pl_get', { id: b.dataset.open });
+      var res = await api('pl_get', { id: tr.dataset.open });
       if (!res.ok || !res.list) { alert('Could not open: ' + (res.error || 'not found')); return; }
-      $('lists-modal').hidden = true;
       poCheck.code = null;
       openSavedList(res.list);
     });
+    // ⋯ More menu
+    $('more-btn').addEventListener('click', function (e) { e.stopPropagation(); $('more-menu').hidden = !$('more-menu').hidden; });
+    $('more-menu').addEventListener('click', function () { $('more-menu').hidden = true; });
+    document.addEventListener('click', function (e) { if (!e.target.closest('.more')) $('more-menu').hidden = true; });
   }
-
 
   window.PL_init = function () {
     if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -1318,6 +1401,8 @@ function matchSku(row, enabledSkus) {
     $('save-btn').addEventListener('click', saveList);
     $('po-bar').addEventListener('click', onPoBarClick);
     updateSavedBtn();
+    renderStepbar();
+    loadHistory();
     loadSkus();
   };
 })();
