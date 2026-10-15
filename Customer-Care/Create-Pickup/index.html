@@ -1171,6 +1171,7 @@ function initDelhiveryApp() {
     if (m !== 'forward' && m !== 'reverse') return;
     pickupMode = m;
     sendBackFrom = null;
+    claimFrom = null;   // a manual tab switch leaves the service request behind
     var t = MODE_TEXT[m];
     document.getElementById('form-title').textContent = t.title;
     document.getElementById('lbl-name').textContent = t.name;
@@ -1381,7 +1382,46 @@ function initDelhiveryApp() {
     if (autoUnitPrice) amountField.value = +(autoUnitPrice * (parseInt(qtyField.value, 10) || 1)).toFixed(2);
   });
   amountField.addEventListener('input', function () { autoUnitPrice = null; }); // manual edit wins
-  loadProductSources();
+  var srcReady = loadProductSources();
+
+  // ── Opened from Customer Care → New requests ("Approve & book pickup"):
+  // ?claim=WC-… fills a reverse pickup from the service request. Booking it
+  // marks the request approved (ccClaimAction). ──
+  var claimFrom = null;
+  (async function prefillFromClaim() {
+    var id = null;
+    try { id = new URLSearchParams(location.search).get('claim'); } catch (e) {}
+    if (!id) return;
+    var res;
+    try { res = await workerGet('ccClaimGet&claim_id=' + encodeURIComponent(id)); } catch (e) { res = null; }
+    if (!res || !res.ok || !res.request) {
+      resultBox.className = 'result-box show error';
+      resultTitle.textContent = 'Could not load request ' + id;
+      resultBody.textContent = (res && res.error) || 'Please try again.';
+      return;
+    }
+    var r = res.request;
+    await srcReady;
+    switchPickupTab('reverse');            // resets the form into reverse mode
+    claimFrom = r.claim_id;
+    document.getElementById('f-name').value = r.name || '';
+    document.getElementById('f-phone').value = String(r.phone || '').replace(/\D/g, '').slice(-10);
+    document.getElementById('f-add').value = r.address || '';
+    pinField.value = r.pincode || '';
+    pinField.dispatchEvent(new Event('blur'));     // fills City/State + serviceability
+    typeField.value = 'Repair';
+    refreshOrderId();
+    // Product: the order's own SKU when it is a UC SKU, else Other + the customer's words.
+    var sku = String(r.order_skus || '').split(',')[0].replace(/\s+x\d+$/, '').trim();
+    if (sku && ucSkus.indexOf(sku) !== -1) { applyProduct(sku); productSearch.value = sku; }
+    else { applyProduct(OTHER); productOtherWrap.style.display = ''; productOtherField.value = r.product || ''; }
+    document.getElementById('f-market-order').value = r.order_id || '';
+    document.getElementById('f-remark').value = (r.claim_id + ' · ' + (r.issue_type || '')).slice(0, 300);
+    resultBox.className = 'result-box show success';
+    resultTitle.textContent = 'Service request ' + r.claim_id;
+    resultBody.textContent = 'Filled from the request — check the details, choose Repair or Replacement, then Create Order. Booking it marks the request approved.';
+    document.getElementById('f-name').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  })();
 
   // ── Live volumetric-weight hint — Delhivery Surface uses (L×W×H)/5000
   // ── Pincode serviceability pre-check — fires on blur so a bad pincode
@@ -2197,6 +2237,14 @@ function initDelhiveryApp() {
             : order.courier === 'Ekart'
             ? '<div style="margin-top:6px;color:var(--text2);">Pickup: Ekart schedules it automatically for booked shipments.</div>'
             : pickupNoteHtml(res.pickup));
+        if (claimFrom && order.direction === 'reverse') {
+          var cf = claimFrom; claimFrom = null;
+          callWorker('ccClaimAction', { claim_id: cf, kind: 'approve', case_id: order.order }).then(function (a) {
+            resultBody.insertAdjacentHTML('beforeend', '<div style="margin-top:6px;' + (a && a.ok ? 'color:var(--text2)' : 'color:#f87171') + '">' +
+              (a && a.ok ? 'Service request ' + escapeHtml(cf) + ' approved' + (a.emailed ? ' — customer emailed.' : '.')
+                         : 'Pickup booked, but request ' + escapeHtml(cf) + ' was not marked approved: ' + escapeHtml((a && a.error) || 'error') + '. Mark it in New requests.') + '</div>');
+          }).catch(function () {});
+        }
         sendBackFrom = null;
         resetFormFields();
         pinStatus.textContent = '';

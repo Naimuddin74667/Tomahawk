@@ -522,6 +522,9 @@ const ACTION_TIERS = {
   validateSession: 'viewer_read', // any authenticated role may confirm their own session
   warrantyLookup: 'public', // public Warranty Check page — non-personal order facts only, rate-limited
   warrantyClaimSubmit: 'public', // public warranty claim form — rate-limited, emails support
+  requestTrack: 'public', // public 'track your request' page — request ID/order ID + mobile, steps only, rate-limited
+  ccClaimsList: 'viewer_read', ccClaimGet: 'viewer_read', ccClaimFiles: 'viewer_read', // Customer Care: New requests
+  ccClaimAction: 'manager_up',
 
   // — Admin only: portal user management + "wipe everything" dev actions —
   adminListUsers: 'admin_only', adminCreateUser: 'admin_only', adminUpdateUser: 'admin_only',
@@ -1254,6 +1257,43 @@ export default {
           console.error('warranty claim failed:', e.message);
           return json({ ok: false, error: 'Something went wrong — please try again, or email support@bullet.co.in.' }, 500);
         }
+      }
+
+      // ── SERVICE REQUESTS (public tracking + Customer Care "New requests") ──
+      if (request.method === 'GET' && action === 'requestTrack') {
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        if (!(await warrantyRateOk(env.DB, 'track:' + ip, 30))) {
+          return json({ ok: false, error: 'Too many checks — please try again in an hour.' }, 429);
+        }
+        try { return json(await srTrack(env, url.searchParams.get('id'), url.searchParams.get('phone'))); }
+        catch (e) { console.error('requestTrack failed:', e.message); return json({ ok: false, error: 'Something went wrong — please try again later.' }, 500); }
+      }
+      if (request.method === 'GET' && action === 'ccClaimsList') {
+        await ensureServiceRequestCols(env.DB);
+        const days = Math.min(365, Math.max(1, parseInt(url.searchParams.get('days') || '90', 10) || 90));
+        const rows = (await env.DB.prepare(
+          "SELECT claim_id, created_at, updated_at, order_id, platform, product, name, phone, email, issue_type, description, address, pincode, city, state, warranty_status, order_date, warranty_until, order_skus, file_count, status, case_id, events_json FROM warranty_claims WHERE created_at > datetime('now', ?) OR COALESCE(status, 'new') NOT IN ('closed','not_covered') ORDER BY created_at DESC LIMIT 500"
+        ).bind('-' + days + ' days').all()).results || [];
+        return json({ ok: true, requests: rows.map(r => ({ ...r, events: srEvents(r), events_json: undefined })) });
+      }
+      if (request.method === 'GET' && action === 'ccClaimGet') {
+        await ensureServiceRequestCols(env.DB);
+        const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(String(url.searchParams.get('claim_id') || '').trim()).first();
+        if (!row) return json({ ok: false, error: 'No such request' }, 404);
+        delete row.ip;
+        return json({ ok: true, request: { ...row, events: srEvents(row), events_json: undefined } });
+      }
+      if (request.method === 'GET' && action === 'ccClaimFiles') {
+        await ensureServiceRequestCols(env.DB);
+        const row = await env.DB.prepare('SELECT files_json FROM warranty_claims WHERE claim_id = ?').bind(String(url.searchParams.get('claim_id') || '').trim()).first();
+        if (!row) return json({ ok: false, error: 'No such request' }, 404);
+        return json({ ok: true, files: await srSignedFiles(env, row) });
+      }
+      if (request.method === 'POST' && act === 'ccClaimAction') {
+        const user = authResult.user || (await resolveSession(request, env.DB));
+        if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
+        const r = await srAction(env, user, body || {});
+        return json(r, r.ok ? 200 : 400);
       }
 
       // ── Phone Scanner App — list Picker & Packer accounts to tap-pick from ──
@@ -4837,6 +4877,9 @@ export default {
       })().catch(err => recordHeartbeat(env, 'stock_alert_whatsapp', 'Stock Alert WhatsApp (9 AM / 12 PM / 4 PM IST)', 'error',
           err.message, 64800).catch(() => {})));
     }
+    // Service requests — email the customer as the courier / warehouse moves
+    // their case on (picked up, reached us, sent back, delivered). */15 ticks.
+    ctx.waitUntil(srMilestoneEmails(env).catch(err => console.error('service request milestones:', err.message)));
     // Order-data retention (Supabase mirror) — once a day, on the tick
     // that falls between 20:30 and 20:44 UTC (02:00–02:14 IST).
     const tick = new Date(event.scheduledTime || Date.now());
@@ -6457,6 +6500,271 @@ const CLAIM_ISSUES = ['Not starting / not working', 'Battery / charging problem'
 const CLAIM_PLATFORMS = ['Amazon', 'Flipkart', 'Website (Shopify)', 'Moglix', 'Other'];
 const CLAIM_MAX_BYTES = 24 * 1024 * 1024;   // all files together (base64 size)
 
+// ══════════════════════════════════════════════════════════════════
+// SERVICE REQUESTS — the website form (tomahawk.tools/pages/service-request)
+// lands in warranty_claims; the care team reviews and acts on it from the
+// Customer Care Dashboard ("New requests"), and the customer follows it on
+// tomahawk.tools/pages/track-request. Every step the customer should know
+// about is emailed to them (SK 13-Oct-2026).
+//
+//   status: new → waiting_customer | tip_sent | quote_sent → approved
+//           (pickup booked, case_id = the reverse RPR/RPL case) → closed
+//           not_covered and closed are final.
+//   events_json: [{at, by, kind, note}] — the request's own history.
+//   Photos / video: Supabase Storage bucket SR_BUCKET, <claim_id>/<n>_<name>.
+// ══════════════════════════════════════════════════════════════════
+const SR_BUCKET = 'service-requests';
+// Customer emails from the request flow (team actions + courier milestones).
+// OFF for the first go-live (15-Oct-2026): requests only show up in the
+// Customer Care Dashboard. Flip to true once the emails + tracking page are signed off.
+const SR_CUSTOMER_EMAILS = false;
+const SR_TRACK_URL = 'https://tomahawk.tools/pages/track-request';
+const SR_FINAL = ['closed', 'not_covered'];
+const SR_KINDS = {
+  //  kind          new status          email subject (null = no email)
+  ask_info:    { status: 'waiting_customer', subject: 'We need a little more from you' },
+  tip:         { status: 'tip_sent',          subject: 'A quick fix to try' },
+  quote:       { status: 'quote_sent',        subject: 'Repair cost for your approval' },
+  not_covered: { status: 'not_covered',       subject: 'About your service request' },
+  approve:     { status: 'approved',          subject: 'Pickup booked' },
+  resolve:     { status: 'closed',            subject: 'Your request is resolved' },
+  reopen:      { status: 'new',               subject: null },
+  note:        { status: null,                subject: null }   // internal note only
+};
+
+async function ensureServiceRequestCols(DB) {
+  await ensureWarrantyClaimsTable(DB);
+  for (const col of ['case_id TEXT', 'events_json TEXT', 'updated_at TEXT', 'files_json TEXT',
+                     'm_picked_at TEXT', 'm_received_at TEXT', 'm_sent_at TEXT', 'm_delivered_at TEXT']) {
+    try { await DB.prepare('ALTER TABLE warranty_claims ADD COLUMN ' + col).run(); } catch (e) { /* exists */ }
+  }
+}
+
+function srEvents(row) { try { return JSON.parse(row.events_json || '[]'); } catch (e) { return []; } }
+
+async function srAddEvent(DB, claimId, ev, sets) {
+  const row = await DB.prepare('SELECT events_json FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
+  const evs = srEvents(row || {});
+  evs.push({ at: new Date().toISOString(), ...ev });
+  const cols = Object.keys(sets || {});
+  await DB.prepare('UPDATE warranty_claims SET events_json = ?, updated_at = datetime(\'now\')' +
+    cols.map(c => ', ' + c + ' = ?').join('') + ' WHERE claim_id = ?')
+    .bind(JSON.stringify(evs), ...cols.map(c => sets[c]), claimId).run();
+}
+
+// ── Supabase Storage (photos + video of each request) ──
+function sbStorageHeaders(env, extra) {
+  return { apikey: env.SUPABASE_SECRET_KEY, Authorization: 'Bearer ' + env.SUPABASE_SECRET_KEY, ...(extra || {}) };
+}
+function sbBase(env) { return env.SUPABASE_URL.replace(/\/$/, '') + '/storage/v1'; }
+
+async function srUploadFiles(env, claimId, files) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY || !files.length) return [];
+  const saved = [];
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    const safe = String(f.filename || 'file').replace(/[^A-Za-z0-9._-]/g, '_').slice(-60);
+    const path = claimId + '/' + (i + 1) + '_' + safe;
+    const bin = Uint8Array.from(atob(f.base64), c => c.charCodeAt(0));
+    const put = () => fetch(sbBase(env) + '/object/' + SR_BUCKET + '/' + path, {
+      method: 'POST', body: bin,
+      headers: sbStorageHeaders(env, { 'Content-Type': f.mime || 'application/octet-stream', 'x-upsert': 'true' })
+    });
+    let r = await put();
+    if (r.status === 400 || r.status === 404) {
+      // first ever upload: create the (private) bucket, then retry once
+      const t = await r.text();
+      if (/bucket/i.test(t)) {
+        await fetch(sbBase(env) + '/bucket', {
+          method: 'POST', headers: sbStorageHeaders(env, { 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ id: SR_BUCKET, name: SR_BUCKET, public: false })
+        });
+        r = await put();
+      }
+    }
+    if (r.ok) saved.push({ path, mime: f.mime, name: f.filename });
+    else console.error('service request file upload failed', r.status, path);
+  }
+  return saved;
+}
+
+async function srSignedFiles(env, row) {
+  let files = [];
+  try { files = JSON.parse(row.files_json || '[]'); } catch (e) { files = []; }
+  if (!files.length || !env.SUPABASE_URL) return [];
+  const r = await fetch(sbBase(env) + '/object/sign/' + SR_BUCKET, {
+    method: 'POST', headers: sbStorageHeaders(env, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ expiresIn: 3600, paths: files.map(f => f.path) })
+  });
+  if (!r.ok) return files.map(f => ({ ...f, url: null }));
+  const signed = await r.json();
+  const byPath = {};
+  (signed || []).forEach(s => { if (s && s.signedURL) byPath[s.path] = sbBase(env) + s.signedURL; });
+  return files.map(f => ({ ...f, url: byPath[f.path] || null }));
+}
+
+// ── Customer emails ──
+function srFirstName(row) { return String(row.name || '').trim().split(/\s+/)[0] || 'there'; }
+
+async function srEmailCustomer(env, row, subject, bodyLines) {
+  if (!SR_CUSTOMER_EMAILS || !row.email) return false;
+  const text = [
+    'Hi ' + srFirstName(row) + ',', '',
+    ...bodyLines, '',
+    'Request ID : ' + row.claim_id,
+    'Product    : ' + (row.product || '-'), '',
+    'Follow your request any time: ' + SR_TRACK_URL + '?id=' + encodeURIComponent(row.claim_id),
+    'Questions? Just reply to this email and quote your request ID.', '',
+    'Team TOMAHAWK® Tools', 'Industrial Tools & Hardware'
+  ].join('\n');
+  try {
+    await sendGmailMessage(env, { to: [row.email], replyTo: 'support@bullet.co.in',
+      subject: subject + ' · ' + row.claim_id, text });
+    return true;
+  } catch (e) { console.error('service request email failed', row.claim_id, e.message); return false; }
+}
+
+const SR_DEFAULT_TEXT = {
+  ask_info: 'To check your product, we need a little more from you. Please reply to this email with it.',
+  tip: 'Many problems can be fixed in a minute. Please try this:',
+  quote: 'Your product is outside the 6-month warranty, so the repair is chargeable. Nothing is done without your OK. Please reply YES to go ahead.',
+  not_covered: 'We have checked your request. Unfortunately this is not covered by the warranty.',
+  approve: 'Good news: we have booked a pickup from your address. Please keep the product packed with its accessories. ' +
+           'So you know what to expect: a few days for the courier to bring it to us, 5 to 7 working days for the repair, ' +
+           'and a few days to reach you again, roughly two weeks in all. We will email you at each step.',
+  resolve: 'Your service request is now resolved. Thank you for your patience.'
+};
+
+// ── Team actions ──
+async function srAction(env, user, b) {
+  await ensureServiceRequestCols(env.DB);
+  const claimId = String(b.claim_id || '').trim();
+  const kind = String(b.kind || '');
+  const k = SR_KINDS[kind];
+  if (!claimId || !k) return { ok: false, error: 'claim_id and a valid kind are required' };
+  const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
+  if (!row) return { ok: false, error: 'No such request' };
+  const msg = String(b.message || '').trim().slice(0, 1500);
+  if (kind === 'note' && !msg) return { ok: false, error: 'Write the note first' };
+  if (['ask_info', 'tip', 'quote', 'not_covered'].includes(kind) && !msg)
+    return { ok: false, error: 'Write the message to the customer first' };
+  const sets = {};
+  if (k.status) sets.status = k.status;
+  if (kind === 'approve') {
+    const caseId = String(b.case_id || '').trim();
+    if (!caseId) return { ok: false, error: 'Book the pickup first (case_id missing)' };
+    sets.case_id = caseId;
+  }
+  let emailed = false;
+  if (k.subject) {
+    const lines = [SR_DEFAULT_TEXT[kind]];
+    if (msg && kind !== 'approve' && kind !== 'resolve') lines.push('', msg);
+    if (msg && (kind === 'approve' || kind === 'resolve')) lines.push('', msg);
+    emailed = await srEmailCustomer(env, row, k.subject, lines);
+  }
+  await srAddEvent(env.DB, claimId, { by: (user && user.username) || 'unknown', kind, note: msg || null,
+    case_id: sets.case_id || null, emailed }, sets);
+  return { ok: true, emailed };
+}
+
+// ── Where is the linked pickup case? (reverse leg + its send-back leg) ──
+async function srCaseLegs(DB, caseId) {
+  if (!caseId) return { rev: null, fwd: null };
+  const rev = await DB.prepare("SELECT order_id, waybill, courier, track_stage, received_at, in_process_at, delivered_at, cancelled_at, linked_order_id, refunded_at, resolution, created_at FROM delhivery_orders WHERE order_id = ? AND delhivery_ok = 1 ORDER BY id DESC LIMIT 1").bind(caseId).first();
+  let fwd = null;
+  if (rev && rev.linked_order_id) {
+    fwd = await DB.prepare("SELECT order_id, waybill, courier, track_stage, rtd_at, delivered_at, created_at FROM delhivery_orders WHERE order_id = ? AND delhivery_ok = 1 ORDER BY id DESC LIMIT 1").bind(rev.linked_order_id).first();
+  }
+  return { rev, fwd };
+}
+
+const SR_PICKED = ['Picked', 'In Transit', 'At Last Mile', 'Out For Delivery', 'Delivered'];
+
+// Steps the customer sees. Never personal data (no name / phone / address).
+function srSteps(row, legs) {
+  const { rev, fwd } = legs;
+  const ev = srEvents(row);
+  const last = kind => { for (let i = ev.length - 1; i >= 0; i--) if (ev[i].kind === kind) return ev[i]; return null; };
+  const steps = [{ key: 'received', state: 'done', at: row.created_at }];
+  const st = row.status || 'new';
+  if (st === 'not_covered') {
+    steps.push({ key: 'not_covered', state: 'done', at: row.updated_at, note: (last('not_covered') || {}).note || null });
+    return { steps, final: true };
+  }
+  if (st === 'waiting_customer') steps.push({ key: 'need_you', state: 'now', at: row.updated_at, note: (last('ask_info') || {}).note || null });
+  else if (st === 'tip_sent') steps.push({ key: 'tip', state: 'now', at: row.updated_at, note: (last('tip') || {}).note || null });
+  else if (st === 'quote_sent') steps.push({ key: 'quote', state: 'now', at: row.updated_at, note: (last('quote') || {}).note || null });
+  else if (st === 'new') steps.push({ key: 'review', state: 'now' });
+  if (st === 'closed' && !row.case_id) { steps.push({ key: 'resolved', state: 'done', at: row.updated_at }); return { steps, final: true }; }
+  if (!row.case_id) {
+    ['pickup', 'reached', 'repair', 'sent', 'delivered'].forEach(k => steps.push({ key: k, state: 'todo' }));
+    return { steps, final: false };
+  }
+  const picked = rev && (SR_PICKED.includes(rev.track_stage) || rev.received_at);
+  const reached = rev && (rev.received_at || rev.track_stage === 'Delivered');
+  const sent = fwd && (fwd.rtd_at || (fwd.track_stage && !['Created', 'Cancelled'].includes(fwd.track_stage)));
+  const delivered = fwd && fwd.track_stage === 'Delivered';
+  const refunded = rev && rev.refunded_at;
+  steps.push({ key: 'approved', state: 'done', at: (last('approve') || {}).at || row.updated_at });
+  steps.push({ key: 'picked', state: picked ? 'done' : 'now', courier: rev && rev.courier || null, awb: rev && rev.waybill || null, stage: rev && rev.track_stage || null });
+  steps.push({ key: 'reached', state: reached ? 'done' : (picked ? 'now' : 'todo'), at: rev && rev.received_at || null });
+  if (refunded) { steps.push({ key: 'refunded', state: 'done', at: rev.refunded_at }); return { steps, final: true }; }
+  steps.push({ key: 'repair', state: sent ? 'done' : (reached ? 'now' : 'todo') });
+  steps.push({ key: 'sent', state: delivered ? 'done' : (sent ? 'now' : 'todo'), courier: fwd && fwd.courier || null, awb: sent ? fwd.waybill : null, stage: fwd && fwd.track_stage || null });
+  steps.push({ key: 'delivered', state: delivered ? 'done' : 'todo', at: fwd && fwd.delivered_at || null });
+  return { steps, final: !!delivered };
+}
+
+// Public: GET ?action=requestTrack&id=<WC-… or order ID>&phone=<10 digits>
+async function srTrack(env, idRaw, phoneRaw) {
+  await ensureServiceRequestCols(env.DB);
+  const id = String(idRaw || '').trim().toUpperCase().replace(/[\s#]/g, '');
+  const phone = String(phoneRaw || '').replace(/\D/g, '').slice(-10);
+  if (!id || phone.length !== 10) return { ok: false, error: 'Enter your request ID (or order ID) and mobile number.' };
+  const row = await env.DB.prepare(
+    "SELECT * FROM warranty_claims WHERE (UPPER(claim_id) = ? OR order_key = ?) AND phone = ? ORDER BY created_at DESC LIMIT 1"
+  ).bind(id, id, phone).first();
+  if (!row) return { ok: false, notFound: true, error: 'We could not find a request with these details.' };
+  const legs = await srCaseLegs(env.DB, row.case_id);
+  const s = srSteps(row, legs);
+  return { ok: true, claim_id: row.claim_id, product: row.product, created_at: row.created_at,
+           status: row.status, steps: s.steps, final: s.final };
+}
+
+// Cron: email the customer when the courier / warehouse moves their case on.
+// Each milestone is emailed once (m_*_at columns).
+async function srMilestoneEmails(env) {
+  if (!SR_CUSTOMER_EMAILS) return { checked: 0, sent: 0, disabled: true };
+  await ensureServiceRequestCols(env.DB);
+  const rows = (await env.DB.prepare(
+    "SELECT * FROM warranty_claims WHERE case_id IS NOT NULL AND status = 'approved' AND m_delivered_at IS NULL ORDER BY created_at DESC LIMIT 40"
+  ).all()).results || [];
+  let sent = 0;
+  for (const row of rows) {
+    const { rev, fwd } = await srCaseLegs(env.DB, row.case_id);
+    if (!rev) continue;
+    const todo = [];
+    if (!row.m_picked_at && (SR_PICKED.includes(rev.track_stage) || rev.received_at))
+      todo.push(['m_picked_at', 'Picked up', ['The courier has collected your product. It is on its way to our service centre.']]);
+    if (!row.m_received_at && rev.received_at)
+      todo.push(['m_received_at', 'It has reached us', ['Your product has reached our service centre. Our technical team will now check and repair it (usually 5 to 7 working days).']]);
+    if (!row.m_sent_at && fwd && (fwd.rtd_at || (fwd.track_stage && !['Created', 'Cancelled'].includes(fwd.track_stage))))
+      todo.push(['m_sent_at', 'On its way back to you', ['Your product is on its way back to you.',
+        'Courier: ' + (fwd.courier || 'Delhivery') + (fwd.waybill ? ' · tracking no. ' + fwd.waybill : '')]]);
+    if (!row.m_delivered_at && fwd && fwd.track_stage === 'Delivered')
+      todo.push(['m_delivered_at', 'Delivered', ['Your product has been delivered. We hope it is working perfectly.',
+        'If anything is still not right, just reply to this email.']]);
+    for (const [col, subject, lines] of todo) {
+      const emailed = await srEmailCustomer(env, row, subject, lines);
+      await srAddEvent(env.DB, row.claim_id, { by: 'system', kind: col.slice(2, -3), emailed }, { [col]: new Date().toISOString() });
+      sent++;
+    }
+    if (fwd && fwd.track_stage === 'Delivered')
+      await env.DB.prepare("UPDATE warranty_claims SET status = 'closed' WHERE claim_id = ?").bind(row.claim_id).run();
+  }
+  return { checked: rows.length, sent };
+}
+
 async function ensureWarrantyClaimsTable(DB) {
   await DB.prepare(`CREATE TABLE IF NOT EXISTS warranty_claims (
     claim_id TEXT PRIMARY KEY, created_at TEXT DEFAULT (datetime('now')),
@@ -6501,12 +6809,12 @@ async function submitWarrantyClaim(env, b, ip) {
   if (photos.length > 3 || files.length - photos.length > 1) throw claimErr('Up to 3 photos and 1 video, please.');
   if (files.reduce((n, x) => n + x.base64.length, 0) > CLAIM_MAX_BYTES) throw claimErr('Files are too large — please use a shorter video or fewer photos.');
 
-  await ensureWarrantyClaimsTable(env.DB);
+  await ensureServiceRequestCols(env.DB);
   const orderKey = f.order_id.toUpperCase().replace(/[\s#]/g, '');
 
   // One open claim per order — return the existing one instead of a duplicate.
   const open = await env.DB.prepare(
-    "SELECT claim_id FROM warranty_claims WHERE order_key = ? AND status = 'new' AND created_at > datetime('now','-30 days') LIMIT 1"
+    "SELECT claim_id FROM warranty_claims WHERE order_key = ? AND COALESCE(status, 'new') NOT IN ('closed','not_covered') AND created_at > datetime('now','-30 days') LIMIT 1"
   ).bind(orderKey).first();
   if (open) return { ok: true, existing: true, claim_id: open.claim_id };
 
@@ -6534,7 +6842,7 @@ async function submitWarrantyClaim(env, b, ip) {
   const v = x => x ? String(x) : '-';
   const to = CC_ORDER_EMAIL_TEST_MODE ? CC_ORDER_EMAIL_TEST_TO : CC_ORDER_EMAIL_TO;
   const text = [
-    'A new warranty claim was submitted on the website.', '',
+    'A new service request was submitted on the website.', '',
     'Claim ID        : ' + claimId,
     'Warranty status : ' + warrantyStatus + (w.found ? ' (ordered ' + w.order_date + ', valid until ' + w.warranty_until + ')' : ''),
     '', '— Customer —',
@@ -6551,15 +6859,22 @@ async function submitWarrantyClaim(env, b, ip) {
     'Type            : ' + f.issue_type,
     'Description     : ' + f.description,
     '', 'Attachments: ' + photos.length + ' photo(s)' + (files.length > photos.length ? ' + 1 video' : '') + '.',
-    '', 'To arrange a pickup, use Create Pickup → Reverse Pickup:',
-    'https://naimuddin74667.github.io/Tomahawk/Customer-Care/Create-Pickup/'
+    '', 'Review it and act on it in the Customer Care Dashboard → New requests:',
+    'https://naimuddin74667.github.io/Tomahawk/Customer-Care/Dashboard/'
   ].join('\n');
   await sendGmailMessage(env, {
     to, replyTo: f.email || undefined,
-    subject: (CC_ORDER_EMAIL_TEST_MODE ? '[TEST] ' : '') + `Warranty Claim ${claimId} · ${f.name} · ${f.order_id} · ${warrantyStatus}`,
+    subject: (CC_ORDER_EMAIL_TEST_MODE ? '[TEST] ' : '') + `Service Request ${claimId} · ${f.name} · ${f.order_id} · ${warrantyStatus}`,
     text, attachments: files.map((x, i) => ({ ...x, filename: claimId + '_' + (i + 1) + '_' + x.filename }))
   });
   await env.DB.prepare("UPDATE warranty_claims SET emailed_at = datetime('now') WHERE claim_id = ?").bind(claimId).run();
+
+  // Keep the photos / video so the care team can review them on the dashboard
+  // (best effort — the email above already carries them).
+  try {
+    const saved = await srUploadFiles(env, claimId, files);
+    if (saved.length) await env.DB.prepare('UPDATE warranty_claims SET files_json = ? WHERE claim_id = ?').bind(JSON.stringify(saved), claimId).run();
+  } catch (e) { console.error('service request file store failed:', e.message); }
 
   // Confirmation to the customer (best effort — never fails the claim).
   if (f.email) {
