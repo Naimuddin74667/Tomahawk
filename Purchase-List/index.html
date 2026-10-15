@@ -200,6 +200,31 @@ tr:hover .icon-btn, .icon-btn:focus { opacity: 1; border-color: var(--border); }
 .link:hover { color: var(--accent); }
 .btn.mini { font-size: 11.5px; padding: 4px 10px; }
 .tag { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px; border-radius: 4px; background: var(--accent-dim); color: var(--accent); margin-top: 3px; }
+.head-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.save-state { font-size: 11.5px; color: var(--text2); display: flex; align-items: center; gap: 6px; }
+.save-state.dirty { color: var(--yellow); }
+.po-bar { border-top: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; background: var(--surface2); }
+.po-bar .po-title { font-size: 10.5px; font-weight: 700; color: var(--text2); text-transform: uppercase; letter-spacing: .06em; }
+.po-bar .po-main { font-size: 13px; font-weight: 600; }
+.po-bar .po-sub { font-size: 11.5px; color: var(--text2); margin-top: 2px; }
+.po-bar .po-sub.err { color: var(--red); }
+.po-bar .grow { flex: 1; min-width: 220px; }
+.po-bar select, .po-bar input { background: var(--bg); border: 1px solid var(--border); border-radius: 7px; color: var(--text); font-family: var(--font-body); font-size: 12.5px; padding: 6px 10px; outline: none; }
+.po-bar input { font-family: var(--font-mono); width: 170px; }
+.po-bar label { font-size: 11px; color: var(--text2); display: flex; flex-direction: column; gap: 3px; }
+.steps { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.step { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--text2); white-space: nowrap; }
+.step.done { color: var(--green); border-color: var(--green); }
+.step.now { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+.step.bad { color: var(--red); border-color: var(--red); }
+.step-sep { color: var(--border); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn:disabled:hover { border-color: var(--border); color: var(--text); }
+.btn.primary:disabled:hover { color: #111; filter: none; }
+table.lists { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.lists th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text2); padding: 6px; border-bottom: 1px solid var(--border); }
+table.lists td { padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+table.lists td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .empty-row td { text-align: center; color: var(--text2); padding: 28px 12px; }
 @media (max-width: 760px) { .page { padding: 14px 16px 32px; } }
 
@@ -263,7 +288,10 @@ table.saved td.mono { font-family: var(--font-mono); }
       <div class="page-title">Purchase List</div>
       <div class="page-sub">Landmark Exim (LME) invoice → Tomahawk &amp; Konrad items matched to enabled UC SKUs → Purchase List PDF</div>
     </div>
-    <div class="sku-status" id="sku-status"><span class="dot"></span><span id="sku-status-text">Loading enabled UC SKUs…</span></div>
+    <div class="head-right">
+      <div class="sku-status" id="sku-status"><span class="dot"></span><span id="sku-status-text">Loading enabled UC SKUs…</span></div>
+      <button class="btn" id="lists-btn" type="button">Saved invoices</button>
+    </div>
   </div>
 
   <input type="file" id="file-input" class="file-hidden" accept="application/pdf,.pdf">
@@ -289,22 +317,24 @@ table.saved td.mono { font-family: var(--font-mono); }
           <span class="file-name" id="file-name"></span>
           <button class="btn ghost" id="upload-again" type="button">Upload another</button>
           <button class="btn" id="saved-btn" type="button">Saved picks (0)</button>
-          <button class="btn primary" id="pdf-btn" type="button">
+          <button class="btn" id="pdf-btn" type="button">
             <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M10 3v10M6 9.5l4 4 4-4M4 16.5h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
             Download PDF
           </button>
+          <button class="btn primary" id="save-btn" type="button">Save</button>
         </div>
       </div>
       <div class="kpis" id="kpis"></div>
+      <div class="po-bar" id="po-bar"></div>
       <div class="msg err total-banner" id="total-banner" hidden></div>
     </div>
 
     <div class="items-panel">
       <div class="items-bar">
         <div class="seg" id="seg">
-          <button type="button" data-f="all" class="on">All invoice lines <span class="count" id="c-all">0</span></button>
-          <button type="button" data-f="ours">Our items <span class="count" id="c-ours">0</span></button>
+          <button type="button" data-f="ours" class="on">Tomahawk <span class="count" id="c-ours">0</span></button>
           <button type="button" data-f="action">Needs action <span class="count" id="c-action">0</span></button>
+          <button type="button" data-f="all">All invoice lines <span class="count" id="c-all">0</span></button>
         </div>
         <div class="note" id="seg-note"></div>
       </div>
@@ -320,6 +350,13 @@ table.saved td.mono { font-family: var(--font-mono); }
 </div>
 
 <datalist id="sku-list"></datalist>
+
+<div class="modal-bg" id="lists-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="lists-title">
+    <div class="modal-head"><div class="t" id="lists-title">Saved invoices</div><button class="btn" id="lists-close" type="button">Close</button></div>
+    <div class="modal-body" id="lists-body"><div class="empty">Loading…</div></div>
+  </div>
+</div>
 
 <div class="modal-bg" id="saved-modal" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="saved-title">
@@ -345,8 +382,9 @@ table.saved td.mono { font-family: var(--font-mono); }
   window.TM_getSession = getSession;
 
   function allowed(user) {
-    if (user.role === 'admin' || user.role === 'manager' || user.role === 'viewer') return true;
-    return user.role === 'custom' && Array.isArray(user.allowedApps) && user.allowedApps.indexOf('Purchase-List') !== -1;
+    // Custom users are stored as role "manager" + an allowedApps list.
+    if (Array.isArray(user.allowedApps)) return user.role === 'admin' || user.allowedApps.indexOf('Purchase-List') !== -1;
+    return user.role === 'admin' || user.role === 'manager' || user.role === 'viewer';
   }
   function showApp(user) {
     document.getElementById('auth-gate').hidden = true;
@@ -356,7 +394,8 @@ table.saved td.mono { font-family: var(--font-mono); }
     document.getElementById('user-avatar').textContent = label.slice(0, 2).toUpperCase();
     document.getElementById('user-name-display').textContent = label;
     var roleLabels = { admin: 'Admin', manager: 'Manager', viewer: 'Viewer', custom: 'Custom' };
-    document.getElementById('user-role-badge').textContent = roleLabels[user.role] || user.role;
+    document.getElementById('user-role-badge').textContent = Array.isArray(user.allowedApps) ? 'Custom' : (roleLabels[user.role] || user.role);
+    window.TM_ROLE = user.role;
   }
   function showAccessDenied() {
     document.body.innerHTML = '<div class="access-denied-screen"><div style="font-size:15px;font-weight:700;">You don\'t have access to this app</div>' +
@@ -692,7 +731,28 @@ function matchSku(row, enabledSkus) {
   var NOT_IN_UC = '__NOT_IN_UC__';     // saved choice meaning "no UC SKU yet"
   var enabledSkus = [], enabledSet = {};
   var state = null;                    // { header, invoiceTotal, rows:[…] }
-  var filter = 'all';                  // table view: all | ours | action
+  var filter = 'ours';                 // table view: ours (Tomahawk) | action | all
+  var STATUS_LABEL = { draft: 'Saved', po_queued: 'PO queued', po_pushing: 'Creating PO', po_created: 'PO created', po_failed: 'PO failed',
+    grn_queued: 'GRN queued', grn_pushing: 'Doing GRN', grn_done: 'Received', grn_partial: 'GRN partly done', grn_failed: 'GRN failed' };
+  var pollTimer = null, poCheck = { code: null, pos: null, error: null };
+
+  // ── Worker calls (hub session token) ─────────────────────────────
+  async function api(action, params, body) {
+    var session = window.TM_getSession();
+    var headers = { 'X-Tomahawk-Session': (session && session.token) || '' };
+    var url = window.TM_WORKER + '?action=' + encodeURIComponent(action) + (params ? '&' + new URLSearchParams(params).toString() : '');
+    var opt = { headers: headers };
+    if (body) { opt.method = 'POST'; headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(Object.assign({ action: action }, body)); }
+    var r = await fetch(url, opt);
+    var j = await r.json().catch(function () { return { ok: false, error: 'HTTP ' + r.status }; });
+    if (!j.ok && !j.error) j.error = 'HTTP ' + r.status;
+    return j;
+  }
+  function canWrite() { return window.TM_ROLE === 'admin' || window.TM_ROLE === 'manager'; }
+  // Lines can be changed until a PO has been sent to UC.
+  function editable() { return canWrite() && (!state.saved || ['draft', 'po_failed'].indexOf(state.saved.uc_status) !== -1); }
+  function markDirty() { if (state) state.dirty = true; }
+  window.addEventListener('beforeunload', function (e) { if (state && state.dirty) { e.preventDefault(); e.returnValue = ''; } });
 
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -760,10 +820,26 @@ function matchSku(row, enabledSkus) {
       var parsed = await parseLmeInvoice(doc);
       if (!parsed.ciPages) throw new Error('No "Commercial Invoice" page found — is this an LME invoice?');
       if (!parsed.items.length) throw new Error('Found the Commercial Invoice but no item lines could be read.');
+      var saved = null;
+      if (parsed.header.invoiceNo) {
+        var got = await api('pl_get', { invoice_no: parsed.header.invoiceNo });
+        saved = got.ok ? got.list : null;
+      }
+      if (saved) {
+        var locked = ['draft', 'po_failed'].indexOf(saved.uc_status) === -1;
+        var who = (saved.saved_by || '—') + ' · ' + fmtWhen(saved.updated_at || saved.saved_at);
+        if (locked || confirm(parsed.header.invoiceNo + ' was already saved (' + who + ', ' + (STATUS_LABEL[saved.uc_status] || saved.uc_status) + ').\n\nOK = open the saved version\nCancel = start again from this PDF (Save will replace the saved one)')) {
+          openSavedList(saved);
+          showMsg('');
+          if (locked) showMsg('Opened the saved version — its PO is already ' + (STATUS_LABEL[saved.uc_status] || saved.uc_status) + ', so it can\'t be re-read from the PDF.');
+          return;
+        }
+      }
       var rows = buildRows(parsed.items);
       rows.forEach(autoMatch);
-      state = { header: parsed.header, invoiceTotal: parsed.invoiceTotal, ciPages: parsed.ciPages, rows: rows, fileName: file.name };
-      filter = 'all';
+      state = { header: parsed.header, invoiceTotal: parsed.invoiceTotal, ciPages: parsed.ciPages, rows: rows, fileName: file.name,
+                saved: saved ? Object.assign({}, saved, { lines: null }) : null, dirty: true };
+      filter = 'ours';
       showMsg('');
       $('upload-panel').hidden = true;
       render();
@@ -799,6 +875,7 @@ function matchSku(row, enabledSkus) {
     else return false;
     row.saved = true; row.editing = false;
     rememberPick(row, sku === NOT_IN_UC ? '' : sku);
+    markDirty();
     return true;
   }
 
@@ -836,6 +913,8 @@ function matchSku(row, enabledSkus) {
     Array.prototype.forEach.call($('seg').children, function (b) { b.classList.toggle('on', b.dataset.f === filter); });
     $('seg-note').textContent = filter === 'all' ? 'Other brands are struck through — use "Include" to add one to our list' : 'The PDF always lists every invoice line';
     renderRows();
+    renderSaveState();
+    renderPo();
     updateSavedBtn();
   }
   function kpi(label, value, sub, cls) {
@@ -843,7 +922,11 @@ function matchSku(row, enabledSkus) {
   }
 
   function skuCell(r, i) {
-    var editing = r.editing || r.status === 'CHECK' || (r.status === 'NEW' && !r.saved && r.candidates.length > 0);
+    var canEdit = editable();
+    var editing = canEdit && (r.editing || r.status === 'CHECK' || (r.status === 'NEW' && !r.saved && r.candidates.length > 0));
+    if (!canEdit) {
+      return '<div class="sku-show">' + (r.sku ? '<span class="sku-text">' + esc(r.sku) + '</span>' : '<span class="sku-text none">' + (r.status === 'CHECK' ? 'NOT CONFIRMED' : 'NOT IN UC') + '</span>') + '</div>';
+    }
     if (!editing) {
       var txt = r.status === 'NEW' ? '<span class="sku-text none">NOT IN UC</span>' : '<span class="sku-text">' + esc(r.sku) + '</span>';
       return '<div class="sku-show">' + txt + (r.saved ? '<span class="star" title="Saved pick — used again next time">★</span>' : '') +
@@ -870,7 +953,7 @@ function matchSku(row, enabledSkus) {
       if (!r.ours) {
         html += '<tr class="other"><td class="sr">' + sr + '</td><td><div class="strike">' + esc(r.displayDesc) + '</div>' + (r.brandNote ? '<div class="sub-line">' + esc(r.brandNote) + '</div>' : '') + '</td>' +
           '<td class="brand strike">' + esc(r.brand || '—') + '</td>' + qtyCell +
-          '<td><button type="button" class="btn mini" data-include="' + i + '" title="Add this line to our purchase list and match it to a UC SKU">+ Include in our list</button></td><td><span class="pill GB">Not ours</span></td></tr>';
+          '<td>' + (editable() ? '<button type="button" class="btn mini" data-include="' + i + '" title="Add this line to our purchase list and match it to a UC SKU">+ Include in our list</button>' : '—') + '</td><td><span class="pill GB">Not ours</span></td></tr>';
         return;
       }
       var label = { OK: 'Matched', CHECK: 'Confirm', NEW: 'Not in UC' }[r.status];
@@ -879,7 +962,7 @@ function matchSku(row, enabledSkus) {
       if (r.note) subs.push('<div class="sub-line warn">' + esc(r.note) + '</div>');
       html += '<tr class="st-' + r.status + '"><td class="sr">' + sr + '</td>' +
         '<td><div class="desc">' + esc(r.displayDesc) + '</div>' + subs.join('') + '</td>' +
-        '<td class="brand">' + esc(r.brand || '—') + (r.included ? '<div><span class="tag">Included</span> <button type="button" class="link" data-exclude="' + i + '">remove</button></div>' : '') + '</td>' + qtyCell +
+        '<td class="brand">' + esc(r.brand || '—') + (r.included ? '<div><span class="tag">Included</span>' + (editable() ? ' <button type="button" class="link" data-exclude="' + i + '">remove</button>' : '') + '</div>' : '') + '</td>' + qtyCell +
         '<td class="sku-cell">' + skuCell(r, i) + '</td>' +
         '<td><span class="pill ' + r.status + '">' + label + '</span></td></tr>';
     });
@@ -895,10 +978,10 @@ function matchSku(row, enabledSkus) {
       var t = e.target.closest('button');
       if (!t) return;
       if (t.dataset.sku != null && t.dataset.i != null) { setRowSku(+t.dataset.i, t.dataset.sku); render(); }
-      else if (t.dataset.forget != null) { var r = state.rows[+t.dataset.forget]; forgetPick(pickKey(r)); autoMatch(r); render(); }
+      else if (t.dataset.forget != null) { var r = state.rows[+t.dataset.forget]; forgetPick(pickKey(r)); autoMatch(r); markDirty(); render(); }
       else if (t.dataset.edit != null) { state.rows[+t.dataset.edit].editing = true; renderRows(); var inp = document.querySelector('.sku-input[data-i="' + t.dataset.edit + '"]'); if (inp) inp.focus(); }
-      else if (t.dataset.include != null) { rememberInclude(state.rows[+t.dataset.include], true); autoMatch(state.rows[+t.dataset.include]); render(); }
-      else if (t.dataset.exclude != null) { rememberInclude(state.rows[+t.dataset.exclude], false); autoMatch(state.rows[+t.dataset.exclude]); render(); }
+      else if (t.dataset.include != null) { rememberInclude(state.rows[+t.dataset.include], true); autoMatch(state.rows[+t.dataset.include]); markDirty(); render(); }
+      else if (t.dataset.exclude != null) { rememberInclude(state.rows[+t.dataset.exclude], false); autoMatch(state.rows[+t.dataset.exclude]); markDirty(); render(); }
       else if (t.dataset.cancel != null) { state.rows[+t.dataset.cancel].editing = false; renderRows(); }
     });
     $('items-body').addEventListener('change', function (e) {
@@ -1004,10 +1087,236 @@ function matchSku(row, enabledSkus) {
   }
 
 
+  // ══════════════════════════════════════════════════════════════════
+  // SAVE + PURCHASE ORDER — saved in D1 (purchase_lists), pushed to UC
+  // by SK's script the same way as Returns: page queues → script claims →
+  // script reports. Create PO = PO only (not approved). Do GRN (after the
+  // container arrives) = approve PO + GRN + QC + putaway.
+  // ══════════════════════════════════════════════════════════════════
+  function fmtWhen(ts) {
+    if (!ts) return '';
+    var d = new Date(String(ts).replace(' ', 'T') + (/Z|[+-]\d\d:?\d\d$/.test(ts) ? '' : 'Z'));
+    return isNaN(d) ? ts : d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+
+  // Every invoice line exactly as reviewed (so a saved list can be reopened without the PDF).
+  function serializeRows() {
+    return state.rows.map(function (r, i) {
+      return { sr: i + 1, desc: r.desc, catalog: r.catalog, brand: r.brand, brandBlank: !!r.brandBlank, brandNote: r.brandNote || '',
+        qty: r.qty, parts: r.parts, brandOurs: !!r.brandOurs, included: !!r.included, ours: !!r.ours,
+        status: r.ours ? r.status : 'GB', sku: r.ours ? (r.sku || '') : '' };
+    });
+  }
+  // PO lines = our rows with a confirmed UC SKU.
+  function poItems() {
+    return state.rows.filter(function (r) { return r.ours && r.status === 'OK' && r.sku; }).map(function (r) { return { sku: r.sku, qty: r.qty }; });
+  }
+  function restoreRows(lines) {
+    return lines.map(function (l) {
+      var r = { desc: l.desc, catalog: l.catalog || '', brand: l.brand || '', brandBlank: !!l.brandBlank, brandNote: l.brandNote || '',
+        qty: l.qty, parts: l.parts && l.parts.length ? l.parts : [l.qty], brandOurs: !!l.brandOurs, included: !!l.included, ours: !!l.ours,
+        status: l.status, sku: l.sku || '', candidates: [], note: '', saved: false, editing: false };
+      r.displayDesc = r.desc;
+      r.splitText = r.parts.length > 1 ? r.parts.map(function (q) { return Number(q).toLocaleString('en-IN'); }).join(' + ') : '';
+      if (r.ours) {
+        // Chips for changing a pick later; the saved SKU stays as saved.
+        var m = matchSku(r, enabledSkus);
+        r.candidates = m.candidates;
+        if (r.sku && r.candidates.indexOf(r.sku) === -1) r.candidates = [r.sku].concat(r.candidates);
+        if (r.status === 'CHECK' && !r.sku) r.note = m.note;
+      }
+      return r;
+    });
+  }
+  function openSavedList(list) {
+    state = {
+      header: { invoiceNo: list.invoice_no, date: list.invoice_date, bl: list.bl_no, cartons: list.cartons },
+      invoiceTotal: list.invoice_total, ciPages: list.ci_pages, fileName: list.file_name || '',
+      rows: restoreRows(list.lines || []), saved: Object.assign({}, list, { lines: null, items: null }), dirty: false
+    };
+    filter = 'ours';
+    $('upload-panel').hidden = true;
+    render();
+  }
+
+  function renderSaveState() {
+    var b = $('save-btn');
+    b.hidden = !canWrite();
+    var locked = state.saved && ['draft', 'po_failed'].indexOf(state.saved.uc_status) === -1;
+    b.disabled = !!locked || (!state.dirty && !!state.saved);
+    b.textContent = locked ? 'Saved' : state.dirty ? (state.saved ? 'Save changes' : 'Save') : 'Saved ✓';
+    b.title = locked ? 'PO already sent to UC — lines are locked' : '';
+  }
+
+  async function saveList() {
+    if (!state || !editable()) return;
+    var c = counts();
+    if (c.CHECK && !confirm(c.CHECK + ' Tomahawk line(s) still need a SKU confirmed. They will be saved as they are but left off the PO until confirmed.\n\nSave anyway?')) return;
+    var b = $('save-btn'); b.disabled = true; b.textContent = 'Saving…';
+    var res = await api('pl_save', null, {
+      invoice_no: state.header.invoiceNo, invoice_date: state.header.date, bl_no: state.header.bl, cartons: state.header.cartons,
+      ci_pages: state.ciPages, invoice_total: state.invoiceTotal, file_name: state.fileName, lines: serializeRows(), items: poItems()
+    });
+    if (!res.ok) { alert('Could not save: ' + res.error); renderSaveState(); return; }
+    state.saved = Object.assign({}, res.list, { lines: null, items: null });
+    state.dirty = false;
+    render();
+  }
+
+  // ── Existing UC POs with this code (from the Supabase mirror) ────
+  async function checkExistingPo(code) {
+    if (!code || poCheck.code === code) return;
+    poCheck = { code: code, pos: null, error: null };
+    var res = await api('pl_checkPo', { code: code });
+    if (poCheck.code !== code) return;
+    if (res.ok) poCheck.pos = res.pos; else poCheck.error = res.error;
+    renderPo();
+  }
+  function nextFreeCode(base, pos) {
+    var used = {}; (pos || []).forEach(function (p) { if (p.status !== 'CANCELLED') used[p.po_code] = true; });
+    if (!used[base]) return base;
+    for (var n = 1; n < 50; n++) if (!used[base + '_' + n]) return base + '_' + n;
+    return base;
+  }
+
+  function stepsHtml(status) {
+    var order = ['saved', 'po', 'grn'];
+    var at = { draft: 'po', po_failed: 'po', po_queued: 'po', po_pushing: 'po', po_created: 'grn', grn_queued: 'grn', grn_pushing: 'grn', grn_failed: 'grn', grn_partial: 'grn', grn_done: 'end' }[status] || 'saved';
+    var labels = { saved: 'Saved', po: 'PO created', grn: 'GRN · received' };
+    return '<div class="steps">' + order.map(function (k, i) {
+      var cls = (order.indexOf(at) > i || at === 'end') ? 'done' : (at === k ? ((status === 'po_failed' || status === 'grn_failed') ? 'bad' : 'now') : '');
+      return (i ? '<span class="step-sep">›</span>' : '') + '<span class="step ' + cls + '">' + labels[k] + '</span>';
+    }).join('') + '</div>';
+  }
+
+  function renderPo() {
+    var bar = $('po-bar');
+    if (!state.saved) {
+      bar.innerHTML = '<div class="grow"><div class="po-title">Purchase order</div><div class="po-main">Save this purchase list first</div>' +
+        '<div class="po-sub">Saving keeps every invoice line and the Tomahawk lines with their UC SKUs. Then you can create the PO in UC.</div></div>' + stepsHtml('none');
+      return;
+    }
+    var L = state.saved, st = L.uc_status || 'draft', items = poItems(), c = counts(), w = canWrite();
+    var who = L.uc_requested_by ? ' · by ' + esc(L.uc_requested_by) + ' ' + esc(fmtWhen(L.uc_requested_at)) : '';
+    var fac = L.facility || 'G4', main = '', sub = '', actions = '';
+    if (st === 'draft' || st === 'po_failed') {
+      var base = L.po_code || L.invoice_no;
+      checkExistingPo(L.invoice_no);
+      var suggested = poCheck.code === L.invoice_no && poCheck.pos ? nextFreeCode(base, poCheck.pos) : base;
+      var existNote = '';
+      if (poCheck.code === L.invoice_no && poCheck.pos && poCheck.pos.length) {
+        existNote = '<div class="po-sub err">Already in UC: ' + poCheck.pos.map(function (p) { return esc(p.po_code) + ' (' + esc(p.status) + ', ' + esc(p.facility || '') + ', ' + fmt(p.qty) + ' pcs)'; }).join(' · ') + '</div>';
+      }
+      main = st === 'po_failed' ? 'PO was not created in UC' : 'Ready to create the PO';
+      sub = (st === 'po_failed' && L.uc_message ? '<div class="po-sub err">' + esc(L.uc_message) + '</div>' : '') +
+        '<div class="po-sub">' + items.length + ' SKU line' + (items.length === 1 ? '' : 's') + ' · ' + fmt(items.reduce(function (a, i) { return a + i.qty; }, 0)) + ' pcs · vendor ITC (Industrial Tools Corporation) · created as CREATED, not approved' +
+        (c.CHECK ? ' · <b style="color:var(--yellow)">' + c.CHECK + ' line(s) still to confirm</b>' : '') + (c.NEW ? ' · ' + c.NEW + ' not in UC (left off)' : '') + '</div>' + existNote;
+      if (w) actions =
+        '<label>Facility<select id="po-fac"><option value="G4"' + (fac === 'G4' ? ' selected' : '') + '>G4</option><option value="E3"' + (fac === 'E3' ? ' selected' : '') + '>E3</option></select></label>' +
+        '<label>PO code<input id="po-code" value="' + esc(document.getElementById('po-code') && poCheck.code === L.invoice_no && document.getElementById('po-code').dataset.touched ? document.getElementById('po-code').value : suggested) + '"></label>' +
+        '<button type="button" class="btn primary" data-po="create"' + (state.dirty || !items.length || c.CHECK ? ' disabled' : '') + ' title="' +
+        (state.dirty ? 'Save your changes first' : !items.length ? 'No lines with a UC SKU' : c.CHECK ? 'Confirm the yellow lines first' : 'Queue the PO for UC') + '">Create Purchase Order</button>';
+    } else if (st === 'po_queued') { main = 'PO queued for UC'; sub = '<div class="po-sub">' + esc(L.po_code) + ' · ' + esc(fac) + who + ' — waiting for the push script to pick it up</div>'; if (w) actions = '<button type="button" class="btn" data-po="cancel">Cancel</button>'; }
+    else if (st === 'po_pushing') { main = 'Creating the PO in UC…'; sub = '<div class="po-sub">' + esc(L.po_code) + ' · ' + esc(fac) + '</div>'; }
+    else if (st === 'po_created') {
+      main = 'PO ' + esc(L.po_code) + ' created in UC (not approved)';
+      sub = '<div class="po-sub">' + esc(fac) + ' · ' + esc(fmtWhen(L.uc_po_created_at)) + (L.uc_message ? ' · ' + esc(L.uc_message) : '') + ' — click Do GRN when the container arrives</div>';
+      if (w) actions = '<button type="button" class="btn primary" data-po="grn">Do GRN</button>';
+    }
+    else if (st === 'grn_queued') { main = 'GRN queued'; sub = '<div class="po-sub">PO ' + esc(L.po_code) + ' · ' + esc(fac) + who + ' — will approve the PO, then GRN, QC and putaway</div>'; if (w) actions = '<button type="button" class="btn" data-po="cancel">Cancel</button>'; }
+    else if (st === 'grn_pushing') { main = 'Doing the GRN in UC…'; sub = '<div class="po-sub">PO ' + esc(L.po_code) + ' · ' + esc(fac) + '</div>'; }
+    else if (st === 'grn_done') { main = 'Received in UC ✓'; sub = '<div class="po-sub">PO ' + esc(L.po_code) + ' · ' + esc(fac) + ' · ' + esc(fmtWhen(L.uc_grn_done_at)) + (L.uc_message ? ' · ' + esc(L.uc_message) : '') + '</div>'; }
+    else if (st === 'grn_partial' || st === 'grn_failed') {
+      var stp = L.uc_steps || {};
+      main = st === 'grn_partial' ? 'GRN partly done — finish the rest in UC' : 'GRN not done';
+      sub = '<div class="po-sub err">' + esc(L.uc_message || '') + '</div><div class="po-sub">Approve ' + (stp.approve_po || '—') + ' · GRN ' + (stp.grn || '—') + ' · QC ' + (stp.qc || '—') + ' · Putaway ' + (stp.putaway || '—') +
+        (L.uc_failed && L.uc_failed.length ? ' · Failed SKUs: ' + L.uc_failed.map(function (f) { return esc(f.sku) + ' (' + esc(f.error) + ')'; }).join(', ') : '') + '</div>';
+      if (w) actions = (st === 'grn_failed' ? '<button type="button" class="btn primary" data-po="grn">Do GRN again</button>' : '') +
+        '<button type="button" class="btn" data-po="done">Mark done (finished in UC)</button>';
+    }
+    bar.innerHTML = '<div class="grow"><div class="po-title">Purchase order · ' + esc(STATUS_LABEL[st] || st) + '</div><div class="po-main">' + main + '</div>' + sub + '</div>' +
+      stepsHtml(st) + actions + '<button type="button" class="btn ghost" data-po="refresh" title="Refresh status">↻</button>';
+    var codeInp = $('po-code'); if (codeInp) codeInp.addEventListener('input', function () { codeInp.dataset.touched = '1'; });
+    // Keep the status fresh while the push script is working on it.
+    clearTimeout(pollTimer);
+    if (/_queued$|_pushing$/.test(st)) pollTimer = setTimeout(refreshStatus, 20000);
+  }
+
+  async function refreshStatus() {
+    if (!state || !state.saved) return;
+    var res = await api('pl_get', { id: state.saved.id });
+    if (!res.ok || !res.list) return;
+    var wasLocked = ['draft', 'po_failed'].indexOf(state.saved.uc_status) === -1;
+    state.saved = Object.assign({}, res.list, { lines: null, items: null });
+    if (!state.dirty && !wasLocked) state.rows = restoreRows(res.list.lines || []);
+    render();
+  }
+
+  async function onPoBarClick(e) {
+    var b = e.target.closest('button[data-po]'); if (!b || !state.saved) return;
+    var id = state.saved.id, kind = b.dataset.po, res;
+    if (kind === 'refresh') { poCheck.code = null; return refreshStatus(); }
+    if (kind === 'create') {
+      var fac = $('po-fac').value, code = $('po-code').value.trim(), c = counts();
+      if (!code) { alert('Enter the PO code.'); return; }
+      var lines = poItems();
+      if (!confirm('Create PO ' + code + ' in UC?\n\nFacility: ' + fac + '\nVendor: ITC — Industrial Tools Corporation\n' + lines.length + ' SKU lines · ' + fmt(lines.reduce(function (a, i) { return a + i.qty; }, 0)) + ' pcs' +
+        (c.NEW ? '\n' + c.NEW + ' line(s) marked Not in UC are left off.' : '') + '\n\nThe PO is created but NOT approved.')) return;
+      b.disabled = true;
+      res = await api('pl_requestPo', null, { id: id, facility: fac, po_code: code });
+    } else if (kind === 'grn') {
+      if (!confirm('Container arrived for PO ' + state.saved.po_code + '?\n\nThis approves the PO in UC and does the GRN, QC and putaway (' + (state.saved.facility || 'G4') + ').')) return;
+      b.disabled = true;
+      res = await api('pl_requestGrn', null, { id: id });
+    } else if (kind === 'cancel') {
+      res = await api('pl_cancel', null, { id: id });
+    } else if (kind === 'done') {
+      if (!confirm('Mark the GRN as done? Only do this after finishing the remaining steps in UC by hand.')) return;
+      res = await api('pl_markGrnDone', null, { id: id });
+    }
+    if (res && !res.ok) alert(res.error);
+    poCheck.code = null;
+    refreshStatus();
+  }
+
+  // ── Saved invoices list ──────────────────────────────────────────
+  async function openLists() {
+    $('lists-modal').hidden = false;
+    $('lists-body').innerHTML = '<div class="empty">Loading…</div>';
+    var res = await api('pl_list');
+    if (!res.ok) { $('lists-body').innerHTML = '<div class="empty">Could not load: ' + esc(res.error) + '</div>'; return; }
+    if (!res.lists.length) { $('lists-body').innerHTML = '<div class="empty">No saved invoices yet.</div>'; return; }
+    $('lists-body').innerHTML = '<table class="lists"><thead><tr><th>Invoice</th><th>Date</th><th class="num">Our qty</th><th>PO</th><th>Status</th><th>Saved</th><th></th></tr></thead><tbody>' +
+      res.lists.map(function (l) {
+        return '<tr><td><b>' + esc(l.invoice_no) + '</b></td><td>' + esc(l.invoice_date || '') + '</td><td class="num">' + fmt(l.our_total) + '</td>' +
+          '<td class="mono">' + esc(l.uc_status === 'draft' ? '—' : (l.po_code || '') + ' · ' + (l.facility || '')) + '</td><td>' + esc(STATUS_LABEL[l.uc_status] || l.uc_status) + '</td>' +
+          '<td class="note">' + esc(l.saved_by || '') + ' · ' + esc(fmtWhen(l.updated_at || l.saved_at)) + '</td>' +
+          '<td><button type="button" class="btn mini" data-open="' + l.id + '">Open</button></td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+  function bindLists() {
+    $('lists-btn').addEventListener('click', openLists);
+    $('lists-close').addEventListener('click', function () { $('lists-modal').hidden = true; });
+    $('lists-modal').addEventListener('click', function (e) { if (e.target === $('lists-modal')) $('lists-modal').hidden = true; });
+    $('lists-body').addEventListener('click', async function (e) {
+      var b = e.target.closest('button[data-open]'); if (!b) return;
+      if (state && state.dirty && !confirm('You have unsaved changes on the open invoice. Open another one anyway?')) return;
+      if (!enabledSkus.length) { alert('The UC SKU list hasn\'t loaded yet — try again in a moment.'); return; }
+      var res = await api('pl_get', { id: b.dataset.open });
+      if (!res.ok || !res.list) { alert('Could not open: ' + (res.error || 'not found')); return; }
+      $('lists-modal').hidden = true;
+      poCheck.code = null;
+      openSavedList(res.list);
+    });
+  }
+
+
   window.PL_init = function () {
     if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    bindUpload(); bindTable(); bindSaved();
+    bindUpload(); bindTable(); bindSaved(); bindLists();
     $('pdf-btn').addEventListener('click', downloadPdf);
+    $('save-btn').addEventListener('click', saveList);
+    $('po-bar').addEventListener('click', onPoBarClick);
     updateSavedBtn();
     loadSkus();
   };

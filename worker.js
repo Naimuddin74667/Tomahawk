@@ -751,6 +751,15 @@ const ACTION_TIERS = {
   // script resumes on the SAME PO/GRN and does the putaway. —
   rsv_grnVerified: 'manager_up',
 
+  // — Purchase List (/Purchase-List/): LME invoice → PO lines. Saving and
+  //   queuing a PO / GRN are writes (manager_up); reading is viewer_read.
+  //   pl_ucClaim / pl_ucReport are SK's script — gated by X-Health-Token
+  //   inside the handler, same as rsv_ucClaim. —
+  pl_list: 'viewer_read', pl_get: 'viewer_read', pl_checkPo: 'viewer_read',
+  pl_save: 'manager_up', pl_requestPo: 'manager_up', pl_requestGrn: 'manager_up',
+  pl_cancel: 'manager_up', pl_markGrnDone: 'manager_up',
+  pl_ucClaim: 'public', pl_ucReport: 'public',
+
   // — Order-Processing: Flipkart image registry (register-on-first-sight +
   //   read-cached-on-repeat). Same tier as getOrderPrices. —
   syncPicklistImages: 'viewer_read',
@@ -1639,6 +1648,28 @@ export default {
               updatedAt: row ? row.updated_at : null
             });
           }
+        }
+
+        // ── PURCHASE LIST — saved invoices (list / one) + existing UC PO check ──
+        if (action === 'pl_list') {
+          await ensurePurchaseListsTable(env.DB);
+          const rows = await env.DB.prepare('SELECT * FROM purchase_lists ORDER BY id DESC LIMIT 200').all();
+          return json({ ok: true, lists: (rows.results || []).map(r => plRowOut(r, false)) });
+        }
+        if (action === 'pl_get') {
+          await ensurePurchaseListsTable(env.DB);
+          const id = parseInt(url.searchParams.get('id'), 10);
+          const inv = String(url.searchParams.get('invoice_no') || '').trim();
+          const row = id
+            ? await env.DB.prepare('SELECT * FROM purchase_lists WHERE id = ?').bind(id).first()
+            : await env.DB.prepare('SELECT * FROM purchase_lists WHERE invoice_no = ?').bind(inv).first();
+          return json({ ok: true, list: row ? plRowOut(row, true) : null });
+        }
+        if (action === 'pl_checkPo') {
+          const code = String(url.searchParams.get('code') || '').trim();
+          if (!code) return json({ ok: false, error: 'code required' }, 400);
+          try { return json({ ok: true, pos: await plExistingPos(env, code) }); }
+          catch (e) { return json({ ok: false, error: e.message }, 502); }
         }
 
         // ── RETURNS VERIFIER — live enabled simple SKU list ────────────
@@ -3367,6 +3398,213 @@ export default {
           ).bind(who, id).run();
           if (!res.meta || !res.meta.changes) return json({ ok: false, error: 'Only partial or failed returns can be marked done' }, 409);
           return json({ ok: true });
+        }
+
+        // ── PURCHASE LIST — save one invoice exactly as reviewed ──────────
+        // Re-saving is allowed only while no PO is in UC (draft / po_failed).
+        if (act === 'pl_save') {
+          await ensurePurchaseListsTable(env.DB);
+          const inv = String(body.invoice_no || '').trim().slice(0, 100);
+          if (!inv) return json({ ok: false, error: 'invoice_no required' }, 400);
+          if (!Array.isArray(body.lines) || !body.lines.length) return json({ ok: false, error: 'lines required' }, 400);
+          const items = plMergeItems(body.items);
+          // Only enabled UC SKUs on the PO — checked against the live list now.
+          if (items.length) {
+            let live;
+            try { live = await ucEnabledSkusLive(env); }
+            catch (e) { return json({ ok: false, error: 'Could not check SKUs against live UC (' + e.message + ') — try again' }, 502); }
+            const liveSet = new Set(live.skus);
+            const bad = items.filter(i => !liveSet.has(i.sku)).map(i => i.sku);
+            if (bad.length) return json({ ok: false, error: 'Not enabled UC SKUs: ' + bad.join(', '), bad_skus: bad }, 400);
+          }
+          const existing = await env.DB.prepare('SELECT id, uc_status FROM purchase_lists WHERE invoice_no = ?').bind(inv).first();
+          if (existing && !['draft', 'po_failed'].includes(existing.uc_status || 'draft'))
+            return json({ ok: false, error: 'PO for ' + inv + ' is already ' + existing.uc_status + ' — it can no longer be changed here' }, 409);
+          const sessionUser = await resolveSession(request, env.DB);
+          const who = (sessionUser && (sessionUser.display_name || sessionUser.username)) || 'unauthenticated';
+          const ourTotal = items.reduce((a, i) => a + i.qty, 0);
+          const vals = [
+            String(body.invoice_date || '').slice(0, 40), String(body.bl_no || '').slice(0, 60), String(body.cartons || '').slice(0, 20),
+            parseInt(body.ci_pages, 10) || 0, parseInt(body.invoice_total, 10) || 0, ourTotal, body.lines.length,
+            String(body.file_name || '').slice(0, 200), JSON.stringify(body.lines), JSON.stringify(items), who
+          ];
+          if (existing) {
+            await env.DB.prepare(
+              "UPDATE purchase_lists SET invoice_date = ?, bl_no = ?, cartons = ?, ci_pages = ?, invoice_total = ?, our_total = ?, line_count = ?, " +
+              "file_name = ?, lines_json = ?, items_json = ?, saved_by = ?, updated_at = datetime('now') WHERE id = ?"
+            ).bind(...vals, existing.id).run();
+          } else {
+            await env.DB.prepare(
+              "INSERT INTO purchase_lists (invoice_date, bl_no, cartons, ci_pages, invoice_total, our_total, line_count, file_name, lines_json, items_json, saved_by, invoice_no, po_code) " +
+              "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ).bind(...vals, inv, inv).run();
+          }
+          const row = await env.DB.prepare('SELECT * FROM purchase_lists WHERE invoice_no = ?').bind(inv).first();
+          return json({ ok: true, list: plRowOut(row, true) });
+        }
+
+        // ── PURCHASE LIST — "Create PO": queue it for SK's script ─────────
+        // body: { id, facility: 'G4'|'E3', po_code }. PO is created but NOT approved.
+        if (act === 'pl_requestPo') {
+          await ensurePurchaseListsTable(env.DB);
+          const id = parseInt(body.id, 10);
+          const facility = String(body.facility || 'G4').toUpperCase();
+          const poCode = String(body.po_code || '').trim().slice(0, 100);
+          if (!id || !poCode) return json({ ok: false, error: 'id and po_code required' }, 400);
+          if (!PL_FACILITIES[facility]) return json({ ok: false, error: 'facility must be G4 or E3' }, 400);
+          const row = await env.DB.prepare('SELECT * FROM purchase_lists WHERE id = ?').bind(id).first();
+          if (!row) return json({ ok: false, error: 'Purchase list not found' }, 404);
+          if (!JSON.parse(row.items_json || '[]').length) return json({ ok: false, error: 'No PO lines with a UC SKU — nothing to order' }, 400);
+          // A PO code that already exists in UC would be rejected there — refuse here first.
+          try {
+            const pos = await plExistingPos(env, poCode);
+            if (pos.some(p => p.po_code === poCode && p.status !== 'CANCELLED'))
+              return json({ ok: false, error: 'PO ' + poCode + ' already exists in UC — use another PO code', existing: pos }, 409);
+          } catch (e) { /* Supabase down — let the push script be the final check */ }
+          const sessionUser = await resolveSession(request, env.DB);
+          const who = (sessionUser && (sessionUser.display_name || sessionUser.username)) || 'unauthenticated';
+          const res = await env.DB.prepare(
+            "UPDATE purchase_lists SET uc_status = 'po_queued', facility = ?, po_code = ?, uc_requested_by = ?, uc_requested_at = datetime('now'), " +
+            "uc_claimed_at = NULL, uc_message = NULL, uc_failed_json = NULL, updated_at = datetime('now') " +
+            "WHERE id = ? AND (COALESCE(uc_status, 'draft') IN ('draft', 'po_failed') OR (uc_status = 'po_pushing' AND uc_claimed_at < datetime('now', '-15 minutes')))"
+          ).bind(facility, poCode, who, id).run();
+          if (!res.meta || !res.meta.changes) return json({ ok: false, error: 'Already ' + row.uc_status }, 409);
+          return json({ ok: true, list: plRowOut(await env.DB.prepare('SELECT * FROM purchase_lists WHERE id = ?').bind(id).first(), false) });
+        }
+
+        // ── PURCHASE LIST — "Do GRN" once the container has arrived ───────
+        // Script then approves the PO, creates the GRN, QC, putaway.
+        if (act === 'pl_requestGrn') {
+          await ensurePurchaseListsTable(env.DB);
+          const id = parseInt(body.id, 10);
+          if (!id) return json({ ok: false, error: 'id required' }, 400);
+          const sessionUser = await resolveSession(request, env.DB);
+          const who = (sessionUser && (sessionUser.display_name || sessionUser.username)) || 'unauthenticated';
+          const res = await env.DB.prepare(
+            "UPDATE purchase_lists SET uc_status = 'grn_queued', uc_requested_by = ?, uc_requested_at = datetime('now'), uc_claimed_at = NULL, " +
+            "uc_message = NULL, updated_at = datetime('now') " +
+            "WHERE id = ? AND (uc_status IN ('po_created', 'grn_failed') OR (uc_status = 'grn_pushing' AND uc_claimed_at < datetime('now', '-15 minutes')))"
+          ).bind(who, id).run();
+          if (!res.meta || !res.meta.changes) return json({ ok: false, error: 'GRN can be requested only after the PO is created in UC' }, 409);
+          return json({ ok: true });
+        }
+
+        // ── PURCHASE LIST — undo a Create PO / Do GRN click before pickup ──
+        if (act === 'pl_cancel') {
+          await ensurePurchaseListsTable(env.DB);
+          const id = parseInt(body.id, 10);
+          if (!id) return json({ ok: false, error: 'id required' }, 400);
+          const res = await env.DB.prepare(
+            "UPDATE purchase_lists SET uc_status = CASE uc_status WHEN 'po_queued' THEN 'draft' ELSE 'po_created' END, " +
+            "uc_message = 'Request cancelled before pickup', updated_at = datetime('now') WHERE id = ? AND uc_status IN ('po_queued', 'grn_queued')"
+          ).bind(id).run();
+          if (!res.meta || !res.meta.changes) return json({ ok: false, error: 'Only a queued request can be cancelled (it may already be picked up)' }, 409);
+          return json({ ok: true });
+        }
+
+        // ── PURCHASE LIST — GRN steps finished by hand in UC ──────────────
+        if (act === 'pl_markGrnDone') {
+          await ensurePurchaseListsTable(env.DB);
+          const id = parseInt(body.id, 10);
+          if (!id) return json({ ok: false, error: 'id required' }, 400);
+          const sessionUser = await resolveSession(request, env.DB);
+          const who = (sessionUser && (sessionUser.display_name || sessionUser.username)) || 'unauthenticated';
+          const res = await env.DB.prepare(
+            "UPDATE purchase_lists SET uc_status = 'grn_done', uc_grn_done_at = COALESCE(uc_grn_done_at, datetime('now')), " +
+            "uc_message = TRIM(COALESCE(uc_message, '') || ' · Finished manually in UC by ' || ? || ' on ' || datetime('now')), updated_at = datetime('now') " +
+            "WHERE id = ? AND uc_status IN ('grn_partial', 'grn_failed')"
+          ).bind(who, id).run();
+          if (!res.meta || !res.meta.changes) return json({ ok: false, error: 'Only a partial or failed GRN can be marked done' }, 409);
+          return json({ ok: true });
+        }
+
+        // ── PURCHASE LIST — SK's push script: claim queued POs / GRNs ─────
+        // Same X-Health-Token as rsv_ucClaim. Each job is marked *_pushing in
+        // the same step so it is never handed out twice.
+        if (act === 'pl_ucClaim') {
+          if (!healthTokenOk(request, env)) return json({ ok: false, error: 'Invalid or missing health token' }, 401);
+          await ensurePurchaseListsTable(env.DB);
+          const rows = await env.DB.prepare(
+            "SELECT * FROM purchase_lists WHERE uc_status IN ('po_queued', 'grn_queued') ORDER BY uc_requested_at ASC LIMIT 20"
+          ).all();
+          const out = [];
+          for (const r of (rows.results || [])) {
+            const isPo = r.uc_status === 'po_queued';
+            const upd = await env.DB.prepare(
+              "UPDATE purchase_lists SET uc_status = ?, uc_claimed_at = datetime('now') WHERE id = ? AND uc_status = ?"
+            ).bind(isPo ? 'po_pushing' : 'grn_pushing', r.id, r.uc_status).run();
+            if (!upd.meta || !upd.meta.changes) continue;
+            const facility = r.facility || 'G4';
+            const base = {
+              id: r.id,
+              invoice_no: r.invoice_no, invoice_date: r.invoice_date, bl_no: r.bl_no,
+              po_number: r.po_code || r.invoice_no,               // PO code in UC = LME invoice no (or the code chosen on the page)
+              vendor_code: PL_VENDOR.code,                        // ITC
+              vendor_name: PL_VENDOR.name,                        // Industrial Tools Corporation
+              facility: facility,                                 // G4 | E3
+              facility_code: PL_FACILITIES[facility],             // UC facility code
+              total_qty: r.our_total,
+              items: JSON.parse(r.items_json || '[]')             // [{ sku, qty }] enabled UC SKUs, merged
+            };
+            if (isPo) out.push(Object.assign(base, {
+              mode: 'create_po',
+              steps: ['vendor_mapping', 'po'],                    // create PO only
+              approve_po: false,                                  // leave it CREATED — do NOT approve
+              unit_price: 0,                                      // same as the hand-made LME POs
+              vendor_sku_rule: 'same_as_item_sku',                // Vendor SKU Code = Item SKU (add mapping if missing)
+              remark: 'LME invoice ' + r.invoice_no + (r.bl_no ? ' · B/L ' + r.bl_no : '')
+            }));
+            else out.push(Object.assign(base, {
+              mode: 'grn',
+              steps: ['approve_po', 'grn', 'qc', 'putaway'],      // container arrived
+              po_code: r.po_code || r.invoice_no,
+              inventory_type: 'GOOD_INVENTORY',
+              putaway_shelf: 'DEFAULT',
+              resume: !!r.uc_steps_json,                          // earlier GRN attempt — continue from where it stopped
+              previous_steps: r.uc_steps_json ? JSON.parse(r.uc_steps_json) : null
+            }));
+          }
+          return json({ ok: true, jobs: out });
+        }
+
+        // ── PURCHASE LIST — SK's push script: report the UC result ────────
+        // create_po: { id, ok, message, po_code }
+        // grn:       { id, ok, message, steps:{ approve_po, grn, qc, putaway } ('done'|'failed'|'manual'), failed_items:[{sku,qty,error}] }
+        if (act === 'pl_ucReport') {
+          if (!healthTokenOk(request, env)) return json({ ok: false, error: 'Invalid or missing health token' }, 401);
+          await ensurePurchaseListsTable(env.DB);
+          const id = parseInt(body.id, 10);
+          if (!id || typeof body.ok !== 'boolean') return json({ ok: false, error: 'id and ok (true/false) required' }, 400);
+          const row = await env.DB.prepare('SELECT id, uc_status FROM purchase_lists WHERE id = ?').bind(id).first();
+          if (!row) return json({ ok: false, error: 'Purchase list not found' }, 404);
+          const msg = String(body.message == null ? '' : body.message).slice(0, 4000);
+          if (row.uc_status === 'po_pushing') {
+            const status = body.ok ? 'po_created' : 'po_failed';
+            await env.DB.prepare(
+              "UPDATE purchase_lists SET uc_status = ?, uc_message = ?, po_code = COALESCE(?, po_code), " +
+              "uc_po_created_at = CASE WHEN ? = 'po_created' THEN datetime('now') ELSE uc_po_created_at END, updated_at = datetime('now') WHERE id = ?"
+            ).bind(status, msg || (body.ok ? '' : 'PO not created (no error text returned)'), body.po_code ? String(body.po_code).slice(0, 100) : null, status, id).run();
+            return json({ ok: true, status });
+          }
+          if (row.uc_status === 'grn_pushing') {
+            const failed = (Array.isArray(body.failed_items) ? body.failed_items : []).map(f => ({
+              sku: String((f && f.sku) || ''), qty: parseInt(f && f.qty, 10) || 0, error: String((f && f.error) || '').slice(0, 1000)
+            })).filter(f => f.sku);
+            const clean = v => (['done', 'failed', 'manual'].includes(v) ? v : null);
+            const s = (body.steps && typeof body.steps === 'object') ? body.steps : {};
+            const steps = { approve_po: clean(s.approve_po), grn: clean(s.grn), qc: clean(s.qc), putaway: clean(s.putaway) };
+            let status;
+            if (body.ok && steps.approve_po === 'done' && steps.grn === 'done' && steps.qc === 'done' && steps.putaway === 'done' && !failed.length) status = 'grn_done';
+            else if (steps.grn === 'done') status = 'grn_partial';
+            else status = 'grn_failed';
+            await env.DB.prepare(
+              "UPDATE purchase_lists SET uc_status = ?, uc_message = ?, uc_steps_json = ?, uc_failed_json = ?, " +
+              "uc_grn_done_at = CASE WHEN ? = 'grn_done' THEN datetime('now') ELSE uc_grn_done_at END, updated_at = datetime('now') WHERE id = ?"
+            ).bind(status, msg || (status === 'grn_failed' ? 'GRN not done (no error text returned)' : ''), JSON.stringify(steps),
+                   failed.length ? JSON.stringify(failed) : null, status, id).run();
+            return json({ ok: true, status });
+          }
+          return json({ ok: false, error: 'Purchase list is ' + row.uc_status + ', not being pushed' }, 409);
         }
 
         // ── RETURNS VERIFIER — save one verified slip ─────────────────────
@@ -7733,6 +7971,104 @@ async function ensureReturnsSlipsTable(DB) {
   for (const [name, def] of add) {
     if (!have.has(name)) await DB.prepare('ALTER TABLE returns_slips ADD COLUMN ' + name + ' ' + def).run();
   }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// PURCHASE LIST (/Purchase-List/) — one row per LME invoice.
+// Saved exactly as reviewed on the page: header, every invoice line
+// (lines_json), and the PO lines (items_json = [{ sku, qty }], our
+// Tomahawk/Konrad + included lines, merged by SKU).
+// UC push follows the Returns pattern — the page queues, SK's script
+// (VPS, X-Health-Token) claims + reports:
+//   uc_status: 'draft'        saved, no PO yet
+//              'po_queued'    "Create PO" clicked     → script creates the PO (NOT approved)
+//              'po_pushing'   script picked it up
+//              'po_created'   PO exists in UC (status CREATED) — waiting for the container
+//              'po_failed'    PO not created (fix + Create PO again)
+//              'grn_queued'   "Do GRN" clicked        → script approves PO, GRN, QC, putaway
+//              'grn_pushing'  script picked it up
+//              'grn_done'     received in UC
+//              'grn_partial'  some steps done — finish in UC, then Mark done
+//              'grn_failed'   GRN not done (Do GRN again)
+// ══════════════════════════════════════════════════════════════════
+const PL_FACILITIES = { G4: 'TomahawkHub', E3: 'industrialtoolsandhardware' };
+const PL_VENDOR = { code: 'ITC', name: 'Industrial Tools Corporation' };
+
+async function ensurePurchaseListsTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS purchase_lists (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_no     TEXT NOT NULL UNIQUE,
+    invoice_date   TEXT,
+    bl_no          TEXT,
+    cartons        TEXT,
+    ci_pages       INTEGER DEFAULT 0,
+    invoice_total  INTEGER DEFAULT 0,
+    our_total      INTEGER DEFAULT 0,
+    line_count     INTEGER DEFAULT 0,
+    file_name      TEXT,
+    lines_json     TEXT NOT NULL DEFAULT '[]',
+    items_json     TEXT NOT NULL DEFAULT '[]',
+    facility       TEXT DEFAULT 'G4',
+    po_code        TEXT,
+    uc_status      TEXT DEFAULT 'draft',
+    uc_requested_by TEXT,
+    uc_requested_at TEXT,
+    uc_claimed_at  TEXT,
+    uc_message     TEXT,
+    uc_steps_json  TEXT,
+    uc_failed_json TEXT,
+    uc_po_created_at TEXT,
+    uc_grn_done_at TEXT,
+    saved_by       TEXT,
+    saved_at       TEXT DEFAULT (datetime('now')),
+    updated_at     TEXT DEFAULT (datetime('now'))
+  )`).run();
+}
+
+// Merges PO lines by SKU and drops empty ones — the stored PO is always clean.
+function plMergeItems(items) {
+  const merged = {}; const order = [];
+  for (const it of (Array.isArray(items) ? items : [])) {
+    const sku = String((it && it.sku) || '').trim();
+    const qty = parseInt(it && it.qty, 10);
+    if (!sku || !(qty > 0)) continue;
+    if (!(sku in merged)) { merged[sku] = 0; order.push(sku); }
+    merged[sku] += qty;
+  }
+  return order.map(sku => ({ sku, qty: merged[sku] }));
+}
+
+// Existing UC POs with this code (or code_1, code_2 …) from the Supabase mirror.
+async function plExistingPos(env, code) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured');
+  const enc = encodeURIComponent(code);
+  const url = env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/uc_purchase_orders?select=po_code,po_status,facility,quantity' +
+    '&or=(po_code.eq.' + enc + ',po_code.like.' + enc + '_*)&limit=1000';
+  const r = await fetch(url, { headers: supabaseHeaders(env) });
+  if (!r.ok) throw new Error('Supabase uc_purchase_orders read failed: HTTP ' + r.status);
+  const byCode = {};
+  for (const row of await r.json()) {
+    const c = row.po_code;
+    if (c !== code && !new RegExp('^' + code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '_\\d+$').test(c)) continue;
+    if (!byCode[c]) byCode[c] = { po_code: c, status: row.po_status, facility: row.facility, lines: 0, qty: 0 };
+    byCode[c].lines++; byCode[c].qty += Number(row.quantity || 0);
+  }
+  return Object.values(byCode).sort((a, b) => a.po_code.localeCompare(b.po_code));
+}
+
+function plRowOut(r, full) {
+  const out = {
+    id: r.id, invoice_no: r.invoice_no, invoice_date: r.invoice_date, bl_no: r.bl_no, cartons: r.cartons,
+    ci_pages: r.ci_pages, invoice_total: r.invoice_total, our_total: r.our_total, line_count: r.line_count,
+    file_name: r.file_name, facility: r.facility, po_code: r.po_code, uc_status: r.uc_status || 'draft',
+    uc_requested_by: r.uc_requested_by, uc_requested_at: r.uc_requested_at, uc_message: r.uc_message,
+    uc_steps: r.uc_steps_json ? JSON.parse(r.uc_steps_json) : null,
+    uc_failed: r.uc_failed_json ? JSON.parse(r.uc_failed_json) : null,
+    uc_po_created_at: r.uc_po_created_at, uc_grn_done_at: r.uc_grn_done_at,
+    saved_by: r.saved_by, saved_at: r.saved_at, updated_at: r.updated_at
+  };
+  if (full) { out.lines = JSON.parse(r.lines_json || '[]'); out.items = JSON.parse(r.items_json || '[]'); }
+  return out;
 }
 
 // Slip photos live in their own table so listing slips stays light.
