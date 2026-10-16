@@ -309,10 +309,18 @@ async function runStockAlertCheck(env, opts) {
     sent = await sendWaToAll(env, list); reason = newOnes.length + ' new: ' + newOnes.map(x => x.sku).join(', ');
   }
 
-  // Replace the saved state with the current list (recovered SKUs drop off).
-  const stmts = [env.DB.prepare('DELETE FROM sa_oos_state')];
-  for (const x of list) stmts.push(env.DB.prepare('INSERT INTO sa_oos_state (sku_code, g4_qty) VALUES (?, ?)').bind(x.sku, x.g4));
-  await env.DB.batch(stmts);
+  // If a scheduled send reached NOBODY (e.g. Meta blocked the token), keep
+  // the old saved state so the new SKUs still count as "new" and are retried
+  // at the next slot, instead of being silently marked as already alerted.
+  const allFailed = !opts.force && sent && !(sent.recipients || []).some(r => r.ok);
+  if (allFailed) {
+    reason += ' — SEND FAILED for all recipients, will retry next slot';
+  } else {
+    // Replace the saved state with the current list (recovered SKUs drop off).
+    const stmts = [env.DB.prepare('DELETE FROM sa_oos_state')];
+    for (const x of list) stmts.push(env.DB.prepare('INSERT INTO sa_oos_state (sku_code, g4_qty) VALUES (?, ?)').bind(x.sku, x.g4));
+    await env.DB.batch(stmts);
+  }
   if (!seeded) await saSetSetting(env.DB, 'wa_seeded', '1');
 
   await saSetSetting(env.DB, 'wa_last_check', JSON.stringify({ at: nowIso, count: list.length, reason }));
