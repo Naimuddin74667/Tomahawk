@@ -1735,7 +1735,7 @@ function fetchWithTimeout(url, ms, opts) {
 // from D1 in one call. This is the only place any of this state is populated.
 async function loadSkuMasterFromD1() {
   try {
-    const res = await fetchWithTimeout(`${WORKER}?action=sm_getAll`, 15000);
+    const res = await fetchWithTimeout(`${WORKER}?action=sm_getAll`, 180000);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'Load failed');
     const rows = data.rows || [];
@@ -1787,6 +1787,7 @@ async function loadUcItemMasterFromD1() {
 }
 
 // ── INIT ───────────────────────────────────────────────────────────────
+let smLoadPromise = Promise.resolve(); // SKU master load — redraws the table when it lands
 window.onload = async () => {
   document.getElementById('gp-date').value = new Date().toISOString().slice(0,10);
   // theme applied early via inline script on <body>
@@ -1794,10 +1795,11 @@ window.onload = async () => {
     // Only SKU master + box counters block the screen, and they load in
     // parallel. The overlay is force-hidden after 10s no matter what, so a
     // slow server can never trap the user on the spinner.
+    smLoadPromise = loadSkuMasterFromD1();
     const overlayCap = new Promise(function(r) { setTimeout(r, 10000); });
     try {
       await Promise.race([
-        Promise.all([loadSkuMasterFromD1(), loadBoxCountersFromD1()]),
+        Promise.all([smLoadPromise, loadBoxCountersFromD1()]),
         overlayCap
       ]);
     } finally {
@@ -1807,6 +1809,11 @@ window.onload = async () => {
     // the background; the Warehouse Label SKU search refreshes when it lands.
     loadUcItemMasterFromD1().then(function() {
       try { whPopulateSkuDropdown(); } catch(e) {}
+    });
+    // If SKU master was still downloading when the overlay cleared, redraw
+    // the Mapped SKUs table + SKU search as soon as it arrives.
+    smLoadPromise.then(function() {
+      try { renderMapTable(); whPopulateSkuDropdown(); enrichMappingImages(); } catch(e) {}
     });
   } else {
     document.getElementById('app-loading-overlay').style.display = 'none';
