@@ -73,6 +73,26 @@ async function ensureWaAlertTables(DB) {
     g4_qty   INTEGER DEFAULT 0,
     since    TEXT DEFAULT (datetime('now'))
   )`).run();
+  // One row per alert check (scheduled slot, manual test, or crash) —
+  // shown as "Alert history" in Stock Alert ⚙ Settings. Last 60 kept.
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS sa_wa_history (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    at         TEXT DEFAULT (datetime('now')),
+    kind       TEXT,
+    count      INTEGER,
+    reason     TEXT,
+    sent_ok    INTEGER,
+    sent_total INTEGER,
+    errors     TEXT
+  )`).run();
+}
+
+// Adds one Alert history row and trims the table to the newest 60.
+async function addWaHistory(DB, h) {
+  await DB.prepare(`INSERT INTO sa_wa_history (at, kind, count, reason, sent_ok, sent_total, errors) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .bind(new Date().toISOString(), h.kind, h.count == null ? null : h.count, h.reason || '',
+      h.sentOk == null ? null : h.sentOk, h.sentTotal == null ? null : h.sentTotal, h.errors || '').run();
+  await DB.prepare(`DELETE FROM sa_wa_history WHERE id NOT IN (SELECT id FROM sa_wa_history ORDER BY id DESC LIMIT 60)`).run();
 }
 async function saGetSetting(DB, key) {
   const row = await DB.prepare('SELECT value FROM sa_settings WHERE key = ?').bind(key).first();
@@ -325,6 +345,12 @@ async function runStockAlertCheck(env, opts) {
 
   await saSetSetting(env.DB, 'wa_last_check', JSON.stringify({ at: nowIso, count: list.length, reason }));
   if (sent) await saSetSetting(env.DB, 'wa_last_sent', JSON.stringify({ at: nowIso, count: sent.count, recipients: sent.recipients, reason }));
+  try {
+    const rs = sent ? (sent.recipients || []) : [];
+    const errs = Array.from(new Set(rs.filter(r => !r.ok).map(r => r.error)));
+    await addWaHistory(env.DB, { kind: opts.force ? 'test' : 'slot', count: list.length, reason,
+      sentOk: sent ? rs.filter(r => r.ok).length : null, sentTotal: sent ? rs.length : null, errors: errs.join(' | ') });
+  } catch (e) { console.warn('sa_wa_history write failed:', e.message); }
   return { count: list.length, newCount: newOnes.length, reason, sent };
 }
 
@@ -1483,7 +1509,8 @@ export default {
             lastCheck: parse(await saGetSetting(env.DB, 'wa_last_check')),
             lastSent: parse(await saGetSetting(env.DB, 'wa_last_sent')),
             current: list, preview: formatOosList(list),
-            templates: await getWaTemplateStatuses(env).catch(e => ({ _error: e.message }))
+            templates: await getWaTemplateStatuses(env).catch(e => ({ _error: e.message })),
+            history: ((await env.DB.prepare('SELECT at, kind, count, reason, sent_ok, sent_total, errors FROM sa_wa_history ORDER BY id DESC LIMIT 30').all()).results) || []
           });
         } catch (err) {
           return json({ ok: false, error: err.message });
@@ -4936,8 +4963,10 @@ export default {
         await recordHeartbeat(env, 'stock_alert_whatsapp', 'Stock Alert WhatsApp (9 AM / 12 PM / 4 PM IST)', 'ok',
           `Slot ${waSlot}: ${r.count} SKU(s) out in E3 with G4 stock — ${r.reason}` +
           (r.sent ? ` — sent to ${r.sent.recipients.filter(x => x.ok).length}/${r.sent.recipients.length}.` : '.'), 64800);
-      })().catch(err => recordHeartbeat(env, 'stock_alert_whatsapp', 'Stock Alert WhatsApp (9 AM / 12 PM / 4 PM IST)', 'error',
-          err.message, 64800).catch(() => {})));
+      })().catch(err => Promise.all([
+          recordHeartbeat(env, 'stock_alert_whatsapp', 'Stock Alert WhatsApp (9 AM / 12 PM / 4 PM IST)', 'error', err.message, 64800),
+          addWaHistory(env.DB, { kind: 'error', reason: 'Slot ' + waSlot + ' check crashed', errors: err.message })
+        ]).catch(() => {})));
     }
     // Service requests — email the customer as the courier / warehouse moves
     // their case on (picked up, reached us, sent back, delivered). */15 ticks.

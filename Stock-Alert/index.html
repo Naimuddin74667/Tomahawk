@@ -595,6 +595,17 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .wa-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .wa-result { font-size: 12px; color: var(--text-secondary); margin-top: 10px; line-height: 1.5; text-align: right; }
 .wa-result:empty { display: none; }
+.wa-hist { max-height: 260px; overflow-y: auto; }
+.wa-hist-row { display: grid; grid-template-columns: 110px 64px 1fr auto; gap: 10px; align-items: baseline; font-size: 12px; padding: 6px 0; border-bottom: 1px solid var(--border-default); }
+.wa-hist-row:last-child { border-bottom: none; }
+.wa-hist-time { color: var(--text-secondary); white-space: nowrap; }
+.wa-hist-kind { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+.wa-hist-reason { color: var(--text-primary); word-break: break-word; }
+.wa-hist-err { display: block; color: var(--c-red); font-size: 11.5px; margin-top: 2px; }
+.wa-hist-res { white-space: nowrap; font-weight: 600; color: var(--text-muted); }
+.wa-hist-res.ok { color: var(--c-green); }
+.wa-hist-res.bad { color: var(--c-red); }
+@media (max-width: 600px) { .wa-hist-row { grid-template-columns: 1fr auto; } .wa-hist-kind, .wa-hist-reason { grid-column: 1 / -1; } }
 .wa-result .ok { color: var(--c-green); }
 .wa-result .bad { color: var(--c-red); }
 .settings-override-list { max-height: 180px; overflow-y: auto; border: 1px solid var(--border-default); border-radius: var(--radius-md); margin-top: 4px; }
@@ -1112,6 +1123,11 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
             <div class="settings-row" style="margin-top:10px;" id="wa-create-tpl-row">
               <button class="btn-ghost" id="wa-create-tpl-btn">Create line-by-line templates</button>
             </div>
+          </div>
+
+          <div class="settings-card" style="grid-column:1 / -1;">
+            <div class="wa-label" id="wa-hist-label">Alert history</div>
+            <div class="wa-hist" id="wa-hist"><div class="wa-empty">Loading…</div></div>
           </div>
         </div>
   <div class="wa-actions">
@@ -2598,6 +2614,25 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     }).join('');
   }
 
+  // Alert history — one row per check: time · kind · what happened · delivery.
+  function renderHistory(rows) {
+    var el = document.getElementById('wa-hist');
+    document.getElementById('wa-hist-label').textContent = 'Alert history · last ' + rows.length;
+    if (!rows.length) { el.innerHTML = '<div class="wa-empty">No checks recorded yet — history starts from the next slot</div>'; return; }
+    var kinds = { slot: 'Auto', test: 'Test', error: 'Error' };
+    el.innerHTML = rows.map(function (h) {
+      var res = '—', cls = '';
+      if (h.kind === 'error') { res = 'Crashed'; cls = 'bad'; }
+      else if (h.sent_total != null) { res = h.sent_ok + '/' + h.sent_total + ' delivered'; cls = h.sent_ok === h.sent_total ? 'ok' : 'bad'; }
+      else { res = 'Not sent'; }
+      var reason = (h.count != null ? h.count + ' out · ' : '') + (h.reason || '');
+      return '<div class="wa-hist-row"><span class="wa-hist-time">' + esc(fmtTime(h.at)) + '</span>' +
+        '<span class="wa-hist-kind">' + esc(kinds[h.kind] || h.kind) + '</span>' +
+        '<span class="wa-hist-reason">' + esc(reason) + (h.errors ? '<span class="wa-hist-err">' + esc(h.errors) + '</span>' : '') + '</span>' +
+        '<span class="wa-hist-res ' + cls + '">' + esc(res) + '</span></div>';
+    }).join('');
+  }
+
   function stat(label, value, sub, subClass) {
     return '<div><div class="wa-stat-label">' + esc(label) + '</div><div class="wa-stat-value">' + esc(value) + '</div>' +
       (sub ? '<div class="wa-stat-sub ' + (subClass || '') + '">' + esc(sub) + '</div>' : '') + '</div>';
@@ -2630,6 +2665,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
         renderCurrent(d.current || []);
         renderTemplates(d.templates);
+        renderHistory(d.history || []);
       })
       .catch(function (e) { statusEl.innerHTML = '<div class="wa-empty">Error: ' + esc(e.message) + '</div>'; });
   }
