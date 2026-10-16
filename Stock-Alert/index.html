@@ -931,7 +931,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
     <div class="stat-card" id="card-low-stock-e3">
       <div class="stat-label">Low Stock in E3</div>
       <div class="stat-value" id="stat-low-stock-e3">—</div>
-      <div class="stat-sub">0 &lt; E3 &lt; 10, G4 has stock to send</div>
+      <div class="stat-sub">0 &lt; E3 &lt; Rec. Qty, G4 has stock to send</div>
     </div>
     <div class="stat-card" id="card-ideal-stock">
       <div class="stat-label">Ideal Stock</div>
@@ -1542,7 +1542,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       baseRows = allRows.filter(function (r) {
         var e3 = Number(r.E3_stock) || 0;
         var g4 = Number(r.G4_stock) || 0;
-        return e3 > 0 && e3 < 10 && g4 > 0;
+        return e3 > 0 && e3 < lowStockLimit(r.skuCode) && g4 > 0;
       });
     } else if (currentView === 'idealstock') {
       // E3 has stock (live to sell) but no channel listing exists anywhere —
@@ -1627,12 +1627,12 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
 
     // "Low Stock in E3" is a different population entirely — not the idle
     // set (which requires E3 = 0). This is SKUs where E3 has *some* stock
-    // but not enough (< 10, hardcoded for now), and G4 has stock to send.
+    // but less than its Rec. Qty (see lowStockLimit), and G4 has stock to send.
     var lowStockCount = 0;
     allRows.forEach(function (r) {
       var e3 = Number(r.E3_stock) || 0;
       var g4 = Number(r.G4_stock) || 0;
-      if (e3 > 0 && e3 < 10 && g4 > 0) lowStockCount++;
+      if (e3 > 0 && e3 < lowStockLimit(r.skuCode) && g4 > 0) lowStockCount++;
     });
 
     // "Ideal Stock" — E3 has stock (live to sell) but the SKU isn't linked
@@ -1813,6 +1813,16 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       });
   }
 
+  // Low Stock threshold for one SKU = its Rec. Qty (SKU override first,
+  // then the Settings default). A SKU is "low" when 0 < E3 < this number.
+  // Falls back to 10 only if no Rec. Qty is set anywhere.
+  function lowStockLimit(sku) {
+    var v = recQtyOverrides.hasOwnProperty(sku) ? recQtyOverrides[sku] : null;
+    if (v === null || v === undefined || v === '') v = appSettings.default_rec_qty;
+    var n = Number(v);
+    return (v === null || v === undefined || v === '' || isNaN(n)) ? 10 : n;
+  }
+
   // ---- REC. QTY CELL (mirrors the Qty/Box pattern above) ----------------
   // Priority 1: SKU-specific manual override (D1: sa_recqty_overrides)
   // Priority 2: app-wide default (D1: sa_settings.default_rec_qty), set from
@@ -1875,7 +1885,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       .then(function (data) {
         if (!data || data.ok === false) throw new Error((data && data.error) || 'Save failed');
         recQtyOverrides[sku] = val;
-        renderTable();
+        applyFilters(); // Rec. Qty drives the Low Stock list + count
         renderRecQtySettingsList(); // keep the Settings modal list in sync if it's open
       })
       .catch(function (err) {
@@ -1893,7 +1903,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
       .then(function (data) {
         if (!data || data.ok === false) throw new Error((data && data.error) || 'Delete failed');
         delete recQtyOverrides[sku];
-        renderTable();
+        applyFilters(); // Rec. Qty drives the Low Stock list + count
         renderRecQtySettingsList();
         if (onDone) onDone(null);
       })
@@ -2446,7 +2456,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         if (!data || data.ok === false) throw new Error((data && data.error) || 'Save failed');
         appSettings.default_rec_qty = raw;
         defaultRecQtyStatus.textContent = raw === '' ? 'Cleared — SKUs without an override will show NA.' : 'Saved.';
-        renderTable();
+        applyFilters(); // Rec. Qty drives the Low Stock list + count
       })
       .catch(function (err) {
         defaultRecQtyStatus.textContent = 'Save failed: ' + err.message;
@@ -2474,7 +2484,7 @@ input[type="checkbox"].row-check, input[type="checkbox"].select-all { accent-col
         newRecQtySkuInput.value = '';
         newRecQtyQtyInput.value = '';
         renderRecQtySettingsList();
-        renderTable();
+        applyFilters(); // Rec. Qty drives the Low Stock list + count
       })
       .catch(function (err) {
         alert('Save failed: ' + err.message);
