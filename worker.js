@@ -73,6 +73,11 @@ async function ensureWaAlertTables(DB) {
     g4_qty   INTEGER DEFAULT 0,
     since    TEXT DEFAULT (datetime('now'))
   )`).run();
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS sa_low_state (
+    sku_code TEXT PRIMARY KEY,
+    g4_qty   INTEGER DEFAULT 0,
+    since    TEXT DEFAULT (datetime('now'))
+  )`).run();
   // One row per alert check (scheduled slot, manual test, or crash) —
   // shown as "Alert history" in Stock Alert ⚙ Settings. Last 60 kept.
   await DB.prepare(`CREATE TABLE IF NOT EXISTS sa_wa_history (
@@ -133,6 +138,38 @@ async function computeOosList(env) {
     .sort((a, b) => b.g4 - a.g4 || a.sku.localeCompare(b.sku));
 }
 
+// Low-stock list: 0 < E3 < Rec. Qty and G4 > 0 — same rule as the app's
+// "Low Stock in E3" card. Rec. Qty = SKU override (sa_recqty_overrides),
+// else the Settings default (sa_settings.default_rec_qty), else 10.
+async function computeLowList(env) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured on Worker');
+  const res = await fetch(env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/rpc/stock_alert_inventory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': env.SUPABASE_SECRET_KEY, 'Authorization': 'Bearer ' + env.SUPABASE_SECRET_KEY },
+    body: '{}'
+  });
+  if (!res.ok) throw new Error('Supabase stock_alert_inventory failed: ' + res.status);
+  const data = await res.json();
+  const archived = await env.DB.prepare('SELECT sku_code FROM sa_archived_skus').all();
+  const archivedSet = new Set((archived.results || []).map(r => r.sku_code));
+  let overrides = {};
+  try {
+    const o = await env.DB.prepare('SELECT sku_code, rec_qty FROM sa_recqty_overrides').all();
+    (o.results || []).forEach(r => { if (r.rec_qty !== null && r.rec_qty !== '') overrides[r.sku_code] = Number(r.rec_qty); });
+  } catch (e) { overrides = {}; /* table not created yet */ }
+  const defRaw = await saGetSetting(env.DB, 'default_rec_qty');
+  const def = (defRaw !== null && defRaw !== '' && !isNaN(Number(defRaw))) ? Number(defRaw) : 10;
+  return (data.rows || [])
+    .filter(r => r.enabled !== false && !archivedSet.has(r.skuCode))
+    .filter(r => {
+      const e3 = Number(r.E3_stock), g4 = Number(r.G4_stock);
+      const limit = overrides.hasOwnProperty(r.skuCode) && !isNaN(overrides[r.skuCode]) ? overrides[r.skuCode] : def;
+      return e3 > 0 && e3 < limit && g4 > 0;
+    })
+    .map(r => ({ sku: r.skuCode, g4: Number(r.G4_stock), e3: Number(r.E3_stock) }))
+    .sort((a, b) => b.g4 - a.g4 || a.sku.localeCompare(b.sku));
+}
+
 // "1. SKU (G4: 80), 2. ..." — trimmed with "+N more" to stay inside limits.
 function formatOosList(list) {
   if (!list.length) return 'None right now';
@@ -189,6 +226,17 @@ async function sendWaStockAlert(env, to, count, listText) {
 // Templates are created once via the admin action waCreateTemplates.
 const META_WA_WABA_ID = '1484177466864671';   // "Test WhatsApp Business Account"
 const WA_MULTI_PREFIX = 'stock_alert_l';
+// Two alert families share all the send/check code below and differ only here:
+//   oos = No Stock in E3 (E3 = 0, G4 > 0)        — 9:00 / 12:00 / 4:00 PM IST
+//   low = Low Stock in E3 (0 < E3 < Rec. Qty, G4 > 0) — 5 min later (9:05 / 12:05 / 4:05)
+// Each family has its own template set, saved state table and settings keys.
+const WA_KINDS = {
+  oos: { prefix: 'stock_alert_l', emoji: '🔴', phrase: 'are out of stock in E3 warehouse', label: 'out-of-stock',
+         state: 'sa_oos_state', key: 'wa_', hist: '', oneLineFallback: true },
+  low: { prefix: 'stock_low_l',   emoji: '🟠', phrase: 'are low stock in E3 warehouse',    label: 'low-stock',
+         state: 'sa_low_state', key: 'wa_low_', hist: 'low-', oneLineFallback: false }
+};
+function waKind(k) { return WA_KINDS[k] ? k : 'oos'; }
 const WA_MULTI_MAX = 10;
 const WA_HEADER_TEXT = 'Alert : SKUs need Attention.';
 const WA_FOOTER_TEXT = 'Do not reply to this message.';
@@ -196,10 +244,11 @@ const WA_FOOTER_TEXT = 'Do not reply to this message.';
 function waLine(x) { return x.sku + ' ...... (G4: ' + x.g4 + ')'; }
 
 // Body text for template with n lines.
-function waMultiBody(n) {
+function waMultiBody(n, kind) {
+  const K = WA_KINDS[waKind(kind)];
   const lines = [];
   for (let i = 1; i <= n; i++) lines.push(i + '. {{' + (i + 1) + '}}');
-  return '🔴 Alert: {{1}} SKU(s) are out of stock in E3 warehouse.\n\nSKU list (G4 qty):\n' +
+  return K.emoji + ' Alert: {{1}} SKU(s) ' + K.phrase + '.\n\nSKU list (G4 qty):\n' +
     lines.join('\n') + '\n\nPlease check the Stock Alert app.';
 }
 
@@ -216,12 +265,14 @@ async function getWaTemplateStatuses(env) {
   return out;
 }
 
-// Creates any missing stock_alert_l1…l10 templates. Returns per-name result.
-async function createWaMultiTemplates(env) {
+// Creates any missing templates of one family (stock_alert_l1…l10 or
+// stock_low_l1…l10). Returns per-name result.
+async function createWaMultiTemplates(env, kind) {
+  kind = waKind(kind);
   const existing = await getWaTemplateStatuses(env);
   const results = [];
   for (let n = 1; n <= WA_MULTI_MAX; n++) {
-    const name = WA_MULTI_PREFIX + n;
+    const name = WA_KINDS[kind].prefix + n;
     if (existing[name]) { results.push({ name, status: existing[name], created: false }); continue; }
     const sample = ['TCD-12K-Bare', 'ARC-2001-Welding-Machine', 'TPW-A', 'TCHG-20A', 'TLL-2C',
       'PRU-5222-Pruner-CL-02', 'TLL-16-16-Line-Level-LT', 'TCD-21K-DBK', 'TID-3628-Impact-Drill-CL', 'TLB041-Leaf-Blower-CL']
@@ -233,7 +284,7 @@ async function createWaMultiTemplates(env) {
         name, language: META_WA_LANG, category: 'UTILITY', parameter_format: 'POSITIONAL',
         components: [
           { type: 'HEADER', format: 'TEXT', text: WA_HEADER_TEXT },
-          { type: 'BODY', text: waMultiBody(n), example: { body_text: [[String(n)].concat(sample)] } },
+          { type: 'BODY', text: waMultiBody(n, kind), example: { body_text: [[String(n)].concat(sample)] } },
           { type: 'FOOTER', text: WA_FOOTER_TEXT }
         ]
       })
@@ -250,7 +301,7 @@ async function createWaMultiTemplates(env) {
 }
 
 // Sends one message using the line-by-line template for this list size.
-async function sendWaMulti(env, to, list) {
+async function sendWaMulti(env, to, list, kind) {
   const n = Math.min(list.length, WA_MULTI_MAX);
   const lines = list.length > WA_MULTI_MAX
     ? list.slice(0, WA_MULTI_MAX - 1).map(waLine).concat(['+' + (list.length - (WA_MULTI_MAX - 1)) + ' more, see Stock Alert app'])
@@ -262,7 +313,7 @@ async function sendWaMulti(env, to, list) {
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + env.META_WA_TOKEN },
     body: JSON.stringify({
       messaging_product: 'whatsapp', to, type: 'template',
-      template: { name: WA_MULTI_PREFIX + n, language: { code: META_WA_LANG },
+      template: { name: WA_KINDS[waKind(kind)].prefix + n, language: { code: META_WA_LANG },
         components: [{ type: 'body', parameters: params }] }
     })
   });
@@ -276,13 +327,24 @@ async function sendWaMulti(env, to, list) {
 
 // Sends the current list to every recipient; returns per-number results.
 // Uses the line-by-line template when approved, else the one-line one.
-async function sendWaToAll(env, list) {
+async function sendWaToAll(env, list, kind) {
+  kind = waKind(kind);
+  const K = WA_KINDS[kind];
   const recipients = parseWaRecipients(await saGetSetting(env.DB, 'wa_recipients'));
   if (!recipients.length) throw new Error('No recipients set — add numbers in Stock Alert ⚙ Settings');
   const listText = formatOosList(list);
   let multiName = null;
-  if (list.length) {
-    const want = WA_MULTI_PREFIX + Math.min(list.length, WA_MULTI_MAX);
+  const want = K.prefix + Math.min(Math.max(list.length, 1), WA_MULTI_MAX);
+  // Low-stock has no one-line fallback (that template says "out of stock"),
+  // so its line-by-line template must be approved before it can send.
+  if (!K.oneLineFallback) {
+    let st = '';
+    try { st = String((await getWaTemplateStatuses(env))[want] || ''); } catch (e) { st = 'unknown (' + e.message + ')'; }
+    if (st.toUpperCase() !== 'APPROVED') {
+      return { recipients: recipients.map(to => ({ to, ok: false, error: 'Template ' + want + ' not approved yet (' + (st || 'not created') + ')' })), listText, count: list.length };
+    }
+    multiName = want;
+  } else if (list.length) {
     try {
       const statuses = await getWaTemplateStatuses(env);
       if (String(statuses[want] || '').toUpperCase() === 'APPROVED') multiName = want;
@@ -293,8 +355,11 @@ async function sendWaToAll(env, list) {
     let usedTemplate = META_WA_TEMPLATE;
     try {
       if (multiName) {
-        try { await sendWaMulti(env, to, list); usedTemplate = multiName; }
-        catch (e) { await sendWaStockAlert(env, to, list.length, listText); usedTemplate = META_WA_TEMPLATE + ' (fallback: ' + e.message + ')'; }
+        if (!K.oneLineFallback) { await sendWaMulti(env, to, list, kind); usedTemplate = multiName; }
+        else {
+          try { await sendWaMulti(env, to, list, kind); usedTemplate = multiName; }
+          catch (e) { await sendWaStockAlert(env, to, list.length, listText); usedTemplate = META_WA_TEMPLATE + ' (fallback: ' + e.message + ')'; }
+        }
       } else {
         await sendWaStockAlert(env, to, list.length, listText);
       }
@@ -304,29 +369,32 @@ async function sendWaToAll(env, list) {
   return { recipients: results, listText, count: list.length };
 }
 
-// The 15-minute check. opts.force = send even if nothing is new (test button).
+// One alert check. opts.kind = 'oos' (default) or 'low'.
+// opts.force = send even if nothing is new (test button).
 async function runStockAlertCheck(env, opts) {
   opts = opts || {};
+  const kind = waKind(opts.kind);
+  const K = WA_KINDS[kind];
   await ensureWaAlertTables(env.DB);
-  const list = await computeOosList(env);
-  const prevRows = await env.DB.prepare('SELECT sku_code FROM sa_oos_state').all();
+  const list = kind === 'low' ? await computeLowList(env) : await computeOosList(env);
+  const prevRows = await env.DB.prepare('SELECT sku_code FROM ' + K.state).all();
   const prev = new Set((prevRows.results || []).map(r => r.sku_code));
-  const seeded = (await saGetSetting(env.DB, 'wa_seeded')) === '1';
+  const seeded = (await saGetSetting(env.DB, K.key + 'seeded')) === '1';
   const enabled = (await saGetSetting(env.DB, 'wa_alerts_enabled')) !== '0';
   const newOnes = list.filter(x => !prev.has(x.sku));
   const nowIso = new Date().toISOString();
 
   let sent = null, reason;
   if (opts.force) {
-    sent = await sendWaToAll(env, list); reason = 'manual test';
+    sent = await sendWaToAll(env, list, kind); reason = 'manual test';
   } else if (!seeded) {
     reason = 'first run — saved current list, no message';
   } else if (!enabled) {
     reason = 'alerts switched off';
   } else if (!newOnes.length) {
-    reason = 'no new out-of-stock SKUs since last slot — skipped';
+    reason = 'no new ' + K.label + ' SKUs since last slot — skipped';
   } else {
-    sent = await sendWaToAll(env, list); reason = newOnes.length + ' new: ' + newOnes.map(x => x.sku).join(', ');
+    sent = await sendWaToAll(env, list, kind); reason = newOnes.length + ' new: ' + newOnes.map(x => x.sku).join(', ');
   }
 
   // If a scheduled send reached NOBODY (e.g. Meta blocked the token), keep
@@ -337,18 +405,18 @@ async function runStockAlertCheck(env, opts) {
     reason += ' — SEND FAILED for all recipients, will retry next slot';
   } else {
     // Replace the saved state with the current list (recovered SKUs drop off).
-    const stmts = [env.DB.prepare('DELETE FROM sa_oos_state')];
-    for (const x of list) stmts.push(env.DB.prepare('INSERT INTO sa_oos_state (sku_code, g4_qty) VALUES (?, ?)').bind(x.sku, x.g4));
+    const stmts = [env.DB.prepare('DELETE FROM ' + K.state)];
+    for (const x of list) stmts.push(env.DB.prepare('INSERT INTO ' + K.state + ' (sku_code, g4_qty) VALUES (?, ?)').bind(x.sku, x.g4));
     await env.DB.batch(stmts);
   }
-  if (!seeded) await saSetSetting(env.DB, 'wa_seeded', '1');
+  if (!seeded) await saSetSetting(env.DB, K.key + 'seeded', '1');
 
-  await saSetSetting(env.DB, 'wa_last_check', JSON.stringify({ at: nowIso, count: list.length, reason }));
-  if (sent) await saSetSetting(env.DB, 'wa_last_sent', JSON.stringify({ at: nowIso, count: sent.count, recipients: sent.recipients, reason }));
+  await saSetSetting(env.DB, K.key + 'last_check', JSON.stringify({ at: nowIso, count: list.length, reason }));
+  if (sent) await saSetSetting(env.DB, K.key + 'last_sent', JSON.stringify({ at: nowIso, count: sent.count, recipients: sent.recipients, reason }));
   try {
     const rs = sent ? (sent.recipients || []) : [];
     const errs = Array.from(new Set(rs.filter(r => !r.ok).map(r => r.error)));
-    await addWaHistory(env.DB, { kind: opts.force ? 'test' : 'slot', count: list.length, reason,
+    await addWaHistory(env.DB, { kind: K.hist + (opts.force ? 'test' : 'slot'), count: list.length, reason,
       sentOk: sent ? rs.filter(r => r.ok).length : null, sentTotal: sent ? rs.length : null, errors: errs.join(' | ') });
   } catch (e) { console.warn('sa_wa_history write failed:', e.message); }
   return { count: list.length, newCount: newOnes.length, reason, sent };
@@ -1501,6 +1569,8 @@ export default {
           await ensureWaAlertTables(env.DB);
           const parse = v => { try { return v ? JSON.parse(v) : null; } catch (e) { return null; } };
           const list = await computeOosList(env);
+          let lowList = [], lowError = null;
+          try { lowList = await computeLowList(env); } catch (e) { lowError = e.message; }
           return json({
             ok: true,
             enabled: (await saGetSetting(env.DB, 'wa_alerts_enabled')) !== '0',
@@ -1509,6 +1579,8 @@ export default {
             lastCheck: parse(await saGetSetting(env.DB, 'wa_last_check')),
             lastSent: parse(await saGetSetting(env.DB, 'wa_last_sent')),
             current: list, preview: formatOosList(list),
+            low: { lastCheck: parse(await saGetSetting(env.DB, 'wa_low_last_check')), lastSent: parse(await saGetSetting(env.DB, 'wa_low_last_sent')),
+                   current: lowList, error: lowError },
             templates: await getWaTemplateStatuses(env).catch(e => ({ _error: e.message })),
             history: ((await env.DB.prepare('SELECT at, kind, count, reason, sent_ok, sent_total, errors FROM sa_wa_history ORDER BY id DESC LIMIT 30').all()).results) || []
           });
@@ -1529,7 +1601,7 @@ export default {
       // waCreateTemplates: one-time creation of stock_alert_l1…l10 on Meta.
       if (request.method === 'POST' && act === 'waCreateTemplates') {
         try {
-          return json({ ok: true, results: await createWaMultiTemplates(env) });
+          return json({ ok: true, results: await createWaMultiTemplates(env, body && body.kind) });
         } catch (err) {
           return json({ ok: false, error: err.message });
         }
@@ -1538,7 +1610,7 @@ export default {
       // waAlertTest: send the CURRENT list to all recipients right now.
       if (request.method === 'POST' && act === 'waAlertTest') {
         try {
-          const r = await runStockAlertCheck(env, { force: true });
+          const r = await runStockAlertCheck(env, { force: true, kind: body && body.kind });
           return json({ ok: true, ...r });
         } catch (err) {
           return json({ ok: false, error: err.message });
@@ -4949,6 +5021,20 @@ export default {
           .catch(err => recordHeartbeat(env, 'flipkart_image_refresh', 'Flipkart Image Refresh (Worker cron, 6:30pm IST)', 'error',
             err.message, 90000).catch(() => {}))
       );
+      return;
+    }
+    // Stock Alert — WhatsApp LOW-stock alerts, 5 min after each out-of-stock
+    // slot: the separate '35 3,6,10 * * *' cron = 9:05 / 12:05 / 4:05 PM IST.
+    // That tick runs ONLY this job and returns (watchers run on */15 ticks).
+    if (event.cron === '35 3,6,10 * * *') {
+      ctx.waitUntil(runStockAlertCheck(env, { kind: 'low' })
+        .then(r => recordHeartbeat(env, 'stock_alert_whatsapp_low', 'Stock Alert WhatsApp — Low Stock (9:05 / 12:05 / 4:05 PM IST)', 'ok',
+          `${r.count} SKU(s) low in E3 with G4 stock — ${r.reason}` +
+          (r.sent ? ` — sent to ${r.sent.recipients.filter(x => x.ok).length}/${r.sent.recipients.length}.` : '.'), 64800))
+        .catch(err => Promise.all([
+          recordHeartbeat(env, 'stock_alert_whatsapp_low', 'Stock Alert WhatsApp — Low Stock (9:05 / 12:05 / 4:05 PM IST)', 'error', err.message, 64800),
+          addWaHistory(env.DB, { kind: 'low-error', reason: 'Low-stock check crashed', errors: err.message })
+        ]).catch(() => {})));
       return;
     }
     // Stock Alert — WhatsApp out-of-stock alerts, only at 9 AM / 12 PM / 4 PM IST.

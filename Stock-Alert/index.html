@@ -511,6 +511,8 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 @media (max-width: 600px) { .wa-hist-row { grid-template-columns: 1fr auto; } .wa-hist-kind, .wa-hist-reason { grid-column: 1 / -1; } }
 .wa-result .ok { color: var(--c-green); }
 .wa-result .bad { color: var(--c-red); }
+.wa-ok { color: var(--c-green); font-weight: 600; }
+.wa-bad { color: var(--c-red); font-weight: 600; }
 .settings-override-list { max-height: 180px; overflow-y: auto; border: 1px solid var(--border-default); border-radius: var(--radius-md); margin-top: 4px; }
 .settings-override-row {
   display: flex; align-items: center; justify-content: space-between;
@@ -960,6 +962,21 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
             </div>
           </div>
 
+          <div class="settings-card">
+            <div class="wa-label" id="wa-low-label">Low stock now</div>
+            <div class="wa-sku-list" id="wa-low-info"><div class="wa-empty">Loading…</div></div>
+            <div class="wa-foot" id="wa-low-status">Sent at <b>9:05 AM, 12:05 PM, 4:05 PM</b> — only when a SKU newly has <b>0 &lt; E3 &lt; Rec. Qty and G4 &gt; 0</b>.</div>
+          </div>
+
+          <div class="settings-card">
+            <div class="wa-label" id="wa-low-tpl-label">Low-stock templates</div>
+            <div class="wa-pills" id="wa-low-tpl-info"></div>
+            <div class="settings-section-hint" style="margin:0;">Low-stock alerts need these approved by Meta (🟠 message). Until a size is approved, that alert is held and retried at the next slot.</div>
+            <div class="settings-row" style="margin-top:10px;" id="wa-create-low-tpl-row">
+              <button class="btn-ghost" id="wa-create-low-tpl-btn">Create low-stock templates</button>
+            </div>
+          </div>
+
           <div class="settings-card" style="grid-column:1 / -1;">
             <div class="wa-label" id="wa-hist-label">Alert history</div>
             <div class="wa-hist" id="wa-hist"><div class="wa-empty">Loading…</div></div>
@@ -967,6 +984,7 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
         </div>
   <div class="wa-actions">
         <button class="btn-ghost" id="wa-refresh-btn">Refresh</button>
+        <button class="btn-ghost" id="wa-low-test-btn">Send low-stock test</button>
         <button class="btn-primary" id="wa-test-btn" style="flex:0 0 auto;">Send test now</button>
       </div>
       <div class="wa-result" id="wa-test-result"></div>
@@ -1894,14 +1912,16 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
     if (/REJECT|PAUSE|DISABLE|ERROR/i.test(st)) return 'bad';
     return 'pend';
   }
-  function renderTemplates(t) {
-    var el = document.getElementById('wa-tpl-info');
-    var label = document.getElementById('wa-tpl-label');
-    var btnRow = document.getElementById('wa-create-tpl-row');
+  // family 'oos' = stock_alert (+ one-line), 'low' = stock_low_l1…l10
+  function renderTemplates(t, family) {
+    var low = family === 'low';
+    var el = document.getElementById(low ? 'wa-low-tpl-info' : 'wa-tpl-info');
+    var label = document.getElementById(low ? 'wa-low-tpl-label' : 'wa-tpl-label');
+    var btnRow = document.getElementById(low ? 'wa-create-low-tpl-row' : 'wa-create-tpl-row');
     if (!t) { el.innerHTML = ''; return; }
     if (t._error) { el.innerHTML = '<span class="wa-pill bad">Could not read templates: ' + esc(t._error) + '</span>'; return; }
-    var names = [['stock_alert', 'One-line']];
-    for (var n = 1; n <= 10; n++) names.push(['stock_alert_l' + n, String(n)]);
+    var names = low ? [] : [['stock_alert', 'One-line']];
+    for (var n = 1; n <= 10; n++) names.push([(low ? 'stock_low_l' : 'stock_alert_l') + n, String(n)]);
     var approved = 0, missing = 0;
     el.innerHTML = names.map(function (pair) {
       var st = t[pair[0]];
@@ -1910,7 +1930,7 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       var tip = pair[0] + ' — ' + (st || 'not created');
       return '<span class="wa-pill ' + pillClass(st) + '" title="' + esc(tip) + '">' + (st === 'APPROVED' ? '✓ ' : '') + esc(pair[1]) + '</span>';
     }).join('');
-    label.textContent = 'Meta templates · ' + approved + ' of ' + names.length + ' approved';
+    label.textContent = (low ? 'Low-stock templates · ' : 'Meta templates · ') + approved + ' of ' + names.length + ' approved';
     btnRow.style.display = missing ? '' : 'none';
   }
 
@@ -1924,15 +1944,36 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
     }).join('');
   }
 
+  // Current low-stock list (0 < E3 < Rec. Qty, G4 > 0) + last low send.
+  function renderLow(low) {
+    low = low || {};
+    var list = low.current || [];
+    var el = document.getElementById('wa-low-info');
+    document.getElementById('wa-low-label').textContent = 'Low stock now · ' + list.length + ' SKU' + (list.length === 1 ? '' : 's');
+    if (low.error) el.innerHTML = '<div class="wa-empty">Error: ' + esc(low.error) + '</div>';
+    else if (!list.length) el.innerHTML = '<div class="wa-empty">No SKUs below Rec. Qty in E3 with G4 stock right now</div>';
+    else el.innerHTML = list.map(function (x) {
+      return '<div class="wa-sku-row"><span class="wa-sku-name">' + esc(x.sku) + '</span><span class="wa-sku-qty">E3 ' + esc(x.e3) + ' · G4 ' + esc(x.g4) + '</span></div>';
+    }).join('');
+    var ls = low.lastSent;
+    var st = document.getElementById('wa-low-status');
+    var base = 'Sent at <b>9:05 AM, 12:05 PM, 4:05 PM</b> — only when a SKU newly has <b>0 &lt; E3 &lt; Rec. Qty and G4 &gt; 0</b>.';
+    if (ls) {
+      var ok = (ls.recipients || []).filter(function (x) { return x.ok; }).length;
+      base += '<br>Last low-stock alert: ' + esc(fmtTime(ls.at)) + ' · <span class="' + (ok === (ls.recipients || []).length ? 'wa-ok' : 'wa-bad') + '">' + ok + '/' + (ls.recipients || []).length + ' delivered</span>';
+    }
+    st.innerHTML = base;
+  }
+
   // Alert history — one row per check: time · kind · what happened · delivery.
   function renderHistory(rows) {
     var el = document.getElementById('wa-hist');
     document.getElementById('wa-hist-label').textContent = 'Alert history · last ' + rows.length;
     if (!rows.length) { el.innerHTML = '<div class="wa-empty">No checks recorded yet — history starts from the next slot</div>'; return; }
-    var kinds = { slot: 'Auto', test: 'Test', error: 'Error' };
+    var kinds = { slot: 'Auto', test: 'Test', error: 'Error', 'low-slot': 'Low · Auto', 'low-test': 'Low · Test', 'low-error': 'Low · Error' };
     el.innerHTML = rows.map(function (h) {
       var res = '—', cls = '';
-      if (h.kind === 'error') { res = 'Crashed'; cls = 'bad'; }
+      if (h.kind === 'error' || h.kind === 'low-error') { res = 'Crashed'; cls = 'bad'; }
       else if (h.sent_total != null) { res = h.sent_ok + '/' + h.sent_total + ' delivered'; cls = h.sent_ok === h.sent_total ? 'ok' : 'bad'; }
       else { res = 'Not sent'; }
       var reason = (h.count != null ? h.count + ' out · ' : '') + (h.reason || '');
@@ -1974,7 +2015,9 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
           stat('Last check', lc ? fmtTime(lc.at) : 'Not run yet', lc ? lc.reason : '') + sentHtml;
 
         renderCurrent(d.current || []);
-        renderTemplates(d.templates);
+        renderTemplates(d.templates, 'oos');
+        renderTemplates(d.templates, 'low');
+        renderLow(d.low);
         renderHistory(d.history || []);
       })
       .catch(function (e) { statusEl.innerHTML = '<div class="wa-empty">Error: ' + esc(e.message) + '</div>'; });
@@ -1994,9 +2037,9 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 
   document.getElementById('wa-refresh-btn').addEventListener('click', loadStatus);
 
-  document.getElementById('wa-create-tpl-btn').addEventListener('click', function () {
-    var btn = this; btn.disabled = true; resultEl.textContent = 'Creating templates on Meta…';
-    post('waCreateTemplates').then(function (d) {
+  function createTemplates(btn, kind) {
+    btn.disabled = true; resultEl.textContent = 'Creating templates on Meta…';
+    post('waCreateTemplates', { kind: kind }).then(function (d) {
       if (!d.ok) { resultEl.textContent = '❌ ' + d.error; return; }
       // One summary line instead of 10 rows; failures listed by name.
       var failed = d.results.filter(function (r) { return r.error; });
@@ -2007,11 +2050,13 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       loadStatus();
     }).catch(function (e) { resultEl.textContent = 'Error: ' + e.message; })
       .finally(function () { btn.disabled = false; });
-  });
+  }
+  document.getElementById('wa-create-tpl-btn').addEventListener('click', function () { createTemplates(this, 'oos'); });
+  document.getElementById('wa-create-low-tpl-btn').addEventListener('click', function () { createTemplates(this, 'low'); });
 
-  document.getElementById('wa-test-btn').addEventListener('click', function () {
-    var btn = this; btn.disabled = true; resultEl.textContent = 'Sending…';
-    post('waAlertTest').then(function (d) {
+  function sendTest(btn, kind) {
+    btn.disabled = true; resultEl.textContent = 'Sending…';
+    post('waAlertTest', { kind: kind }).then(function (d) {
       if (!d.ok) { resultEl.textContent = '❌ ' + d.error; return; }
       resultEl.innerHTML = (d.sent.recipients || []).map(function (x) {
         return x.ok ? '<span class="ok">✓ ' + esc(x.to) + ' — sent via ' + esc(x.template || 'stock_alert') + '</span>'
@@ -2020,7 +2065,9 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       loadStatus();
     }).catch(function (e) { resultEl.textContent = 'Error: ' + e.message; })
       .finally(function () { btn.disabled = false; });
-  });
+  }
+  document.getElementById('wa-test-btn').addEventListener('click', function () { sendTest(this, 'oos'); });
+  document.getElementById('wa-low-test-btn').addEventListener('click', function () { sendTest(this, 'low'); });
 
   // Load when an admin opens Settings.
   document.getElementById('settings-btn').addEventListener('click', function () {
