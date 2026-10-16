@@ -656,7 +656,7 @@ const ACTION_TIERS = {
   //   are manager+ regardless of which app calls them. A viewer never
   //   sees Inward Label Generator's own UI to reach this read via that
   //   route — that's enforced by the app's frontend gate, not here. —
-  sm_getAll: 'viewer_read',
+  sm_getAll: 'viewer_read', sm_getList: 'viewer_read', sm_getBw: 'viewer_read',
   sm_upsert: 'manager_up', sm_upsertBulk: 'manager_up', sm_delete: 'manager_up',
 
   // — UC SKU List: enabled UC SKUs live from Supabase (uc_item_types), D1
@@ -1697,6 +1697,25 @@ export default {
         }
 
         // ── SKU MASTER ─────────────────────────────────────────────────
+        // ── SKU MASTER (light) — every column EXCEPT the heavy base64
+        // bw_image_url, plus a has_bw flag. Inward Label Generator loads
+        // this first so its screen opens fast, then pulls images via sm_getBw.
+        if (action === 'sm_getList') {
+          await ensureSkuMasterTable(env.DB);
+          const rows = await env.DB.prepare(`SELECT uc_sku, internal_sku, category, qty_per_box, image_url, bw_source_url,
+            CASE WHEN bw_image_url IS NOT NULL AND bw_image_url <> '' THEN 1 ELSE 0 END AS has_bw, updated_at
+            FROM sku_master ORDER BY uc_sku ASC`).all();
+          return json({ ok: true, rows: rows.results || [] });
+        }
+
+        // ── SKU MASTER B&W images only — loaded in the background ──────
+        if (action === 'sm_getBw') {
+          await ensureSkuMasterTable(env.DB);
+          const rows = await env.DB.prepare(`SELECT uc_sku, bw_image_url, bw_source_url FROM sku_master
+            WHERE bw_image_url IS NOT NULL AND bw_image_url <> ''`).all();
+          return json({ ok: true, rows: rows.results || [] });
+        }
+
         if (action === 'sm_getAll') {
           await ensureSkuMasterTable(env.DB);
           const rows = await env.DB.prepare('SELECT * FROM sku_master ORDER BY uc_sku ASC').all();
