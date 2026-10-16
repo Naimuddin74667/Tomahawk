@@ -1,0 +1,986 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#3d1263">
+<title>Royal Enterprises</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* =========================================================
+   Royal Enterprises — Phase 1 frontend
+   Owner catalogue + stock, Staff view-only, Shopkeeper ordering preview
+   Data: localStorage (re_data_v1) until backend is connected
+   Look: clean, static business app — light default, minimal motion
+   ========================================================= */
+:root{
+  --bg:#f6f2fa; --bg2:#ffffff; --card:#ffffff; --card2:#f3edf9; --line:#ebe3f3;
+  --text:#1d1430; --muted:#6f6582;
+  --primary:#4a1677; --primary-ink:#ffffff; --primary-soft:#f0e6fa;
+  --accent:#ff3e8a; --accent-ink:#ffffff; --accent-soft:#ffe6f0;
+  --head:radial-gradient(120% 90% at 100% 0%,#7b2fbf 0%,#5b1a8c 35%,#2a0b4a 85%);
+  --gold:#b98512; --gold-soft:#fbf3e0;
+  --ok:#14915f; --ok-soft:#e3f5ec; --warn:#b86e00; --warn-soft:#fdf0dc; --bad:#d23a4f; --bad-soft:#fbe6e9;
+  --r:14px; --shadow:0 1px 3px rgba(42,11,74,.06); --nav-h:64px;
+}
+[data-theme="dark"]{
+  --bg:#130b1f; --bg2:#1b1129; --card:#21152f; --card2:#2b1d3d; --line:#33244a;
+  --text:#f1ebfa; --muted:#a395b8;
+  --primary:#c9a3ff; --primary-ink:#1b0d2e; --primary-soft:#2f1f47;
+  --accent:#ff4f95; --accent-ink:#ffffff; --accent-soft:#3a1a2c;
+  --head:radial-gradient(120% 90% at 100% 0%,#5a2290 0%,#3d1263 40%,#1b0a30 90%);
+  --gold:#e0b04a; --gold-soft:#2c2618;
+  --ok:#3fcf8e; --ok-soft:#173026; --warn:#f0a63a; --warn-soft:#33281a; --bad:#ff6b7e; --bad-soft:#3a1e24;
+  --shadow:none;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{font-family:'Inter',system-ui,sans-serif;color:var(--text);background:var(--bg);min-height:100vh;overflow-x:hidden;font-size:15px}
+h1,h2,h3,h4{margin:0;font-weight:700;letter-spacing:-.01em}
+button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+input,select,textarea{font:inherit;color:var(--text)}
+.muted{color:var(--muted)}
+svg.ic{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+/* ---------- App bar ---------- */
+.appbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:calc(12px + env(safe-area-inset-top)) 16px 12px;background:var(--head);color:#fff}
+.brand{display:flex;align-items:center;gap:10px;cursor:pointer;min-width:0}
+.logo{width:36px;height:36px;border-radius:11px;display:grid;place-items:center;background:rgba(255,255,255,.14);flex:none}
+.logo svg{width:22px;height:22px}
+.brand b{font-size:16px;display:block;line-height:1.15}
+.brand small{color:rgba(255,255,255,.75);font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.hdr-actions{display:flex;gap:6px}
+.iconbtn{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:var(--card);border:1px solid var(--line)}
+.iconbtn:active{background:var(--card2)}
+.appbar .iconbtn{background:rgba(255,255,255,.14);border:0;color:#fff}
+
+main{padding:14px 16px calc(var(--nav-h) + 30px + env(safe-area-inset-bottom));max-width:760px;margin:0 auto}
+
+/* ---------- Bottom nav ---------- */
+.bnav{position:fixed;left:0;right:0;bottom:0;z-index:60;display:flex;justify-content:space-around;
+  padding:6px 8px calc(6px + env(safe-area-inset-bottom));background:var(--bg2);border-top:1px solid var(--line)}
+.bnav button{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 0;font-size:11.5px;font-weight:600;color:var(--muted)}
+.bnav button.on{color:var(--accent)}
+.bnav button.on svg{stroke-width:2.3}
+
+/* ---------- Common blocks ---------- */
+.sec{display:flex;align-items:center;justify-content:space-between;margin:22px 2px 10px;font-size:16px}
+.sec small{font-weight:500;color:var(--muted);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+.pill{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:6px;font-size:11.5px;font-weight:600;background:var(--card2);color:var(--muted)}
+.pill.gold{background:var(--gold-soft);color:var(--gold)}
+.pill.ok{background:var(--ok-soft);color:var(--ok)}
+.pill.low{background:var(--warn-soft);color:var(--warn)}
+.pill.out{background:var(--bad-soft);color:var(--bad)}
+.empty{text-align:center;padding:28px 16px;color:var(--muted)}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 16px;border-radius:10px;font-weight:600;font-size:15px}
+.btn:active{opacity:.85}
+.btn.gold{background:var(--accent);color:var(--accent-ink);box-shadow:0 4px 12px rgba(255,62,138,.25)}
+.btn.ghost{background:var(--card);border:1px solid var(--line)}
+.btn.danger{background:var(--bad-soft);color:var(--bad)}
+.btn.block{width:100%}
+.btn:disabled{opacity:.4;pointer-events:none}
+
+.search{position:relative;margin:2px 0 12px}
+.search svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--muted);width:18px;height:18px}
+.search input{width:100%;padding:11px 12px 11px 38px;border-radius:10px;border:1px solid var(--line);background:var(--card);outline:none;font-size:15px}
+.search input:focus{border-color:var(--primary)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;padding:7px 13px;border-radius:8px;background:var(--card);border:1px solid var(--line);font-size:13.5px;font-weight:500;color:var(--text)}
+.chip.on{background:var(--primary);color:var(--primary-ink);border-color:var(--primary)}
+
+/* ---------- Owner home ---------- */
+.greet{margin:4px 2px 2px}
+.greet h1{font-size:21px}
+.greet p{margin:3px 0 0;color:var(--muted);font-size:13.5px}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.stat{padding:14px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow)}
+.stat .v{font-size:22px;font-weight:700;margin-top:8px}
+.stat .l{font-size:12.5px;color:var(--muted);font-weight:500}
+.stat .ic{color:var(--muted)}
+.quick{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}
+.qa{display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 6px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);font-size:12.5px;font-weight:600;box-shadow:var(--shadow)}
+.qa:active{background:var(--card2)}
+.qa span{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;background:var(--primary-soft);color:var(--primary)}
+
+/* ---------- Lists ---------- */
+.list{display:flex;flex-direction:column;gap:8px}
+.row{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow)}
+.row img,.thumb{width:48px;height:48px;border-radius:8px;object-fit:cover;flex:none;background:var(--card2)}
+.row .grow{flex:1;min-width:0}
+.row b{display:block;font-size:14.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .sub{font-size:12.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stockn{font-weight:700;font-size:18px;text-align:right;min-width:44px}
+.stockn.low{color:var(--warn)} .stockn.out{color:var(--bad)} .stockn.ok{color:var(--text)}
+.stockn small{display:block;font-size:10.5px;color:var(--muted);font-weight:500}
+.adj{width:36px;height:36px;border-radius:9px;display:grid;place-items:center;background:var(--card);border:1px solid var(--line)}
+
+.pcard{display:flex;gap:12px;padding:12px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);cursor:pointer}
+.pcard img{width:72px;height:72px;border-radius:10px;object-fit:cover;flex:none}
+.pcard .grow{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.pcard b{font-size:15px;font-weight:600}
+.pcard .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:auto}
+
+/* ---------- FAB ---------- */
+.fab{position:fixed;right:16px;bottom:calc(var(--nav-h) + 16px + env(safe-area-inset-bottom));z-index:55;width:54px;height:54px;border-radius:16px;
+  display:grid;place-items:center;background:var(--accent);color:var(--accent-ink);box-shadow:0 6px 16px rgba(255,62,138,.35)}
+.fab svg{width:24px;height:24px;stroke-width:2.4}
+
+/* ---------- Bottom sheet ---------- */
+.sheet-wrap{position:fixed;inset:0;z-index:100;background:rgba(15,18,30,.45);opacity:0;visibility:hidden;transition:opacity .2s,visibility .2s}
+.sheet-wrap.open{opacity:1;visibility:visible}
+.sheet{position:absolute;left:0;right:0;bottom:0;max-height:92vh;overflow-y:auto;margin:0 auto;max-width:760px;
+  background:var(--bg);border-radius:18px 18px 0 0;padding:6px 16px calc(20px + env(safe-area-inset-bottom));
+  transform:translateY(100%);transition:transform .25s ease-out}
+.sheet-wrap.open .sheet{transform:translateY(0)}
+.grab{width:40px;height:4px;border-radius:9px;background:var(--line);margin:4px auto 12px}
+.sheet-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
+.sheet-h h2{font-size:18px}
+
+/* ---------- Forms ---------- */
+.field{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
+.field label{font-size:12.5px;font-weight:600;color:var(--muted)}
+.field input,.field select,.field textarea{width:100%;padding:11px 12px;border-radius:9px;border:1px solid var(--line);background:var(--card);outline:none;font-size:15px}
+.field input:focus,.field select:focus,.field textarea:focus{border-color:var(--primary)}
+.field input:disabled{background:var(--card2);color:var(--muted)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.photo-pick{display:grid;place-items:center;height:160px;border-radius:var(--r);border:1.5px dashed var(--line);background:var(--card);margin-bottom:14px;overflow:hidden;cursor:pointer;color:var(--muted);font-weight:500;text-align:center}
+.photo-pick img{width:100%;height:100%;object-fit:contain;background:var(--card2)}
+.vblock{padding:14px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);margin-bottom:10px}
+.vblock-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-weight:600}
+.vphoto{width:44px;height:44px;border-radius:8px;border:1.5px dashed var(--line);display:grid;place-items:center;overflow:hidden;color:var(--muted);flex:none;cursor:pointer}
+.vphoto img{width:100%;height:100%;object-fit:cover}
+.seg{display:flex;background:var(--card2);border-radius:10px;padding:3px;margin-bottom:14px}
+.seg button{flex:1;padding:9px;border-radius:8px;font-weight:600;color:var(--muted);font-size:14px}
+.seg button.on{background:var(--card);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.1)}
+
+/* ---------- Product detail (owner) ---------- */
+.pd-img{width:100%;height:210px;border-radius:var(--r);object-fit:contain;background:var(--card2)}
+.vcard{padding:12px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);margin-bottom:8px}
+.vcard-top{display:flex;align-items:center;gap:10px}
+.prices{display:grid;grid-template-columns:repeat(auto-fit,minmax(70px,1fr));gap:6px;margin-top:10px}
+.prices div{padding:7px;border-radius:8px;background:var(--card2);text-align:center}
+.prices small{display:block;font-size:10.5px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.prices b{font-size:14.5px}
+
+/* ---------- Shop view (Purple Rush) ---------- */
+body.shop .appbar{display:none}
+body.shop main{padding-top:0}
+.ps-top{margin:0 -16px;padding:calc(16px + env(safe-area-inset-top)) 16px 16px;background:var(--head);color:#fff;border-radius:0 0 26px 26px}
+.ps-row{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.ps-eta{font-size:21px;font-weight:800;letter-spacing:-.02em;min-width:0}
+.ps-eta small{display:block;font-size:12.5px;font-weight:500;opacity:.8;letter-spacing:0;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ps-acts{display:flex;gap:8px;flex:none}
+.ps-btn{width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.16);display:grid;place-items:center;color:#fff;font-weight:700;font-size:13px}
+.ps-search{position:relative;margin-top:14px}
+.ps-search svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#8a7f9c;width:18px;height:18px}
+.ps-search input{width:100%;border:0;outline:none;border-radius:14px;padding:12px 12px 12px 38px;font-size:15px;background:#fff;color:#1d1430}
+.ps-cats{display:flex;align-items:flex-start;gap:12px;margin-top:16px;overflow-x:auto;scrollbar-width:none}
+.ps-cats::-webkit-scrollbar{display:none}
+.ps-cat{flex:none;width:64px;text-align:center;font-size:11.5px;font-weight:600;color:#fff;opacity:.72;line-height:1.2}
+.ps-cat.on{opacity:1}
+.ps-cat .ci{width:52px;height:52px;border-radius:16px;margin:0 auto 6px;display:grid;place-items:center;background:rgba(255,255,255,.14)}
+.ps-cat .ci img{width:38px;height:38px}
+.ps-cat.on .ci{background:rgba(255,255,255,.26);outline:2px solid #fff;outline-offset:2px}
+.ps-bans{display:flex;gap:10px;overflow-x:auto;margin:14px -16px 0;padding:0 16px;scrollbar-width:none;scroll-snap-type:x mandatory}
+.ps-bans::-webkit-scrollbar{display:none}
+.ps-ban{flex:none;width:78%;max-width:300px;scroll-snap-align:start;padding:14px 16px;border-radius:18px;color:#fff}
+.ps-ban b{display:block;font-size:16px}
+.ps-ban small{font-size:12.5px;opacity:.9}
+.ps-brands{display:flex;gap:8px;overflow-x:auto;padding:14px 0 2px;scrollbar-width:none}
+.ps-brands::-webkit-scrollbar{display:none}
+.ps-brand{flex:none;padding:7px 13px;border-radius:999px;border:1px solid var(--line);background:var(--card);font-size:13px;font-weight:600}
+.ps-brand.on{background:var(--primary);color:var(--primary-ink);border-color:var(--primary)}
+.ps-h{display:flex;justify-content:space-between;align-items:baseline;margin:16px 2px 10px}
+.ps-h b{font-size:17px;font-weight:800}
+.ps-h small{color:var(--muted);font-size:12.5px}
+.ps-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+@media(min-width:620px){.ps-grid{grid-template-columns:repeat(4,1fr)}}
+.ps-card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:6px;cursor:pointer;position:relative}
+.ps-img{position:relative}
+.ps-img img{width:100%;aspect-ratio:1/1;border-radius:10px;object-fit:cover;display:block;background:var(--card2)}
+.ps-oos{position:absolute;inset:0;border-radius:10px;background:rgba(255,255,255,.65);display:grid;place-items:center;font-size:11px;font-weight:800;color:var(--bad)}
+[data-theme="dark"] .ps-oos{background:rgba(19,11,31,.65)}
+.ps-addw{position:absolute;right:0;bottom:-8px}
+.ps-add{height:30px;min-width:52px;padding:0 8px;border-radius:9px;background:var(--card);border:1.5px solid var(--accent);color:var(--accent);font-weight:800;font-size:12px;box-shadow:0 4px 10px rgba(255,62,138,.18)}
+.ps-step{height:30px;min-width:64px;border-radius:9px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:space-between;font-weight:800;font-size:13px;box-shadow:0 4px 10px rgba(255,62,138,.3)}
+.ps-step button{width:21px;height:30px;color:#fff;font-size:16px;font-weight:800}
+.ps-step span{padding:0 4px;display:flex;align-items:center;gap:2px}
+.ps-pr{margin:12px 2px 0;font-size:14px;font-weight:800}
+.ps-pr s{font-size:10.5px;color:var(--muted);font-weight:500;margin-left:3px}
+.ps-nm{font-size:12px;font-weight:600;line-height:1.25;margin:2px 2px 0;min-height:30px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ps-op{font-size:10.5px;color:var(--muted);margin:2px 2px 2px}
+
+.sp-img{display:block;height:210px;width:210px;max-width:100%;margin:0 auto 14px;border-radius:20px;object-fit:cover}
+.sp-title{font-size:20px;font-weight:800}
+.sp-sub{color:var(--muted);font-size:13px;margin:3px 0 14px}
+.vopt{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);margin-bottom:8px}
+.vopt.sel{border-color:var(--accent);background:var(--accent-soft)}
+.vopt.dis{opacity:.5}
+.vopt img{width:44px;height:44px;border-radius:10px;object-fit:cover}
+.vopt .grow{flex:1;min-width:0}
+.vopt b{font-size:14.5px;font-weight:600;display:block}
+.vopt .price{font-weight:800;font-size:15px;margin:2px 0}
+.stepper{display:flex;align-items:center;border-radius:10px;overflow:hidden;background:var(--accent);color:#fff}
+.stepper button{width:32px;height:36px;display:grid;place-items:center;font-size:19px;font-weight:700;color:#fff}
+.stepper input{width:36px;text-align:center;border:0;background:none;font-weight:800;font-size:15px;outline:none;color:#fff;-moz-appearance:textfield}
+.stepper.zero{background:var(--card);border:1.5px solid var(--accent)}
+.stepper.zero button,.stepper.zero input{color:var(--accent)}
+.stepper input::-webkit-outer-spin-button,.stepper input::-webkit-inner-spin-button{-webkit-appearance:none}
+
+.cartbar{position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:70;max-width:736px;margin:0 auto;display:none;align-items:center;justify-content:space-between;gap:12px;
+  padding:10px 10px 10px 16px;border-radius:16px;background:#2a0b4a;color:#fff;box-shadow:0 10px 24px rgba(42,11,74,.35);cursor:pointer}
+.cartbar.show{display:flex}
+.cartbar b{font-size:17px}
+.cartbar small{opacity:.75;font-weight:500}
+.cartbar .go{display:flex;align-items:center;gap:6px;padding:10px 14px;border-radius:12px;font-weight:800;background:var(--accent)}
+
+.success{text-align:center;padding:10px 0 6px}
+.success .tick{width:64px;height:64px;margin:8px auto 14px;border-radius:50%;display:grid;place-items:center;background:var(--ok-soft);color:var(--ok)}
+.success .tick svg{width:32px;height:32px;stroke-width:2.6}
+
+.toast{position:fixed;left:50%;bottom:calc(var(--nav-h) + 24px);transform:translateX(-50%);opacity:0;z-index:4000;background:#1b1f2e;color:#fff;padding:10px 16px;border-radius:10px;font-weight:500;font-size:14px;transition:opacity .2s;pointer-events:none;max-width:88vw;text-align:center}
+.toast.show{opacity:1}
+body.shop .toast{bottom:calc(84px + env(safe-area-inset-bottom))}
+
+.role-opt{display:flex;align-items:center;gap:14px;width:100%;text-align:left;padding:12px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);margin-bottom:8px}
+.role-opt.on{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary)}
+.role-opt span{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;background:var(--primary-soft);color:var(--primary);flex:none}
+.role-opt small{display:block;color:var(--muted);font-size:12.5px;margin-top:2px}
+.note{font-size:12.5px;color:var(--muted);background:var(--card2);border-radius:10px;padding:10px 12px;margin-top:8px}
+
+.order-line{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px}
+.order-line:last-child{border-bottom:0}
+.total-row{display:flex;justify-content:space-between;align-items:center;padding:14px 0 4px;font-size:18px;font-weight:700}
+</style>
+</head>
+<body>
+
+
+<header class="appbar">
+  <div class="brand" onclick="goTab('home')"><span class="logo" id="logoCrown"></span><div><b>Royal Enterprises</b><small id="roleLbl">Owner</small></div></div>
+  <div class="hdr-actions">
+    <button class="iconbtn" onclick="openRole()" aria-label="Switch view" id="roleBtn"></button>
+    <button class="iconbtn" onclick="toggleTheme()" aria-label="Theme" id="themeBtn"></button>
+  </div>
+</header>
+
+<main id="main"></main>
+
+<nav class="bnav" id="bnav"></nav>
+<button class="fab" id="fab" onclick="openProductForm()" aria-label="Add product" style="display:none"></button>
+<div class="cartbar" id="cartbar" onclick="openCart()"></div>
+
+<div class="sheet-wrap" id="sheetWrap" onclick="if(event.target===this)closeSheet()"><div class="sheet" id="sheet"></div></div>
+<div class="toast" id="toast"></div>
+<input type="file" id="fileIn" accept="image/*" capture="environment" hidden>
+
+<script>
+/* =========================================================
+   STORAGE KEYS (app prefix "re_" + _v1 suffix)
+   ========================================================= */
+const KEY = 're_data_v1', CART_KEY = 're_cart_v1', UI_KEY = 're_ui_v1';
+const DEMO_SHOP = { id: 'SH-0001', name: 'Demo Mobile Shop' }; // replaced by real shop login in Phase 2
+
+/* ---------- small helpers ---------- */
+const $ = s => document.querySelector(s);
+const main = $('#main');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const num = v => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
+const inr = n => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const loadJSON = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } };
+const fmtDT = ts => new Date(ts).toLocaleString('en-IN', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+
+/* ---------- icons (inline SVG) ---------- */
+const ICONS = {
+  home:'<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>',
+  box:'<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/>',
+  layers:'<path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/><path d="M3 17l9 5 9-5"/>',
+  more:'<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
+  user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
+  moon:'<path d="M21 13A9 9 0 1 1 11 3a7 7 0 0 0 10 10z"/>',
+  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>', minus:'<path d="M5 12h14"/>',
+  search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/>',
+  cart:'<path d="M3 4h2l2.4 11h11l2-8H6.3"/><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/>',
+  edit:'<path d="M4 20h4L19 9l-4-4L4 16v4z"/>', clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  camera:'<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
+  store:'<path d="M4 9l1.5-5h13L20 9"/><path d="M4 9h16v2a3 3 0 0 1-5.3 2 3 3 0 0 1-5.4 0A3 3 0 0 1 4 11z"/><path d="M5 14v6h14v-6"/>',
+  trash:'<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>', x:'<path d="M6 6l12 12M18 6L6 18"/>',
+  check:'<path d="M5 12l5 5 9-10"/>', alert:'<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/>',
+  rupee:'<path d="M6 4h12M6 9h12M14 4c3 0 4 2.5 4 5s-2 5-6 5H7l8 7"/>', eye:'<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  tag:'<path d="M3 12V4h8l10 10-8 8z"/><circle cx="8" cy="8" r="1.5"/>', download:'<path d="M12 4v11M7 10l5 5 5-5M4 20h16"/>',
+  arrow:'<path d="M5 12h14M13 6l6 6-6 6"/>', in:'<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>'
+};
+const ic = (n, extra = '') => `<svg class="ic" viewBox="0 0 24 24" ${extra}>${ICONS[n] || ''}</svg>`;
+const CROWN = `<svg viewBox="0 0 64 64"><defs><linearGradient id="cg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffeeb5"/><stop offset="1" stop-color="#d6951b"/></linearGradient></defs><path d="M8 24l12 10 12-19 12 19 12-10-5 26H13z" fill="url(#cg)"/><rect x="13" y="52" width="38" height="6" rx="2" fill="url(#cg)"/><circle cx="8" cy="22" r="4" fill="#ffeeb5"/><circle cx="32" cy="12" r="4.5" fill="#ffeeb5"/><circle cx="56" cy="22" r="4" fill="#ffeeb5"/><circle cx="32" cy="40" r="4" fill="#8b6cff"/></svg>`;
+
+/* ---------- placeholder product art (used when no photo uploaded) ---------- */
+const ART = {
+  charger:'<rect x="62" y="70" width="76" height="80" rx="14"/><path d="M85 70V45M115 70V45"/><path d="M104 92l-14 20h20l-14 20"/>',
+  cable:'<path d="M60 150c0-40 80-30 80-70 0-20-15-30-30-30"/><rect x="92" y="28" width="30" height="24" rx="6"/><rect x="48" y="146" width="24" height="26" rx="5"/>',
+  earphone:'<path d="M66 120V95a34 34 0 0 1 68 0v25"/><rect x="54" y="112" width="24" height="38" rx="11"/><rect x="122" y="112" width="24" height="38" rx="11"/>',
+  power:'<rect x="70" y="45" width="60" height="110" rx="14"/><path d="M104 75l-14 24h20l-14 24"/>',
+  cover:'<rect x="66" y="35" width="68" height="130" rx="16"/><circle cx="88" cy="58" r="8"/><circle cx="88" cy="81" r="8"/>',
+  glass:'<rect x="66" y="35" width="68" height="130" rx="16"/><path d="M82 72l36-18M82 102l36-18M82 132l36-18"/>',
+  speaker:'<rect x="62" y="40" width="76" height="120" rx="18"/><circle cx="100" cy="115" r="22"/><circle cx="100" cy="68" r="8"/>',
+  default:'<path d="M60 82h80l-8 68H68z"/><path d="M80 82a20 20 0 0 1 40 0"/>'
+};
+const HUE = { charger:262, cable:205, earphone:325, power:150, cover:22, glass:188, speaker:290, default:245 };
+function artKind(catName) {
+  const c = (catName || '').toLowerCase();
+  if (/charg|adapter/.test(c)) return 'charger';
+  if (/cable|wire|cord/.test(c)) return 'cable';
+  if (/ear|neck|head|bud/.test(c)) return 'earphone';
+  if (/power ?bank|bank/.test(c)) return 'power';
+  if (/cover|case|back/.test(c)) return 'cover';
+  if (/glass|guard|screen/.test(c)) return 'glass';
+  if (/speaker/.test(c)) return 'speaker';
+  return 'default';
+}
+const artCache = {};
+function art(kind) {
+  if (artCache[kind]) return artCache[kind];
+  const h = HUE[kind] ?? 245;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect width="200" height="200" fill="hsl(${h},35%,94%)"/><g transform="translate(40 40) scale(.6)" fill="none" stroke="hsl(${h},30%,42%)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">${ART[kind]}</g></svg>`;
+  return (artCache[kind] = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg));
+}
+
+/* =========================================================
+   DATA
+   ========================================================= */
+let S = loadJSON(KEY, null) || seed();
+let cart = loadJSON(CART_KEY, {});            // { variantId: qty }
+let ui = Object.assign({ role: 'owner', tab: 'home', theme: 'light' }, loadJSON(UI_KEY, {}));
+const view = { q: '', brand: 'all', cat: 'all', stock: 'all' };
+
+let saveTimer;
+function save() {                              // 400ms debounce, same pattern as other apps
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(KEY, JSON.stringify(S)); }
+    catch (e) { toast('Phone storage full — use smaller photos'); }
+  }, 400);
+}
+const saveCart = () => localStorage.setItem(CART_KEY, JSON.stringify(cart));
+const saveUI = () => localStorage.setItem(UI_KEY, JSON.stringify(ui));
+
+function seed() {
+  const b = [{ id:'b1', name:'Royal Gold' }, { id:'b2', name:'VoltX' }, { id:'b3', name:'Generic' }];
+  const c = ['Chargers','Cables','Earphones','Power Banks','Covers','Tempered Glass'].map((n, i) => ({ id:'c' + (i + 1), name:n }));
+  const V = (label, sku, purchase, dist, retail, stock, weight = 50) => ({ id: uid(), label, sku, weight, purchase, dist, retail, stock, lowAt: 5, photo: '' });
+  const P = (name, brandId, catId, variants, desc = '') => ({ id: uid(), name, brandId, catId, desc, photo: '', variants, created: Date.now() });
+  const products = [
+    P('Fast Charger', 'b2', 'c1', [V('20W White','VX-FC20-W',120,180,299,40,80), V('20W Black','VX-FC20-B',120,180,299,25,80), V('33W White','VX-FC33-W',190,260,449,12,95)], 'Type-C PD fast charger'),
+    P('Type-C Cable 1m', 'b1', 'c2', [V('Type-C White','RG-TC1-W',35,60,149,120,30), V('Type-C Black','RG-TC1-B',35,60,149,80,30), V('Lightning 1m','RG-LT1-W',55,90,199,4,30)]),
+    P('Wired Earphones Bass+', 'b3', 'c3', [V('Black','GN-EP-B',45,75,199,60,25), V('White','GN-EP-W',45,75,199,0,25)]),
+    P('10000mAh Power Bank', 'b2', 'c4', [V('Black','VX-PB10-B',450,620,999,10,230), V('Blue','VX-PB10-BL',450,620,999,6,230)]),
+    P('Silicone Back Cover', 'b3', 'c5', [V('Redmi 13C','GN-CV-R13C',25,45,149,50,20), V('Samsung A15','GN-CV-A15',25,45,149,35,20), V('Vivo Y28','GN-CV-Y28',25,45,149,3,20)]),
+    P('9H Tempered Glass', 'b1', 'c6', [V('Redmi Note 13','RG-TG-RN13',8,18,99,200,10), V('Samsung A15','RG-TG-A15',8,18,99,150,10)]),
+    P('Car Charger Dual USB', 'b2', 'c1', [V('12V','VX-CC-12',95,140,299,20,40), V('24V','VX-CC-24',110,160,349,8,40)]),
+    P('Wireless Neckband', 'b1', 'c3', [V('Black','RG-NB-B',320,450,899,15,45), V('Green','RG-NB-G',320,450,899,9,45)])
+  ];
+  const log = [];
+  products.forEach(p => p.variants.forEach(v => log.push({ id: uid(), ts: Date.now(), pid: p.id, vid: v.id, qty: v.stock, type: 'opening', note: 'Opening stock', by: 'owner' })));
+  return { brands: b, cats: c, products, log, orders: [], meta: { nextOrder: 1001, demo: true } };
+}
+
+/* ---------- lookups ---------- */
+const brandName = id => (S.brands.find(b => b.id === id) || {}).name || '—';
+const catName = id => (S.cats.find(c => c.id === id) || {}).name || '—';
+const getP = id => S.products.find(p => p.id === id);
+const getV = (p, vid) => p && p.variants.find(v => v.id === vid);
+function findV(vid) { for (const p of S.products) { const v = p.variants.find(x => x.id === vid); if (v) return { p, v }; } return null; }
+const allVariants = () => S.products.flatMap(p => p.variants.map(v => ({ p, v })));
+const stState = v => v.stock <= 0 ? 'out' : v.stock <= (v.lowAt || 0) ? 'low' : 'ok';
+const imgP = p => p.photo || art(artKind(catName(p.catId)));
+const imgV = (p, v) => v.photo || imgP(p);
+const totalStock = p => p.variants.reduce((a, v) => a + num(v.stock), 0);
+const isOwner = () => ui.role === 'owner';
+function priceRange(p, key = 'dist') {
+  const xs = p.variants.map(v => num(v[key]));
+  const lo = Math.min(...xs), hi = Math.max(...xs);
+  return lo === hi ? inr(lo) : `${inr(lo)}–${inr(hi)}`;
+}
+
+/* =========================================================
+   UI SHELL: roles, nav, theme, sheets, toast
+   ========================================================= */
+function applyTheme() {
+  document.documentElement.dataset.theme = ui.theme;
+  $('#themeBtn').innerHTML = ic(ui.theme === 'dark' ? 'sun' : 'moon');
+  document.querySelector('meta[name=theme-color]').content = ui.theme === 'dark' ? '#1b0a30' : '#3d1263';
+}
+function toggleTheme() { ui.theme = ui.theme === 'dark' ? 'light' : 'dark'; saveUI(); applyTheme(); if (ui.role === 'shop') renderShop(); }
+
+const TABS = [['home','Home','home'], ['products','Products','box'], ['stock','Stock','layers'], ['more','More','more']];
+function renderNav() {
+  const shop = ui.role === 'shop';
+  $('#bnav').style.display = shop ? 'none' : 'flex';
+  document.body.classList.toggle('shop', shop);
+  $('#bnav').innerHTML = TABS.map(([k, l, i]) => `<button class="${ui.tab === k ? 'on' : ''}" onclick="goTab('${k}')">${ic(i)}${l}</button>`).join('');
+  $('#roleLbl').textContent = { owner: 'Owner', staff: 'Staff · view only', shop: DEMO_SHOP.name + ' · ' + DEMO_SHOP.id }[ui.role];
+  $('#roleBtn').innerHTML = ic(shop ? 'store' : 'user');
+  $('#fab').style.display = (isOwner() && ui.tab === 'products') ? 'grid' : 'none';
+  $('#fab').innerHTML = ic('plus');
+  updateCartBar();
+}
+function goTab(t) {
+  if (ui.role === 'shop') { render(); return; }
+  ui.tab = t; saveUI(); render(); window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+function render() {
+  renderNav();
+  if (ui.role === 'shop') return renderShop();
+  ({ home: renderHome, products: renderProducts, stock: renderStock, more: renderMore }[ui.tab] || renderHome)();
+}
+
+function openSheet(html, opts = {}) {
+  const w = $('#sheetWrap');
+  $('#sheet').innerHTML = '<div class="grab"></div>' + html;
+  $('#sheet').scrollTop = 0;
+  requestAnimationFrame(() => w.classList.add('open'));
+}
+function closeSheet() { $('#sheetWrap').classList.remove('open'); }
+const sheetHead = (title, sub = '') => `<div class="sheet-h"><div><h2>${title}</h2>${sub ? `<div class="muted" style="font-size:13px;margin-top:2px">${sub}</div>` : ''}</div><button class="iconbtn" onclick="closeSheet()">${ic('x')}</button></div>`;
+
+let toastT;
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2200); }
+
+function openRole() {
+  const opt = (r, icon, t, s) => `<button class="role-opt ${ui.role === r ? 'on' : ''}" onclick="setRole('${r}')"><span>${ic(icon)}</span><div><b>${t}</b><small>${s}</small></div></button>`;
+  openSheet(sheetHead('Switch view') +
+    opt('owner', 'user', 'Owner', 'Add products, prices, stock, confirm orders') +
+    opt('staff', 'eye', 'Staff', 'View catalogue, stock & orders only') +
+    opt('shop', 'store', 'Shopkeeper (preview)', 'What your retailers see when they order') +
+    `<div class="note">This switcher is for testing. Real logins (shop link + mobile number) come with the backend.</div>`);
+}
+function setRole(r) { ui.role = r; if (r !== 'shop' && !TABS.some(t => t[0] === ui.tab)) ui.tab = 'home'; saveUI(); closeSheet(); render(); window.scrollTo(0, 0); }
+
+/* =========================================================
+   OWNER / STAFF — HOME
+   ========================================================= */
+function greet() { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; }
+function renderHome() {
+  const vs = allVariants();
+  const low = vs.filter(x => stState(x.v) !== 'ok').sort((a, b) => a.v.stock - b.v.stock);
+  const value = vs.reduce((a, x) => a + num(x.v.stock) * num(isOwner() ? x.v.purchase : x.v.dist), 0);
+  const orders = S.orders.slice().reverse().slice(0, 6);
+  const newCount = S.orders.filter(o => o.status === 'new').length;
+  const stat = (i, icon, l, v) => `<div class="stat">${ic(icon)}<div class="v">${v}</div><div class="l">${l}</div></div>`;
+  main.innerHTML = `
+    <div class="greet"><h1>${greet()}</h1><p>${new Date().toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' })}</p></div>
+    <div class="stats">
+      ${stat(0, 'box', 'Products', S.products.length)}
+      ${stat(1, 'tag', 'Variants (SKUs)', vs.length)}
+      ${stat(2, 'rupee', isOwner() ? 'Stock value (cost)' : 'Stock value (dist. rate)', inr(value))}
+      ${stat(3, 'alert', 'Low / out of stock', low.length)}
+    </div>
+    ${isOwner() ? `<div class="quick">
+      <button class="qa" onclick="openProductForm()"><span>${ic('plus')}</span>Add product</button>
+      <button class="qa" onclick="goTab('stock')"><span>${ic('in')}</span>Stock in</button>
+      <button class="qa" onclick="setRole('shop')"><span>${ic('store')}</span>Shop view</button></div>` : ''}
+    <h3 class="sec">Orders from shops ${newCount ? `<span class="pill gold">${newCount} new</span>` : '<small>none yet</small>'}</h3>
+    <div class="list">${orders.length ? orders.map(orderRow).join('') : `<div class="empty card">Orders placed from the shopkeeper view will appear here.<br><br><button class="btn ghost" onclick="setRole('shop')">${ic('store')} Try it as a shopkeeper</button></div>`}</div>
+    <h3 class="sec">Needs restock <small>${low.length} variants</small></h3>
+    <div class="list">${low.slice(0, 6).map(({ p, v }, i) => stockRow(p, v, i)).join('') || '<div class="empty card">All stock healthy 👌</div>'}</div>`;
+}
+function orderRow(o, i = 0) {
+  const pill = { new: 'gold', confirmed: 'ok', cancelled: 'out' }[o.status];
+  const qty = o.items.reduce((a, x) => a + x.qty, 0);
+  return `<div class="row" style="cursor:pointer" onclick="openOrder('${o.id}')">
+    <div class="thumb" style="display:grid;place-items:center;color:var(--gold)">${ic('cart')}</div>
+    <div class="grow"><b>${esc(o.no)} · ${esc(o.shopName)}</b><div class="sub">${fmtDT(o.ts)} · ${qty} pcs · ${o.items.length} items</div></div>
+    <div style="text-align:right"><b>${inr(o.total)}</b><span class="pill ${pill}" style="margin-top:4px">${o.status}</span></div></div>`;
+}
+function openOrder(id) {
+  const o = S.orders.find(x => x.id === id); if (!o) return;
+  const lines = o.items.map(x => `<div class="order-line"><div><b>${esc(x.name)}</b><div class="muted" style="font-size:12.5px">${esc(x.label)} · ${esc(x.sku)}</div></div><div style="text-align:right;white-space:nowrap">${x.qty} × ${inr(x.rate)}<div><b>${inr(x.qty * x.rate)}</b></div></div></div>`).join('');
+  const actions = isOwner() && o.status === 'new'
+    ? `<div class="grid2" style="margin-top:16px"><button class="btn danger" onclick="setOrderStatus('${o.id}','cancelled')">Cancel</button><button class="btn gold" onclick="setOrderStatus('${o.id}','confirmed')">${ic('check')} Confirm</button></div>
+       <div class="note">Confirming reduces stock. Delivery & khata come in Phase 3.</div>` : '';
+  openSheet(sheetHead(esc(o.no), `${esc(o.shopName)} (${esc(o.shopId)}) · ${fmtDT(o.ts)} · <span class="pill">${o.status}</span>`) +
+    `<div class="card" style="padding:4px 14px">${lines}</div><div class="total-row"><span>Total</span><span>${inr(o.total)}</span></div>` + actions);
+}
+function setOrderStatus(id, status) {
+  const o = S.orders.find(x => x.id === id); if (!o) return;
+  if (status === 'confirmed') {
+    // check stock first so we never go negative
+    const short = o.items.filter(x => { const f = findV(x.vid); return !f || f.v.stock < x.qty; });
+    if (short.length) return toast('Not enough stock: ' + short.map(x => x.label).join(', '));
+    o.items.forEach(x => { const f = findV(x.vid); applyStock(f.p.id, f.v.id, -x.qty, 'order', o.no); });
+  }
+  o.status = status; o.updated = Date.now(); save(); closeSheet(); render();
+  toast(status === 'confirmed' ? 'Order confirmed · stock updated' : 'Order cancelled');
+}
+
+/* =========================================================
+   OWNER / STAFF — PRODUCTS
+   ========================================================= */
+function filterChips(kind) {
+  const list = kind === 'brand' ? S.brands : S.cats;
+  const cur = view[kind === 'brand' ? 'brand' : 'cat'];
+  const fn = kind === 'brand' ? 'setBrandF' : 'setCatF';
+  return `<div class="chips"><button class="chip ${cur === 'all' ? 'on' : ''}" onclick="${fn}('all')">All ${kind === 'brand' ? 'brands' : 'categories'}</button>` +
+    list.map(x => `<button class="chip ${cur === x.id ? 'on' : ''}" onclick="${fn}('${x.id}')">${esc(x.name)}</button>`).join('') + '</div>';
+}
+function setBrandF(id) { view.brand = id; ui.role === 'shop' ? renderShopGrid() : renderProducts(); }
+function setCatF(id) { view.cat = id; ui.role === 'shop' ? (renderCatChips(), renderShopGrid()) : renderProducts(); }
+function matchP(p) {
+  const q = view.q.trim().toLowerCase();
+  if (view.brand !== 'all' && p.brandId !== view.brand) return false;
+  if (view.cat !== 'all' && p.catId !== view.cat) return false;
+  if (!q) return true;
+  return (p.name + ' ' + brandName(p.brandId) + ' ' + catName(p.catId) + ' ' + p.variants.map(v => v.label + ' ' + v.sku).join(' ')).toLowerCase().includes(q);
+}
+function renderProducts() {
+  main.innerHTML = `
+    <div class="search">${ic('search')}<input id="pq" placeholder="Search product, variant or SKU" value="${esc(view.q)}" oninput="view.q=this.value;renderProductList()"></div>
+    ${filterChips('brand')}${filterChips('cat')}
+    <div class="list" id="plist"></div>`;
+  renderProductList();
+}
+function renderProductList() {
+  const ps = S.products.filter(matchP);
+  $('#plist').innerHTML = ps.length ? ps.map((p, i) => {
+    const t = totalStock(p), anyLow = p.variants.some(v => stState(v) !== 'ok');
+    return `<div class="pcard" onclick="openProduct('${p.id}')">
+      <img src="${imgP(p)}" alt="" loading="lazy">
+      <div class="grow"><b>${esc(p.name)}</b><span class="muted" style="font-size:12.5px">${esc(brandName(p.brandId))} · ${esc(catName(p.catId))}</span>
+        <div class="meta"><span class="pill">${p.variants.length} variants</span><span class="pill gold">${priceRange(p)}</span>${anyLow ? '<span class="pill low">restock</span>' : ''}</div></div>
+      <div class="stockn ${t <= 0 ? 'out' : anyLow ? 'low' : 'ok'}">${t}<small>in stock</small></div></div>`;
+  }).join('') : `<div class="empty card">No products match.${isOwner() ? `<br><br><button class="btn gold" onclick="openProductForm()">${ic('plus')} Add product</button>` : ''}</div>`;
+}
+function openProduct(id) {
+  const p = getP(id); if (!p) return;
+  const vcards = p.variants.map(v => {
+    const s = stState(v), margin = num(v.dist) ? Math.round((num(v.dist) - num(v.purchase)) / num(v.dist) * 100) : 0;
+    return `<div class="vcard"><div class="vcard-top"><img class="thumb" src="${imgV(p, v)}" style="width:46px;height:46px">
+      <div style="flex:1;min-width:0"><b>${esc(v.label)}</b><div class="muted" style="font-size:12.5px">${esc(v.sku)}${v.weight ? ' · ' + v.weight + ' g' : ''}</div></div>
+      <div class="stockn ${s}">${v.stock}<small>${s === 'out' ? 'out' : s === 'low' ? 'low' : 'pcs'}</small></div>
+      ${isOwner() ? `<button class="adj" onclick="openAdjust('${p.id}','${v.id}')" aria-label="Adjust stock">${ic('layers')}</button>` : ''}</div>
+      <div class="prices">${isOwner() ? `<div><small>Purchase</small><b>${inr(v.purchase)}</b></div>` : ''}<div><small>Distributor</small><b>${inr(v.dist)}</b></div><div><small>Retail</small><b>${inr(v.retail)}</b></div>${isOwner() ? `<div><small>Margin</small><b style="color:var(--ok)">${margin}%</b></div>` : ''}</div></div>`;
+  }).join('');
+  openSheet(sheetHead(esc(p.name), `${esc(brandName(p.brandId))} · ${esc(catName(p.catId))}`) +
+    `<img class="pd-img" src="${imgP(p)}" alt="">${p.desc ? `<p class="muted" style="margin:12px 2px 0">${esc(p.desc)}</p>` : ''}
+     <h3 class="sec">Variants <small>${p.variants.length} · ${totalStock(p)} pcs total</small></h3>${vcards}
+     ${isOwner() ? `<button class="btn gold block" style="margin-top:8px" onclick="openProductForm('${p.id}')">${ic('edit')} Edit product</button>` : ''}`);
+}
+
+/* ---------- Add / Edit product form ---------- */
+let F = null; // draft while the form is open
+function blankVariant() { return { id: uid(), label: '', sku: '', weight: '', purchase: '', dist: '', retail: '', stock: '', lowAt: 5, photo: '', isNew: true }; }
+function openProductForm(id) {
+  if (!isOwner()) return;
+  const p = id && getP(id);
+  F = p ? JSON.parse(JSON.stringify(p)) : { id: null, name: '', brandId: S.brands[0]?.id || '', catId: S.cats[0]?.id || '', desc: '', photo: '', variants: [blankVariant()] };
+  const opts = (list, cur, kind) => list.map(x => `<option value="${x.id}" ${x.id === cur ? 'selected' : ''}>${esc(x.name)}</option>`).join('') + `<option value="__new">+ Add new ${kind}…</option>`;
+  openSheet(sheetHead(p ? 'Edit product' : 'Add product', 'Photo → details → variants') + `
+    <div class="photo-pick" id="fPhoto" onclick="pickPhoto(d=>{F.photo=d;showFormPhoto()})"></div>
+    <div class="field"><label>Product name *</label><input value="${esc(F.name)}" placeholder="e.g. Fast Charger" oninput="F.name=this.value"></div>
+    <div class="grid2">
+      <div class="field"><label>Brand *</label><select onchange="pickOrAdd(this,'brand')">${opts(S.brands, F.brandId, 'brand')}</select></div>
+      <div class="field"><label>Category *</label><select onchange="pickOrAdd(this,'cat')">${opts(S.cats, F.catId, 'category')}</select></div>
+    </div>
+    <div class="field"><label>Short description</label><input value="${esc(F.desc)}" placeholder="Optional" oninput="F.desc=this.value"></div>
+    <h3 class="sec">Variants <small>colour / type / voltage</small></h3>
+    <div id="fVars"></div>
+    <button class="btn ghost block" onclick="F.variants.push(blankVariant());renderFormVariants()">${ic('plus')} Add variant</button>
+    <button class="btn gold block" style="margin-top:12px" onclick="saveProduct()">${ic('check')} Save product</button>
+    ${p ? `<button class="btn danger block" style="margin-top:10px" onclick="deleteProduct('${p.id}')">${ic('trash')} Delete product</button>` : ''}`);
+  showFormPhoto(); renderFormVariants();
+}
+function showFormPhoto() {
+  $('#fPhoto').innerHTML = F.photo ? `<img src="${F.photo}" alt="">` : `<div>${ic('camera', 'style="width:34px;height:34px"')}<br>Tap to take / choose photo</div>`;
+}
+function renderFormVariants() {
+  $('#fVars').innerHTML = F.variants.map((v, i) => `
+    <div class="vblock"><div class="vblock-h"><span>Variant ${i + 1}</span>${F.variants.length > 1 ? `<button class="iconbtn" style="width:34px;height:34px" onclick="F.variants.splice(${i},1);renderFormVariants()">${ic('trash')}</button>` : ''}</div>
+      <div style="display:flex;gap:10px;align-items:flex-end">
+        <div class="vphoto" onclick="pickPhoto(d=>{F.variants[${i}].photo=d;renderFormVariants()})">${v.photo ? `<img src="${v.photo}">` : ic('camera')}</div>
+        <div class="field" style="flex:1;margin:0"><label>Variant name *</label><input value="${esc(v.label)}" placeholder="e.g. 20W White" oninput="F.variants[${i}].label=this.value"></div>
+      </div>
+      <div class="grid2" style="margin-top:10px">
+        <div class="field"><label>SKU code</label><input value="${esc(v.sku)}" placeholder="Auto if blank" oninput="F.variants[${i}].sku=this.value.toUpperCase()"></div>
+        <div class="field"><label>Weight (g)</label><input type="number" inputmode="decimal" value="${esc(v.weight)}" oninput="F.variants[${i}].weight=this.value"></div>
+      </div>
+      <div class="grid3">
+        <div class="field"><label>Purchase ₹</label><input type="number" inputmode="decimal" value="${esc(v.purchase)}" oninput="F.variants[${i}].purchase=this.value"></div>
+        <div class="field"><label>Distributor ₹ *</label><input type="number" inputmode="decimal" value="${esc(v.dist)}" oninput="F.variants[${i}].dist=this.value"></div>
+        <div class="field"><label>Retail ₹</label><input type="number" inputmode="decimal" value="${esc(v.retail)}" oninput="F.variants[${i}].retail=this.value"></div>
+      </div>
+      <div class="grid2">
+        ${v.isNew ? `<div class="field"><label>Opening stock</label><input type="number" inputmode="numeric" value="${esc(v.stock)}" oninput="F.variants[${i}].stock=this.value"></div>` : `<div class="field"><label>Current stock</label><input value="${v.stock} pcs" disabled></div>`}
+        <div class="field"><label>Low-stock alert at</label><input type="number" inputmode="numeric" value="${esc(v.lowAt)}" oninput="F.variants[${i}].lowAt=this.value"></div>
+      </div>
+    </div>`).join('');
+}
+function pickOrAdd(sel, kind) {
+  if (sel.value !== '__new') { F[kind === 'brand' ? 'brandId' : 'catId'] = sel.value; return; }
+  const name = (prompt(kind === 'brand' ? 'New brand name' : 'New category name') || '').trim();
+  const list = kind === 'brand' ? S.brands : S.cats;
+  if (!name) { sel.value = F[kind === 'brand' ? 'brandId' : 'catId']; return; }
+  let item = list.find(x => x.name.toLowerCase() === name.toLowerCase());
+  if (!item) { item = { id: uid(), name }; list.push(item); save(); }
+  F[kind === 'brand' ? 'brandId' : 'catId'] = item.id;
+  sel.insertAdjacentHTML('afterbegin', `<option value="${item.id}">${esc(item.name)}</option>`);
+  sel.value = item.id;
+}
+function autoSku(pname, vlabel) {
+  const ini = s => s.split(/\s+/).filter(Boolean).map(w => /\d/.test(w) ? w.replace(/[^A-Za-z0-9]/g, '') : w[0]).join('').toUpperCase();
+  let base = (ini(pname).slice(0, 4) + '-' + ini(vlabel).slice(0, 6)).replace(/-$/, '') || 'SKU';
+  let sku = base, n = 2;
+  const used = new Set(allVariants().map(x => x.v.sku));
+  while (used.has(sku)) sku = base + '-' + n++;
+  return sku;
+}
+function saveProduct() {
+  const name = F.name.trim();
+  if (!name) return toast('Enter product name');
+  if (!F.brandId || !F.catId) return toast('Select brand and category');
+  const vs = F.variants.filter(v => v.label.trim());
+  if (!vs.length) return toast('Add at least one variant name');
+  if (vs.some(v => !num(v.dist))) return toast('Distributor rate is required for every variant');
+  // SKU must be unique across all products
+  const others = new Set(allVariants().filter(x => x.p.id !== F.id).map(x => x.v.sku));
+  const seen = new Set();
+  for (const v of vs) {
+    v.label = v.label.trim();
+    if (!v.sku) v.sku = autoSku(name, v.label);
+    if (others.has(v.sku) || seen.has(v.sku)) return toast('Duplicate SKU: ' + v.sku);
+    seen.add(v.sku);
+  }
+  const isNewP = !F.id;
+  const pid = F.id || uid();
+  const clean = vs.map(v => ({ id: v.id, label: v.label, sku: v.sku, weight: num(v.weight), purchase: num(v.purchase), dist: num(v.dist), retail: num(v.retail),
+    stock: v.isNew ? Math.max(0, Math.round(num(v.stock))) : v.stock, lowAt: Math.max(0, Math.round(num(v.lowAt))), photo: v.photo || '' }));
+  vs.filter(v => v.isNew && num(v.stock) > 0).forEach(v => S.log.push({ id: uid(), ts: Date.now(), pid, vid: v.id, qty: Math.round(num(v.stock)), type: 'opening', note: 'Opening stock', by: 'owner' }));
+  const obj = { id: pid, name, brandId: F.brandId, catId: F.catId, desc: F.desc.trim(), photo: F.photo, variants: clean, created: F.created || Date.now(), updated: Date.now() };
+  if (isNewP) S.products.unshift(obj); else S.products[S.products.findIndex(p => p.id === pid)] = obj;
+  save(); closeSheet(); F = null;
+  if (ui.tab !== 'products') ui.tab = 'products';
+  render(); toast(isNewP ? 'Product added ✨' : 'Product updated');
+}
+function deleteProduct(id) {
+  if (!confirm('Delete this product and all its variants?')) return;
+  S.products = S.products.filter(p => p.id !== id);
+  save(); closeSheet(); render(); toast('Product deleted');
+}
+function pickPhoto(cb) {
+  const fi = $('#fileIn'); fi.value = '';
+  fi.onchange = async () => {
+    const f = fi.files[0]; if (!f) return;
+    try { cb(await compressImage(f)); } catch (e) { toast('Could not read that photo'); }
+  };
+  fi.click();
+}
+// Shrinks phone photos (often 3–5 MB) to ~60 KB so storage stays small
+function compressImage(file, max = 720) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const s = Math.min(1, max / Math.max(img.width, img.height));
+        const c = document.createElement('canvas'); c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        res(c.toDataURL('image/jpeg', .72));
+      };
+      img.onerror = rej; img.src = fr.result;
+    };
+    fr.onerror = rej; fr.readAsDataURL(file);
+  });
+}
+
+/* =========================================================
+   OWNER / STAFF — STOCK
+   ========================================================= */
+function stockRow(p, v, i = 0) {
+  const s = stState(v);
+  return `<div class="row">
+    <img src="${imgV(p, v)}" alt="" loading="lazy">
+    <div class="grow" onclick="openProduct('${p.id}')" style="cursor:pointer"><b>${esc(p.name)}</b><div class="sub">${esc(v.label)} · ${esc(v.sku)}</div></div>
+    <div class="stockn ${s}">${v.stock}<small>${s === 'out' ? 'out' : s === 'low' ? 'low' : 'pcs'}</small></div>
+    ${isOwner() ? `<button class="adj" onclick="openAdjust('${p.id}','${v.id}')" aria-label="Adjust">${ic('plus')}</button>` : ''}</div>`;
+}
+function renderStock() {
+  const vs = allVariants();
+  const cnt = k => k === 'all' ? vs.length : vs.filter(x => stState(x.v) === k).length;
+  const chip = (k, l) => `<button class="chip ${view.stock === k ? 'on' : ''}" onclick="view.stock='${k}';renderStock()">${l} (${cnt(k)})</button>`;
+  main.innerHTML = `
+    <div class="search">${ic('search')}<input placeholder="Search product, variant or SKU" value="${esc(view.q)}" oninput="view.q=this.value;renderStockList()"></div>
+    <div class="chips">${chip('all', 'All')}${chip('low', 'Low')}${chip('out', 'Out')}${chip('ok', 'Healthy')}</div>
+    <div style="display:flex;justify-content:flex-end;margin:-2px 0 10px"><button class="btn ghost" style="padding:9px 14px;font-size:13.5px" onclick="openHistory()">${ic('clock')} Stock history</button></div>
+    <div class="list" id="slist"></div>`;
+  renderStockList();
+}
+function renderStockList() {
+  const q = view.q.trim().toLowerCase();
+  const rows = allVariants().filter(({ p, v }) =>
+    (view.stock === 'all' || stState(v) === view.stock) &&
+    (!q || (p.name + ' ' + v.label + ' ' + v.sku).toLowerCase().includes(q)));
+  $('#slist').innerHTML = rows.map(({ p, v }, i) => stockRow(p, v, i)).join('') || '<div class="empty card">Nothing here.</div>';
+}
+let adj = null;
+function openAdjust(pid, vid) {
+  const p = getP(pid), v = getV(p, vid); if (!v) return;
+  adj = { pid, vid, mode: 'in' };
+  openSheet(sheetHead('Adjust stock', `${esc(p.name)} · ${esc(v.label)}`) + `
+    <div class="card" style="padding:16px;text-align:center;margin-bottom:14px"><div class="muted" style="font-size:12.5px;font-weight:600">Current stock</div><div style="font-size:34px;font-weight:700">${v.stock}</div></div>
+    <div class="seg" id="adjSeg">
+      <button class="on" onclick="setAdjMode('in',this)">+ Stock in</button><button onclick="setAdjMode('out',this)">− Stock out</button><button onclick="setAdjMode('set',this)">Set count</button></div>
+    <div class="field"><label id="adjLbl">Quantity received</label><input id="adjQty" type="number" inputmode="numeric" placeholder="0"></div>
+    <div class="field"><label>Note</label><input id="adjNote" placeholder="e.g. Purchase from supplier / damaged / recount"></div>
+    <button class="btn gold block" onclick="saveAdjust()">${ic('check')} Save</button>`);
+  setTimeout(() => $('#adjQty')?.focus(), 400);
+}
+function setAdjMode(m, btn) {
+  adj.mode = m;
+  document.querySelectorAll('#adjSeg button').forEach(b => b.classList.toggle('on', b === btn));
+  $('#adjLbl').textContent = { in: 'Quantity received', out: 'Quantity removed', set: 'Actual count on shelf' }[m];
+}
+function saveAdjust() {
+  const p = getP(adj.pid), v = getV(p, adj.vid);
+  const q = Math.round(num($('#adjQty').value));
+  if (adj.mode !== 'set' && q <= 0) return toast('Enter a quantity');
+  if (adj.mode === 'set' && q < 0) return toast('Count cannot be negative');
+  const delta = adj.mode === 'in' ? q : adj.mode === 'out' ? -q : q - v.stock;
+  if (v.stock + delta < 0) return toast('Stock cannot go below zero');
+  if (delta === 0) { closeSheet(); return; }
+  applyStock(p.id, v.id, delta, adj.mode === 'set' ? 'count' : adj.mode, $('#adjNote').value.trim());
+  save(); closeSheet(); render(); toast(`Stock ${delta > 0 ? '+' : ''}${delta} → ${v.stock}`);
+}
+// Every stock change goes through here so the history log is always complete
+function applyStock(pid, vid, delta, type, note = '') {
+  const v = getV(getP(pid), vid); if (!v) return;
+  v.stock = num(v.stock) + delta;
+  S.log.push({ id: uid(), ts: Date.now(), pid, vid, qty: delta, type, note, by: ui.role });
+}
+function openHistory() {
+  const TYPE = { opening: 'Opening', in: 'Stock in', out: 'Stock out', count: 'Recount', order: 'Order' };
+  const rows = S.log.slice().reverse().slice(0, 150).map(l => {
+    const f = findV(l.vid);
+    return `<div class="order-line"><div style="min-width:0"><b>${f ? esc(f.p.name) + ' · ' + esc(f.v.label) : '(deleted item)'}</b><div class="muted" style="font-size:12px">${fmtDT(l.ts)} · ${TYPE[l.type] || l.type}${l.note ? ' · ' + esc(l.note) : ''}</div></div>
+      <b style="color:${l.qty >= 0 ? 'var(--ok)' : 'var(--bad)'};white-space:nowrap">${l.qty >= 0 ? '+' : ''}${l.qty}</b></div>`;
+  }).join('');
+  openSheet(sheetHead('Stock history', 'Latest 150 movements') + `<div class="card" style="padding:4px 14px">${rows || '<div class="empty">No movements yet</div>'}</div>`);
+}
+
+/* =========================================================
+   MORE
+   ========================================================= */
+function renderMore() {
+  const mgr = (kind, title) => {
+    const list = kind === 'brand' ? S.brands : S.cats, key = kind === 'brand' ? 'brandId' : 'catId';
+    return `<h3 class="sec">${title} <small>${list.length}</small></h3><div class="list">${list.map(x => {
+      const used = S.products.filter(p => p[key] === x.id).length;
+      return `<div class="row"><div class="grow"><b>${esc(x.name)}</b><div class="sub">${used} products</div></div>
+        ${isOwner() ? `<button class="adj" onclick="renameItem('${kind}','${x.id}')">${ic('edit')}</button><button class="adj" onclick="deleteItem('${kind}','${x.id}')">${ic('trash')}</button>` : ''}</div>`;
+    }).join('')}</div>${isOwner() ? `<button class="btn ghost block" style="margin-top:10px" onclick="addItem('${kind}')">${ic('plus')} Add ${kind === 'brand' ? 'brand' : 'category'}</button>` : ''}`;
+  };
+  main.innerHTML = mgr('brand', 'Brands') + mgr('cat', 'Categories') + `
+    <h3 class="sec">App</h3>
+    <div class="list">
+      <button class="row" onclick="toggleTheme()"><span class="adj">${ic(ui.theme === 'dark' ? 'sun' : 'moon')}</span><div class="grow" style="text-align:left"><b>${ui.theme === 'dark' ? 'Light' : 'Dark'} mode</b></div></button>
+      <button class="row" onclick="exportData()"><span class="adj">${ic('download')}</span><div class="grow" style="text-align:left"><b>Download backup</b><div class="sub">All products, stock & orders as JSON</div></div></button>
+      ${isOwner() ? `<button class="row" onclick="resetData()"><span class="adj" style="color:var(--bad)">${ic('trash')}</span><div class="grow" style="text-align:left"><b>${S.meta.demo ? 'Clear demo data & start fresh' : 'Reset all data'}</b><div class="sub">Removes everything on this phone</div></div></button>` : ''}
+    </div>
+    <div class="note" style="margin-top:16px">Phase 1 preview · data is saved on this phone only. Cloud sync, shop logins, delivery, khata and reports come in the next phases.</div>`;
+}
+function addItem(kind) {
+  const name = (prompt(kind === 'brand' ? 'Brand name' : 'Category name') || '').trim(); if (!name) return;
+  const list = kind === 'brand' ? S.brands : S.cats;
+  if (list.some(x => x.name.toLowerCase() === name.toLowerCase())) return toast('Already exists');
+  list.push({ id: uid(), name }); save(); renderMore();
+}
+function renameItem(kind, id) {
+  const list = kind === 'brand' ? S.brands : S.cats, it = list.find(x => x.id === id);
+  const name = (prompt('Rename', it.name) || '').trim(); if (!name) return;
+  it.name = name; save(); renderMore();
+}
+function deleteItem(kind, id) {
+  const key = kind === 'brand' ? 'brandId' : 'catId';
+  if (S.products.some(p => p[key] === id)) return toast('Move its products first — it is in use');
+  if (!confirm('Delete?')) return;
+  if (kind === 'brand') S.brands = S.brands.filter(x => x.id !== id); else S.cats = S.cats.filter(x => x.id !== id);
+  save(); renderMore();
+}
+function exportData() {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }));
+  a.download = 'royal-enterprises-backup-' + new Date().toISOString().slice(0, 10) + '.json'; a.click();
+}
+function resetData() {
+  if (!confirm('This deletes all products, stock and orders on this phone. Continue?')) return;
+  S = { brands: [], cats: [], products: [], log: [], orders: [], meta: { nextOrder: 1001, demo: false } };
+  cart = {}; saveCart(); localStorage.setItem(KEY, JSON.stringify(S)); render(); toast('Fresh start — add your first brand');
+}
+
+/* =========================================================
+   SHOPKEEPER VIEW (ordering preview)
+   Shopkeepers see distributor rate only — never purchase price or exact stock
+   ========================================================= */
+const BANNERS = [['linear-gradient(120deg,#ff3e8a,#ff7a59)', 'Same-day delivery', 'Order before 2 PM'], ['linear-gradient(120deg,#5b1a8c,#8e44d6)', 'Pay later', 'Purchases go to your khata']];
+function shopInitials() { return DEMO_SHOP.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase(); }
+function renderShop() {
+  main.innerHTML = `
+    <section class="ps-top">
+      <div class="ps-row"><div class="ps-eta">Same-day delivery<small>${esc(DEMO_SHOP.name)} · ${DEMO_SHOP.id}</small></div>
+        <div class="ps-acts"><button class="ps-btn" onclick="toggleTheme()" aria-label="Theme">${ic(ui.theme === 'dark' ? 'sun' : 'moon')}</button><button class="ps-btn" onclick="openRole()" aria-label="Account">${shopInitials()}</button></div></div>
+      <div class="ps-search">${ic('search')}<input placeholder="Search chargers, cables, covers…" value="${esc(view.q)}" oninput="view.q=this.value;renderShopGrid()"></div>
+      <div class="ps-cats" id="catBar"></div>
+    </section>
+    <div class="ps-bans">${BANNERS.map(b => `<div class="ps-ban" style="background:${b[0]}"><b>${b[1]}</b><small>${b[2]}</small></div>`).join('')}</div>
+    <div class="ps-brands" id="brandBar"></div>
+    <div class="ps-h"><b>All products</b><small id="psCount"></small></div>
+    <div class="ps-grid" id="shopGrid"></div>
+    <div style="height:84px"></div>`;
+  renderCatChips(); renderBrandBar(); renderShopGrid();
+}
+// category icons inside the purple header
+function renderCatChips() {
+  const cats = S.cats.filter(c => S.products.some(p => p.catId === c.id));
+  const tile = (id, name, img) => `<button class="ps-cat ${view.cat === id ? 'on' : ''}" onclick="setCatF('${id}')"><span class="ci"><img src="${img}" alt=""></span>${esc(name)}</button>`;
+  $('#catBar').innerHTML = tile('all', 'All', headIcon('default')) + cats.map(c => tile(c.id, c.name, headIcon(artKind(c.name)))).join('');
+}
+function headIcon(kind) {   // white line icon on transparent background
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><g transform="translate(30 30) scale(.7)" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">${ART[kind]}</g></svg>`;
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+}
+function renderBrandBar() {
+  const b = (id, name) => `<button class="ps-brand ${view.brand === id ? 'on' : ''}" onclick="pickBrand('${id}')">${esc(name)}</button>`;
+  $('#brandBar').innerHTML = b('all', 'All brands') + S.brands.filter(x => S.products.some(p => p.brandId === x.id)).map(x => b(x.id, x.name)).join('');
+}
+function pickBrand(id) { view.brand = id; renderBrandBar(); renderShopGrid(); }
+function renderShopGrid() {
+  const ps = S.products.filter(matchP);
+  $('#psCount').textContent = ps.length + ' item' + (ps.length === 1 ? '' : 's');
+  $('#shopGrid').innerHTML = ps.length ? ps.map(p => {
+    const live = p.variants.filter(v => v.stock > 0);
+    const inCart = p.variants.reduce((a, v) => a + (cart[v.id] || 0), 0);
+    const lo = Math.min(...p.variants.map(v => num(v.dist)));
+    const mrp = Math.max(...p.variants.map(v => num(v.retail)));
+    const single = p.variants.length === 1;
+    // single-variant products get an inline stepper; multi-variant products open the variant sheet
+    let btn = '';
+    if (live.length) {
+      if (!inCart) btn = `<button class="ps-add" onclick="event.stopPropagation();${single ? `quickAdd('${p.variants[0].id}',1)` : `openShopProduct('${p.id}')`}">ADD</button>`;
+      else if (single) btn = `<div class="ps-step" onclick="event.stopPropagation()"><button onclick="quickAdd('${p.variants[0].id}',-1)">−</button>${inCart}<button onclick="quickAdd('${p.variants[0].id}',1)">+</button></div>`;
+      else btn = `<div class="ps-step" style="padding:0 8px" onclick="event.stopPropagation();openShopProduct('${p.id}')"><span>${inCart} in cart</span>${ic('edit', 'style="width:14px;height:14px"')}</div>`;
+    }
+    return `<div class="ps-card" onclick="openShopProduct('${p.id}')">
+      <div class="ps-img"><img src="${imgP(p)}" alt="" loading="lazy">${live.length ? '' : '<div class="ps-oos">OUT OF STOCK</div>'}<div class="ps-addw">${btn}</div></div>
+      <div class="ps-pr">${inr(lo)}${mrp > lo ? `<s>${inr(mrp)}</s>` : ''}</div>
+      <div class="ps-nm">${esc(p.name)}</div><div class="ps-op">${single ? esc(p.variants[0].label) : p.variants.length + ' options'}</div></div>`;
+  }).join('') : '<div class="empty card" style="grid-column:1/-1">No products found</div>';
+}
+function quickAdd(vid, d) {
+  const f = findV(vid); if (!f) return;
+  let q = Math.max(0, (cart[vid] || 0) + d);
+  if (q > f.v.stock) { q = f.v.stock; toast(`Only ${f.v.stock} available`); }
+  if (q) cart[vid] = q; else delete cart[vid];
+  saveCart(); renderShopGrid(); updateCartBar();
+}
+let tmp = {}, tmpPid = null; // quantities being picked inside the product sheet
+function openShopProduct(pid) {
+  const p = getP(pid); if (!p) return;
+  tmpPid = pid; tmp = {};
+  p.variants.forEach(v => { if (cart[v.id]) tmp[v.id] = cart[v.id]; });
+  const avail = v => v.stock <= 0 ? '<span class="pill out">Out of stock</span>' : v.stock <= v.lowAt ? `<span class="pill low">Only ${v.stock} left</span>` : '<span class="pill ok">In stock</span>';
+  openSheet(`<img class="sp-img" src="${imgP(p)}" alt="">
+    <div class="sp-title">${esc(p.name)}</div><div class="sp-sub">${esc(brandName(p.brandId))} · ${esc(catName(p.catId))}${p.desc ? ' · ' + esc(p.desc) : ''}</div>
+    <h3 class="sec" style="margin-top:0">Choose variants <small>enter quantity</small></h3>
+    ${p.variants.map(v => `<div class="vopt ${v.stock <= 0 ? 'dis' : ''} ${tmp[v.id] ? 'sel' : ''}" id="vo-${v.id}">
+      <img src="${imgV(p, v)}" alt=""><div class="grow"><b>${esc(v.label)}</b><div class="price">${inr(v.dist)}</div>${avail(v)}</div>
+      ${v.stock > 0 ? `<div class="stepper ${tmp[v.id] ? '' : 'zero'}" id="st-${v.id}"><button onclick="stepTmp('${v.id}',-1)">−</button><input id="tq-${v.id}" type="number" inputmode="numeric" value="${tmp[v.id] || 0}" oninput="setTmp('${v.id}',this.value)"><button onclick="stepTmp('${v.id}',1)">+</button></div>` : ''}</div>`).join('')}
+    <button class="btn gold block" id="addBtn" style="margin-top:8px" onclick="commitTmp()"></button>`);
+  updateAddBtn();
+}
+function setTmp(vid, val, fromStep) {
+  const f = findV(vid); if (!f) return;
+  let q = Math.max(0, Math.round(num(val)));
+  if (q > f.v.stock) { q = f.v.stock; toast(`Only ${f.v.stock} available`); }
+  if (q) tmp[vid] = q; else delete tmp[vid];
+  const inp = $('#tq-' + vid); if (inp && (fromStep || String(q) !== inp.value)) inp.value = q;
+  $('#vo-' + vid)?.classList.toggle('sel', q > 0);
+  $('#st-' + vid)?.classList.toggle('zero', q === 0);
+  updateAddBtn();
+}
+function stepTmp(vid, d) { setTmp(vid, (tmp[vid] || 0) + d, true); }
+function updateAddBtn() {
+  const p = getP(tmpPid);
+  const qty = Object.values(tmp).reduce((a, b) => a + b, 0);
+  const amt = Object.entries(tmp).reduce((a, [vid, q]) => a + q * num(getV(p, vid)?.dist), 0);
+  const hadInCart = p.variants.some(v => cart[v.id]);
+  const b = $('#addBtn'); if (!b) return;
+  b.innerHTML = qty ? `${ic('cart')} ${hadInCart ? 'Update cart' : 'Add to cart'} · ${qty} pcs · ${inr(amt)}` : (hadInCart ? `${ic('trash')} Remove from cart` : 'Select a quantity');
+  b.disabled = !qty && !hadInCart;
+}
+function commitTmp() {
+  const p = getP(tmpPid);
+  p.variants.forEach(v => { if (tmp[v.id]) cart[v.id] = tmp[v.id]; else delete cart[v.id]; });
+  saveCart();
+  const added = Object.keys(tmp).length > 0;
+  closeSheet(); renderShopGrid(); updateCartBar();
+  toast(added ? 'Cart updated' : 'Removed from cart');
+}
+function cartTotals() {
+  let qty = 0, amt = 0, lines = 0;
+  for (const [vid, q] of Object.entries(cart)) { const f = findV(vid); if (!f) { delete cart[vid]; continue; } qty += q; amt += q * num(f.v.dist); lines++; }
+  return { qty, amt, lines };
+}
+function updateCartBar() {
+  const bar = $('#cartbar');
+  if (ui.role !== 'shop') { bar.classList.remove('show'); return; }
+  const t = cartTotals();
+  bar.innerHTML = `<div><small>${t.lines} item${t.lines > 1 ? 's' : ''} · ${t.qty} pcs</small><br><b>${inr(t.amt)}</b></div><div class="go">View cart ${ic('arrow', 'style="width:16px;height:16px"')}</div>`;
+  bar.classList.toggle('show', t.qty > 0);
+}
+function openCart() {
+  const t = cartTotals();
+  if (!t.qty) { closeSheet(); updateCartBar(); return; }
+  const lines = Object.entries(cart).map(([vid, q]) => {
+    const { p, v } = findV(vid);
+    return `<div class="vopt"><img src="${imgV(p, v)}" alt=""><div class="grow"><b>${esc(p.name)}</b><div class="muted" style="font-size:12.5px">${esc(v.label)} · ${inr(v.dist)}</div><div class="price">${inr(q * v.dist)}</div></div>
+      <div class="stepper"><button onclick="stepCart('${vid}',-1)">−</button><input type="number" inputmode="numeric" value="${q}" onchange="setCart('${vid}',this.value)"><button onclick="stepCart('${vid}',1)">+</button></div></div>`;
+  }).join('');
+  openSheet(sheetHead('Your order', `${DEMO_SHOP.name} · ${DEMO_SHOP.id}`) + lines + `
+    <div class="total-row"><span>Total <small class="muted" style="font-size:13px;font-weight:500">${t.qty} pcs</small></span><span>${inr(t.amt)}</span></div>
+    <div class="field" style="margin-top:8px"><label>Note for Royal Enterprises (optional)</label><input id="orderNote" placeholder="e.g. deliver after 4 pm"></div>
+    <button class="btn gold block" onclick="submitOrder()">${ic('check')} Place order</button>`);
+}
+function setCart(vid, val) {
+  const f = findV(vid); let q = Math.max(0, Math.round(num(val)));
+  if (f && q > f.v.stock) { q = f.v.stock; toast(`Only ${f.v.stock} available`); }
+  if (q) cart[vid] = q; else delete cart[vid];
+  saveCart(); updateCartBar(); renderShopGrid(); openCart();
+}
+function stepCart(vid, d) { setCart(vid, (cart[vid] || 0) + d); }
+function submitOrder() {
+  const items = Object.entries(cart).map(([vid, q]) => { const { p, v } = findV(vid); return { pid: p.id, vid, name: p.name, label: v.label, sku: v.sku, qty: q, rate: num(v.dist) }; });
+  if (!items.length) return;
+  const o = { id: uid(), no: 'RE-' + S.meta.nextOrder++, shopId: DEMO_SHOP.id, shopName: DEMO_SHOP.name, source: 'app', ts: Date.now(), items,
+    total: items.reduce((a, x) => a + x.qty * x.rate, 0), note: ($('#orderNote')?.value || '').trim(), status: 'new' };
+  S.orders.push(o); save();
+  cart = {}; saveCart(); updateCartBar(); renderShopGrid();
+  openSheet(`<div class="success"><div class="tick">${ic('check')}</div><h2>Order placed!</h2>
+    <p class="muted" style="margin:8px 0 2px">Order <b style="color:var(--text)">${o.no}</b> · ${inr(o.total)}</p>
+    <p class="muted" style="font-size:13px;margin:0 0 18px">Royal Enterprises will confirm and deliver soon.</p>
+    <button class="btn gold block" onclick="closeSheet()">Continue shopping</button></div>`);
+}
+
+/* =========================================================
+   BOOT
+   ========================================================= */
+$('#logoCrown').innerHTML = CROWN;
+applyTheme();
+render();
+</script>
+</body>
+</html>
