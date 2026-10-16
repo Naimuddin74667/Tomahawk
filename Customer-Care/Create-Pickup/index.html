@@ -1385,7 +1385,7 @@ function initDelhiveryApp() {
   var srcReady = loadProductSources();
 
   // ── Opened from Customer Care → New requests ("Approve & book pickup"):
-  // ?claim=WC-… fills a reverse pickup from the service request. Booking it
+  // ?claim=WN-/SN-/NV-… fills a reverse pickup from the service request. Booking it
   // marks the request approved (ccClaimAction). ──
   var claimFrom = null;
   (async function prefillFromClaim() {
@@ -1401,6 +1401,13 @@ function initDelhiveryApp() {
       return;
     }
     var r = res.request;
+    // A pickup is already booked (by us or by Shikhar's Care Desk) — don't book a second one.
+    if (r.case_id) {
+      resultBox.className = 'result-box show error';
+      resultTitle.textContent = 'Request ' + r.claim_id + ' already has a pickup';
+      resultBody.textContent = 'Pickup case ' + r.case_id + ' is already booked for this request. Track it in the Customer Care Dashboard.';
+      return;
+    }
     await srcReady;
     switchPickupTab('reverse');            // resets the form into reverse mode
     claimFrom = r.claim_id;

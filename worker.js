@@ -525,6 +525,9 @@ const ACTION_TIERS = {
   requestTrack: 'public', // public 'track your request' page — request ID/order ID + mobile, steps only, rate-limited
   ccClaimsList: 'viewer_read', ccClaimGet: 'viewer_read', ccClaimFiles: 'viewer_read', // Customer Care: New requests
   ccClaimAction: 'manager_up',
+  // Shikhar's Care Desk server — checked by the X-Care-Key header (env.CARE_KEY) inside the handler
+  externalPickupRecord: 'public', warrantyRegistrations: 'public',
+  warrantyRegister: 'public', // public product-registration form (tomahawk.tools) — rate-limited
 
   // — Admin only: portal user management + "wipe everything" dev actions —
   adminListUsers: 'admin_only', adminCreateUser: 'admin_only', adminUpdateUser: 'admin_only',
@@ -771,6 +774,10 @@ const ACTION_TIERS = {
   waAlertStatus: 'admin_only', waAlertSave: 'admin_only', waAlertTest: 'admin_only', waCreateTemplates: 'admin_only'
 };
 
+// Actions that need a valid session + role even when enforce_auth = '0'.
+// Only add actions whose frontend already sends X-Tomahawk-Session.
+const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction']);
+
 function getAuthRequirement(act) {
   return ACTION_TIERS[act] || 'manager_up'; // fail-closed default for anything unmapped
 }
@@ -828,7 +835,9 @@ async function checkAuth(request, DB, method, act) {
     return { ok: true, user: sessionUser };
   }
 
-  const enforcementOn = await isEnforcementOn(DB);
+  // Customer personal data (names, phones, addresses) is always gated,
+  // even while the soft-launch flag is off (SK code review, 15-Oct-2026).
+  const enforcementOn = ALWAYS_GATED.has(act) || await isEnforcementOn(DB);
   if (!enforcementOn) {
     // Soft-launch: don't block yet, but attach the user if a valid token was sent
     return { ok: true, user: sessionUser };
@@ -1294,6 +1303,32 @@ export default {
         if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
         const r = await srAction(env, user, body || {});
         return json(r, r.ok ? 200 : 400);
+      }
+
+      // ── Shikhar's Care Desk → us (server-to-server, X-Care-Key) ──
+      if (request.method === 'POST' && act === 'externalPickupRecord') {
+        if (!careKeyOk(request, env)) return json({ ok: false, error: 'Invalid or missing X-Care-Key' }, 401);
+        try { const r = await externalPickupRecord(env, body || {}); return json(r, r.ok ? 200 : 400); }
+        catch (e) { console.error('externalPickupRecord failed:', e.message); return json({ ok: false, error: 'Server error' }, 500); }
+      }
+      if (request.method === 'GET' && action === 'warrantyRegistrations') {
+        if (!careKeyOk(request, env)) return json({ ok: false, error: 'Invalid or missing X-Care-Key' }, 401);
+        const days = Math.min(365, Math.max(1, parseInt(url.searchParams.get('days') || '90', 10) || 90));
+        return json(await listWarrantyRegistrations(env, days));
+      }
+
+      // ── Product registration form (public, tomahawk.tools) ──
+      if (request.method === 'POST' && act === 'warrantyRegister') {
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        if (!(await warrantyRateOk(env.DB, 'reg:' + ip, 5))) {
+          return json({ ok: false, error: 'Too many registrations from this connection — please try again in an hour.' }, 429);
+        }
+        try { return json(await submitWarrantyRegistration(env, body || {}, ip)); }
+        catch (e) {
+          if (e.userError) return json({ ok: false, error: e.message }, 400);
+          console.error('warranty registration failed:', e.message);
+          return json({ ok: false, error: 'Something went wrong — please try again, or email support@bullet.co.in.' }, 500);
+        }
       }
 
       // ── Phone Scanner App — list Picker & Packer accounts to tap-pick from ──
@@ -6653,6 +6688,9 @@ async function srAction(env, user, b) {
   if (kind === 'approve') {
     const caseId = String(b.case_id || '').trim();
     if (!caseId) return { ok: false, error: 'Book the pickup first (case_id missing)' };
+    // Never link a second pickup — e.g. Shikhar's Care Desk already booked one.
+    if (row.case_id && row.case_id !== caseId)
+      return { ok: false, error: 'This request already has a pickup booked (' + row.case_id + '). Cancel the extra booking.' };
     sets.case_id = caseId;
   }
   let emailed = false;
@@ -6715,7 +6753,7 @@ function srSteps(row, legs) {
   return { steps, final: !!delivered };
 }
 
-// Public: GET ?action=requestTrack&id=<WC-… or order ID>&phone=<10 digits>
+// Public: GET ?action=requestTrack&id=<WN-/SN-/NV-/WC-… or order ID>&phone=<10 digits>
 async function srTrack(env, idRaw, phoneRaw) {
   await ensureServiceRequestCols(env.DB);
   const id = String(idRaw || '').trim().toUpperCase().replace(/[\s#]/g, '');
@@ -6779,6 +6817,35 @@ async function ensureWarrantyClaimsTable(DB) {
 
 function claimErr(msg) { const e = new Error(msg); e.userError = true; return e; }
 
+// Request ID prefix by warranty status (SK 15-Oct-2026):
+//   WN- Under warranty · SN- Out of warranty · NV- Order not verified / Order cancelled
+function srIdPrefix(warrantyStatus) {
+  if (warrantyStatus === 'Under warranty') return 'WN';
+  if (warrantyStatus === 'Out of warranty') return 'SN';
+  return 'NV';
+}
+
+// Today's IST date as YYMMDD.
+function istYYMMDD() {
+  const ist = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString();
+  return ist.slice(2, 4) + ist.slice(5, 7) + ist.slice(8, 10);
+}
+
+// Make a <prefix>-YYMMDD-NN ID and run the INSERT built by makeStmt(id).
+// Two submissions at the same moment can pick the same NN; on a duplicate
+// key we simply try the next number (up to 5 times) instead of failing.
+async function insertWithSerialId(DB, prefix, table, col, makeStmt) {
+  const base = prefix + '-' + istYYMMDD() + '-';
+  const cnt = await DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${col} LIKE ?`).bind(base + '%').first();
+  let n = ((cnt && cnt.n) || 0) + 1;
+  for (let attempt = 0; attempt < 5; attempt++, n++) {
+    const id = base + String(n).padStart(2, '0');
+    try { await makeStmt(id).run(); return id; }
+    catch (e) { if (!/UNIQUE|PRIMARY KEY|constraint/i.test(e.message || '')) throw e; }
+  }
+  throw new Error('Could not allocate a ' + prefix + ' ID after 5 tries');
+}
+
 async function submitWarrantyClaim(env, b, ip) {
   const clean = (v, max) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, max);
   const f = {
@@ -6825,19 +6892,17 @@ async function submitWarrantyClaim(env, b, ip) {
     : w.under_warranty ? 'Under warranty' : 'Out of warranty';
   const skus = w.found ? (w.items || []).map(it => it.sku + (it.qty > 1 ? ' x' + it.qty : '')).join(', ') : '';
 
-  // Claim ID: WC-YYMMDD-NN (IST date, per-day serial)
-  const ist = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString();
-  const day = ist.slice(2, 4) + ist.slice(5, 7) + ist.slice(8, 10);
-  const cnt = await env.DB.prepare("SELECT COUNT(*) AS n FROM warranty_claims WHERE claim_id LIKE ?").bind('WC-' + day + '-%').first();
-  const claimId = 'WC-' + day + '-' + String(((cnt && cnt.n) || 0) + 1).padStart(2, '0');
-
-  await env.DB.prepare(`INSERT INTO warranty_claims (claim_id, order_id, order_key, platform, product, name, phone, email,
+  // Claim ID: <prefix>-YYMMDD-NN (IST date, per-day serial per prefix).
+  // Older requests keep their WC- IDs.
+  const prefix = srIdPrefix(warrantyStatus);
+  const claimId = await insertWithSerialId(env.DB, prefix, 'warranty_claims', 'claim_id', id => env.DB.prepare(
+    `INSERT INTO warranty_claims (claim_id, order_id, order_key, platform, product, name, phone, email,
       issue_type, description, address, pincode, city, state, warranty_status, order_date, warranty_until, order_skus, file_count, ip)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
-    claimId, f.order_id, orderKey, f.platform, f.product, f.name, f.phone, f.email || null,
+    id, f.order_id, orderKey, f.platform, f.product, f.name, f.phone, f.email || null,
     f.issue_type, f.description, f.address, f.pincode, f.city, f.state,
     warrantyStatus, w.order_date || null, w.warranty_until || null, skus, files.length, ip
-  ).run();
+  ));
 
   const v = x => x ? String(x) : '-';
   const to = CC_ORDER_EMAIL_TEST_MODE ? CC_ORDER_EMAIL_TEST_TO : CC_ORDER_EMAIL_TO;
@@ -6881,23 +6946,166 @@ async function submitWarrantyClaim(env, b, ip) {
     try {
       await sendGmailMessage(env, {
         to: [f.email], replyTo: 'support@bullet.co.in',
-        subject: `Your Tomahawk warranty claim ${claimId}`,
+        subject: `Your Tomahawk service request ${claimId}`,
         text: [
           'Hi ' + f.name + ',', '',
-          'Thank you — we have received your warranty claim.', '',
-          'Claim ID : ' + claimId,
+          'Thank you — we have received your service request.', '',
+          'Request ID : ' + claimId,
           'Order ID : ' + f.order_id,
           'Product  : ' + f.product,
           'Issue    : ' + f.issue_type, '',
           'Our support team will review the details and photos and contact you on ' + f.phone + ' soon.',
           'Please keep the product and its accessories ready in case a pickup is arranged.', '',
-          'For any questions, reply to this email or write to support@bullet.co.in quoting your Claim ID.', '',
+          'For any questions, reply to this email or write to support@bullet.co.in quoting your Request ID.', '',
           'Team TOMAHAWK® Tools', 'Industrial Tools & Hardware'
         ].join('\n')
       });
     } catch (e) { console.error('claim confirmation email failed:', e.message); }
   }
   return { ok: true, claim_id: claimId, warranty_status: warrantyStatus };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// SHIKHAR'S CARE DESK INTEGRATION (SK 15-Oct-2026)
+// His server books Ekart reverse pickups for approved service requests
+// itself, then tells us here so our dashboard shows the pickup and the
+// team never books a second one. Auth: X-Care-Key header == env.CARE_KEY.
+// ══════════════════════════════════════════════════════════════════
+
+// Constant-time compare so the key can't be guessed byte by byte.
+function careKeyOk(request, env) {
+  const want = String(env.CARE_KEY || '');
+  const got = String(request.headers.get('X-Care-Key') || '');
+  if (!want || got.length !== want.length) return false;
+  let diff = 0;
+  for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ got.charCodeAt(i);
+  return diff === 0;
+}
+
+// POST { claim_id, courier, waybill, order_number, booked_by, booked_at,
+//        job_type?, products_desc?, quantity?, total_amount? }
+// → reverse row in delhivery_orders + claim approved and linked.
+// Idempotent: the same order_number or waybill again returns ok, no insert.
+async function externalPickupRecord(env, b) {
+  const s = (v, max) => String(v == null ? '' : v).trim().slice(0, max);
+  const claimId = s(b.claim_id, 40), orderNo = s(b.order_number, 40), waybill = s(b.waybill, 60);
+  const courier = s(b.courier, 20) || 'Ekart', bookedBy = s(b.booked_by, 60) || 'care-desk';
+  if (!claimId || !orderNo || !waybill) return { ok: false, error: 'claim_id, order_number and waybill are required' };
+
+  await ensureServiceRequestCols(env.DB);
+  await ensureDelhiveryTable(env.DB);
+  const claim = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
+  if (!claim) return { ok: false, error: 'No such request: ' + claimId };
+
+  // Already recorded (retry from his side) → same answer, nothing new.
+  const dup = await env.DB.prepare(
+    "SELECT order_id FROM delhivery_orders WHERE order_id = ? OR (waybill = ? AND waybill <> '') LIMIT 1"
+  ).bind(orderNo, waybill).first();
+  if (dup) return { ok: true, existing: true, case_id: dup.order_id };
+
+  // Our team already booked a different pickup for this request.
+  if (claim.case_id) return { ok: false, error: 'Request already has a pickup booked: ' + claim.case_id };
+
+  // Shipment details in the same shape our own bookings store, so every
+  // dashboard view (name, phone, address, product) works unchanged.
+  const ship = {
+    order: orderNo, name: claim.name, phone: claim.phone, add: claim.address,
+    pin: claim.pincode, city: claim.city, state: claim.state,
+    products_desc: s(b.products_desc, 200) || claim.product || '',
+    quantity: parseInt(b.quantity, 10) || 1, total_amount: Number(b.total_amount) || 0,
+    payment_mode: 'Pickup', hsn_code: '8467'
+  };
+  const jobType = ['Repair', 'Replacement', 'Refund'].includes(b.job_type) ? b.job_type : 'Repair';
+  const bookedAt = s(b.booked_at, 40) || new Date().toISOString();
+
+  await env.DB.prepare(`
+    INSERT INTO delhivery_orders (order_id, waybill, status, delhivery_ok, payload_json, response_json, created_by,
+                                  job_type, remark, courier, direction, market_order_id, track_stage, created_at)
+    VALUES (?, ?, 'created', 1, ?, ?, ?, ?, ?, ?, 'reverse', ?, 'Created', datetime('now'))
+  `).bind(
+    orderNo, waybill, JSON.stringify({ shipments: [ship] }),
+    JSON.stringify({ source: 'care-desk', booked_at: bookedAt }),
+    bookedBy, jobType, (claimId + ' · ' + (claim.issue_type || '') + ' · booked by Care Desk').slice(0, 300),
+    courier, claim.order_id || null
+  ).run();
+
+  await srAddEvent(env.DB, claimId, { by: bookedBy, kind: 'approve', note: 'Pickup booked by Care Desk (' + courier + ' ' + waybill + ')',
+    case_id: orderNo, emailed: false }, { status: 'approved', case_id: orderNo });
+  return { ok: true, case_id: orderNo };
+}
+
+// ── Product registration (tomahawk.tools form) ──
+async function ensureWarrantyRegistrationsTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS warranty_registrations (
+    registration_id TEXT PRIMARY KEY, created_at TEXT DEFAULT (datetime('now')),
+    name TEXT, phone TEXT, email TEXT,
+    pincode TEXT, city TEXT, state TEXT, address TEXT,
+    platform TEXT, order_id TEXT, product TEXT, purchase_date TEXT,
+    lang TEXT, files_json TEXT, ip TEXT
+  )`).run();
+}
+
+async function submitWarrantyRegistration(env, b, ip) {
+  const clean = (v, max) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, max);
+  const f = {
+    name: clean(b.name, 80), phone: clean(b.phone, 20).replace(/\D/g, '').slice(-10),
+    email: clean(b.email, 120).toLowerCase(), pincode: clean(b.pincode, 6),
+    city: clean(b.city, 60), state: clean(b.state, 60), address: clean(b.address, 300),
+    platform: clean(b.platform, 30), order_id: clean(b.order_id, 40), product: clean(b.product, 120),
+    purchase_date: clean(b.purchase_date, 10), lang: clean(b.lang, 10)
+  };
+  if (f.name.length < 2) throw claimErr('Please enter your full name.');
+  if (!/^[6-9]\d{9}$/.test(f.phone)) throw claimErr('Please enter a valid 10-digit mobile number.');
+  if (f.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email)) throw claimErr('Please enter a valid email or leave it empty.');
+  if (!/^[1-9]\d{5}$/.test(f.pincode)) throw claimErr('Please enter a valid 6-digit pincode.');
+  if (f.address.length < 10) throw claimErr('Please enter your full address.');
+  if (CLAIM_PLATFORMS.indexOf(f.platform) === -1) throw claimErr('Please choose where you bought it.');
+  if (!f.product) throw claimErr('Please tell us which product.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(f.purchase_date) || f.purchase_date > new Date().toISOString().slice(0, 10))
+    throw claimErr('Please enter the purchase date.');
+  if (b.consent !== true) throw claimErr('Please tick the confirmation box.');
+
+  // Exactly one invoice: photo or PDF.
+  const files = (Array.isArray(b.files) ? b.files : []).slice(0, 1).map(x => ({
+    mime: String(x.type || ''), base64: String(x.data || ''), filename: String(x.name || 'invoice').slice(0, 80)
+  })).filter(x => x.base64 && (/^image\//.test(x.mime) || x.mime === 'application/pdf'));
+  if (!files.length) throw claimErr('Please add a photo or PDF of your invoice.');
+  if (files[0].base64.length > 8 * 1024 * 1024) throw claimErr('The invoice file is too large — please use a smaller photo.');
+
+  await ensureWarrantyRegistrationsTable(env.DB);
+  const regId = await insertWithSerialId(env.DB, 'WR', 'warranty_registrations', 'registration_id', id => env.DB.prepare(
+    `INSERT INTO warranty_registrations (registration_id, name, phone, email, pincode, city, state, address,
+      platform, order_id, product, purchase_date, lang, ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, f.name, f.phone, f.email || null, f.pincode, f.city, f.state, f.address,
+         f.platform, f.order_id || null, f.product, f.purchase_date, f.lang || null, ip));
+
+  // Invoice goes to the same private Supabase bucket as service-request photos
+  // (best effort — the registration is saved either way).
+  try {
+    const saved = await srUploadFiles(env, regId, files);
+    if (saved.length) await env.DB.prepare('UPDATE warranty_registrations SET files_json = ? WHERE registration_id = ?')
+      .bind(JSON.stringify(saved), regId).run();
+  } catch (e) { console.error('registration file store failed:', e.message); }
+
+  return { ok: true, registration_id: regId };
+}
+
+async function listWarrantyRegistrations(env, days) {
+  await ensureWarrantyRegistrationsTable(env.DB);
+  const rows = (await env.DB.prepare(
+    "SELECT * FROM warranty_registrations WHERE created_at > datetime('now', ?) ORDER BY created_at DESC LIMIT 1000"
+  ).bind('-' + days + ' days').all()).results || [];
+  // Sign every invoice in ONE storage call (1-hour links), then hand them back per row.
+  const parse = r => { try { return JSON.parse(r.files_json || '[]'); } catch (e) { return []; } };
+  const all = [];
+  rows.forEach(r => parse(r).forEach(f => all.push(f)));
+  const signed = all.length ? await srSignedFiles(env, { files_json: JSON.stringify(all) }) : [];
+  const byPath = {};
+  signed.forEach(f => { byPath[f.path] = f; });
+  return { ok: true, registrations: rows.map(r => {
+    const { ip, files_json, ...rest } = r;
+    return { ...rest, files: parse(r).map(f => byPath[f.path] || { ...f, url: null }) };
+  }) };
 }
 
 // ── Order-Processing: Amazon picklist images — LIVE from Supabase ──
