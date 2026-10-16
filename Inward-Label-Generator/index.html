@@ -1721,11 +1721,21 @@ async function saveSkuMapToStorage() {
   }
 }
 
+// fetch() that gives up after `ms` — a hung request shows a toast
+// instead of leaving the app waiting forever.
+function fetchWithTimeout(url, ms, opts) {
+  const ctrl = new AbortController();
+  const t = setTimeout(function() { ctrl.abort(); }, ms);
+  return fetch(url, Object.assign({}, opts || {}, { signal: ctrl.signal }))
+    .catch(function(e) { throw e.name === 'AbortError' ? new Error('server took too long (' + Math.round(ms/1000) + 's)') : e; })
+    .finally(function() { clearTimeout(t); });
+}
+
 // ── SKU MASTER — load everything (skuMap, bwStore, gpImageCache, categories)
 // from D1 in one call. This is the only place any of this state is populated.
 async function loadSkuMasterFromD1() {
   try {
-    const res = await fetch(`${WORKER}?action=sm_getAll`);
+    const res = await fetchWithTimeout(`${WORKER}?action=sm_getAll`, 15000);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'Load failed');
     const rows = data.rows || [];
@@ -1748,7 +1758,7 @@ async function loadSkuMasterFromD1() {
 // before any box has been generated this session.
 async function loadBoxCountersFromD1() {
   try {
-    const res = await fetch(`${WORKER}?action=gp_getBoxCounters`);
+    const res = await fetchWithTimeout(`${WORKER}?action=gp_getBoxCounters`, 15000);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'Load failed');
     boxCounters = {};
@@ -1764,7 +1774,7 @@ async function loadBoxCountersFromD1() {
 // for the Warehouse Label "UC SKU" search, not just SKUs already mapped here.
 async function loadUcItemMasterFromD1() {
   try {
-    const res = await fetch(`${WORKER}?action=ucsku_getList`);
+    const res = await fetchWithTimeout(`${WORKER}?action=ucsku_getList`, 45000);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'Load failed');
     ucItemMasterSkus = data.skus || [];
@@ -1781,13 +1791,23 @@ window.onload = async () => {
   document.getElementById('gp-date').value = new Date().toISOString().slice(0,10);
   // theme applied early via inline script on <body>
   if (IS_LIVE) {
+    // Only SKU master + box counters block the screen, and they load in
+    // parallel. The overlay is force-hidden after 10s no matter what, so a
+    // slow server can never trap the user on the spinner.
+    const overlayCap = new Promise(function(r) { setTimeout(r, 10000); });
     try {
-      await loadSkuMasterFromD1();
-      await loadBoxCountersFromD1();
-      await loadUcItemMasterFromD1();
+      await Promise.race([
+        Promise.all([loadSkuMasterFromD1(), loadBoxCountersFromD1()]),
+        overlayCap
+      ]);
     } finally {
       document.getElementById('app-loading-overlay').style.display = 'none';
     }
+    // The full UC SKU list (Supabase-backed, slow on a cache miss) loads in
+    // the background; the Warehouse Label SKU search refreshes when it lands.
+    loadUcItemMasterFromD1().then(function() {
+      try { whPopulateSkuDropdown(); } catch(e) {}
+    });
   } else {
     document.getElementById('app-loading-overlay').style.display = 'none';
   }
