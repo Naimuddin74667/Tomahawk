@@ -1731,25 +1731,59 @@ function fetchWithTimeout(url, ms, opts) {
     .finally(function() { clearTimeout(t); });
 }
 
-// ── SKU MASTER — load everything (skuMap, bwStore, gpImageCache, categories)
-// from D1 in one call. This is the only place any of this state is populated.
+// ── SKU MASTER — two-step load so the screen opens fast:
+//   1) sm_getList — mappings WITHOUT the heavy B&W images (fast, renders the table)
+//   2) sm_getBw   — B&W images, in the background (loadBwImagesFromD1)
+// Rows that have a B&W image get a `pending` bwStore entry until step 2
+// lands, so needsBw() won't send them to Gemini again by mistake.
+let bwLoadPromise = Promise.resolve();
 async function loadSkuMasterFromD1() {
   try {
-    const res = await fetchWithTimeout(`${WORKER}?action=sm_getAll`, 180000);
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || 'Load failed');
+    let data = null, light = true;
+    try {
+      const res = await fetchWithTimeout(`${WORKER}?action=sm_getList`, 60000);
+      data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Load failed');
+    } catch(e) {
+      // Safety net: if the Worker doesn't have sm_getList yet, use the old
+      // full load (includes B&W images, slower).
+      light = false;
+      const res2 = await fetchWithTimeout(`${WORKER}?action=sm_getAll`, 180000);
+      data = await res2.json();
+      if (!data.ok) throw new Error(data.error || 'Load failed');
+    }
     const rows = data.rows || [];
     skuMap = rows.map(function(r) {
       return { ucSku: r.uc_sku, internalSku: r.internal_sku || '', pcsPerCarton: r.qty_per_box || null, imageUrl: r.image_url || '', category: r.category || '', source: 'sku_master' };
     });
     bwStore = {}; gpImageCache = {}; categories = [];
     rows.forEach(function(r) {
-      if (r.bw_image_url) bwStore[r.uc_sku] = { bwImageUrl: r.bw_image_url, bwSourceUrl: r.bw_source_url || '' };
+      if (!light && r.bw_image_url) bwStore[r.uc_sku] = { bwImageUrl: r.bw_image_url, bwSourceUrl: r.bw_source_url || '' };
+      if (light && r.has_bw) bwStore[r.uc_sku] = { bwImageUrl: '', bwSourceUrl: r.bw_source_url || '', pending: true };
       if (r.image_url) gpImageCache[r.uc_sku] = r.image_url;
       if (r.category && r.category !== 'Default' && !categories.includes(r.category)) categories.push(r.category);
     });
+    if (light) bwLoadPromise = loadBwImagesFromD1();
   } catch(e) {
     showToast('⚠ Could not load SKU data from server — ' + e.message, true);
+  }
+}
+
+// Step 2 — fills bwStore with the real B&W images, then redraws the table.
+async function loadBwImagesFromD1() {
+  try {
+    const res = await fetchWithTimeout(`${WORKER}?action=sm_getBw`, 180000);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Load failed');
+    (data.rows || []).forEach(function(r) {
+      bwStore[r.uc_sku] = { bwImageUrl: r.bw_image_url, bwSourceUrl: r.bw_source_url || '' };
+    });
+  } catch(e) {
+    showToast('⚠ Could not load B&W images — ' + e.message, true);
+  } finally {
+    // Anything still pending failed to load — drop the flag so it behaves as before
+    Object.keys(bwStore).forEach(function(k) { if (bwStore[k].pending) delete bwStore[k]; });
+    try { renderMapTable(); } catch(e) {}
   }
 }
 
@@ -2414,6 +2448,7 @@ async function waitForBw(ucSkuSet) {
 }
 
 async function generateLabels(type) {
+  await bwLoadPromise; // B&W images may still be loading in the background
   const ctx    = type==='manual'?'import':'factory';
   const items  = getItems(ctx);
   const gpNum  = document.getElementById('gp-number')?.value.trim()||'';
@@ -2878,6 +2913,7 @@ async function initGeminiKey() {
 function needsBw(m) {
   if (!m.imageUrl || m.imageUrl.length < 5) return false;
   const entry = bwStore[m.ucSku] || {};
+  if (entry.pending) return false; // real image still downloading (loadBwImagesFromD1)
   if (!entry.bwImageUrl) return true;
   if (entry.bwSourceUrl !== m.imageUrl) return true;
   return false;
@@ -2893,6 +2929,7 @@ function scheduleBwIfNeeded(idx) {
 }
 
 async function processBwQueue() {
+  await bwLoadPromise; // B&W images may still be loading in the background
   if (bwProcessing || !bwQueue.size) return;
   if (!getGeminiKey()) { bwQueue.clear(); return; }
   bwProcessing = true;
@@ -3761,6 +3798,7 @@ function whUseManualWithoutSaving() {
 
 // Generate labels — one per box, each with its own qty
 async function generateWhLabels() {
+  await bwLoadPromise; // B&W images may still be loading in the background
   const sku = whState.internalSku.trim();
   if (!sku) { showToast('Select or enter a SKU first', true); return; }
   const n = whState.numBoxes;
