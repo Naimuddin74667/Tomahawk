@@ -193,6 +193,12 @@ html[data-theme="dark"] .test-banner { color:#0f1517; }
 .bal-rows div { display:flex; justify-content:space-between; gap:8px; color:var(--text2); }
 .bal-rows b { font-variant-numeric:tabular-nums; }
 .bal-next { margin-top:12px; padding-top:10px; border-top:1px solid var(--border); font-size:13px; }
+.half-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.half { border:2px solid var(--accent); background:var(--accent-soft); color:var(--text); border-radius:12px; padding:14px 12px; text-align:left; display:flex; flex-direction:column; gap:4px; font-size:14px; }
+.half span { font-size:12px; color:var(--accent); font-weight:600; }
+.half.off { border-color:var(--border); background:var(--surface2); }
+.half.off b { text-decoration:line-through; color:var(--text2); }
+.half.off span { color:var(--text2); }
 .due-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; background:var(--red-soft); border-radius:12px; padding:12px 14px; margin-bottom:var(--gap); font-size:14px; }
 
 @media (max-width:820px) {
@@ -271,7 +277,7 @@ function defaultData() {
     car: { name:'Maruti Dzire Tour S (CNG)', regNo:'', purchaseDate:'', price:830000, downPayment:200000,
            downPaidBy:uncle, loanAmount:622128, netDisbursed:603000, irr:14.01, emi:21314, tenure:36, emiStartDate:'2026-11-05' },
     partners: [ { id:me, name:'Me', share:50 }, { id:uncle, name:'Uncle', share:50 } ],
-    drivers: [], payments: [], expenses: [], transfers: []
+    drivers: [], payments: [], expenses: [], transfers: [], offs: []
   };
 }
 function load() {
@@ -341,7 +347,14 @@ function rentPeriods(drv) {
     const next = drv.rentCycle === 'daily' ? addDays(from, 1)
                : drv.rentCycle === 'weekly' ? addDays(from, 7)
                : addMonths(parseYmd(drv.startDate), i + 1);
-    out.push({ from: ymd(from), to: ymd(addDays(next, -1)), due: num(drv.rentAmount), paid: 0 });
+    const p = { from: ymd(from), to: ymd(addDays(next, -1)), due: num(drv.rentAmount), paid: 0, off: [] };
+    if (drv.rentCycle === 'daily') {
+      // Each daily period = previous night + this day; each half is half the rent.
+      const halves = periodHalves(p.from);
+      p.off = halves.filter(x => isOff(drv.id, x.date, x.half));
+      p.due = num(drv.rentAmount) * (2 - p.off.length) / 2;
+    }
+    out.push(p);
     from = next; i++;
   }
   return out;
@@ -357,7 +370,53 @@ function driverLedger(drv) {
   return { periods, pays, due, paid, balance: due - paid, advance: Math.max(0, pool) };
 }
 
+/* ── Car off / out of service, tracked per half day (night or day) ── */
+function periodHalves(day) {   // the two halves a daily period covers
+  return [{ date: ymd(addDays(parseYmd(day), -1)), half: 'night' }, { date: day, half: 'day' }];
+}
+function isOff(driverId, date, half) { return (DB.offs || []).some(o => o.driverId === driverId && o.date === date && o.half === half); }
+function setOff(driverId, date, half, off) {
+  DB.offs = (DB.offs || []).filter(o => !(o.driverId === driverId && o.date === date && o.half === half));
+  if (off) DB.offs.push({ id: uid(), driverId, date, half });
+}
+function halfLabel(x) { return fmtShort(x.date) + ' ' + x.half; }
+
+/* Tap a daily period → say which halves the car ran, and optionally record the rent for it. */
+function openPeriod(driverId, day) {
+  const drv = DB.drivers.find(d => d.id === driverId); if (!drv) return;
+  const halves = periodHalves(day), half = num(drv.rentAmount) / 2;
+  const ran = halves.map(x => !isOff(driverId, x.date, x.half));
+  const draw = () => {
+    const n = ran.filter(Boolean).length, amt = half * n;
+    const per = driverLedger(drv).periods.find(p => p.from === day);
+    const alreadyPaid = per ? per.paid : 0;
+    const toPay = Math.max(0, amt - alreadyPaid);
+    document.getElementById('modal').innerHTML = `<h3>${esc(drv.name)}</h3>
+      <p class="muted" style="margin:-6px 0 14px;font-size:13px">Rent for ${periodLabel(drv, { from: day })} · tap to mark the car off</p>
+      <div class="half-grid">${halves.map((x, i) => `<button class="half ${ran[i] ? 'on' : 'off'}" onclick="window._pt(${i})">
+          <b>${halfLabel(x)}</b><span>${ran[i] ? 'Ran · ' + inr(half) : 'Car off · ₹0'}</span></button>`).join('')}</div>
+      <div class="rc-amt" style="margin-top:14px">${inr(amt)}</div>
+      ${alreadyPaid ? `<div class="muted" style="font-size:13px;margin:-6px 0 12px">Already received ${inr(alreadyPaid)}</div>` : ''}
+      ${toPay > 0 ? `<button class="btn primary rc-yes" onclick="window._ps(true)">✓ Save &amp; received ${inr(toPay)}</button>` : ''}
+      <button class="btn rc-yes" style="margin-top:8px" onclick="window._ps(false)">Save${toPay > 0 ? ' (not received yet)' : ''}</button>
+      <button class="btn rc-yes" style="margin-top:8px" onclick="closeModal()">Cancel</button>`;
+  };
+  window._pt = i => { ran[i] = !ran[i]; draw(); };
+  window._ps = received => {
+    halves.forEach((x, i) => setOff(driverId, x.date, x.half, !ran[i]));
+    const per = driverLedger(drv).periods.find(p => p.from === day);
+    const toPay = per ? Math.max(0, per.due - per.paid) : 0;
+    if (received && toPay > 0) DB.payments.push({ id: uid(), driverId, date: todayStr(), amount: toPay, mode: 'Online',
+      receivedBy: defaultReceiver(), note: 'Rent for ' + periodLabel(drv, { from: day }) });
+    save(); PAGES[currentPage](); toast('Saved');
+    if (pendingRent().length && document.getElementById('modal').dataset.from === 'prompt') openRentConfirm(); else closeModal();
+  };
+  draw();
+  document.getElementById('overlay').classList.add('open');
+}
+
 function periodStatus(p) {
+  if (p.due === 0) return '<span class="badge b-up">Car off</span>';
   if (p.paid >= p.due) return '<span class="badge b-paid">Paid</span>';
   if (p.paid > 0) return '<span class="badge b-part">Part ' + inr(p.paid) + '</span>';
   return '<span class="badge b-due">Pending</span>';
@@ -471,7 +530,7 @@ rent() {
       </div>
       <div class="grid two">
         <div><div class="list-title">Rent periods</div>
-          <div class="list">${shown.map(p => lrow(periodLabel(d, p), '', inr(p.due), periodStatus(p))).join('') || '<div class="empty">No periods yet</div>'}</div>
+          <div class="list">${shown.map(p => lrow(periodLabel(d, p), '', inr(p.due), periodStatus(p), d.rentCycle === 'daily' ? `openPeriod('${d.id}','${p.from}')` : '')).join('') || '<div class="empty">No periods yet</div>'}</div>
           ${L.periods.length > 6 ? `<button class="link-btn" onclick="toggleRentAll('${d.id}')">${all ? 'Show latest only' : 'Show all ' + L.periods.length + ' periods'}</button>` : ''}</div>
         <div><div class="list-title">Payments received</div>
           <div class="list">${L.pays.slice().reverse().map(p => lrow(fmtDate(p.date), esc(p.mode) + (p.note ? ' · ' + esc(p.note) : ''), '<span class="pos">' + inr(p.amount) + '</span>', '', `openPayment('${p.id}')`)).join('') || '<div class="empty">No payments yet</div>'}</div></div>
@@ -653,7 +712,10 @@ function lrow(title, sub, amount, extra, onclick) {
 }
 /* Daily rent at 8 PM covers the previous night + that day, e.g. "16 Oct night + 17 Oct". */
 function periodLabel(drv, p) {
-  if (drv.rentCycle === 'daily') return fmtShort(ymd(addDays(parseYmd(p.from), -1))) + ' night + ' + fmtShort(p.from);
+  if (drv.rentCycle === 'daily') {
+    const base = fmtShort(ymd(addDays(parseYmd(p.from), -1))) + ' night + ' + fmtShort(p.from);
+    return p.off && p.off.length === 1 ? base + ' (' + p.off[0].half + ' off)' : base;
+  }
   return fmtRange(p.from, p.to);
 }
 function fmtShort(s) { return parseYmd(s).toLocaleDateString('en-IN', { day:'numeric', month:'short' }); }
@@ -818,6 +880,7 @@ function checkRentPrompt() {
 function greeting() { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; }
 
 function openRentConfirm(manual) {
+  document.getElementById('modal').dataset.from = '';
   const list = pendingRent();
   if (!list.length) { closeModal(); if (manual) toast('No rent pending'); return; }
   const prefs = DB.prefs || {}; const mode = prefs.mode || 'Cash'; const by = defaultReceiver();
@@ -833,7 +896,8 @@ function openRentConfirm(manual) {
         <div class="rc-amt">${inr(left)}</div>
         <button class="btn primary rc-yes" onclick="confirmRent('${x.d.id}', ${left})">✓ Received ${inr(left)}</button>
         ${more ? `<button class="btn rc-yes" style="margin-top:8px" onclick="confirmRent('${x.d.id}', ${x.total})">Received all ${inr(x.total)}</button>` : ''}
-        <div class="rc-links"><button class="link-btn" onclick="closeModal();openPayment(null,'${x.d.id}')">Different amount</button></div>
+        <div class="rc-links"><button class="link-btn" onclick="closeModal();openPayment(null,'${x.d.id}')">Different amount</button>
+          ${x.d.rentCycle === 'daily' ? `<button class="link-btn" onclick="document.getElementById('modal').dataset.from='prompt';openPeriod('${x.d.id}','${p.from}')">Car off / half day</button>` : ''}</div>
       </div>`;
     }).join('')}
     <button class="btn rc-yes" onclick="snoozeRent()">Not yet — remind me tomorrow</button>`;
