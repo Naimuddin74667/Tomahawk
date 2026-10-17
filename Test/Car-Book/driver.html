@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0d7a6f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="MNS Rent">
+<title>MNS Tours &amp; Travels — My Rent</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230d7a6f'/%3E%3Ctext x='32' y='45' font-family='Arial,sans-serif' font-weight='700' font-size='34' text-anchor='middle' fill='%23ffffff'%3E%E2%82%B9%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Same look as the owner app — driver view is read-only */
+:root {
+  --bg:#f6f4ef; --surface:#ffffff; --surface2:#f1efe9; --border:#e4e0d6;
+  --accent:#0d7a6f; --accent-ink:#ffffff; --accent-soft:rgba(13,122,111,.10);
+  --text:#1c2333; --text2:#6b7080;
+  --green:#15803d; --green-soft:rgba(21,128,61,.10);
+  --red:#c2410c; --red-soft:rgba(194,65,12,.10);
+  --font-display:'Sora',sans-serif; --font-body:'Inter',sans-serif;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:var(--font-body); background:var(--bg); color:var(--text); font-size:15px; -webkit-font-smoothing:antialiased; }
+.wrap { max-width:520px; margin:0 auto; padding:16px 16px calc(32px + env(safe-area-inset-bottom)); }
+.top { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+.top h1 { font-family:var(--font-display); font-size:17px; display:flex; align-items:center; gap:8px; }
+.logo { width:30px; height:30px; border-radius:9px; background:var(--accent); color:#fff; display:grid; place-items:center; font-size:15px; }
+.icon-btn { background:var(--surface); border:1px solid var(--border); color:var(--text2); border-radius:10px; padding:8px 12px; font-size:13px; font-family:inherit; }
+.hello { font-family:var(--font-display); font-size:22px; font-weight:700; }
+.sub { color:var(--text2); font-size:13px; margin-top:3px; }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:18px; margin-top:14px; box-shadow:0 1px 2px rgba(28,35,51,.05); }
+.card h3 { font-family:var(--font-display); font-size:15px; margin-bottom:8px; }
+.due { text-align:center; padding:24px 18px; }
+.due .label { color:var(--text2); font-size:13px; font-weight:600; }
+.due .amt { font-family:var(--font-display); font-size:44px; font-weight:700; margin:6px 0 4px; }
+.due.clear .amt { color:var(--green); } .due.pend .amt { color:var(--red); }
+.pay { display:block; width:100%; margin-top:14px; padding:15px; border:0; border-radius:14px; background:var(--accent); color:#fff; font-family:inherit; font-size:16px; font-weight:700; text-decoration:none; }
+.note { color:var(--text2); font-size:12px; margin-top:8px; }
+.row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 0; border-bottom:1px solid var(--border); }
+.row:last-child { border-bottom:0; }
+.row .t { font-weight:600; } .row .s { color:var(--text2); font-size:12px; margin-top:2px; }
+.row .r { display:flex; align-items:center; gap:8px; white-space:nowrap; font-weight:600; }
+.badge { display:inline-block; padding:3px 9px; border-radius:20px; font-size:11px; font-weight:700; }
+.b-paid { background:var(--green-soft); color:var(--green); } .b-due { background:var(--red-soft); color:var(--red); }
+.b-part { background:var(--accent-soft); color:var(--accent); } .b-off { background:var(--surface2); color:var(--text2); }
+.tabs { display:grid; grid-template-columns:1fr 1fr; gap:6px; background:var(--surface2); padding:4px; border-radius:12px; margin-top:14px; }
+.tabs button { border:0; background:none; padding:10px; border-radius:9px; font-family:inherit; font-weight:600; font-size:14px; color:var(--text2); }
+.tabs button.on { background:var(--surface); color:var(--text); box-shadow:0 1px 2px rgba(0,0,0,.06); }
+.more { background:none; border:0; color:var(--accent); font-weight:600; font-size:14px; padding:12px 0 2px; font-family:inherit; }
+.msg { text-align:center; padding:60px 20px; color:var(--text2); }
+.msg b { display:block; color:var(--text); font-size:17px; margin-bottom:6px; }
+.foot { text-align:center; color:var(--text2); font-size:11px; margin-top:18px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><h1><span class="logo">₹</span>MNS Tours &amp; Travels</h1><button class="icon-btn" onclick="loadData()">↻ Refresh</button></div>
+  <div id="app"><div class="msg">Loading…</div></div>
+</div>
+
+<script>
+/* ── Link setup: ?api=<worker url>&d=<driver code>. Saved so the home-screen icon keeps working. ── */
+const LINK_KEY = 'mnsdriver_link_v1';
+let link = (() => {
+  const q = new URLSearchParams(location.search);
+  if (q.get('api') && q.get('d')) {
+    const l = { api: q.get('api'), d: q.get('d') };
+    try { localStorage.setItem(LINK_KEY, JSON.stringify(l)); } catch {}
+    return l;
+  }
+  try { return JSON.parse(localStorage.getItem(LINK_KEY) || 'null'); } catch { return null; }
+})();
+
+const RENT_DUE_HOUR = 20;    // daily rent is collected at 8 PM (covers last night + today)
+let D = null, tab = 'days', showAll = false;
+
+/* ── Helpers (same rules as the owner app) ── */
+const num = v => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+const inr = n => { const r = Math.round(n); return (r < 0 ? '−₹' : '₹') + Math.abs(r).toLocaleString('en-IN'); };
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ymd = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+const parseYmd = s => { const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); };
+const addDays = (d, n) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
+const addMonths = (d, n) => { const r = new Date(d.getFullYear(), d.getMonth() + n, 1); r.setDate(Math.min(d.getDate(), new Date(r.getFullYear(), r.getMonth() + 1, 0).getDate())); return r; };
+const fmtDate = s => parseYmd(s).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
+const fmtShort = s => parseYmd(s).toLocaleDateString('en-IN', { day:'numeric', month:'short' });
+const todayStr = () => ymd(new Date());
+function fmtRange(a, b) {
+  if (a === b) return fmtShort(a);
+  const A = parseYmd(a), B = parseYmd(b);
+  return A.getMonth() === B.getMonth() ? A.getDate() + '–' + fmtShort(b) : fmtShort(a) + ' – ' + fmtShort(b);
+}
+const isOff = (date, half) => D.offs.some(o => o.date === date && o.half === half);
+const halves = day => [{ date: ymd(addDays(parseYmd(day), -1)), half: 'night' }, { date: day, half: 'day' }];
+
+function periods() {
+  const drv = D.driver; if (!drv.startDate || !drv.rentAmount) return [];
+  let last = todayStr();
+  if (drv.rentCycle === 'daily' && new Date().getHours() < RENT_DUE_HOUR) last = ymd(addDays(new Date(), -1));
+  const until = parseYmd(drv.endDate && drv.endDate < last ? drv.endDate : last);
+  const out = []; let from = parseYmd(drv.startDate), i = 0;
+  while (from <= until && i < 3000) {
+    const next = drv.rentCycle === 'daily' ? addDays(from, 1) : drv.rentCycle === 'weekly' ? addDays(from, 7) : addMonths(parseYmd(drv.startDate), i + 1);
+    const p = { from: ymd(from), to: ymd(addDays(next, -1)), due: num(drv.rentAmount), paid: 0, off: [] };
+    if (drv.rentCycle === 'daily') { p.off = halves(p.from).filter(x => isOff(x.date, x.half)); p.due = num(drv.rentAmount) * (2 - p.off.length) / 2; }
+    out.push(p); from = next; i++;
+  }
+  // Payments cover the oldest days first
+  let pool = D.payments.reduce((s, x) => s + num(x.amount), 0);
+  for (const p of out) { const t = Math.min(pool, p.due); p.paid = t; pool -= t; }
+  return out;
+}
+function label(p) {
+  if (D.driver.rentCycle !== 'daily') return fmtRange(p.from, p.to);
+  const base = fmtRange(ymd(addDays(parseYmd(p.from), -1)), p.from);
+  return p.off.length === 1 ? base + ' (' + p.off[0].half + ' off)' : base;
+}
+function status(p) {
+  if (p.due === 0) return '<span class="badge b-off">Car off</span>';
+  if (p.paid >= p.due) return '<span class="badge b-paid">Paid</span>';
+  if (p.paid > 0) return '<span class="badge b-part">Part ' + inr(p.paid) + '</span>';
+  return '<span class="badge b-due">Pending</span>';
+}
+
+/* ── Render ── */
+function render() {
+  const P = periods();
+  const due = P.reduce((s, p) => s + p.due, 0), paid = D.payments.reduce((s, x) => s + num(x.amount), 0);
+  const pending = Math.max(0, due - paid), advance = Math.max(0, paid - due);
+  const pendDays = P.filter(p => p.paid < p.due);
+  const upi = D.upi.id ? 'upi://pay?pa=' + encodeURIComponent(D.upi.id) + '&pn=' + encodeURIComponent(D.upi.name || 'MNS Tours and Travels')
+    + '&am=' + pending.toFixed(2) + '&cu=INR&tn=' + encodeURIComponent('Rent ' + D.driver.name) : '';
+  const cycle = { daily:'per day', weekly:'per week', monthly:'per month' }[D.driver.rentCycle] || '';
+  const daysList = (showAll ? P.slice().reverse() : P.slice(-10).reverse());
+
+  document.getElementById('app').innerHTML = `
+    <div class="hello">Hi ${esc(D.driver.name.split(' ')[0])} 👋</div>
+    <div class="sub">${esc(D.car.name)}${D.car.regNo ? ' · ' + esc(D.car.regNo) : ''} · ${inr(D.driver.rentAmount)} ${cycle}</div>
+
+    <div class="card due ${pending ? 'pend' : 'clear'}">
+      <div class="label">${pending ? 'Rent pending' : advance ? 'Paid in advance' : 'All rent paid'}</div>
+      <div class="amt">${pending ? inr(pending) : advance ? inr(advance) : '✓'}</div>
+      <div class="sub">${pending ? pendDays.length + ' day' + (pendDays.length === 1 ? '' : 's') + ' pending · ' + pendDays.slice(0, 3).map(label).join(', ') + (pendDays.length > 3 ? '…' : '') : 'Thank you! Nothing due right now.'}</div>
+      ${pending && upi ? `<a class="pay" href="${upi}">Pay ${inr(pending)} now (UPI)</a>
+        <div class="note">Opens your UPI app. Payments show here once the owner records them.</div>` : ''}
+      ${D.driver.rentCycle === 'daily' ? `<div class="note">Daily rent is due at 8 PM and covers last night + today.</div>` : ''}
+    </div>
+
+    <div class="tabs"><button class="${tab === 'days' ? 'on' : ''}" onclick="tab='days';render()">Rent days</button>
+      <button class="${tab === 'pays' ? 'on' : ''}" onclick="tab='pays';render()">Payments</button></div>
+
+    <div class="card">${tab === 'days'
+      ? (daysList.map(p => `<div class="row"><div><div class="t">${label(p)}</div></div><div class="r">${inr(p.due)} ${status(p)}</div></div>`).join('') || '<div class="msg" style="padding:24px">No rent days yet</div>')
+        + (P.length > 10 ? `<button class="more" onclick="showAll=!showAll;render()">${showAll ? 'Show latest only' : 'Show all ' + P.length + ' days'}</button>` : '')
+      : (D.payments.slice().sort((a, b) => b.date.localeCompare(a.date)).map(x => `<div class="row"><div><div class="t">${fmtDate(x.date)}</div><div class="s">${esc(x.mode || 'Online')}</div></div><div class="r" style="color:var(--green)">${inr(x.amount)}</div></div>`).join('') || '<div class="msg" style="padding:24px">No payments yet</div>')
+    }</div>
+    <div class="foot">Updated ${new Date(D.updatedAt).toLocaleString('en-IN', { day:'2-digit', month:'short', hour:'numeric', minute:'2-digit' })} · View only</div>`;
+}
+function showMsg(title, text) { document.getElementById('app').innerHTML = `<div class="msg"><b>${title}</b>${text}</div>`; }
+
+async function loadData() {
+  if (!link) { showMsg('Link missing', 'Please open the link the owner sent you on WhatsApp.'); return; }
+  try {
+    const res = await fetch(link.api.replace(/\/+$/, '') + '/driver?code=' + encodeURIComponent(link.d), { cache: 'no-store' });
+    const body = await res.json();
+    if (!res.ok) { showMsg('Can’t open', esc(body.error || 'Please ask the owner for a new link.')); return; }
+    D = body; render();
+  } catch (e) { showMsg('No connection', 'Check your internet and tap Refresh.'); }
+}
+loadData();
+// Recheck at 8 PM if left open
+(() => { const n = new Date(), at = new Date(n); at.setHours(RENT_DUE_HOUR, 0, 5, 0); if (at > n) setTimeout(() => D && render(), at - n); })();
+</script>
+</body>
+</html>

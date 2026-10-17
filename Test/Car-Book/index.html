@@ -199,6 +199,10 @@ html[data-theme="dark"] .test-banner { color:#0f1517; }
 .half.off { border-color:var(--border); background:var(--surface2); }
 .half.off b { text-decoration:line-through; color:var(--text2); }
 .half.off span { color:var(--text2); }
+.sync-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin:0 6px; vertical-align:1px; background:var(--text2); opacity:.5; }
+.sync-dot[data-s="ok"] { background:var(--green); opacity:1; }
+.sync-dot[data-s="syncing"] { background:var(--accent); opacity:1; }
+.sync-dot[data-s="error"] { background:var(--red); opacity:1; }
 .due-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; background:var(--red-soft); border-radius:12px; padding:12px 14px; margin-bottom:var(--gap); font-size:14px; }
 
 @media (max-width:820px) {
@@ -236,7 +240,7 @@ html[data-theme="dark"] .test-banner { color:#0f1517; }
 <body>
 
 <nav class="sidebar" id="sidebar">
-  <div class="brand"><div class="logo">₹</div><div><h1>MNS Tours &amp; Travels</h1><small>Car rent &amp; expense book</small></div></div>
+  <div class="brand"><div class="logo">₹</div><div><h1>MNS Tours &amp; Travels</h1><small><span class="sync-dot" data-s="off"></span>Car rent &amp; expense book</small></div></div>
   <button class="nav-item" data-page="dashboard"><span class="ico">◧</span>Dashboard</button>
   <button class="nav-item" data-page="rent"><span class="ico">₹</span>Rent</button>
   <button class="nav-item" data-page="expenses"><span class="ico">⇣</span>Expenses</button>
@@ -247,7 +251,7 @@ html[data-theme="dark"] .test-banner { color:#0f1517; }
 </nav>
 
 <main class="main">
-  <div class="mobile-top"><h1><span class="logo">₹</span>MNS Tours &amp; Travels</h1><button class="icon-btn" onclick="toggleTheme()">◐</button></div>
+  <div class="mobile-top"><h1><span class="logo">₹</span>MNS Tours &amp; Travels<span class="sync-dot" data-s="off"></span></h1><button class="icon-btn" onclick="toggleTheme()">◐</button></div>
   <div id="page"></div>
 </main>
 
@@ -284,8 +288,15 @@ function defaultData() {
 function load() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw), d = Object.assign(defaultData(), parsed);
+    if (raw) return migrate(JSON.parse(raw));
+  } catch (e) { console.warn('Load failed', e); }
+  return defaultData();
+}
+/* Bring any saved copy (this phone's or the cloud's) up to the current format. */
+function migrate(parsed) {
+  {
+    {
+      const d = Object.assign(defaultData(), parsed);
       if (d.car.price === 840000 && !num(d.car.emi)) Object.assign(d.car, { price:830000, emi:21314 });
       // Apply the confirmed KMPL scheme to earlier placeholder values (only if not edited by hand)
       if ([630000, 640000].includes(num(d.car.loanAmount))) d.car.loanAmount = 622128;
@@ -298,18 +309,80 @@ function load() {
       if (!parsed.rentToAccount) { d.payments.forEach(x => x.receivedBy = 'account'); d.rentToAccount = true; }
       // Uncle paid the ₹2L upfront — fill it in if it was never set
       if (!d.car.downPaidBy) { const u = d.partners.find(p => /uncle/i.test(p.name)); if (u) d.car.downPaidBy = u.id; }
+      // Every driver gets a private code for their view-only link
+      d.drivers.forEach(x => { if (!x.accessCode) x.accessCode = newCode(); });
       return d;
     }
-  } catch (e) { console.warn('Load failed', e); }
-  return defaultData();
+  }
 }
+function newCode() { const a = 'abcdefghjkmnpqrstuvwxyz23456789'; let s = ''; for (let i = 0; i < 10; i++) s += a[Math.floor(Math.random() * a.length)]; return s; }
 let saveTimer = null;
 function save() {                       // 400ms debounce, same pattern as other apps
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
+    DB._savedAt = new Date().toISOString();
     try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
     catch (e) { alert('Could not save — browser storage is full or blocked.'); }
+    pushCloud();
   }, 400);
+}
+
+/* ════════════ Cloud sync (your own Cloudflare Worker + D1) ════════════
+   This phone keeps a copy in localStorage so the app opens instantly and works offline.
+   When a Worker URL + key are set in Setup, every save is also sent to the cloud,
+   and on opening, the newer of (this phone, cloud) wins. */
+const CLOUD_KEY = 'mnscar_cloud_v1';
+function cloudCfg() { try { return JSON.parse(localStorage.getItem(CLOUD_KEY) || 'null'); } catch { return null; } }
+let cloudState = 'off';   // off | syncing | ok | error
+const SYNC_TEXT = { off:'Not connected', syncing:'Syncing…', ok:'Synced', error:'Sync error' };
+function setCloudState(s, msg) {
+  cloudState = s;
+  document.querySelectorAll('.sync-text').forEach(el => el.textContent = SYNC_TEXT[s]);
+  document.querySelectorAll('.sync-dot').forEach(el => {
+    el.dataset.s = s; el.title = msg || ({ off:'Saved on this phone only', syncing:'Syncing…', ok:'Synced to cloud', error:'Cloud sync failed' })[s];
+  });
+}
+async function cloudFetch(path, opts = {}) {
+  const c = cloudCfg(); if (!c) throw new Error('not set');
+  const res = await fetch(c.url.replace(/\/+$/, '') + path, { ...opts,
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Key': c.key, ...(opts.headers || {}) } });
+  const body = await res.json().catch(() => ({}));
+  return { status: res.status, body };
+}
+let pushing = null, pushAgain = false;
+async function pushCloud(force) {
+  if (!cloudCfg()) return;
+  if (pushing) { pushAgain = true; return; }
+  setCloudState('syncing');
+  pushing = (async () => {
+    try {
+      const r = await cloudFetch('/state', { method:'PUT', body: JSON.stringify({ data: DB, savedAt: DB._savedAt, force: !!force }) });
+      if (r.status === 409) {
+        // Another device saved newer data — take it, so nothing newer is overwritten
+        applyCloud(r.body.data); toast('Updated with newer data from another device');
+      } else if (r.status >= 400) throw new Error(r.body.error || r.status);
+      setCloudState('ok');
+    } catch (e) { setCloudState('error', 'Cloud sync failed: ' + e.message); }
+    pushing = null;
+    if (pushAgain) { pushAgain = false; pushCloud(); }
+  })();
+}
+function applyCloud(data) {
+  DB = migrate(data);
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); } catch {}
+  if (typeof PAGES !== 'undefined') PAGES[currentPage]();
+}
+async function pullCloud() {
+  if (!cloudCfg()) { setCloudState('off'); return; }
+  setCloudState('syncing');
+  try {
+    const r = await cloudFetch('/state');
+    if (r.status >= 400) throw new Error(r.body.error || r.status);
+    const remote = r.body;
+    if (remote.data && (!DB._savedAt || remote.savedAt > DB._savedAt)) { applyCloud(remote.data); setCloudState('ok'); }
+    else if (!remote.data || remote.savedAt < DB._savedAt) { if (!DB._savedAt) DB._savedAt = new Date().toISOString(); await pushCloud(); }
+    else setCloudState('ok');
+  } catch (e) { setCloudState('error', 'Cloud sync failed: ' + e.message); }
 }
 let DB = load();
 
@@ -654,11 +727,24 @@ setup() {
         <div class="card section"><h3>Drivers</h3>
           ${DB.drivers.map(d => `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
             <div><b>${esc(d.name)}</b><div class="muted" style="font-size:12px">${inr(d.rentAmount)} ${CYCLES[d.rentCycle].toLowerCase()} from ${fmtDate(d.startDate)}</div></div>
-            <button class="btn sm" onclick="openDriver('${d.id}')">Edit</button></div>`).join('') || '<div class="muted">No driver yet.</div>'}
+            <div class="btn-row"><button class="btn sm" onclick="shareDriverLink('${d.id}')">Driver link</button><button class="btn sm" onclick="openDriver('${d.id}')">Edit</button></div></div>`).join('') || '<div class="muted">No driver yet.</div>'}
           <button class="btn sm" style="margin-top:10px" onclick="openDriver()">+ Driver</button>
         </div>
+        <div class="card section"><h3>Cloud sync</h3>
+          <p class="muted" style="font-size:13px;margin-bottom:10px">Your Cloudflare Worker. Once connected, data is saved online, shows on every device, and the driver link works.</p>
+          <div class="field"><label>Worker URL</label><input id="cl_url" placeholder="https://mns-tours.xxxx.workers.dev" value="${esc((cloudCfg() || {}).url || '')}"></div>
+          <div class="field"><label>Admin key</label><input id="cl_key" type="password" placeholder="Same as ADMIN_KEY secret" value="${esc((cloudCfg() || {}).key || '')}"></div>
+          <div class="btn-row"><button class="btn primary sm" onclick="connectCloud()">${cloudCfg() ? 'Save & reconnect' : 'Connect'}</button>
+            ${cloudCfg() ? '<button class="btn sm" onclick="disconnectCloud()">Disconnect</button>' : ''}
+            <span class="muted" style="font-size:12px;align-self:center"><span class="sync-dot" data-s="${cloudState}"></span><span class="sync-text">${SYNC_TEXT[cloudState]}</span></span></div>
+        </div>
+        <div class="card section"><h3>UPI for driver payments</h3>
+          <div class="field"><label>UPI ID</label><input placeholder="name@bank" value="${esc(c.upiId || '')}" onchange="setCar('upiId',this.value.trim())"></div>
+          <div class="field"><label>Name shown in UPI</label><input placeholder="MNS Tours and Travels" value="${esc(c.upiName || '')}" onchange="setCar('upiName',this.value.trim())"></div>
+          <div class="help" style="font-size:11px;color:var(--text2)">The driver's "Pay now" button opens his UPI app with this ID and the pending amount.</div>
+        </div>
         <div class="card section"><h3>Backup</h3>
-          <p class="muted" style="font-size:13px;margin-bottom:10px">Data lives only in this browser for now. Download a backup regularly; restore it on another device if needed.</p>
+          <p class="muted" style="font-size:13px;margin-bottom:10px">A backup file is a copy of everything — handy to keep even with cloud sync on.</p>
           <div class="btn-row"><button class="btn sm" onclick="exportData()">Download backup</button>
             <label class="btn sm">Restore backup<input type="file" accept=".json" hidden onchange="importData(this.files[0])"></label>
             <button class="btn sm danger" onclick="resetData()">Reset all</button></div>
@@ -948,11 +1034,13 @@ function restoreSnapshot() {
   const s = getSnapshot(); if (!s) return;
   try {
     clearTimeout(saveTimer);
+    s.data._savedAt = new Date().toISOString();   // newest, so it replaces the test data in the cloud too
     localStorage.setItem(STORE_KEY, JSON.stringify(s.data));
+    if (cloudCfg()) { DB = s.data; clearTimeout(saveTimer); pushCloud(true); }
     localStorage.removeItem(SNAP_KEY); localStorage.removeItem(SNOOZE_KEY);
     localStorage.setItem(TESTFLOW_KEY, 'done');
   } catch { alert('Could not restore.'); return; }
-  location.reload();
+  setTimeout(() => location.reload(), cloudCfg() ? 1500 : 0);
 }
 function keepTestData() { try { localStorage.removeItem(SNAP_KEY); localStorage.setItem(TESTFLOW_KEY, 'done'); } catch {} closeModal(); refresh(); toast('Testing ended'); }
 function restartTesting() { if (startTesting()) { refresh(); toast('Real entries saved — testing mode on'); } }
@@ -1045,7 +1133,7 @@ function openDriver(id) {
     { k:'endDate', label:'Left on (blank if still driving)', type:'date' },
     { k:'note', label:'Note (licence, address, deposit…)', type:'textarea' }
   ], existing || { rentCycle:'daily' },
-  d => { d.rentAmount = num(d.rentAmount); if (existing) Object.assign(existing, d); else DB.drivers.push({ id:uid(), ...d }); },
+  d => { d.rentAmount = num(d.rentAmount); if (existing) Object.assign(existing, d); else DB.drivers.push({ id:uid(), accessCode:newCode(), ...d }); },
   existing ? () => {
     if (DB.payments.some(p => p.driverId === id)) { alert('This driver has payments recorded. Set a "Left on" date instead of deleting.'); return; }
     DB.drivers = DB.drivers.filter(d => d.id !== id);
@@ -1063,6 +1151,28 @@ function setCar(k, v) {
   save(); toast('Saved');
   // Update in place (no full re-render, so the next field you tapped keeps focus on the phone)
   const note = document.getElementById('costNote'); if (note) note.innerHTML = costNoteHtml();
+}
+function connectCloud() {
+  const url = document.getElementById('cl_url').value.trim(), key = document.getElementById('cl_key').value.trim();
+  if (!/^https:\/\//.test(url) || !key) { alert('Enter the Worker URL (https://…) and the admin key.'); return; }
+  try { localStorage.setItem(CLOUD_KEY, JSON.stringify({ url, key })); } catch {}
+  pullCloud().then(() => { PAGES.setup(); toast(cloudState === 'ok' ? 'Connected' : 'Could not connect — check URL and key'); });
+}
+function disconnectCloud() {
+  if (!confirm('Stop syncing this device? Data stays on this phone and in the cloud.')) return;
+  try { localStorage.removeItem(CLOUD_KEY); } catch {} setCloudState('off'); PAGES.setup();
+}
+function driverLinkUrl(d) {
+  const c = cloudCfg(); if (!c) return '';
+  return new URL('driver.html', location.href).href + '?api=' + encodeURIComponent(c.url) + '&d=' + d.accessCode;
+}
+function shareDriverLink(id) {
+  const d = DB.drivers.find(x => x.id === id);
+  if (!cloudCfg()) { alert('Connect Cloud sync first (Setup → Cloud sync). The driver link needs it.'); return; }
+  if (!d.accessCode) { d.accessCode = newCode(); save(); }
+  const text = 'Hi ' + d.name + ', check your rent and pay here (MNS Tours & Travels):\n' + driverLinkUrl(d);
+  const phone = (d.phone || '').replace(/\D/g, '').slice(-10);
+  window.open('https://wa.me/' + (phone ? '91' + phone : '') + '?text=' + encodeURIComponent(text), '_blank');
 }
 function costNoteHtml() {
   const c = DB.car, cc = carCost();
@@ -1151,10 +1261,14 @@ function toggleTheme() {
 try { const t = localStorage.getItem(THEME_KEY); if (t) document.documentElement.dataset.theme = t; } catch {}
 // First open of this version: everything entered so far is real — snapshot it and start testing mode
 try { if (!localStorage.getItem(TESTFLOW_KEY) && !getSnapshot()) { startTesting(); localStorage.setItem(TESTFLOW_KEY, 'started'); } } catch {}
-const autoAdded = autoMarkEmis();
+// With cloud sync, get the latest copy first, then auto-mark EMIs and show the rent popup
+function afterLoad() {
+  const n = autoMarkEmis();
+  if (n) { PAGES[currentPage](); setTimeout(() => toast(n + ' EMI' + (n > 1 ? 's' : '') + ' marked paid'), 300); }
+  setTimeout(checkRentPrompt, 400);
+}
 go('dashboard');
-if (autoAdded) setTimeout(() => toast(autoAdded + ' EMI' + (autoAdded > 1 ? 's' : '') + ' marked paid'), 300);
-setTimeout(checkRentPrompt, 400);
+if (cloudCfg()) pullCloud().then(afterLoad); else afterLoad();
 (function scheduleEightPm() {
   const now = new Date(), at = new Date(now); at.setHours(RENT_DUE_HOUR, 0, 5, 0);
   if (at > now) setTimeout(() => { PAGES[currentPage](); checkRentPrompt(); }, at - now);
