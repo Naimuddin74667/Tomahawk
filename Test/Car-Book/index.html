@@ -580,6 +580,8 @@ dashboard() {
   render(`
     <div class="page-head"><div><h2>Dashboard</h2><div class="sub">${esc(c.name)}${c.regNo ? ' · ' + esc(c.regNo) : ''}</div></div>
       <div class="btn-row desk-only"><button class="btn primary" onclick="openPayment()">+ Rent received</button><button class="btn" onclick="openExpense()">+ Expense</button></div></div>
+    ${cloudCfg() ? '' : `<div class="due-banner" style="background:var(--accent-soft)"><div><b>This device isn't connected.</b> Your saved data is in the cloud — connect to load it.</div>
+      <button class="btn primary sm" onclick="go('setup');setTimeout(()=>document.getElementById('cl_url')?.scrollIntoView({block:'center'}),50)">Connect</button></div>`}
     ${dueBanner()}
     ${setupMissing ? `<div class="note">Finish the <a href="#" onclick="go('setup');return false" style="color:var(--accent)">Setup</a> page (purchase date, EMI amount, first EMI date and the driver) so every number here is accurate.</div>` : ''}
     ${balanceCard()}
@@ -1179,9 +1181,18 @@ function setCar(k, v) {
 }
 function connectCloud() {
   const url = document.getElementById('cl_url').value.trim(), key = document.getElementById('cl_key').value.trim();
-  if (!/^https:\/\//.test(url) || !key) { alert('Enter the Worker URL (https://…) and the admin key.'); return; }
+  if (!/^(https:\/\/|http:\/\/localhost)/.test(url) || !key) { alert('Enter the Worker URL (https://…) and the admin key.'); return; }
+  const prev = cloudCfg();
   try { localStorage.setItem(CLOUD_KEY, JSON.stringify({ url, key })); } catch {}
-  pullCloud().then(() => { startLive(); PAGES.setup(); toast(cloudState === 'ok' ? 'Connected' : 'Could not connect — check URL and key'); });
+  cloudFetch('/state').then(r => {
+    if (r.status >= 400) throw new Error(r.body.error || r.status);
+    // Cloud already has data → load it here. Only an empty cloud gets this device's data.
+    if (r.body.data) { applyCloud(r.body.data); setCloudState('ok'); }
+    else { DB._savedAt = new Date().toISOString(); return pushCloud(true); }
+  }).catch(e => {
+    if (prev) localStorage.setItem(CLOUD_KEY, JSON.stringify(prev)); else localStorage.removeItem(CLOUD_KEY);
+    setCloudState(prev ? 'error' : 'off', 'Could not connect: ' + e.message);
+  }).then(() => { startLive(); PAGES.setup(); toast(cloudState === 'ok' ? 'Connected' : 'Could not connect — check URL and key'); });
 }
 function disconnectCloud() {
   if (!confirm('Stop syncing this device? Data stays on this phone and in the cloud.')) return;
@@ -1285,7 +1296,7 @@ function toggleTheme() {
 }
 try { const t = localStorage.getItem(THEME_KEY); if (t) document.documentElement.dataset.theme = t; } catch {}
 // First open of this version: everything entered so far is real — snapshot it and start testing mode
-try { if (!localStorage.getItem(TESTFLOW_KEY) && !getSnapshot()) { startTesting(); localStorage.setItem(TESTFLOW_KEY, 'started'); } } catch {}
+try { if (!localStorage.getItem(TESTFLOW_KEY) && !getSnapshot() && localStorage.getItem(STORE_KEY)) { startTesting(); localStorage.setItem(TESTFLOW_KEY, 'started'); } } catch {}
 // With cloud sync, get the latest copy first, then auto-mark EMIs and show the rent popup
 function afterLoad() {
   const n = autoMarkEmis();
