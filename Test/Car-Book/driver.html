@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0d7a6f">
+<link rel="manifest" href="driver-manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="MNS Rent">
@@ -52,25 +54,24 @@ body { font-family:var(--font-body); background:var(--bg); color:var(--text); fo
 .msg { text-align:center; padding:60px 20px; color:var(--text2); }
 .msg b { display:block; color:var(--text); font-size:17px; margin-bottom:6px; }
 .foot { text-align:center; color:var(--text2); font-size:11px; margin-top:18px; }
+.install-btn[hidden] { display:none !important; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="top"><h1><span class="logo">₹</span>MNS Tours &amp; Travels</h1><button class="icon-btn" onclick="loadData()">↻ Refresh</button></div>
+  <div class="top"><h1><span class="logo">₹</span>MNS Tours &amp; Travels</h1><div style="display:flex;gap:6px"><button class="icon-btn install-btn" hidden onclick="installApp()">⤓ Install</button><button class="icon-btn" onclick="loadData()">↻ Refresh</button></div></div>
   <div id="app"><div class="msg">Loading…</div></div>
 </div>
 
 <script>
-/* ── Link setup: ?api=<worker url>&d=<driver code>. Saved so the home-screen icon keeps working. ── */
-const LINK_KEY = 'mnsdriver_link_v1';
-let link = (() => {
+/* ── Driver logs in with his mobile number only (saved on his phone). Old ?api=&d= links still work. ── */
+const WORKER_URL = 'https://mns-enterprises.naimuddinshaikh74667.workers.dev';
+const LOGIN_KEY = 'mnsdriver_login_v1';
+const apiBase = () => { try { return localStorage.getItem('mnscar_api_override') || WORKER_URL; } catch { return WORKER_URL; } };
+let login = (() => {
   const q = new URLSearchParams(location.search);
-  if (q.get('api') && q.get('d')) {
-    const l = { api: q.get('api'), d: q.get('d') };
-    try { localStorage.setItem(LINK_KEY, JSON.stringify(l)); } catch {}
-    return l;
-  }
-  try { return JSON.parse(localStorage.getItem(LINK_KEY) || 'null'); } catch { return null; }
+  if (q.get('d')) return { code: q.get('d') };
+  try { return JSON.parse(localStorage.getItem(LOGIN_KEY) || 'null'); } catch { return null; }
 })();
 
 const RENT_DUE_HOUR = 20;    // daily rent is collected at 8 PM (covers last night + today)
@@ -156,25 +157,61 @@ function render() {
         + (P.length > 10 ? `<button class="more" onclick="showAll=!showAll;render()">${showAll ? 'Show latest only' : 'Show all ' + P.length + ' days'}</button>` : '')
       : (D.payments.slice().sort((a, b) => b.date.localeCompare(a.date)).map(x => `<div class="row"><div><div class="t">${fmtDate(x.date)}</div><div class="s">${esc(x.mode || 'Online')}</div></div><div class="r" style="color:var(--green)">${inr(x.amount)}</div></div>`).join('') || '<div class="msg" style="padding:24px">No payments yet</div>')
     }</div>
-    <div class="foot">Updated ${new Date(D.updatedAt).toLocaleString('en-IN', { day:'2-digit', month:'short', hour:'numeric', minute:'2-digit' })} · View only</div>`;
+    <div class="foot">Updated ${new Date(D.updatedAt).toLocaleString('en-IN', { day:'2-digit', month:'short', hour:'numeric', minute:'2-digit' })} · View only${login && login.mobile ? ' · <a href="#" onclick="logoutDriver();return false" style="color:var(--text2)">Log out</a>' : ''}</div>`;
 }
 function showMsg(title, text) { document.getElementById('app').innerHTML = `<div class="msg"><b>${title}</b>${text}</div>`; }
 
-async function loadData() {
-  if (!link) { showMsg('Link missing', 'Please open the link the owner sent you on WhatsApp.'); return; }
+function showLogin(err) {
+  document.getElementById('app').innerHTML = `<div class="card" style="text-align:center;padding:26px 20px;margin-top:30px">
+    <div class="hello" style="font-size:20px">Check your rent</div>
+    <div class="sub" style="margin-bottom:18px">Log in with your mobile number</div>
+    <form id="lf"><input id="mob" type="tel" inputmode="numeric" placeholder="10-digit mobile number" autocomplete="tel"
+      style="width:100%;padding:14px;border:1px solid var(--border);border-radius:12px;font-size:18px;text-align:center;letter-spacing:1px;font-family:inherit;background:var(--surface2)">
+    <div style="color:var(--red);font-size:13px;min-height:20px;margin-top:8px">${esc(err || '')}</div>
+    <button class="pay" type="submit" style="margin-top:6px">Continue</button></form></div>`;
+  document.getElementById('lf').onsubmit = e => {
+    e.preventDefault();
+    const m = document.getElementById('mob').value.replace(/\D/g, '').slice(-10);
+    if (m.length !== 10) { showLogin('Enter your 10-digit mobile number'); return; }
+    login = { mobile: m }; loadData(true);
+  };
+}
+function logoutDriver() { try { localStorage.removeItem(LOGIN_KEY); } catch {} login = null; D = null; showLogin(); }
+
+async function loadData(fromLogin) {
+  if (!login) { showLogin(); return; }
   try {
-    const res = await fetch(link.api.replace(/\/+$/, '') + '/driver?code=' + encodeURIComponent(link.d), { cache: 'no-store' });
+    const q = login.mobile ? 'mobile=' + login.mobile : 'code=' + encodeURIComponent(login.code);
+    const res = await fetch(apiBase() + '/driver?' + q, { cache: 'no-store' });
     const body = await res.json();
-    if (!res.ok) { showMsg('Can’t open', esc(body.error || 'Please ask the owner for a new link.')); return; }
+    if (!res.ok) {
+      if (login.mobile) { try { localStorage.removeItem(LOGIN_KEY); } catch {} login = null; D = null; showLogin(body.error || 'Not registered'); }
+      else showMsg('Can\u2019t open', esc(body.error || 'Please ask the owner for a new link.'));
+      return;
+    }
+    if (login.mobile && fromLogin) { try { localStorage.setItem(LOGIN_KEY, JSON.stringify(login)); } catch {} }
     D = body; render();
   } catch (e) { if (!D) showMsg('No connection', 'Check your internet and tap Refresh.'); }   // keep last view if a background refresh fails
 }
 loadData();
 // Keep it fresh while open: every 30 s, and whenever he comes back to the app
-setInterval(() => { if (!document.hidden) loadData(); }, 30000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) loadData(); });
+setInterval(() => { if (!document.hidden && D) loadData(); }, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && D) loadData(); });
 // Recheck at 8 PM if left open
 (() => { const n = new Date(), at = new Date(n); at.setHours(RENT_DUE_HOUR, 0, 5, 0); if (at > n) setTimeout(() => D && render(), at - n); })();
+// "Install app" button — shown only when Chrome offers installation and the app isn't installed yet
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault(); installEvt = e;
+  document.querySelectorAll('.install-btn').forEach(b => b.hidden = false);
+});
+window.addEventListener('appinstalled', () => document.querySelectorAll('.install-btn').forEach(b => b.hidden = true));
+function installApp() {
+  if (!installEvt) return;
+  installEvt.prompt(); installEvt.userChoice.finally(() => { installEvt = null; document.querySelectorAll('.install-btn').forEach(b => b.hidden = true); });
+}
+// Installable app + offline open
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
 </html>
