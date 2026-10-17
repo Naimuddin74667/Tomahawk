@@ -263,6 +263,7 @@ html[data-theme="dark"] .test-banner { color:#0f1517; }
    a real backend, only these two functions need to change.
    ════════════════════════════════════════════════════════════ */
 const STORE_KEY = 'mnscar_data_v1';
+const ACCOUNT = 'account';   // rent goes into the business account by default, not to a partner
 const THEME_KEY = 'mnscar_theme_v1';
 
 const EXPENSE_CATEGORIES = ['EMI','Insurance','Permit & Road Tax','Fitness / PUC','Service','Repair','Tyres & Battery',
@@ -277,14 +278,14 @@ function defaultData() {
     car: { name:'Maruti Dzire Tour S (CNG)', regNo:'', purchaseDate:'', price:830000, downPayment:200000,
            downPaidBy:uncle, loanAmount:622128, netDisbursed:603000, irr:14.01, emi:21314, tenure:36, emiStartDate:'2026-11-05' },
     partners: [ { id:me, name:'Me', share:50 }, { id:uncle, name:'Uncle', share:50 } ],
-    drivers: [], payments: [], expenses: [], transfers: [], offs: []
+    drivers: [], payments: [], expenses: [], transfers: [], offs: [], rentToAccount: true
   };
 }
 function load() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
     if (raw) {
-      const d = Object.assign(defaultData(), JSON.parse(raw));
+      const parsed = JSON.parse(raw), d = Object.assign(defaultData(), parsed);
       if (d.car.price === 840000 && !num(d.car.emi)) Object.assign(d.car, { price:830000, emi:21314 });
       // Apply the confirmed KMPL scheme to earlier placeholder values (only if not edited by hand)
       if ([630000, 640000].includes(num(d.car.loanAmount))) d.car.loanAmount = 622128;
@@ -293,6 +294,8 @@ function load() {
       if (!d.car.emiStartDate) d.car.emiStartDate = '2026-11-05';
       // Category renamed: "Registration & Accessories" → "Accessories"
       d.expenses.forEach(e => { if (e.category === 'Registration & Accessories') e.category = 'Accessories'; });
+      // Rent belongs to the business account, not a partner (one-time move of earlier entries)
+      if (!parsed.rentToAccount) { d.payments.forEach(x => x.receivedBy = 'account'); d.rentToAccount = true; }
       // Uncle paid the ₹2L upfront — fill it in if it was never set
       if (!d.car.downPaidBy) { const u = d.partners.find(p => /uncle/i.test(p.name)); if (u) d.car.downPaidBy = u.id; }
       return d;
@@ -327,7 +330,7 @@ function addMonths(d, n) {
 }
 function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
 const FROM_RENT = 'rent';   // special payer: paid out of rent collected, not by a partner
-function partnerName(id) { if (id === FROM_RENT) return 'From rent'; const p = DB.partners.find(p => p.id === id); return p ? p.name : '—'; }
+function partnerName(id) { if (id === FROM_RENT) return 'From rent'; if (id === ACCOUNT || !id) return 'Account'; const p = DB.partners.find(p => p.id === id); return p ? p.name : '—'; }
 function driverName(id) { const d = DB.drivers.find(d => d.id === id); return d ? d.name : '—'; }
 function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1800); }
 function sum(arr, f) { return arr.reduce((s, x) => s + f(x), 0); }
@@ -407,7 +410,7 @@ function openPeriod(driverId, day) {
     const per = driverLedger(drv).periods.find(p => p.from === day);
     const toPay = per ? Math.max(0, per.due - per.paid) : 0;
     if (received && toPay > 0) DB.payments.push({ id: uid(), driverId, date: todayStr(), amount: toPay, mode: 'Online',
-      receivedBy: defaultReceiver(), note: 'Rent for ' + periodLabel(drv, { from: day }) });
+      receivedBy: ACCOUNT, note: 'Rent for ' + periodLabel(drv, { from: day }) });
     save(); PAGES[currentPage](); toast('Saved');
     if (pendingRent().length && document.getElementById('modal').dataset.from === 'prompt') openRentConfirm(); else closeModal();
   };
@@ -601,13 +604,12 @@ partners() {
         <span class="badge ${Math.abs(r.balance) < 1 ? 'b-up' : r.balance > 0 ? 'b-paid' : 'b-due'}" style="font-size:12px">${Math.abs(r.balance) < 1 ? 'Even' : r.balance > 0 ? 'Gets ' + inr(r.balance) : 'Owes ' + inr(-r.balance)}</span>
       </div>
       <div class="list">
-        ${lrow('Paid for car', 'Own money' + (r.fromRentShare ? ' + ' + inr(r.fromRentShare) + ' paid from rent held' : ''), inr(r.paidOut))}
-        ${lrow('Rent kept', 'Rent this partner received', inr(r.rentKept))}
-        ${r.wdHandedOut >= 1 ? lrow('Profit paid out of rent held', 'Rent cash used for profit taken', inr(r.wdHandedOut)) : ''}
+        ${lrow('Paid for car', 'Own money', inr(r.paidOut))}
+        ${r.rentKept ? lrow('Rent kept personally', 'Rent this partner held on to', inr(r.rentKept)) : ''}
         ${r.profitTaken ? lrow('Profit taken', 'Taken out for personal use', inr(r.profitTaken)) : ''}
         ${r.settleOut ? lrow('Paid to partner', 'Settlement given', inr(r.settleOut)) : ''}
         ${r.settleIn ? lrow('Received from partner', 'Settlement received', inr(r.settleIn)) : ''}
-        ${lrow('Fair share of net cost', r.share + '% of (all costs − all rent)', inr(r.fair))}
+        ${lrow('Fair share', r.share + '% of what partners put in', inr(r.fair))}
       </div></div>`).join('')}</div>
     <div class="card section"><h3>Money between partners</h3>
       <div class="btn-row" style="margin-bottom:6px">
@@ -726,29 +728,24 @@ function fmtRange(a, b) {
 }
 function toggleRentAll(id) { window._rentAll = window._rentAll || {}; window._rentAll[id] = !window._rentAll[id]; PAGES.rent(); }
 
-/* Partner settlement: net outlay = costs paid − rent kept.
-   Fair outlay = share% × total net outlay. Balance > 0 → others owe this partner. */
+/* Partner settlement.
+   Rent goes into the shared business account, and EMIs/expenses "From rent" come out of it —
+   none of that belongs to either partner, so it doesn't affect the split.
+   What counts per partner: own money put in (+), money paid to the other partner (+),
+   rent personally kept, profit taken out, money received from the other partner (−).
+   Fair = share% of the total; Balance > 0 → this partner is owed money. */
 function partnerSettlement() {
   const T = DB.transfers || [];
   const settles = T.filter(t => t.type === 'settle'), withdraws = T.filter(t => t.type === 'withdraw');
-  // Money that leaves the rent cash: expenses paid "From rent" + profit taken out.
-  // It comes from whoever is holding the rent, in proportion to the rent each kept
-  // (capped at what was collected — any shortfall stays unassigned, see Rent money card).
-  const expFromRent = sum(DB.expenses.filter(e => e.paidBy === FROM_RENT), e => num(e.amount));
-  const wdTotal = sum(withdraws, t => num(t.amount)), outOfRent = expFromRent + wdTotal;
-  const totalKept = sum(DB.payments.filter(x => DB.partners.some(p => p.id === x.receivedBy)), x => num(x.amount));
   const rows = DB.partners.map(p => {
+    const paidOut = (DB.car.downPaidBy === p.id ? num(DB.car.downPayment) : 0)
+                  + sum(DB.expenses.filter(e => e.paidBy === p.id), e => num(e.amount));
     const rentKept = sum(DB.payments.filter(x => x.receivedBy === p.id), x => num(x.amount));
-    const outShare = totalKept ? Math.min(outOfRent, totalKept) * rentKept / totalKept : 0;
-    // Split this partner's outflow into "spent on the car" vs "handed out as profit" (display only)
-    const fromRentShare = outOfRent ? outShare * expFromRent / outOfRent : 0, wdHandedOut = outShare - fromRentShare;
     const profitTaken = sum(withdraws.filter(t => t.to === p.id), t => num(t.amount));
     const settleOut = sum(settles.filter(t => t.from === p.id), t => num(t.amount));
     const settleIn = sum(settles.filter(t => t.to === p.id), t => num(t.amount));
-    const paidOut = (DB.car.downPaidBy === p.id ? num(DB.car.downPayment) : 0)
-                  + sum(DB.expenses.filter(e => e.paidBy === p.id), e => num(e.amount)) + fromRentShare;
-    const net = paidOut + wdHandedOut + settleOut - rentKept - profitTaken - settleIn;
-    return { name:p.name, share:num(p.share), paidOut, rentKept, received: rentKept, fromRentShare, wdHandedOut, profitTaken, settleOut, settleIn, net };
+    const net = paidOut + settleOut - rentKept - profitTaken - settleIn;
+    return { name:p.name, share:num(p.share), paidOut, rentKept, profitTaken, settleOut, settleIn, net };
   });
   const totalNet = sum(rows, r => r.net), totalShare = sum(rows, r => r.share) || 100;
   rows.forEach(r => { r.fair = totalNet * r.share / totalShare; r.balance = r.net - r.fair; });
@@ -786,8 +783,9 @@ function openTransfer(id, type) {
 
 /* Available balance = money that should be in the car's account right now:
    rent received − EMIs/expenses paid "From rent" − profit taken out. */
+const inAccount = x => !DB.partners.some(p => p.id === x.receivedBy);
 function accountBalance() {
-  const rentIn = sum(DB.payments, p => num(p.amount));
+  const rentIn = sum(DB.payments.filter(inAccount), p => num(p.amount));
   const emiOut = sum(DB.expenses.filter(e => e.paidBy === FROM_RENT && e.category === 'EMI'), e => num(e.amount));
   const otherOut = sum(DB.expenses.filter(e => e.paidBy === FROM_RENT && e.category !== 'EMI'), e => num(e.amount));
   const profitOut = sum((DB.transfers || []).filter(t => t.type === 'withdraw'), t => num(t.amount));
@@ -815,15 +813,15 @@ function balanceCard() {
   </div>`;
 }
 function rentPoolCard() {
-  const rent = sum(DB.payments, p => num(p.amount));
+  const rent = sum(DB.payments.filter(inAccount), p => num(p.amount));
   const spent = sum(DB.expenses.filter(e => e.paidBy === FROM_RENT), e => num(e.amount));
   const taken = sum((DB.transfers || []).filter(t => t.type === 'withdraw'), t => num(t.amount));
   const left = rent - spent - taken;
-  return `<div class="card section"><h3>Rent money</h3><div class="list">
-    ${lrow('Rent collected', '', inr(rent))}
+  return `<div class="card section"><h3>Business account</h3><div class="list">
+    ${lrow('Rent received', 'Goes into the account', inr(rent))}
     ${lrow('Paid from rent', 'EMIs and expenses marked "From rent"', inr(spent))}
     ${taken ? lrow('Profit taken out', 'Personal use by partners', inr(taken)) : ''}
-    ${lrow(left >= 0 ? 'Rent left in hand' : 'Rent fell short by', left < 0 ? 'Someone covered this from their own pocket — set "Paid by"' : '', '<span class="' + (left >= 0 ? 'pos' : 'neg') + '">' + inr(Math.abs(left)) + '</span>')}
+    ${lrow(left >= 0 ? 'Balance in account' : 'Account short by', left < 0 ? 'Someone covered this from their own pocket — set "Paid by"' : '', '<span class="' + (left >= 0 ? 'pos' : 'neg') + '">' + inr(Math.abs(left)) + '</span>')}
   </div></div>`;
 }
 function openForm(title, fields, values, onSave, onDelete) {
@@ -883,11 +881,8 @@ function openRentConfirm(manual) {
   document.getElementById('modal').dataset.from = '';
   const list = pendingRent();
   if (!list.length) { closeModal(); if (manual) toast('No rent pending'); return; }
-  const prefs = DB.prefs || {}; const mode = prefs.mode || 'Cash'; const by = defaultReceiver();
-  document.getElementById('modal').innerHTML = `<h3>${greeting()} 👋</h3>
+    document.getElementById('modal').innerHTML = `<h3>${greeting()} 👋</h3>
     <p class="muted" style="margin:-6px 0 14px;font-size:13px">Did you receive the rent?</p>
-    ${DB.partners.length > 1 ? `<div class="list-title">Received by</div>
-    <div class="chips" id="rcBy">${DB.partners.map(p => `<button class="chip ${p.id === by ? 'on' : ''}" data-v="${p.id}" onclick="pickPref('receivedBy','${p.id}','rcBy')">${esc(p.name)}</button>`).join('')}</div>` : ''}
     ${list.map(x => {
       const p = x.pend[0], left = p.due - p.paid, more = x.pend.length - 1;
       return `<div class="rc-driver">
@@ -916,7 +911,7 @@ function defaultReceiver() {
 function confirmRent(driverId, amount) {
   const prefs = DB.prefs || {};
   DB.payments.push({ id: uid(), driverId, date: todayStr(), amount, mode: 'Online',
-                     receivedBy: defaultReceiver(), note: 'Confirmed from reminder' });
+                     receivedBy: ACCOUNT, note: 'Confirmed from reminder' });
   save(); PAGES[currentPage](); toast('Rent ' + inr(amount) + ' added');
   openRentConfirm();   // shows the next pending one, or closes when all clear
 }
@@ -989,10 +984,10 @@ function openPayment(id, driverId) {
     { k:'driverId', label:'Driver', type:'select', options: DB.drivers.map(d => [d.id, d.name]) },
     { k:'date', label:'Date', type:'date', req:true, def: todayStr() },
     { k:'mode', label:'Mode', type:'select', options: PAY_MODES },
-    { k:'receivedBy', label:'Received by (partner)', type:'select', options: partnerOptions(), help:'Who got the money — used for partner settlement.' },
+    { k:'receivedBy', label:'Received in', type:'select', options: [[ACCOUNT, 'Business account'], ...DB.partners.map(p => [p.id, p.name + ' (kept personally)'])], help:'Leave as Business account unless a partner kept the cash.' },
     { k:'note', label:'Note', type:'text' }
-  ], existing || { driverId: driverId || active.id, mode: 'Online', receivedBy: defaultReceiver() },
-  d => { d.amount = num(d.amount); DB.prefs = Object.assign(DB.prefs || {}, { receivedBy: d.receivedBy });
+  ], existing || { driverId: driverId || active.id, mode: 'Online', receivedBy: ACCOUNT },
+  d => { d.amount = num(d.amount); 
          if (existing) Object.assign(existing, d); else DB.payments.push({ id:uid(), ...d }); },
   existing ? () => DB.payments = DB.payments.filter(p => p.id !== id) : null);
 }
