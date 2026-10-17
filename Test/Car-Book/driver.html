@@ -167,9 +167,12 @@ async function loadData() {
     const body = await res.json();
     if (!res.ok) { showMsg('Can’t open', esc(body.error || 'Please ask the owner for a new link.')); return; }
     D = body; render();
-  } catch (e) { showMsg('No connection', 'Check your internet and tap Refresh.'); }
+  } catch (e) { if (!D) showMsg('No connection', 'Check your internet and tap Refresh.'); }   // keep last view if a background refresh fails
 }
 loadData();
+// Keep it fresh while open: every 30 s, and whenever he comes back to the app
+setInterval(() => { if (!document.hidden) loadData(); }, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) loadData(); });
 // Recheck at 8 PM if left open
 (() => { const n = new Date(), at = new Date(n); at.setHours(RENT_DUE_HOUR, 0, 5, 0); if (at > n) setTimeout(() => D && render(), at - n); })();
 </script>

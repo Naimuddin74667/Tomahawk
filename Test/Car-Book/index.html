@@ -317,9 +317,11 @@ function migrate(parsed) {
 }
 function newCode() { const a = 'abcdefghjkmnpqrstuvwxyz23456789'; let s = ''; for (let i = 0; i < 10; i++) s += a[Math.floor(Math.random() * a.length)]; return s; }
 let saveTimer = null;
+let saveTimerPending = false;
 function save() {                       // 400ms debounce, same pattern as other apps
-  clearTimeout(saveTimer);
+  clearTimeout(saveTimer); saveTimerPending = true;
   saveTimer = setTimeout(() => {
+    saveTimerPending = false;
     DB._savedAt = new Date().toISOString();
     try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
     catch (e) { alert('Could not save — browser storage is full or blocked.'); }
@@ -372,6 +374,29 @@ function applyCloud(data) {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); } catch {}
   if (typeof PAGES !== 'undefined') PAGES[currentPage]();
 }
+/* Live updates: while the app is on screen, check the cloud every 5 s for changes made on
+   another device (1 s would use up Cloudflare's free daily request limit). Skips while you're
+   typing in a form or a save is still on its way up, so nothing you're doing gets overwritten. */
+const LIVE_EVERY_MS = 5000;
+let liveTimer = null, liveBusy = false;
+async function liveCheck() {
+  if (!cloudCfg() || document.hidden || liveBusy || pushing || saveTimer && saveTimerPending) return;
+  if (document.getElementById('overlay').classList.contains('open')) return;
+  liveBusy = true;
+  try {
+    const r = await cloudFetch('/state');
+    if (r.status < 400 && r.body.data && r.body.savedAt > (DB._savedAt || '')) {
+      applyCloud(r.body.data); setCloudState('ok'); toast('Updated');
+    } else if (r.status < 400) setCloudState('ok');
+  } catch { setCloudState('error', 'Offline — will sync when back online'); }
+  liveBusy = false;
+}
+function startLive() {
+  clearInterval(liveTimer);
+  if (cloudCfg()) liveTimer = setInterval(liveCheck, LIVE_EVERY_MS);
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) liveCheck(); });
+window.addEventListener('online', () => { pushCloud(); liveCheck(); });
 async function pullCloud() {
   if (!cloudCfg()) { setCloudState('off'); return; }
   setCloudState('syncing');
@@ -1156,11 +1181,11 @@ function connectCloud() {
   const url = document.getElementById('cl_url').value.trim(), key = document.getElementById('cl_key').value.trim();
   if (!/^https:\/\//.test(url) || !key) { alert('Enter the Worker URL (https://…) and the admin key.'); return; }
   try { localStorage.setItem(CLOUD_KEY, JSON.stringify({ url, key })); } catch {}
-  pullCloud().then(() => { PAGES.setup(); toast(cloudState === 'ok' ? 'Connected' : 'Could not connect — check URL and key'); });
+  pullCloud().then(() => { startLive(); PAGES.setup(); toast(cloudState === 'ok' ? 'Connected' : 'Could not connect — check URL and key'); });
 }
 function disconnectCloud() {
   if (!confirm('Stop syncing this device? Data stays on this phone and in the cloud.')) return;
-  try { localStorage.removeItem(CLOUD_KEY); } catch {} setCloudState('off'); PAGES.setup();
+  try { localStorage.removeItem(CLOUD_KEY); } catch {} clearInterval(liveTimer); setCloudState('off'); PAGES.setup();
 }
 function driverLinkUrl(d) {
   const c = cloudCfg(); if (!c) return '';
@@ -1268,7 +1293,7 @@ function afterLoad() {
   setTimeout(checkRentPrompt, 400);
 }
 go('dashboard');
-if (cloudCfg()) pullCloud().then(afterLoad); else afterLoad();
+if (cloudCfg()) pullCloud().then(afterLoad).then(startLive); else afterLoad();
 (function scheduleEightPm() {
   const now = new Date(), at = new Date(now); at.setHours(RENT_DUE_HOUR, 0, 5, 0);
   if (at > now) setTimeout(() => { PAGES[currentPage](); checkRentPrompt(); }, at - now);
