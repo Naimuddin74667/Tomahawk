@@ -219,6 +219,8 @@ body.readonly .lrow.click { cursor:default; }
 .login-err { color:var(--red); font-size:13px; min-height:18px; margin:-2px 0 10px; }
 .logo-img { width:30px; height:30px; border-radius:9px; display:inline-block; vertical-align:middle; margin-right:8px; box-shadow:0 0 0 1px var(--border); background:#fff; }
 .logo-img.lg { width:40px; height:40px; border-radius:11px; margin-right:0; }
+.pin-box { font-family:var(--font-display); font-size:38px; font-weight:700; letter-spacing:6px; text-align:center; background:var(--accent-soft); color:var(--accent); border-radius:14px; padding:18px 10px; }
+.lrow .r .btn + .btn { margin-left:0; }
 .due-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; background:var(--red-soft); border-radius:12px; padding:12px 14px; margin-bottom:var(--gap); font-size:14px; }
 
 @media (max-width:820px) {
@@ -783,7 +785,7 @@ setup() {
         <div class="card section"><h3>Drivers</h3>
           ${DB.drivers.map(d => `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
             <div><b>${esc(d.name)}</b><div class="muted" style="font-size:12px">${inr(d.rentAmount)} ${CYCLES[d.rentCycle].toLowerCase()} from ${fmtDate(d.startDate)}</div></div>
-            <div class="btn-row"><button class="btn sm" onclick="shareDriverLink('${d.id}')">Driver link</button><button class="btn sm" onclick="openDriver('${d.id}')">Edit</button></div></div>`).join('') || '<div class="muted">No driver yet.</div>'}
+            <div class="btn-row"><button class="btn sm" onclick="shareDriverLink('${d.id}')">Send login</button><button class="btn sm" onclick="openDriver('${d.id}')">Edit</button></div></div>`).join('') || '<div class="muted">No driver yet.</div>'}
           <button class="btn sm" style="margin-top:10px" onclick="openDriver()">+ Driver</button>
         </div>
         <div class="card section">${loginCardInner()}</div>
@@ -1218,15 +1220,15 @@ function showLogin(msg) {
   const el = document.getElementById('login');
   el.innerHTML = `<div class="login-card">
     <img src="logo.png" alt="MNS Tours &amp; Travels" style="width:84px;height:84px;display:block;margin:0 auto 12px">
-    <h2>MNS Tours &amp; Travels</h2><p class="muted" style="margin:4px 0 20px;font-size:13px">Owner login</p>
+    <h2>MNS Tours &amp; Travels</h2><p class="muted" style="margin:4px 0 20px;font-size:13px">Log in with your mobile number and PIN</p>
     <form id="loginForm">
       <div class="field"><label>Mobile number</label><input name="mobile" type="tel" inputmode="numeric" autocomplete="username" placeholder="10-digit mobile" required></div>
-      <div class="field"><label>Password</label><input name="password" type="password" autocomplete="current-password" required></div>
+      <div class="field"><label>PIN</label><input name="password" type="password" inputmode="text" autocomplete="current-password" placeholder="6-digit PIN" required></div>
       <div class="login-err">${esc(msg || '')}</div>
       <button class="btn primary rc-yes" type="submit">Log in</button>
     </form>
     <button class="btn rc-yes install-btn" ${installEvt ? '' : 'hidden'} style="margin-top:10px" type="button" onclick="installApp()">⤓ Install app on this phone</button>
-    <p class="muted" style="font-size:12px;margin-top:16px">Driver? <a href="driver.html">Check your rent here</a></p></div>`;
+    <p class="muted" style="font-size:12px;margin-top:16px">Don\u2019t have a PIN? Ask the owner.</p></div>`;
   el.hidden = false;
   document.getElementById('loginForm').onsubmit = async e => {
     e.preventDefault();
@@ -1236,6 +1238,7 @@ function showLogin(msg) {
       const r = await cloudFetch('/login', { method: 'POST', body: JSON.stringify({ mobile: f.mobile, password: f.password }) });
       if (r.status >= 400) throw new Error(r.body.error || 'Login failed');
       localStorage.setItem(AUTH_KEY, JSON.stringify(r.body));
+      if (r.body.role === 'driver') { location.replace('driver.html'); return; }   // drivers get their own rent screen
       applyRole();
       if (isViewer()) await pullCloud(); else await firstSync();
       el.hidden = true; el.innerHTML = ''; document.body.classList.remove('locked');
@@ -1259,56 +1262,93 @@ function logout(expired) {
   clearInterval(liveTimer); closeModal();
   showLogin(expired ? 'Please log in again' : '');
 }
-async function loadOwners() {
-  const box = document.getElementById('ownerList'); if (!box) return;
-  try {
-    const r = await cloudFetch('/users');
-    const me = (cloudCfg() || {}).mobile;
-    box.innerHTML = (r.body.users || []).map(u => lrow(esc(u.name) + (u.mobile === me ? ' <span class="muted" style="font-weight:400">(you)</span>' : ''), esc(u.mobile) + ' · ' + (u.role === 'viewer' ? 'View only' : 'Full access'), '',
-      u.mobile === me ? '' : `<button class="btn sm danger" onclick="removeOwner('${u.mobile}')">Remove</button>`)).join('');
-  } catch { box.innerHTML = '<div class="muted" style="font-size:13px">Could not load logins</div>'; }
-}
-function openOwnerForm(self) {
-  const me = cloudCfg() || {};
-  openForm(self ? 'Change my password' : 'Add login', [
-    { k:'name', label:'Name', type:'text', req:true, def: self ? me.name : '' },
-    { k:'mobile', label:'Mobile number', type:'tel', req:true, def: self ? me.mobile : '' },
-    { k:'password', label: self ? 'New password' : 'Password', type:'password', req:true, help:'At least 6 characters.' },
-    ...(self ? [] : [{ k:'role', label:'Access', type:'select', options: [['viewer','View only — sees everything, can\u2019t change'], ['owner','Full access — can change everything']] }])
-  ], {}, d => {
-    if (self) d.role = me.role;
-    cloudFetch('/users', { method:'POST', body: JSON.stringify(d) }).then(r => {
-      if (r.status >= 400) { alert(r.body.error || 'Could not save'); return; }
-      if (self) { const a = cloudCfg(); a.name = d.name; localStorage.setItem(AUTH_KEY, JSON.stringify(a)); }
-      toast(self ? 'Password changed' : 'Login added'); PAGES.setup();
-    });
-  });
-}
 function removeOwner(mobile) {
-  if (!confirm('Remove login for ' + mobile + '?')) return;
+  const u = USERS.find(x => x.mobile === mobile) || {};
+  if (!confirm('Remove the login for ' + (u.name || mobile) + '? They are logged out at once.')) return;
   cloudFetch('/users?mobile=' + mobile, { method:'DELETE' }).then(r => { if (r.status >= 400) alert(r.body.error); loadOwners(); });
 }
+const ROLE_LABEL = { owner:'Full access', viewer:'View only', driver:'Driver' };
+let USERS = [];   // logins from the server (owner/viewer view)
 function loginCardInner() {
   const me = cloudCfg() || {};
-  return `<h3>Logins</h3>
+  return `<h3>Users &amp; logins</h3>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px">
-      <div style="font-size:13px">Logged in as <b>${esc(me.name || '')}</b> · ${esc(me.mobile || '')}${isViewer() ? ' · <span class="badge b-up">View only</span>' : ''}
+      <div style="font-size:13px">Logged in as <b>${esc(me.name || '')}</b> · ${esc(me.mobile || '')} · <span class="badge b-up">${ROLE_LABEL[me.role] || ''}</span>
         <div class="muted" style="font-size:12px"><span class="sync-dot" data-s="${cloudState}"></span><span class="sync-text">${SYNC_TEXT[cloudState]}</span></div></div>
       <button class="btn sm" onclick="logout()">Log out</button></div>
     ${isViewer() ? '' : `<div class="list" id="ownerList"><div class="muted" style="font-size:13px;padding:8px 0">Loading…</div></div>
     <img src="data:," alt="" style="display:none" onerror="loadOwners()">`}
-    <div class="btn-row" style="margin-top:10px">${isViewer() ? '' : '<button class="btn sm" onclick="openOwnerForm()">+ Add login</button>'}
-      <button class="btn sm" onclick="openOwnerForm(true)">Change my password</button></div>
-    ${isViewer() ? '' : '<div class="help" style="font-size:11px;color:var(--text2);margin-top:6px">Full access can change everything. View only sees everything but can\u2019t change anything. Drivers log in with just their mobile number on the driver page.</div>'}`;
+    <div class="btn-row" style="margin-top:10px">${isViewer() ? '' : '<button class="btn primary sm" onclick="openUserForm()">+ Add user</button>'}
+      <button class="btn sm" onclick="openMyPassword()">Change my password</button></div>
+    ${isViewer() ? '' : '<div class="help" style="font-size:11px;color:var(--text2);margin-top:6px">Add a user with their mobile number — the app makes a 6-digit PIN for them. Everyone logs in on the same page with mobile + PIN. Full access changes everything · View only sees everything · Driver sees only his own rent.</div>'}`;
 }
-function driverLinkUrl() { return new URL('driver.html', location.href).href; }
-function shareDriverLink(id) {
+async function loadOwners() {
+  const box = document.getElementById('ownerList'); if (!box) return;
+  try {
+    const r = await cloudFetch('/users'); USERS = r.body.users || [];
+    const me = (cloudCfg() || {}).mobile;
+    box.innerHTML = USERS.map(u => lrow(
+      esc(u.name) + (u.mobile === me ? ' <span class="muted" style="font-weight:400">(you)</span>' : ''),
+      esc(u.mobile) + ' · ' + ROLE_LABEL[u.role] + (u.role === 'driver' ? ' — ' + esc(driverName(u.driverId)) : ''), '',
+      u.mobile === me ? '' : `<button class="btn sm" onclick="resetPin('${u.mobile}')">New PIN</button><button class="btn sm danger" onclick="removeOwner('${u.mobile}')">✕</button>`)).join('');
+  } catch { box.innerHTML = '<div class="muted" style="font-size:13px">Could not load users</div>'; }
+}
+function openUserForm(preset) {
+  const drivers = DB.drivers.filter(d => !d.endDate);
+  openForm('Add user', [
+    { k:'name', label:'Name', type:'text', req:true },
+    { k:'mobile', label:'Mobile number', type:'tel', req:true, help:'They log in with this number.' },
+    { k:'role', label:'Access', type:'select', options: [['viewer','View only — sees everything, can’t change'], ['owner','Full access — can change everything'], ['driver','Driver — sees only his own rent']] },
+    { k:'driverId', label:'Which driver', type:'select', showIf:['role','driver'], options: drivers.length ? drivers.map(d => [d.id, d.name]) : [['','— add the driver first —']] }
+  ], preset || { role:'viewer' }, d => { createUser(d); });
+}
+async function createUser(d) {
+  if (d.role !== 'driver') delete d.driverId;
+  const r = await cloudFetch('/users', { method:'POST', body: JSON.stringify(d) });
+  if (r.status >= 400) { alert(r.body.error || 'Could not add user'); return; }
+  showPin(d.name, r.body.mobile, r.body.pin, true);
+}
+async function resetPin(mobile) {
+  const u = USERS.find(x => x.mobile === mobile) || { name: '' };
+  if (!confirm('Make a new PIN for ' + (u.name || mobile) + '? The old PIN stops working and they are logged out.')) return;
+  const r = await cloudFetch('/users/reset-pin', { method:'POST', body: JSON.stringify({ mobile }) });
+  if (r.status >= 400) { alert(r.body.error || 'Could not reset'); return; }
+  showPin(u.name, mobile, r.body.pin, false);
+}
+/* Shown once after creating a user / resetting a PIN — the PIN isn't stored anywhere readable. */
+function showPin(name, mobile, pin, isNew) {
+  const link = new URL('./', location.href).href;
+  const msg = 'Hi ' + (name || '') + ', your MNS Tours & Travels login:\n' + link + '\nMobile: ' + mobile + '\nPIN: ' + pin +
+              '\n\nOpen the link in Chrome and tap "Install" to add it as an app.';
+  document.getElementById('modal').innerHTML = `<h3>${isNew ? 'User added' : 'New PIN'}</h3>
+    <p class="muted" style="font-size:13px;margin:-6px 0 14px">${esc(name || '')} · ${esc(mobile)}</p>
+    <div class="pin-box">${pin.replace(/(\d{3})(\d{3})/, '$1 $2')}</div>
+    <p class="muted" style="font-size:12px;margin:10px 0 14px">Send it now — for safety the PIN can’t be seen again later (you can always make a new one).</p>
+    <button class="btn primary rc-yes" onclick="window.open('https://wa.me/91${mobile}?text=' + encodeURIComponent(${JSON.stringify(msg).replace(/"/g, '&quot;')}), '_blank')">Send on WhatsApp</button>
+    <button class="btn rc-yes" style="margin-top:8px" onclick="navigator.clipboard && navigator.clipboard.writeText(${JSON.stringify(msg).replace(/"/g, '&quot;')}).then(() => toast('Copied'))">Copy message</button>
+    <button class="btn rc-yes" style="margin-top:8px" onclick="closeModal();PAGES[currentPage]()">Done</button>`;
+  document.getElementById('overlay').classList.add('open');
+}
+function openMyPassword() {
+  const me = cloudCfg() || {};
+  openForm('Change my password', [
+    { k:'name', label:'My name', type:'text', req:true, def: me.name },
+    { k:'password', label:'New password or PIN', type:'password', req:true, help:'At least 6 characters.' }
+  ], {}, d => {
+    cloudFetch('/users/password', { method:'POST', body: JSON.stringify(d) }).then(r => {
+      if (r.status >= 400) { alert(r.body.error || 'Could not save'); return; }
+      const a = cloudCfg(); a.name = d.name; localStorage.setItem(AUTH_KEY, JSON.stringify(a)); toast('Saved'); PAGES.setup();
+    });
+  });
+}
+async function shareDriverLink(id) {
   const d = DB.drivers.find(x => x.id === id);
   const phone = (d.phone || '').replace(/\D/g, '').slice(-10);
-  if (phone.length !== 10) { alert('Add the driver’s 10-digit mobile number first (Edit).'); openDriver(id); return; }
-  const text = 'Hi ' + d.name + ', check your rent and pay here (MNS Tours & Travels):\n' + driverLinkUrl() +
-    '\nLog in with your mobile number ' + phone + '.';
-  window.open('https://wa.me/91' + phone + '?text=' + encodeURIComponent(text), '_blank');
+  if (phone.length !== 10) { alert('Add the driver\u2019s 10-digit mobile number first (Edit).'); openDriver(id); return; }
+  if (!USERS.length) { try { USERS = (await cloudFetch('/users')).body.users || []; } catch {} }
+  const existing = USERS.find(u => u.mobile === phone);
+  if (existing) resetPin(phone);
+  else createUser({ name: d.name, mobile: phone, role: 'driver', driverId: d.id });
 }
 function costNoteHtml() {
   const c = DB.car, cc = carCost();
@@ -1408,6 +1448,7 @@ function afterLoad() {
   setTimeout(checkRentPrompt, 400);
 }
 go('dashboard');
+if ((cloudCfg() || {}).role === 'driver') location.replace('driver.html');
 applyRole();
 try { localStorage.removeItem('mnscar_cloud_v1'); } catch {}   // old manual connection, replaced by login
 if (cloudCfg()) pullCloud().then(afterLoad).then(startLive); else showLogin();
