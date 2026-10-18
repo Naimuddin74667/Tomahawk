@@ -64,6 +64,8 @@ async function setupTables(DB) {
   for (const col of ["role TEXT DEFAULT 'owner'", 'driver_id TEXT', 'fails INTEGER DEFAULT 0', 'lock_until TEXT']) {
     try { await DB.prepare('ALTER TABLE users ADD COLUMN ' + col).run(); } catch (e) { /* already there */ }
   }
+  // which rent day a driver's "I've paid" is for (start date of that day's period)
+  try { await DB.prepare('ALTER TABLE claims ADD COLUMN day TEXT').run(); } catch (e) { /* already there */ }
 }
 
 export default {
@@ -226,8 +228,9 @@ export default {
         const waiting = (await DB.prepare("SELECT COUNT(*) AS n FROM claims WHERE driver_id = ?1 AND status = 'pending'").bind(me.driverId).first()).n;
         if (waiting >= 5) return err('You already have 5 payments waiting for the owner to confirm', 400);
         const id = randomHex(8);
-        await DB.prepare("INSERT INTO claims (id, driver_id, driver_name, amount, label, status, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6)")
-          .bind(id, me.driverId, me.name || '', amount, String(body.label || '').slice(0, 80), now()).run();
+        const day = /^\d{4}-\d{2}-\d{2}$/.test(String(body.day || '')) ? body.day : null;
+        await DB.prepare("INSERT INTO claims (id, driver_id, driver_name, amount, label, status, created_at, day) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7)")
+          .bind(id, me.driverId, me.name || '', amount, String(body.label || '').slice(0, 80), now(), day).run();
         return json({ ok: true, id });
       }
       if (path === '/driver/claim/cancel' && req.method === 'POST') {
