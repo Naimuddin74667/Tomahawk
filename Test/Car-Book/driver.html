@@ -51,6 +51,7 @@ body { font-family:var(--font-body); background:var(--bg); color:var(--text); fo
 .mp-help { color:var(--text2); font-size:12px; margin-top:6px; }
 .toast { position:fixed; bottom:30px; left:50%; transform:translateX(-50%); background:var(--text); color:var(--bg); padding:9px 16px; border-radius:10px; font-weight:600; font-size:13px; z-index:99; }
 .b-wait { background:rgba(67,56,202,.10); color:#4338ca; }
+.half-btn { display:block; width:100%; margin-top:6px; text-align:center; }
 .paid-form { margin-top:14px; text-align:left; } .paid-form label { font-size:12px; font-weight:600; color:var(--text2); }
 .card.rej { border-color:var(--red); background:var(--red-soft); font-size:13px; }
 .pay-other { background:var(--surface); color:var(--accent); border:1.5px solid var(--accent); margin-top:10px; cursor:pointer; }
@@ -135,21 +136,22 @@ function rangeText(list) {
   if (!list.length) return '';
   return list.length === 1 ? shortLabel(list[0]) : shortLabel(list[0]) + ' to ' + shortLabel(list[list.length - 1]);
 }
-let paidForm = false, sending = false;
-async function sendPaid() {
-  const v = document.getElementById('paidAmt').value;
-  const amount = Math.round(parseFloat(String(v).replace(/[^\d.]/g, '')) * 100) / 100;
-  if (!(amount > 0)) { document.getElementById('paidAmt').focus(); return; }
+let sending = false;
+/* One tap: full day (the usual rent). Half day is the rare option. */
+async function sendPaid(half) {
+  const full = num(D.driver.rentAmount), amount = half ? full / 2 : full;
   if (sending) return; sending = true;
-  const pend = periods().filter(p => p.paid + p.wait < p.due);
+  // Label the next day this payment covers, e.g. "Rent 16–17 Oct" (+ "half day")
+  const next = periods().find(p => p.paid + p.wait < p.due);
+  const label = (next ? 'Rent ' + shortLabel(next) : 'Rent advance') + (half ? ' (half day)' : '');
   try {
     const res = await fetch(apiBase() + '/driver/claim', { method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + auth.token },
-      body: JSON.stringify({ amount, label: pend.length ? 'Rent ' + rangeText(pend) : 'Rent advance' }) });
+      body: JSON.stringify({ amount, label }) });
     const body = await res.json();
     if (res.status === 401 || res.status === 403) { toLogin(); return; }
     if (!res.ok) { alert(body.error || 'Could not send'); return; }
-    paidForm = false; await loadData(); flash('Sent — waiting for the owner to confirm');
+    await loadData(); flash(inr(amount) + ' sent — waiting for the owner to confirm');
   } catch { alert('No internet — please try again'); }
   finally { sending = false; }
 }
@@ -194,13 +196,9 @@ function render() {
       <div class="amt">${pending ? inr(pending) : waitAmt ? inr(waitAmt) : advance ? inr(advance) : '✓'}</div>
       <div class="sub">${pending ? pendDays.length + ' day' + (pendDays.length === 1 ? '' : 's') + ' pending · ' + pendDays.slice(0, 3).map(label).join(', ') + (pendDays.length > 3 ? '…' : '')
         : waitAmt ? 'You marked it paid — it shows as Paid once the owner confirms.' : 'Thank you! Nothing due right now.'}</div>
-      ${paidForm
-        ? `<div class="paid-form"><label>Amount you paid</label>
-             <div class="other-row"><input id="paidAmt" type="number" inputmode="decimal" value="${pending || ''}" placeholder="Amount ₹">
-               <button class="pay" style="margin:0" onclick="sendPaid()">Send</button></div>
-             <button class="more" onclick="paidForm=false;render()">Cancel</button></div>`
-        : `<button class="pay" onclick="paidForm=true;render();setTimeout(()=>document.getElementById('paidAmt').select(),50)">✓ I've paid</button>
-           <div class="note">Pay the owner by UPI as usual, then tap here and enter the amount.</div>`}
+      <button class="pay" onclick="sendPaid(false)">✓ I've paid ${inr(D.driver.rentAmount)}</button>
+      ${D.driver.rentCycle === 'daily' ? `<button class="more half-btn" onclick="sendPaid(true)">Paid half day (${inr(num(D.driver.rentAmount) / 2)})</button>` : ''}
+      <div class="note">Pay the owner by UPI as usual, then tap here.</div>
       ${D.driver.rentCycle === 'daily' ? `<div class="note">Daily rent is due at 8 PM and covers last night + today.</div>` : ''}
     </div>
 
