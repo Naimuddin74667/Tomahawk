@@ -122,10 +122,13 @@ function upiLink(amount, note) {
 }
 // Plain hyphen + no "(day off)" so every UPI app shows the note correctly
 const shortLabel = p => label({ ...p, off: [] }).replace(/[–—]/g, '-').replace(/\s+-\s+/g, '-');
+// Vehicle number first (e.g. "MH04NJ1723 Rent for 16-17 Oct") so each car's rent is easy to spot in the bank history
+const vehicleNo = () => (D.car.regNo || '').replace(/\s+/g, '').toUpperCase();
 function rentNote(pend) {
-  if (!pend.length) return 'Rent';
-  if (pend.length === 1) return 'Rent for ' + shortLabel(pend[0]);
-  return 'Rent for ' + shortLabel(pend[0]) + ' to ' + shortLabel(pend[pend.length - 1]);
+  const v = vehicleNo() ? vehicleNo() + ' ' : '';
+  if (!pend.length) return v + 'Rent';
+  if (pend.length === 1) return v + 'Rent for ' + shortLabel(pend[0]);
+  return v + 'Rent ' + shortLabel(pend[0]) + ' to ' + shortLabel(pend[pend.length - 1]);
 }
 let showOther = false;
 function payOther() {
@@ -133,7 +136,7 @@ function payOther() {
   const amt = Math.round(parseFloat(String(v).replace(/[^\d.]/g, '')) * 100) / 100;
   if (!(amt > 0)) { document.getElementById('otherAmt').focus(); return; }
   const pend = periods().filter(p => p.paid < p.due);
-  location.href = upiLink(amt, pend.length ? rentNote(pend) : 'Rent advance');
+  location.href = upiLink(amt, pend.length ? rentNote(pend) : (vehicleNo() ? vehicleNo() + ' ' : '') + 'Rent advance');
 }
 function label(p) {
   if (D.driver.rentCycle !== 'daily') return fmtRange(p.from, p.to);
