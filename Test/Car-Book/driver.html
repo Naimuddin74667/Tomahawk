@@ -42,6 +42,14 @@ body { font-family:var(--font-body); background:var(--bg); color:var(--text); fo
 .note { color:var(--text2); font-size:12px; margin-top:8px; }
 .other-row { display:grid; grid-template-columns:1fr 100px; gap:8px; margin-top:10px; }
 .other-row input { padding:14px; border:1.5px solid var(--accent); border-radius:14px; font-size:18px; font-family:inherit; background:var(--surface); min-width:0; text-align:center; }
+.manual-pay { margin-top:14px; background:var(--surface2); border-radius:12px; padding:12px; text-align:left; }
+.mp-title { font-weight:700; font-size:13px; margin-bottom:6px; }
+.mp-row { display:grid; grid-template-columns:62px 1fr auto; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border); font-size:13px; }
+.mp-row:last-of-type { border-bottom:0; }
+.mp-row span { color:var(--text2); } .mp-row b { word-break:break-all; }
+.mp-row button { border:1px solid var(--accent); background:var(--surface); color:var(--accent); border-radius:8px; padding:6px 12px; font-weight:600; font-family:inherit; font-size:13px; }
+.mp-help { color:var(--text2); font-size:12px; margin-top:6px; }
+.toast { position:fixed; bottom:30px; left:50%; transform:translateX(-50%); background:var(--text); color:var(--bg); padding:9px 16px; border-radius:10px; font-weight:600; font-size:13px; z-index:99; }
 .pay-other { background:var(--surface); color:var(--accent); border:1.5px solid var(--accent); margin-top:10px; cursor:pointer; }
 .row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 0; border-bottom:1px solid var(--border); }
 .row:last-child { border-bottom:0; }
@@ -131,6 +139,11 @@ function rentNote(pend) {
   return v + 'Rent ' + shortLabel(pend[0]) + ' to ' + shortLabel(pend[pend.length - 1]);
 }
 let showOther = false;
+function copyText(t, msg) {
+  const done = () => { const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg; document.body.appendChild(el); setTimeout(() => el.remove(), 1600); };
+  if (navigator.clipboard) navigator.clipboard.writeText(String(t)).then(done, done);
+  else { const i = document.createElement('input'); i.value = t; document.body.appendChild(i); i.select(); document.execCommand('copy'); i.remove(); done(); }
+}
 function payOther() {
   const v = document.getElementById('otherAmt').value;
   const amt = Math.round(parseFloat(String(v).replace(/[^\d.]/g, '')) * 100) / 100;
@@ -174,7 +187,14 @@ function render() {
              <button class="pay" style="margin:0" onclick="payOther()">Pay</button></div>`
         : `<button class="pay pay-other" onclick="showOther=true;render();setTimeout(()=>document.getElementById('otherAmt').focus(),50)">Pay other amount</button>`) : ''}
       ${D.upi.id ? `
-        <div class="note">Opens your UPI app. Payments show here once the owner records them.</div>` : ''}
+        <div class="manual-pay">
+          <div class="mp-title">If the Pay button shows an error</div>
+          <div class="mp-row"><span>UPI ID</span><b>${esc(D.upi.id)}</b><button onclick="copyText('${esc(D.upi.id)}','UPI ID copied')">Copy</button></div>
+          ${pending ? `<div class="mp-row"><span>Amount</span><b>${inr(pending)}</b><button onclick="copyText('${pending}','Amount copied')">Copy</button></div>` : ''}
+          <div class="mp-row"><span>Note</span><b>${esc(rentNote(pendDays))}</b><button onclick="copyText(${JSON.stringify(rentNote(pendDays)).replace(/"/g, '&quot;')},'Note copied')">Copy</button></div>
+          <div class="mp-help">Open GPay / PhonePe / Paytm → Pay UPI ID → paste the UPI ID → enter the amount → pay.</div>
+        </div>
+        <div class="note">Payments show here once the owner records them.</div>` : ''}
       ${D.driver.rentCycle === 'daily' ? `<div class="note">Daily rent is due at 8 PM and covers last night + today.</div>` : ''}
     </div>
 
