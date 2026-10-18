@@ -221,6 +221,9 @@ body.readonly .lrow.click { cursor:default; }
 .logo-img.lg { width:40px; height:40px; border-radius:11px; margin-right:0; }
 .pin-box { font-family:var(--font-display); font-size:38px; font-weight:700; letter-spacing:6px; text-align:center; background:var(--accent-soft); color:var(--accent); border-radius:14px; padding:18px 10px; }
 .lrow .r .btn + .btn { margin-left:0; }
+.veh-switch { display:flex; align-items:center; gap:8px; background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:6px 10px; margin-bottom:14px; box-shadow:var(--shadow); }
+.veh-switch select { flex:1; border:0; background:transparent; color:var(--text); font-size:15px; font-weight:600; padding:6px 2px; font-family:inherit; min-width:0; }
+.veh-switch select:focus { outline:none; }
 .due-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; background:var(--red-soft); border-radius:12px; padding:12px 14px; margin-bottom:var(--gap); font-size:14px; }
 
 @media (max-width:820px) {
@@ -295,11 +298,16 @@ const PAY_MODES = ['Online','Cash','Other'];
 const RENT_DUE_HOUR = 20;   // daily rent is collected at 8 PM (covers last night + today)
 const CYCLES = { daily:'Daily', weekly:'Weekly', monthly:'Monthly' };
 
+function defaultVehicle(id) {
+  return { id: id || uid(), name:'', regNo:'', purchaseDate:'', price:0, downPayment:0, downPaidBy:'',
+           loanAmount:0, netDisbursed:0, irr:0, emi:0, tenure:0, emiStartDate:'', emiPaidBy:'rent' };
+}
 function defaultData() {
   const me = uid(), uncle = uid();
   return {
-    car: { name:'Maruti Dzire Tour S (CNG)', regNo:'', purchaseDate:'', price:830000, downPayment:200000,
-           downPaidBy:uncle, loanAmount:622128, netDisbursed:603000, irr:14.01, emi:21314, tenure:36, emiStartDate:'2026-11-05' },
+    vehicles: [ Object.assign(defaultVehicle('v1'), { name:'Maruti Dzire Tour S (CNG)', price:830000, downPayment:200000,
+           downPaidBy:uncle, loanAmount:622128, netDisbursed:603000, irr:14.01, emi:21314, tenure:36, emiStartDate:'2026-11-05' }) ],
+    settings: { upiId:'', upiName:'' },
     partners: [ { id:me, name:'Me', share:50 }, { id:uncle, name:'Uncle', share:50 } ],
     drivers: [], payments: [], expenses: [], transfers: [], offs: [], rentToAccount: true
   };
@@ -313,26 +321,35 @@ function load() {
 }
 /* Bring any saved copy (this phone's or the cloud's) up to the current format. */
 function migrate(parsed) {
-  {
-    {
-      const d = Object.assign(defaultData(), parsed);
-      if (d.car.price === 840000 && !num(d.car.emi)) Object.assign(d.car, { price:830000, emi:21314 });
-      // Apply the confirmed KMPL scheme to earlier placeholder values (only if not edited by hand)
-      if ([630000, 640000].includes(num(d.car.loanAmount))) d.car.loanAmount = 622128;
-      if (d.car.netDisbursed === undefined) d.car.netDisbursed = 603000;
-      if (d.car.irr === undefined) d.car.irr = 14.01;
-      if (!d.car.emiStartDate) d.car.emiStartDate = '2026-11-05';
-      // Category renamed: "Registration & Accessories" → "Accessories"
-      d.expenses.forEach(e => { if (e.category === 'Registration & Accessories') e.category = 'Accessories'; });
-      // Rent belongs to the business account, not a partner (one-time move of earlier entries)
-      if (!parsed.rentToAccount) { d.payments.forEach(x => x.receivedBy = 'account'); d.rentToAccount = true; }
-      // Uncle paid the ₹2L upfront — fill it in if it was never set
-      if (!d.car.downPaidBy) { const u = d.partners.find(p => /uncle/i.test(p.name)); if (u) d.car.downPaidBy = u.id; }
-      // Every driver gets a private code for their view-only link
-      d.drivers.forEach(x => { if (!x.accessCode) x.accessCode = newCode(); });
-      return d;
-    }
+  const d = Object.assign(defaultData(), parsed);
+  // ── Older single-car format: fix earlier placeholder values, then turn the car into Vehicle 1
+  if (d.car) {
+    const c = d.car;
+    if (c.price === 840000 && !num(c.emi)) Object.assign(c, { price:830000, emi:21314 });
+    if ([630000, 640000].includes(num(c.loanAmount))) c.loanAmount = 622128;
+    if (c.netDisbursed === undefined) c.netDisbursed = 603000;
+    if (c.irr === undefined) c.irr = 14.01;
+    if (!c.emiStartDate) c.emiStartDate = '2026-11-05';
+    if (!c.downPaidBy) { const u = d.partners.find(p => /uncle/i.test(p.name)); if (u) c.downPaidBy = u.id; }
+    if (!parsed.vehicles || !parsed.vehicles.length) d.vehicles = [Object.assign(defaultVehicle('v1'), c, { id: 'v1' })];
+    if (!parsed.settings) d.settings = { upiId: c.upiId || '', upiName: c.upiName || '' };
+    delete d.car;
   }
+  d.vehicles.forEach(v => { delete v.upiId; delete v.upiName; if (!v.emiPaidBy) v.emiPaidBy = 'rent'; });
+  d.settings = Object.assign({ upiId:'', upiName:'' }, d.settings || {});
+  // ── Every record belongs to a vehicle (by its ID, so editing a number plate never breaks links)
+  const v0 = d.vehicles[0].id;
+  d.drivers.forEach(x => { if (!x.vehicleId || !d.vehicles.some(v => v.id === x.vehicleId)) x.vehicleId = v0; });
+  d.payments.forEach(x => { if (!x.vehicleId) { const dr = d.drivers.find(y => y.id === x.driverId); x.vehicleId = dr ? dr.vehicleId : v0; } });
+  d.expenses.forEach(x => { if (!x.vehicleId) x.vehicleId = v0; });
+  d.offs.forEach(x => { if (!x.vehicleId) { const dr = d.drivers.find(y => y.id === x.driverId); x.vehicleId = dr ? dr.vehicleId : v0; } });
+  d.emiNoAuto = (d.emiNoAuto || []).map(n => typeof n === 'number' ? v0 + ':' + n : n);
+  // Category renamed: "Registration & Accessories" → "Accessories"
+  d.expenses.forEach(e => { if (e.category === 'Registration & Accessories') e.category = 'Accessories'; });
+  // Rent belongs to the business account, not a partner (one-time move of earlier entries)
+  if (!parsed.rentToAccount) { d.payments.forEach(x => x.receivedBy = 'account'); d.rentToAccount = true; }
+  d.drivers.forEach(x => { if (!x.accessCode) x.accessCode = newCode(); });
+  return d;
 }
 function newCode() { const a = 'abcdefghjkmnpqrstuvwxyz23456789'; let s = ''; for (let i = 0; i < 10; i++) s += a[Math.floor(Math.random() * a.length)]; return s; }
 let saveTimer = null;
@@ -535,7 +552,7 @@ function openPeriod(driverId, day) {
     halves.forEach((x, i) => setOff(driverId, x.date, x.half, !ran[i]));
     const per = driverLedger(drv).periods.find(p => p.from === day);
     const toPay = per ? Math.max(0, per.due - per.paid) : 0;
-    if (received && toPay > 0) DB.payments.push({ id: uid(), driverId, date: todayStr(), amount: toPay, mode: 'Online',
+    if (received && toPay > 0) DB.payments.push({ id: uid(), driverId, vehicleId: vehOfDriver(drv), date: todayStr(), amount: toPay, mode: 'Online',
       receivedBy: ACCOUNT, note: 'Rent for ' + periodLabel(drv, { from: day }) });
     save(); PAGES[currentPage](); toast('Saved');
     if (pendingRent().length && document.getElementById('modal').dataset.from === 'prompt') openRentConfirm(); else closeModal();
@@ -551,40 +568,65 @@ function periodStatus(p) {
   return '<span class="badge b-due">Pending</span>';
 }
 
-/* EMI schedule: one row per month from first EMI date. */
-function emiSchedule() {
-  const c = DB.car; if (!c.emiStartDate || !c.tenure) return [];
-  const start = parseYmd(c.emiStartDate);
-  return Array.from({ length: num(c.tenure) }, (_, i) => {
+/* ════════════ Vehicles ════════════
+   The top selector picks "All vehicles" or one vehicle; every page shows that selection.
+   Records point to a vehicle by its ID (not the number plate). */
+const SEL_KEY = 'mnscar_vehicle_v1';
+let SEL = (() => { try { return localStorage.getItem(SEL_KEY) || 'all'; } catch { return 'all'; } })();
+const vehById = id => DB.vehicles.find(v => v.id === id) || DB.vehicles[0];
+const selValid = () => DB.vehicles.some(v => v.id === SEL);
+const selVehicles = () => selValid() ? DB.vehicles.filter(v => v.id === SEL) : DB.vehicles;
+const curVeh = () => selValid() ? vehById(SEL) : (DB.vehicles.length === 1 ? DB.vehicles[0] : null);   // null = "All" with several
+const vehOfDriver = d => (d && d.vehicleId) || DB.vehicles[0].id;
+function vidOf(x) { return x.vehicleId || (x.driverId ? vehOfDriver(DB.drivers.find(d => d.id === x.driverId)) : DB.vehicles[0].id); }
+const inSel = x => !selValid() || vidOf(x) === SEL;
+const selDrivers = () => DB.drivers.filter(d => !selValid() || vehOfDriver(d) === SEL);
+const vehLabel = v => v ? (v.regNo || v.name || 'Vehicle') : '';
+const multiVeh = () => DB.vehicles.length > 1;
+function setSel(id) { SEL = id; try { localStorage.setItem(SEL_KEY, id); } catch {} PAGES[currentPage](); window.scrollTo(0, 0); }
+function vehSwitcher() {
+  if (!multiVeh()) return '';
+  return `<div class="veh-switch"><span>🚗</span><select onchange="setSel(this.value)">
+    <option value="all">All vehicles (${DB.vehicles.length})</option>
+    ${DB.vehicles.map(v => `<option value="${v.id}" ${v.id === SEL ? 'selected' : ''}>${esc(vehLabel(v))}${v.regNo && v.name ? ' · ' + esc(v.name) : ''}</option>`).join('')}</select></div>`;
+}
+const vehTag = id => multiVeh() && !selValid() ? ' · ' + esc(vehLabel(vehById(id))) : '';
+
+/* EMI schedule for one vehicle: one row per month from its first EMI date. */
+function emiSchedule(v) {
+  v = v || curVeh() || DB.vehicles[0];
+  if (!v.emiStartDate || !v.tenure) return [];
+  const start = parseYmd(v.emiStartDate);
+  return Array.from({ length: num(v.tenure) }, (_, i) => {
     const date = ymd(addMonths(start, i));
-    const exp = DB.expenses.find(e => e.category === 'EMI' && num(e.emiNo) === i + 1);
-    return { no: i + 1, date, amount: num(c.emi), expense: exp };
+    const exp = DB.expenses.find(e => e.category === 'EMI' && num(e.emiNo) === i + 1 && vidOf(e) === v.id);
+    return { no: i + 1, date, amount: num(v.emi), expense: exp };
   });
 }
 
-/* Real cost of the car = down payment + every EMI over the full tenure.
-   Interest = that total − cash price. */
-function carCost() {
-  const c = DB.car;
-  const total = num(c.downPayment) + num(c.emi) * num(c.tenure);
-  return { total, interest: Math.max(0, total - num(c.price)) };
+/* Real cost of a vehicle = upfront + every EMI over the full tenure. Interest = that total − cash price. */
+function carCost(v) {
+  v = v || curVeh() || DB.vehicles[0];
+  const total = num(v.downPayment) + num(v.emi) * num(v.tenure);
+  return { total, interest: Math.max(0, total - num(v.price)) };
 }
 
 function totals() {
-  const rent = sum(DB.payments, p => num(p.amount));
-  const emiPaid = sum(DB.expenses.filter(e => e.category === 'EMI'), e => num(e.amount));
-  const running = sum(DB.expenses.filter(e => e.category !== 'EMI'), e => num(e.amount));
-  const down = num(DB.car.downPayment);
+  const vs = selVehicles();
+  const pays = DB.payments.filter(inSel), exps = DB.expenses.filter(inSel);
+  const rent = sum(pays, p => num(p.amount));
+  const emiPaid = sum(exps.filter(e => e.category === 'EMI'), e => num(e.amount));
+  const running = sum(exps.filter(e => e.category !== 'EMI'), e => num(e.amount));
+  const down = sum(vs, v => num(v.downPayment));
   const cashOut = down + emiPaid + running;
-  const sched = emiSchedule();
-  const emisLeft = sched.filter(r => !r.expense).length;
-  const loanLeft = emisLeft * num(DB.car.emi);
-  const pending = sum(DB.drivers, d => Math.max(0, driverLedger(d).balance));
-  const cc = carCost();
-  // Break-even = full car cost (incl. interest) + running costs so far, all covered by rent
-  const toBreakEven = Math.max(0, cc.total + running - rent);
+  const emisLeft = sum(vs, v => emiSchedule(v).filter(r => !r.expense).length);
+  const loanLeft = sum(vs, v => emiSchedule(v).filter(r => !r.expense).length * num(v.emi));
+  const pending = sum(selDrivers(), d => Math.max(0, driverLedger(d).balance));
+  const carTotal = sum(vs, v => carCost(v).total), interest = sum(vs, v => carCost(v).interest), price = sum(vs, v => num(v.price));
+  // Break-even = full vehicle cost (incl. interest) + running costs so far, all covered by rent
+  const toBreakEven = Math.max(0, carTotal + running - rent);
   return { rent, emiPaid, running, down, cashOut, net: rent - cashOut, operating: rent - running,
-           emisLeft, loanLeft, pending, carTotal: cc.total, interest: cc.interest, toBreakEven };
+           emisLeft, loanLeft, pending, carTotal, interest, price, toBreakEven };
 }
 
 /* ════════════ Router ════════════ */
@@ -595,18 +637,18 @@ function go(page) {
   PAGES[page](); window.scrollTo(0, 0);
 }
 document.querySelectorAll('.nav-item').forEach(b => b.addEventListener('click', () => go(b.dataset.page)));
-function render(html) { document.getElementById('page').innerHTML = testBanner() + html; }
+function render(html) { document.getElementById('page').innerHTML = testBanner() + vehSwitcher() + html; }
 function refresh() { save(); PAGES[currentPage](); }
 
 /* ════════════ Pages ════════════ */
 const PAGES = {
 
 dashboard() {
-  const t = totals(), c = DB.car;
+  const t = totals(), c = curVeh();
   const recovered = t.cashOut > 0 ? Math.min(100, (t.rent / t.cashOut) * 100) : 0;
-  const setupMissing = !isViewer() && !c.purchaseDate || !c.emi || !c.emiStartDate || !DB.drivers.length;
+  const setupMissing = !isViewer() && (selVehicles().some(v => !v.purchaseDate || !v.emi || !v.emiStartDate) || !selDrivers().length);
   render(`
-    <div class="page-head"><div><h2>Dashboard</h2><div class="sub">${esc(c.name)}${c.regNo ? ' · ' + esc(c.regNo) : ''}</div></div>
+    <div class="page-head"><div><h2>Dashboard</h2><div class="sub">${c ? esc(c.name) + (c.regNo ? ' · ' + esc(c.regNo) : '') : 'All ' + DB.vehicles.length + ' vehicles'}</div></div>
       <div class="btn-row desk-only"><button class="btn primary" onclick="openPayment()">+ Rent received</button><button class="btn" onclick="openExpense()">+ Expense</button></div></div>
     ${dueBanner()}
     ${setupMissing ? `<div class="note">Finish the <a href="#" onclick="go('setup');return false" style="color:var(--accent)">Setup</a> page (purchase date, EMI amount, first EMI date and the driver) so every number here is accurate.</div>` : ''}
@@ -616,7 +658,7 @@ dashboard() {
       ${kpi('Total spent so far', inr(t.cashOut), 'neg', 'Down ' + inr(t.down) + ' · EMI ' + inr(t.emiPaid) + ' · Other ' + inr(t.running))}
       ${kpi('Net cash so far', inr(t.net), t.net >= 0 ? 'pos' : 'neg', 'Rent minus everything spent')}
       ${kpi('Operating profit', inr(t.operating), t.operating >= 0 ? 'pos' : 'neg', 'Rent minus running costs (no EMI)')}
-      ${kpi('Car cost (incl. interest)', inr(t.carTotal), 'amb', 'Cash price ' + inr(c.price) + ' + extra for loan ' + inr(t.interest))}
+      ${kpi(c ? 'Car cost (incl. interest)' : 'Vehicles cost (incl. interest)', inr(t.carTotal), 'amb', 'Cash price ' + inr(t.price) + ' + extra for loan ' + inr(t.interest))}
       ${kpi('Loan remaining', inr(t.loanLeft), '', t.emisLeft + ' EMIs left (incl. interest)')}
     </div>
     <div class="grid two section">
@@ -625,7 +667,7 @@ dashboard() {
         <div class="muted" style="font-size:13px">Rent collected ${inr(t.rent)} of ${inr(t.cashOut)} spent so far</div>
         <div class="bar"><span style="width:${recovered.toFixed(1)}%"></span></div>
         <div style="margin-top:14px;font-size:13px;line-height:1.6">
-          Full business cost (car ${inr(t.carTotal)} + other costs ${inr(t.running)}): <b>${inr(t.carTotal + t.running)}</b><br>
+          Full business cost (${c ? 'car' : 'vehicles'} ${inr(t.carTotal)} + other costs ${inr(t.running)}): <b>${inr(t.carTotal + t.running)}</b><br>
           ${t.toBreakEven > 0 ? 'Rent still needed to break even: <b class="neg">' + inr(t.toBreakEven) + '</b>' : '<b class="pos">Broken even — everything from here is profit</b>'}</div>
       </div>
       <div class="card"><h3>Last 6 months</h3>${monthChart()}</div>
@@ -637,14 +679,14 @@ dashboard() {
 },
 
 rent() {
-  const blocks = DB.drivers.map(d => {
+  const blocks = selDrivers().map(d => {
     const L = driverLedger(d);
     const all = window._rentAll && window._rentAll[d.id];
     const shown = all ? L.periods.slice().reverse() : L.periods.slice(-6).reverse();
     return `<div class="card section">
       <div class="driver-head">
         <div><h3 style="margin:0">${esc(d.name)} ${d.endDate ? '<span class="badge b-up">Left ' + fmtDate(d.endDate) + '</span>' : ''}</h3>
-          <div class="meta">${inr(d.rentAmount)} ${CYCLES[d.rentCycle].toLowerCase()} · since ${fmtDate(d.startDate)}${d.phone ? ' · <a href="tel:' + esc(d.phone) + '">' + esc(d.phone) + '</a>' : ''}</div></div>
+          <div class="meta">${multiVeh() ? '<b>' + esc(vehLabel(vehById(d.vehicleId))) + '</b> · ' : ''}${inr(d.rentAmount)} ${CYCLES[d.rentCycle].toLowerCase()} · since ${fmtDate(d.startDate)}${d.phone ? ' · <a href="tel:' + esc(d.phone) + '">' + esc(d.phone) + '</a>' : ''}</div></div>
         <div class="btn-row actions">
           <button class="btn primary sm" onclick="openPayment(null,'${d.id}')">+ Payment</button>
           <button class="btn sm" onclick="shareWhatsApp('${d.id}')">WhatsApp</button>
@@ -672,8 +714,8 @@ rent() {
 
 expenses() {
   const f = window._expFilter || { cat:'', month:'' };
-  const months = [...new Set(DB.expenses.map(e => e.date.slice(0,7)))].sort().reverse();
-  const list = DB.expenses.filter(e => (!f.cat || e.category === f.cat) && (!f.month || e.date.startsWith(f.month)))
+  const months = [...new Set(DB.expenses.filter(inSel).map(e => e.date.slice(0,7)))].sort().reverse();
+  const list = DB.expenses.filter(e => inSel(e) && (!f.cat || e.category === f.cat) && (!f.month || e.date.startsWith(f.month)))
                           .sort((a,b) => b.date.localeCompare(a.date));
   const byCat = {}; list.forEach(e => byCat[e.category] = (byCat[e.category] || 0) + num(e.amount));
   render(`<div class="page-head"><div><h2>Expenses</h2><div class="sub">Every rupee spent on the car</div></div>
@@ -685,7 +727,7 @@ expenses() {
     <div class="grid two">
       <div class="card"><h3>Entries · ${inr(sum(list, e => num(e.amount)))}</h3><div class="list">
         ${list.map(e => lrow(esc(e.category) + (e.category === 'EMI' && e.emiNo ? ' #' + e.emiNo : ''),
-            fmtDate(e.date) + (e.paidBy ? ' · ' + esc(partnerName(e.paidBy)) : '') + (e.note ? ' · ' + esc(e.note) : ''),
+            fmtDate(e.date) + vehTag(vidOf(e)) + (e.paidBy ? ' · ' + esc(partnerName(e.paidBy)) : '') + (e.note ? ' · ' + esc(e.note) : ''),
             inr(e.amount), '', `openExpense('${e.id}')`)).join('') || '<div class="empty">No expenses</div>'}
       </div></div>
       <div class="card"><h3>By category</h3><div class="list">
@@ -695,34 +737,37 @@ expenses() {
 },
 
 loan() {
-  const c = DB.car, s = emiSchedule(), paid = s.filter(r => r.expense).length;
-  const all = window._loanAll;
-  // By default show anything unpaid & due, plus the next 3 upcoming; "Show all" lists every EMI.
-  const today = todayStr();
-  let rows = s;
-  if (!all) { const due = s.filter(r => !r.expense && r.date <= today); const up = s.filter(r => !r.expense && r.date > today).slice(0, 3); rows = [...due, ...up]; }
-  render(`<div class="page-head"><div><h2>Loan</h2><div class="sub">Loan ${inr(c.loanAmount)}${num(c.irr) ? ' @ ' + c.irr + '%' : ''} · ${inr(c.emi)} × ${c.tenure} months · interest ${inr(Math.max(0, num(c.emi) * num(c.tenure) - num(c.loanAmount)))}</div></div>
-      <button class="btn" onclick="go('setup')">Edit loan</button></div>
-    ${!s.length ? '<div class="card empty">Add the EMI amount and first EMI date on the Setup page to see the schedule.</div>' : `
-    <div class="card">
+  const all = window._loanAll, today = todayStr();
+  const blocks = selVehicles().map(c => {
+    const s = emiSchedule(c), paid = s.filter(r => r.expense).length;
+    // By default show anything unpaid & due, plus the next 3 upcoming; "Show all" lists every EMI.
+    let rows = s;
+    if (!all) { const due = s.filter(r => !r.expense && r.date <= today); const up = s.filter(r => !r.expense && r.date > today).slice(0, 3); rows = [...due, ...up]; }
+    const head = `<div style="margin-bottom:10px"><h3 style="margin:0">${esc(vehLabel(c))}${c.regNo && c.name ? ' <span class="muted" style="font-weight:500;font-size:13px">· ' + esc(c.name) + '</span>' : ''}</h3>
+      <div class="muted" style="font-size:12px;margin-top:2px">Loan ${inr(c.loanAmount)}${num(c.irr) ? ' @ ' + c.irr + '%' : ''} · ${inr(c.emi)} × ${c.tenure} months · interest ${inr(Math.max(0, num(c.emi) * num(c.tenure) - num(c.loanAmount)))}</div></div>`;
+    if (!s.length) return `<div class="card section">${head}<div class="empty">Add the EMI amount and first EMI date in Setup to see the schedule.</div></div>`;
+    return `<div class="card section">${head}
       <div style="display:flex;justify-content:space-between;font-size:13px"><span><b>${paid}</b> paid</span><span class="muted">${s.length - paid} left</span></div>
       <div class="bar" style="margin:8px 0 14px"><span style="width:${(paid / s.length * 100).toFixed(1)}%"></span></div>
       <div class="list">${rows.map(r => {
         const late = !r.expense && r.date < today;
         const right = r.expense ? '<span class="badge b-paid">Paid</span>'
-          : `<button class="btn sm ${late ? 'primary' : ''}" onclick="event.stopPropagation();markEmiPaid(${r.no})">Mark paid</button>`;
+          : `<button class="btn sm ${late ? 'primary' : ''}" onclick="event.stopPropagation();markEmiPaid(${r.no},'${c.id}')">Mark paid</button>`;
         return lrow('EMI #' + r.no + (late ? ' <span class="badge b-due">Overdue</span>' : ''),
           fmtDate(r.date) + (r.expense ? ' · paid ' + fmtDate(r.expense.date) : ''),
           inr(r.expense ? r.expense.amount : r.amount), right, r.expense ? `openExpense('${r.expense.id}')` : '');
       }).join('') || '<div class="empty">All EMIs are paid 🎉</div>'}</div>
       <button class="link-btn" onclick="window._loanAll=!window._loanAll;PAGES.loan()">${all ? 'Show due & next only' : 'Show all ' + s.length + ' EMIs'}</button>
-    </div>`}`);
+    </div>`;
+  }).join('');
+  render(`<div class="page-head"><div><h2>Loan</h2><div class="sub">${multiVeh() && !selValid() ? 'All vehicles' : 'EMI schedule'}</div></div>
+      <button class="btn" onclick="go('setup')">Edit loan</button></div>${blocks}`);
 },
 
 partners() {
   const rows = partnerSettlement();
   const tr = (DB.transfers || []).slice().sort((a,b) => b.date.localeCompare(a.date));
-  render(`<div class="page-head"><div><h2>Partners</h2><div class="sub">Who put in what, and who owes whom</div></div>
+  render(`<div class="page-head"><div><h2>Partners</h2><div class="sub">Who put in what, and who owes whom${multiVeh() ? ' · all vehicles together' : ''}</div></div>
       <button class="btn" onclick="go('setup')">Edit partners</button></div>
     <div class="grid two">${rows.map(r => `<div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -751,17 +796,27 @@ partners() {
 },
 
 setup() {
-  const c = DB.car;
+  const c = editVeh();
   if (isViewer()) {
     render(`<div class="page-head"><div><h2>Account</h2><div class="sub">View-only access</div></div></div>
       <div class="card" style="max-width:520px">${loginCardInner()}</div>`);
     return;
   }
   const pOpts = DB.partners.map(p => `<option value="${p.id}" ${p.id === c.downPaidBy ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
-  render(`<div class="page-head"><div><h2>Setup</h2><div class="sub">Car, loan, partners, drivers and backup</div></div></div>
+  const pickFirst = multiVeh() && !selValid();
+  render(`<div class="page-head"><div><h2>Setup</h2><div class="sub">Vehicles, loans, partners, drivers and logins</div></div></div>
     <div class="grid two">
-      <div class="card"><h3>Car &amp; loan</h3>
-        ${setupField('name','Car','text')}${setupField('regNo','Registration no.','text')}
+      <div>
+      <div class="card"><h3>Vehicles</h3>
+        <div class="list">${DB.vehicles.map(v => lrow(esc(vehLabel(v)) + (v.id === c.id && !pickFirst ? ' <span class="badge b-paid">Editing</span>' : ''),
+          esc(v.name || '') + (v.emi ? ' · EMI ' + inr(v.emi) : ''), '',
+          (v.id === c.id && !pickFirst ? '' : `<button class="btn sm" onclick="setSel('${v.id}')">Edit</button>`) +
+          (multiVeh() ? `<button class="btn sm danger" onclick="removeVehicle('${v.id}')">✕</button>` : ''))).join('')}</div>
+        <button class="btn sm primary" style="margin-top:10px" onclick="openVehicleForm()">+ Add vehicle</button>
+      </div>
+      ${pickFirst ? `<div class="card section empty">Pick a vehicle above (Edit) to change its details.</div>` : `
+      <div class="card section"><h3>Vehicle &amp; loan — <span class="veh-name-live">${esc(vehLabel(c))}</span></h3>
+        ${setupField('regNo','Registration no.','text')}${setupField('name','Model','text')}
         ${setupField('purchaseDate','Purchase date','date')}${setupField('price','Cash price (₹)','number','What the car costs if bought in cash.')}
         ${setupField('downPayment','Upfront paid (₹)','number','Down payment + tax, permit, registration, insurance — everything paid at purchase.')}
         <div class="field"><label>Upfront paid by</label><select onchange="setCar('downPaidBy',this.value)"><option value="">—</option>${pOpts}</select></div>
@@ -771,6 +826,7 @@ setup() {
           ${payerOptions().filter(o => o[0]).map(([v,l]) => `<option value="${v}" ${(c.emiPaidBy || FROM_RENT) === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
           <div class="help">Each EMI is marked paid automatically the day after it's due, using this. Tap an EMI to change who paid it.</div></div>
         <div class="note" id="costNote" style="margin:4px 0 0">${costNoteHtml()}</div>
+      </div>`}
       </div>
       <div>
         <div class="card"><h3>Partners</h3>
@@ -784,14 +840,14 @@ setup() {
         </div>
         <div class="card section"><h3>Drivers</h3>
           ${DB.drivers.map(d => `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
-            <div><b>${esc(d.name)}</b><div class="muted" style="font-size:12px">${inr(d.rentAmount)} ${CYCLES[d.rentCycle].toLowerCase()} from ${fmtDate(d.startDate)}</div></div>
+            <div><b>${esc(d.name)}</b><div class="muted" style="font-size:12px">${multiVeh() ? esc(vehLabel(vehById(d.vehicleId))) + ' · ' : ''}${inr(d.rentAmount)} ${CYCLES[d.rentCycle].toLowerCase()} from ${fmtDate(d.startDate)}</div></div>
             <div class="btn-row"><button class="btn sm" onclick="shareDriverLink('${d.id}')">Send login</button><button class="btn sm" onclick="openDriver('${d.id}')">Edit</button></div></div>`).join('') || '<div class="muted">No driver yet.</div>'}
           <button class="btn sm" style="margin-top:10px" onclick="openDriver()">+ Driver</button>
         </div>
         <div class="card section">${loginCardInner()}</div>
         <div class="card section"><h3>UPI for driver payments</h3>
-          <div class="field"><label>UPI ID</label><input placeholder="name@bank" value="${esc(c.upiId || '')}" onchange="setCar('upiId',this.value.trim())"></div>
-          <div class="field"><label>Name shown in UPI</label><input placeholder="MNS Tours and Travels" value="${esc(c.upiName || '')}" onchange="setCar('upiName',this.value.trim())"></div>
+          <div class="field"><label>UPI ID</label><input placeholder="name@bank" value="${esc(DB.settings.upiId || '')}" onchange="setSetting('upiId',this.value.trim())"></div>
+          <div class="field"><label>Name shown in UPI</label><input placeholder="MNS Tours and Travels" value="${esc(DB.settings.upiName || '')}" onchange="setSetting('upiName',this.value.trim())"></div>
           <div class="help" style="font-size:11px;color:var(--text2)">The driver's "Pay now" button opens his UPI app with this ID and the pending amount.</div>
         </div>
         <div class="card section"><h3>Backup</h3>
@@ -817,8 +873,8 @@ function monthChart() {
   const now = new Date(), months = [];
   for (let i = 5; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); months.push(ymd(d).slice(0,7)); }
   const data = months.map(m => ({ m,
-    in: sum(DB.payments.filter(p => p.date.startsWith(m)), p => num(p.amount)),
-    out: sum(DB.expenses.filter(e => e.date.startsWith(m)), e => num(e.amount)) }));
+    in: sum(DB.payments.filter(p => inSel(p) && p.date.startsWith(m)), p => num(p.amount)),
+    out: sum(DB.expenses.filter(e => inSel(e) && e.date.startsWith(m)), e => num(e.amount)) }));
   const max = Math.max(1, ...data.map(d => Math.max(d.in, d.out)));
   return `<div class="chart">${data.map(d => `<div class="col" title="${monthLabel(d.m)}: rent ${inr(d.in)}, spent ${inr(d.out)}">
       <div class="bars"><div class="b in" style="height:${d.in / max * 100}%"></div><div class="b out" style="height:${d.out / max * 100}%"></div></div>
@@ -826,19 +882,19 @@ function monthChart() {
     <div class="legend"><span><i style="background:var(--green)"></i>Rent</span><span><i style="background:var(--red)"></i>Spent (incl. EMI)</span></div>`;
 }
 function driverSummaryTable() {
-  if (!DB.drivers.length) return '<div class="empty">No driver yet</div>';
-  return '<div class="list">' + DB.drivers.map(d => { const L = driverLedger(d);
-    return lrow(esc(d.name), 'Paid ' + inr(L.paid),
+  if (!selDrivers().length) return '<div class="empty">No driver yet</div>';
+  return '<div class="list">' + selDrivers().map(d => { const L = driverLedger(d);
+    return lrow(esc(d.name), (multiVeh() ? esc(vehLabel(vehById(d.vehicleId))) + ' · ' : '') + 'Paid ' + inr(L.paid),
       L.balance > 0 ? '<span class="neg">' + inr(L.balance) + '</span>' : '', L.balance > 0 ? '<span class="badge b-due">Pending</span>' : '<span class="badge b-paid">Clear</span>', "go('rent')");
   }).join('') + '</div>';
 }
 function recentActivity() {
   const items = [
-    ...DB.payments.map(p => ({ date:p.date, txt:'Rent · ' + driverName(p.driverId), amt:num(p.amount), id:p.id, kind:'p' })),
-    ...DB.expenses.map(e => ({ date:e.date, txt:e.category + (e.note ? ' · ' + e.note : ''), amt:-num(e.amount), id:e.id, kind:'e' }))
+    ...DB.payments.filter(inSel).map(p => ({ date:p.date, txt:'Rent · ' + driverName(p.driverId), amt:num(p.amount), id:p.id, kind:'p', v:vidOf(p) })),
+    ...DB.expenses.filter(inSel).map(e => ({ date:e.date, txt:e.category + (e.note ? ' · ' + e.note : ''), amt:-num(e.amount), id:e.id, kind:'e', v:vidOf(e) }))
   ].sort((a,b) => b.date.localeCompare(a.date)).slice(0, 8);
   if (!items.length) return '<div class="empty">Nothing recorded yet</div>';
-  return '<div class="list">' + items.map(i => lrow(esc(i.txt), fmtDate(i.date),
+  return '<div class="list">' + items.map(i => lrow(esc(i.txt), fmtDate(i.date) + vehTag(i.v),
     '<span class="' + (i.amt >= 0 ? 'pos' : 'neg') + '">' + (i.amt >= 0 ? '+' : '−') + inr(Math.abs(i.amt)) + '</span>', '',
     (i.kind === 'p' ? 'openPayment' : 'openExpense') + "('" + i.id + "')")).join('') + '</div>';
 }
@@ -876,7 +932,7 @@ function partnerSettlement() {
   const T = DB.transfers || [];
   const settles = T.filter(t => t.type === 'settle'), withdraws = T.filter(t => t.type === 'withdraw');
   const rows = DB.partners.map(p => {
-    const paidOut = (DB.car.downPaidBy === p.id ? num(DB.car.downPayment) : 0)
+    const paidOut = sum(DB.vehicles.filter(v => v.downPaidBy === p.id), v => num(v.downPayment))
                   + sum(DB.expenses.filter(e => e.paidBy === p.id), e => num(e.amount));
     const rentKept = sum(DB.payments.filter(x => x.receivedBy === p.id), x => num(x.amount));
     const profitTaken = sum(withdraws.filter(t => t.to === p.id), t => num(t.amount));
@@ -923,24 +979,28 @@ function openTransfer(id, type) {
 /* Available balance = money that should be in the car's account right now:
    rent received − EMIs/expenses paid "From rent" − profit taken out. */
 const inAccount = x => !DB.partners.some(p => p.id === x.receivedBy);
+/* One business account for all vehicles. With one vehicle selected, shows just that vehicle's share of it
+   (profit taken out is business-wide, so it only appears under "All vehicles"). */
 function accountBalance() {
-  const rentIn = sum(DB.payments.filter(inAccount), p => num(p.amount));
-  const emiOut = sum(DB.expenses.filter(e => e.paidBy === FROM_RENT && e.category === 'EMI'), e => num(e.amount));
-  const otherOut = sum(DB.expenses.filter(e => e.paidBy === FROM_RENT && e.category !== 'EMI'), e => num(e.amount));
-  const profitOut = sum((DB.transfers || []).filter(t => t.type === 'withdraw'), t => num(t.amount));
+  const rentIn = sum(DB.payments.filter(x => inAccount(x) && inSel(x)), p => num(p.amount));
+  const emiOut = sum(DB.expenses.filter(e => inSel(e) && e.paidBy === FROM_RENT && e.category === 'EMI'), e => num(e.amount));
+  const otherOut = sum(DB.expenses.filter(e => inSel(e) && e.paidBy === FROM_RENT && e.category !== 'EMI'), e => num(e.amount));
+  const profitOut = selValid() ? 0 : sum((DB.transfers || []).filter(t => t.type === 'withdraw'), t => num(t.amount));
   return { rentIn, emiOut, otherOut, profitOut, balance: rentIn - emiOut - otherOut - profitOut };
 }
 function balanceCard() {
   const b = accountBalance();
-  const next = emiSchedule().find(r => !r.expense);
+  // Next EMI across the selected vehicles (soonest first)
+  const next = selVehicles().map(v => ({ v, r: emiSchedule(v).find(r => !r.expense) })).filter(x => x.r)
+    .sort((a, c) => a.r.date.localeCompare(c.r.date))[0];
   let nextLine = '';
   if (next) {
-    const gap = b.balance - next.amount;
-    nextLine = `<div class="bal-next">Next EMI <b>${inr(next.amount)}</b> on ${fmtDate(next.date)} ·
+    const gap = b.balance - next.r.amount;
+    nextLine = `<div class="bal-next">Next EMI <b>${inr(next.r.amount)}</b> on ${fmtDate(next.r.date)}${multiVeh() ? ' (' + esc(vehLabel(next.v)) + ')' : ''} ·
       ${gap >= 0 ? '<span class="pos">covered ✓</span>' : '<span class="neg">short by ' + inr(-gap) + '</span>'}</div>`;
   }
   return `<div class="card bal-card">
-    <div class="bal-top"><div><div class="kpi"><div class="label">Available balance</div></div>
+    <div class="bal-top"><div><div class="kpi"><div class="label">Available balance${selValid() && multiVeh() ? ' · ' + esc(vehLabel(curVeh())) : ''}</div></div>
       <div class="bal-amt ${b.balance >= 0 ? '' : 'neg'}">${inr(b.balance)}</div></div></div>
     <div class="bal-rows">
       <div><span>Rent received</span><b class="pos">+${inr(b.rentIn)}</b></div>
@@ -1052,7 +1112,7 @@ function defaultReceiver() {
 function confirmRent(driverId, amount) {
   if (viewOnly()) return;
   const prefs = DB.prefs || {};
-  DB.payments.push({ id: uid(), driverId, date: todayStr(), amount, mode: 'Online',
+  DB.payments.push({ id: uid(), driverId, vehicleId: vehOfDriver(DB.drivers.find(x => x.id === driverId)), date: todayStr(), amount, mode: 'Online',
                      receivedBy: ACCOUNT, note: 'Confirmed from reminder' });
   save(); PAGES[currentPage](); toast('Rent ' + inr(amount) + ' added');
   openRentConfirm();   // shows the next pending one, or closes when all clear
@@ -1133,7 +1193,7 @@ function openPayment(id, driverId) {
     { k:'receivedBy', label:'Received in', type:'select', options: [[ACCOUNT, 'Business account'], ...DB.partners.map(p => [p.id, p.name + ' (kept personally)'])], help:'Leave as Business account unless a partner kept the cash.' },
     { k:'note', label:'Note', type:'text' }
   ], existing || { driverId: driverId || active.id, mode: 'Online', receivedBy: ACCOUNT },
-  d => { d.amount = num(d.amount); 
+  d => { d.amount = num(d.amount); d.vehicleId = vehOfDriver(DB.drivers.find(x => x.id === d.driverId));
          if (existing) Object.assign(existing, d); else DB.payments.push({ id:uid(), ...d }); },
   existing ? () => DB.payments = DB.payments.filter(p => p.id !== id) : null);
 }
@@ -1143,16 +1203,17 @@ function openExpense(id) {
   const existing = id ? DB.expenses.find(e => e.id === id) : null;
   openForm(existing ? 'Edit expense' : 'Add expense', [
     { k:'amount', label:'Amount (₹)', type:'number', req:true },
+    ...(multiVeh() ? [{ k:'vehicleId', label:'Vehicle', type:'select', options: DB.vehicles.map(v => [v.id, vehLabel(v) + (v.regNo && v.name ? ' · ' + v.name : '')]) }] : []),
     { k:'category', label:'Category', type:'select', options: EXPENSE_CATEGORIES },
     { k:'emiNo', label:'EMI no.', type:'number', showIf:['category','EMI'], help:'Links this payment to a row in the Loan schedule.' },
     { k:'date', label:'Date', type:'date', req:true, def: todayStr() },
     { k:'paidBy', label:'Paid by', type:'select', options: payerOptions(), help:'"From rent" = paid out of the rent collected; no partner share.' },
     { k:'note', label:'Note', type:'text' }
-  ], existing || { category:'Service' },
-  d => { d.amount = num(d.amount); d.emiNo = d.emiNo ? num(d.emiNo) : '';
+  ], existing || { category:'Service', vehicleId: (curVeh() || DB.vehicles[0]).id },
+  d => { d.amount = num(d.amount); d.emiNo = d.emiNo ? num(d.emiNo) : ''; d.vehicleId = d.vehicleId || (existing ? vidOf(existing) : (curVeh() || DB.vehicles[0]).id);
          if (existing) Object.assign(existing, d); else DB.expenses.push({ id:uid(), ...d }); },
   existing ? () => {
-    if (existing.category === 'EMI' && existing.emiNo) DB.emiNoAuto = [...new Set([...(DB.emiNoAuto || []), num(existing.emiNo)])];
+    if (existing.category === 'EMI' && existing.emiNo) DB.emiNoAuto = [...new Set([...(DB.emiNoAuto || []), vidOf(existing) + ':' + num(existing.emiNo)])];
     DB.expenses = DB.expenses.filter(e => e.id !== id);
   } : null);
 }
@@ -1160,26 +1221,26 @@ function openExpense(id) {
 function autoMarkEmis() {
   if (isViewer()) return 0;
   const skip = DB.emiNoAuto || [], today = todayStr(); let added = 0;
-  for (const r of emiSchedule()) {
+  for (const v of DB.vehicles) for (const r of emiSchedule(v)) {
     const markOn = ymd(addDays(parseYmd(r.date), 1));
-    if (!r.expense && markOn <= today && !skip.includes(r.no)) {
-      DB.expenses.push({ id:uid(), category:'EMI', emiNo:r.no, date:markOn, amount:r.amount,
-                         paidBy: DB.car.emiPaidBy || FROM_RENT, note:'Auto-marked' });
+    if (!r.expense && markOn <= today && !skip.includes(v.id + ':' + r.no)) {
+      DB.expenses.push({ id:uid(), category:'EMI', emiNo:r.no, vehicleId:v.id, date:markOn, amount:r.amount,
+                         paidBy: v.emiPaidBy || FROM_RENT, note:'Auto-marked' });
       added++;
     }
   }
   if (added) save();
   return added;
 }
-function markEmiPaid(no) {
+function markEmiPaid(no, vid) {
   if (viewOnly()) return;
-  const row = emiSchedule().find(r => r.no === no);
+  const v = vehById(vid), row = emiSchedule(v).find(r => r.no === no);
   openForm('EMI #' + no + ' paid', [
     { k:'date', label:'Paid on', type:'date', req:true, def: row.date <= todayStr() ? row.date : todayStr() },
     { k:'amount', label:'Amount (₹)', type:'number', req:true, def: row.amount },
     { k:'paidBy', label:'Paid by', type:'select', options: payerOptions() },
     { k:'note', label:'Note', type:'text' }
-  ], { paidBy: DB.car.emiPaidBy || FROM_RENT }, d => { DB.emiNoAuto = (DB.emiNoAuto || []).filter(n => n !== no); DB.expenses.push({ id:uid(), category:'EMI', emiNo:no, ...d, amount:num(d.amount) }); });
+  ], { paidBy: v.emiPaidBy || FROM_RENT }, d => { DB.emiNoAuto = (DB.emiNoAuto || []).filter(n => n !== v.id + ':' + no); DB.expenses.push({ id:uid(), category:'EMI', emiNo:no, vehicleId:v.id, ...d, amount:num(d.amount) }); });
 }
 
 function openDriver(id) {
@@ -1187,14 +1248,18 @@ function openDriver(id) {
   const existing = id ? DB.drivers.find(d => d.id === id) : null;
   openForm(existing ? 'Edit driver' : 'Add driver', [
     { k:'name', label:'Name', type:'text', req:true },
+    ...(multiVeh() ? [{ k:'vehicleId', label:'Vehicle', type:'select', options: DB.vehicles.map(v => [v.id, vehLabel(v) + (v.regNo && v.name ? ' · ' + v.name : '')]) }] : []),
     { k:'phone', label:'Mobile number', type:'tel', req:true, help:'10-digit mobile. The driver logs in with this number.' },
     { k:'rentCycle', label:'Rent cycle', type:'select', options: Object.entries(CYCLES) },
     { k:'rentAmount', label:'Rent per cycle (₹)', type:'number', req:true },
     { k:'startDate', label:'Rent starts from', type:'date', req:true, def: todayStr() },
     { k:'endDate', label:'Left on (blank if still driving)', type:'date' },
     { k:'note', label:'Note (licence, address, deposit…)', type:'textarea' }
-  ], existing || { rentCycle:'daily' },
-  d => { d.rentAmount = num(d.rentAmount); if (existing) Object.assign(existing, d); else DB.drivers.push({ id:uid(), accessCode:newCode(), ...d }); },
+  ], existing || { rentCycle:'daily', vehicleId: (curVeh() || DB.vehicles[0]).id },
+  d => { d.rentAmount = num(d.rentAmount); d.vehicleId = d.vehicleId || (existing && existing.vehicleId) || (curVeh() || DB.vehicles[0]).id;
+         if (existing && existing.vehicleId !== d.vehicleId && DB.payments.some(p => p.driverId === existing.id))
+           alert('Note: past rent stays with the old vehicle; new rent goes to the new one.');
+         if (existing) Object.assign(existing, d); else DB.drivers.push({ id:uid(), accessCode:newCode(), ...d }); },
   existing ? () => {
     if (DB.payments.some(p => p.driverId === id)) { alert('This driver has payments recorded. Set a "Left on" date instead of deleting.'); return; }
     DB.drivers = DB.drivers.filter(d => d.id !== id);
@@ -1202,13 +1267,44 @@ function openDriver(id) {
 }
 
 /* ════════════ Setup handlers ════════════ */
+const editVeh = () => curVeh() || DB.vehicles[0];
+function setSetting(k, v) { if (viewOnly()) return; DB.settings[k] = v; save(); toast('Saved'); }
+function openVehicleForm() {
+  if (viewOnly()) return;
+  openForm('Add vehicle', [
+    { k:'regNo', label:'Registration no.', type:'text', req:true, help:'e.g. MH04 NJ 1723' },
+    { k:'name', label:'Model', type:'text', req:true, help:'e.g. Maruti Dzire Tour S (CNG)' },
+    { k:'purchaseDate', label:'Purchase date', type:'date' },
+    { k:'price', label:'Cash price (₹)', type:'number' },
+    { k:'downPayment', label:'Upfront paid (₹)', type:'number', help:'Down payment + tax, permit, registration, insurance.' },
+    { k:'downPaidBy', label:'Upfront paid by', type:'select', options: partnerOptions() },
+    { k:'loanAmount', label:'Total loan amount (₹)', type:'number' },
+    { k:'emi', label:'EMI amount (₹)', type:'number' },
+    { k:'tenure', label:'Tenure (months)', type:'number' },
+    { k:'emiStartDate', label:'First EMI date', type:'date' }
+  ], {}, d => {
+    const v = Object.assign(defaultVehicle(), d);
+    ['price','downPayment','loanAmount','emi','tenure'].forEach(k => v[k] = num(v[k]));
+    DB.vehicles.push(v); SEL = v.id; try { localStorage.setItem(SEL_KEY, v.id); } catch {}
+  });
+}
+function removeVehicle(id) {
+  if (viewOnly()) return;
+  const used = DB.drivers.some(d => d.vehicleId === id) || DB.payments.some(p => vidOf(p) === id) || DB.expenses.some(e => vidOf(e) === id);
+  if (used) { alert('This vehicle has drivers or entries. Move or delete them first.'); return; }
+  if (DB.vehicles.length < 2) return;
+  if (!confirm('Remove ' + vehLabel(vehById(id)) + '?')) return;
+  DB.vehicles = DB.vehicles.filter(v => v.id !== id); SEL = 'all'; try { localStorage.setItem(SEL_KEY, 'all'); } catch {}
+  refresh();
+}
 function setupField(k, label, type, help) {
-  return `<div class="field"><label>${label}</label><input id="car_${k}" type="${type}" value="${esc(DB.car[k])}" ${type === 'number' ? 'step="any"' : ''}
+  return `<div class="field"><label>${label}</label><input id="car_${k}" type="${type}" value="${esc(editVeh()[k] ?? '')}" ${type === 'number' ? 'step="any"' : ''}
     onchange="setCar('${k}',this.value)">${help ? '<div class="help">' + help + '</div>' : ''}</div>`;
 }
 function setCar(k, v) {
   if (viewOnly()) return;
-  DB.car[k] = ['price','downPayment','loanAmount','netDisbursed','irr','emi','tenure'].includes(k) ? num(v) : v;
+  editVeh()[k] = ['price','downPayment','loanAmount','netDisbursed','irr','emi','tenure'].includes(k) ? num(v) : v;
+  if (k === 'regNo' || k === 'name') document.querySelectorAll('.veh-name-live').forEach(el => el.textContent = vehLabel(editVeh()));
   // Keep loan amount in step with price − down payment unless edited directly
   save(); toast('Saved');
   // Update in place (no full re-render, so the next field you tapped keeps focus on the phone)
@@ -1351,11 +1447,11 @@ async function shareDriverLink(id) {
   else createUser({ name: d.name, mobile: phone, role: 'driver', driverId: d.id });
 }
 function costNoteHtml() {
-  const c = DB.car, cc = carCost();
+  const c = editVeh(), cc = carCost(c);
   const emis = num(c.emi) * num(c.tenure);
   return `Car cost incl. interest: <b>${inr(cc.total)}</b><br>
     <span class="muted">${inr(c.downPayment)} upfront + ${inr(c.emi)} × ${c.tenure} EMIs (${inr(emis)})<br>
-    Interest on loan ${inr(Math.max(0, emis - num(c.loanAmount)))} · loan charges + protection ${inr(Math.max(0, num(c.loanAmount) - num(c.netDisbursed)))}<br>
+    Interest on loan ${inr(Math.max(0, emis - num(c.loanAmount)))} · loan charges + protection ${inr(num(c.netDisbursed) ? Math.max(0, num(c.loanAmount) - num(c.netDisbursed)) : 0)}<br>
     Extra vs cash price ${inr(c.price)}: ${inr(cc.interest)}</span>`;
 }
 function setPartner(id, k, v) { if (viewOnly()) return; const p = DB.partners.find(p => p.id === id); p[k] = k === 'share' ? num(v) : v; refresh(); }
@@ -1363,7 +1459,7 @@ function addPartner() {
   if (viewOnly()) return; DB.partners.push({ id:uid(), name:'Partner ' + (DB.partners.length + 1), share:0 }); refresh(); }
 function removePartner(id) {
   if (viewOnly()) return;
-  const used = DB.expenses.some(e => e.paidBy === id) || DB.payments.some(p => p.receivedBy === id) || DB.car.downPaidBy === id;
+  const used = DB.expenses.some(e => e.paidBy === id) || DB.payments.some(p => p.receivedBy === id) || DB.vehicles.some(v => v.downPaidBy === id);
   if (used) { alert('This partner is linked to entries. Rename instead of removing.'); return; }
   if (confirm('Remove partner?')) { DB.partners = DB.partners.filter(p => p.id !== id); refresh(); }
 }
@@ -1399,7 +1495,7 @@ function statementLines(d) {
   return { L, text:
 `*MNS Tours & Travels — Rent statement*
 Driver: ${d.name}
-Car: ${DB.car.name}${DB.car.regNo ? ' (' + DB.car.regNo + ')' : ''}
+Car: ${vehById(d.vehicleId).name}${vehById(d.vehicleId).regNo ? ' (' + vehById(d.vehicleId).regNo + ')' : ''}
 Rent: ${inr(d.rentAmount)} ${CYCLES[d.rentCycle].toLowerCase()}, from ${fmtDate(d.startDate)}
 
 Total due till ${fmtDate(todayStr())}: ${inr(L.due)}
@@ -1420,7 +1516,7 @@ function printStatement(id) {
     <h1>MNS Tours &amp; Travels</h1><div style="color:#555;margin-bottom:16px">Rent statement · generated ${fmtDate(todayStr())}</div>
     <table style="width:auto;margin-bottom:16px"><tbody>
       <tr><td><b>Driver</b></td><td>${esc(d.name)}${d.phone ? ' · ' + esc(d.phone) : ''}</td></tr>
-      <tr><td><b>Car</b></td><td>${esc(DB.car.name)}${DB.car.regNo ? ' (' + esc(DB.car.regNo) + ')' : ''}</td></tr>
+      <tr><td><b>Car</b></td><td>${esc(vehById(d.vehicleId).name)}${vehById(d.vehicleId).regNo ? ' (' + esc(vehById(d.vehicleId).regNo) + ')' : ''}</td></tr>
       <tr><td><b>Rent</b></td><td>${inr(d.rentAmount)} ${CYCLES[d.rentCycle].toLowerCase()} from ${fmtDate(d.startDate)}</td></tr>
       <tr><td><b>Total due</b></td><td>${inr(L.due)}</td></tr><tr><td><b>Paid</b></td><td>${inr(L.paid)}</td></tr>
       <tr><td><b>${L.balance > 0 ? 'Pending' : 'Advance'}</b></td><td><b>${inr(Math.abs(L.balance))}</b></td></tr></tbody></table>
