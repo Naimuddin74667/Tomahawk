@@ -23,7 +23,11 @@
      DELETE /users?mobile=…                owner
      GET    /state                         owner, viewer
      PUT    /state           {data, savedAt, force?}                   owner
-     GET    /driver                        driver → his own rent only
+     GET    /driver                        driver → his own rent only (+ his "I've paid" claims)
+     POST   /driver/claim    {amount, label}            driver says "I've paid" → waits for owner
+     POST   /driver/claim/cancel {id}                    driver withdraws a claim still waiting
+     POST   /claims/resolve  {id, status}                owner: 'accepted' | 'rejected'
+   GET /state also returns the claims still waiting, so the owner app can ask "Received?".
    ═══════════════════════════════════════════════════════════════════ */
 
 const CORS = {
@@ -52,6 +56,9 @@ async function setupTables(DB) {
     DB.prepare('CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY, data TEXT NOT NULL, saved_at TEXT NOT NULL)'),
     DB.prepare('CREATE TABLE IF NOT EXISTS users (mobile TEXT PRIMARY KEY, name TEXT, salt TEXT NOT NULL, hash TEXT NOT NULL, created_at TEXT)'),
     DB.prepare('CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, mobile TEXT NOT NULL, created_at TEXT)'),
+    // Driver "I've paid" notices, kept apart from the app data so a driver can never change real records
+    DB.prepare('CREATE TABLE IF NOT EXISTS claims (id TEXT PRIMARY KEY, driver_id TEXT NOT NULL, driver_name TEXT, amount REAL NOT NULL, ' +
+               "label TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT, resolved_at TEXT, resolved_by TEXT)"),
   ]);
   // Columns added over time — add them if this database is older
   for (const col of ["role TEXT DEFAULT 'owner'", 'driver_id TEXT', 'fails INTEGER DEFAULT 0', 'lock_until TEXT']) {
@@ -187,7 +194,15 @@ export default {
       if (path === '/state' && req.method === 'GET') {
         if (!canView) return me ? notAllowed() : needLogin();
         const r = await row();
-        return json(r ? { data: JSON.parse(r.data), savedAt: r.saved_at } : { data: null, savedAt: null });
+        const claims = (await DB.prepare("SELECT * FROM claims WHERE status = 'pending' ORDER BY created_at").all()).results || [];
+        return json(r ? { data: JSON.parse(r.data), savedAt: r.saved_at, claims } : { data: null, savedAt: null, claims });
+      }
+      if (path === '/claims/resolve' && req.method === 'POST') {
+        if (!isOwner) return me ? notAllowed() : needLogin();
+        const status = body.status === 'accepted' ? 'accepted' : 'rejected';
+        const r = await DB.prepare("UPDATE claims SET status = ?1, resolved_at = ?2, resolved_by = ?3 WHERE id = ?4 AND status = 'pending'")
+          .bind(status, now(), me.mobile, String(body.id || '')).run();
+        return json({ ok: true });
       }
       if (path === '/state' && req.method === 'PUT') {
         if (!isOwner) return me ? notAllowed() : needLogin();
@@ -200,6 +215,27 @@ export default {
           'ON CONFLICT(id) DO UPDATE SET data = excluded.data, saved_at = excluded.saved_at')
           .bind(JSON.stringify(body.data), body.savedAt).run();
         return json({ ok: true, savedAt: body.savedAt });
+      }
+
+      /* ── Driver: "I've paid" ── */
+      if (path === '/driver/claim' && req.method === 'POST') {
+        if (!me) return needLogin();
+        if (me.role !== 'driver' || !me.driverId) return notAllowed();
+        const amount = Math.round(Number(body.amount) * 100) / 100;
+        if (!(amount > 0) || amount > 100000) return err('Enter the amount you paid', 400);
+        const waiting = (await DB.prepare("SELECT COUNT(*) AS n FROM claims WHERE driver_id = ?1 AND status = 'pending'").bind(me.driverId).first()).n;
+        if (waiting >= 5) return err('You already have 5 payments waiting for the owner to confirm', 400);
+        const id = randomHex(8);
+        await DB.prepare("INSERT INTO claims (id, driver_id, driver_name, amount, label, status, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6)")
+          .bind(id, me.driverId, me.name || '', amount, String(body.label || '').slice(0, 80), now()).run();
+        return json({ ok: true, id });
+      }
+      if (path === '/driver/claim/cancel' && req.method === 'POST') {
+        if (!me) return needLogin();
+        if (me.role !== 'driver') return notAllowed();
+        await DB.prepare("UPDATE claims SET status = 'cancelled', resolved_at = ?1 WHERE id = ?2 AND driver_id = ?3 AND status = 'pending'")
+          .bind(now(), String(body.id || ''), me.driverId).run();
+        return json({ ok: true });
       }
 
       /* ── Driver view: only his own rent ── */
@@ -222,6 +258,8 @@ export default {
                     startDate: drv.startDate, endDate: drv.endDate || '' },
           payments: (d.payments || []).filter(p => p.driverId === drv.id).map(p => ({ date: p.date, amount: p.amount, mode: p.mode })),
           offs: (d.offs || []).filter(o => o.driverId === drv.id).map(o => ({ date: o.date, half: o.half })),
+          claims: ((await DB.prepare('SELECT id, amount, label, status, created_at AS createdAt, resolved_at AS resolvedAt FROM claims ' +
+                    'WHERE driver_id = ?1 ORDER BY created_at DESC LIMIT 20').bind(drv.id).all()).results || []),
           updatedAt: r.saved_at,
         });
       }

@@ -224,6 +224,8 @@ body.readonly .lrow.click { cursor:default; }
 .veh-switch { display:flex; align-items:center; gap:8px; background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:6px 10px; margin-bottom:14px; box-shadow:var(--shadow); }
 .veh-switch select { flex:1; border:0; background:transparent; color:var(--text); font-size:15px; font-weight:600; padding:6px 2px; font-family:inherit; min-width:0; }
 .veh-switch select:focus { outline:none; }
+
+.due-banner.claim-banner { background:rgba(67,56,202,.10); }
 .due-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; background:var(--red-soft); border-radius:12px; padding:12px 14px; margin-bottom:var(--gap); font-size:14px; }
 
 @media (max-width:820px) {
@@ -432,6 +434,7 @@ async function liveCheck() {
     if (r.status < 400 && r.body.data && r.body.savedAt > (DB._savedAt || '')) {
       applyCloud(r.body.data); setCloudState('ok'); toast('Updated');
     } else if (r.status < 400) setCloudState('ok');
+    if (r.status < 400) setClaims(r.body.claims);
   } catch { setCloudState('error', 'Offline — will sync when back online'); }
   liveBusy = false;
 }
@@ -448,6 +451,7 @@ async function pullCloud() {
     const r = await cloudFetch('/state');
     if (r.status >= 400) throw new Error(r.body.error || r.status);
     const remote = r.body;
+    setClaims(remote.claims, true);
     if (remote.data && (isViewer() || !DB._savedAt || remote.savedAt > DB._savedAt)) { applyCloud(remote.data); setCloudState('ok'); }
     else if (!remote.data || remote.savedAt < DB._savedAt) { if (!DB._savedAt) DB._savedAt = new Date().toISOString(); await pushCloud(); }
     else setCloudState('ok');
@@ -845,11 +849,6 @@ setup() {
           <button class="btn sm" style="margin-top:10px" onclick="openDriver()">+ Driver</button>
         </div>
         <div class="card section">${loginCardInner()}</div>
-        <div class="card section"><h3>UPI for driver payments</h3>
-          <div class="field"><label>UPI ID</label><input placeholder="name@bank" value="${esc(DB.settings.upiId || '')}" onchange="setSetting('upiId',this.value.trim())"></div>
-          <div class="field"><label>Name shown in UPI</label><input placeholder="MNS Tours and Travels" value="${esc(DB.settings.upiName || '')}" onchange="setSetting('upiName',this.value.trim())"></div>
-          <div class="help" style="font-size:11px;color:var(--text2)">The driver's "Pay now" button opens his UPI app with this ID and the pending amount.</div>
-        </div>
         <div class="card section"><h3>Backup</h3>
           <p class="muted" style="font-size:13px;margin-bottom:10px">A backup file is a copy of everything — handy to keep even with cloud sync on.</p>
           <div class="btn-row"><button class="btn sm" onclick="exportData()">Download backup</button>
@@ -1064,14 +1063,75 @@ function pendingRent() {
     return { d, pend, total: sum(pend, p => p.due - p.paid) };
   }).filter(x => x.pend.length);
 }
+/* ════════════ Driver "I've paid" notices ════════════
+   The driver marks a payment in his app → it waits here until you confirm it. */
+let CLAIMS = [], claimLater = new Set();
+function setClaims(list, quiet) {
+  const before = CLAIMS.map(c => c.id).join();
+  CLAIMS = Array.isArray(list) ? list : [];
+  if (CLAIMS.map(c => c.id).join() !== before && !quiet && !document.getElementById('overlay').classList.contains('open')) PAGES[currentPage]();
+  if (!quiet) setTimeout(maybeClaimPrompt, 300);
+}
+function maybeClaimPrompt() {
+  if (isViewer() || !cloudCfg()) return;
+  if (document.getElementById('overlay').classList.contains('open')) return;
+  if (CLAIMS.some(c => !claimLater.has(c.id))) openClaimConfirm();
+}
+function claimDriver(c) { return DB.drivers.find(d => d.id === c.driver_id) || { id: c.driver_id, name: c.driver_name || 'Driver' }; }
+function openClaimConfirm(manual) {
+  const list = manual ? CLAIMS : CLAIMS.filter(c => !claimLater.has(c.id));
+  const c = list[0]; if (!c) { closeModal(); return; }
+  const d = claimDriver(c);
+  const when = new Date(c.created_at).toLocaleString('en-IN', { day:'numeric', month:'short', hour:'numeric', minute:'2-digit' });
+  document.getElementById('modal').dataset.from = 'claim';
+  document.getElementById('modal').innerHTML = `<h3>Payment from ${esc(d.name)}</h3>
+    <p class="muted" style="margin:-6px 0 14px;font-size:13px">${esc(d.name.split(' ')[0])} says he paid you${multiVeh() && d.vehicleId ? ' · ' + esc(vehLabel(vehById(d.vehicleId))) : ''}</p>
+    <div class="rc-driver"><div class="what">${esc(c.label || 'Rent')} · marked ${when}</div>
+      <div class="rc-amt">${inr(c.amount)}</div>
+      <div class="muted" style="font-size:12px">Check your UPI / bank SMS before confirming.</div></div>
+    <button class="btn primary rc-yes" onclick="resolveClaim('${c.id}', true)">✓ Yes, received ${inr(c.amount)}</button>
+    <button class="btn rc-yes" style="margin-top:8px;color:var(--red)" onclick="resolveClaim('${c.id}', false)">Not received</button>
+    <button class="btn rc-yes" style="margin-top:8px" onclick="claimLater.add('${c.id}');closeModal();maybeClaimPrompt()">Later</button>
+    ${list.length > 1 ? `<p class="muted" style="font-size:12px;text-align:center;margin-top:10px">${list.length - 1} more waiting</p>` : ''}`;
+  document.getElementById('overlay').classList.add('open');
+}
+async function resolveClaim(id, ok) {
+  if (viewOnly()) return;
+  const c = CLAIMS.find(x => x.id === id); if (!c) { closeModal(); return; }
+  if (!ok && !confirm('Mark ' + inr(c.amount) + ' as NOT received? The driver will be asked to contact you.')) return;
+  try {
+    const r = await cloudFetch('/claims/resolve', { method:'POST', body: JSON.stringify({ id, status: ok ? 'accepted' : 'rejected' }) });
+    if (r.status >= 400) throw new Error(r.body.error || 'failed');
+  } catch (e) { alert('Could not confirm — check internet and try again.'); return; }
+  if (ok) {
+    const d = claimDriver(c);
+    DB.payments.push({ id: uid(), driverId: d.id, vehicleId: vehOfDriver(d), date: ymd(new Date(c.created_at)), amount: num(c.amount),
+                       mode: 'Online', receivedBy: ACCOUNT, note: 'Driver marked paid' + (c.label ? ' · ' + c.label : ''), claimId: id });
+    save();
+  }
+  CLAIMS = CLAIMS.filter(x => x.id !== id);
+  toast(ok ? 'Recorded ' + inr(c.amount) : 'Marked not received');
+  closeModal(); PAGES[currentPage]();
+  setTimeout(maybeClaimPrompt, 250);
+}
+function claimBanner() {
+  if (!CLAIMS.length) return '';
+  const total = sum(CLAIMS, c => num(c.amount));
+  const who = [...new Set(CLAIMS.map(c => claimDriver(c).name))].join(', ');
+  return `<div class="due-banner claim-banner"><div><b>${inr(total)}</b> marked paid by ${esc(who)} — waiting for your confirmation</div>
+    ${isViewer() ? '' : '<button class="btn primary sm" onclick="openClaimConfirm(true)">Review</button>'}</div>`;
+}
 function dueBanner() {
-  const list = pendingRent(); if (!list.length) return '';
-  const total = sum(list, x => x.total);
-  return `<div class="due-banner"><div><b>${inr(total)}</b> rent pending${list.length === 1 ? ' from ' + esc(list[0].d.name) : ''}</div>
+  const list = pendingRent(); if (!list.length) return claimBanner();
+  // Rent the driver already marked as paid (waiting for you) isn't counted twice
+  const total = sum(list, x => x.total) - sum(CLAIMS, c => num(c.amount));
+  if (total <= 0) return claimBanner();
+  return claimBanner() + `<div class="due-banner"><div><b>${inr(total)}</b> rent pending${list.length === 1 ? ' from ' + esc(list[0].d.name) : ''}</div>
     <button class="btn primary sm" onclick="openRentConfirm(true)">Confirm</button></div>`;
 }
 function checkRentPrompt() {
   if (isViewer()) return;
+  if (CLAIMS.some(c => !claimLater.has(c.id))) { maybeClaimPrompt(); return; }
   let snoozed = ''; try { snoozed = localStorage.getItem(SNOOZE_KEY) || ''; } catch {}
   if (snoozed !== todayStr() && pendingRent().length) openRentConfirm();
 }
@@ -1347,6 +1407,7 @@ async function firstSync() {
   setCloudState('syncing');
   const r = await cloudFetch('/state');
   if (r.status >= 400) throw new Error(r.body.error || 'Could not load data');
+  setClaims(r.body.claims, true);
   if (r.body.data) applyCloud(r.body.data);
   else { DB._savedAt = new Date().toISOString(); await pushCloud(true); }
   setCloudState('ok');

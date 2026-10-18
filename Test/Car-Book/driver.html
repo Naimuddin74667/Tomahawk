@@ -50,6 +50,9 @@ body { font-family:var(--font-body); background:var(--bg); color:var(--text); fo
 .mp-row button { border:1px solid var(--accent); background:var(--surface); color:var(--accent); border-radius:8px; padding:6px 12px; font-weight:600; font-family:inherit; font-size:13px; }
 .mp-help { color:var(--text2); font-size:12px; margin-top:6px; }
 .toast { position:fixed; bottom:30px; left:50%; transform:translateX(-50%); background:var(--text); color:var(--bg); padding:9px 16px; border-radius:10px; font-weight:600; font-size:13px; z-index:99; }
+.b-wait { background:rgba(67,56,202,.10); color:#4338ca; }
+.paid-form { margin-top:14px; text-align:left; } .paid-form label { font-size:12px; font-weight:600; color:var(--text2); }
+.card.rej { border-color:var(--red); background:var(--red-soft); font-size:13px; }
 .pay-other { background:var(--surface); color:var(--accent); border:1.5px solid var(--accent); margin-top:10px; cursor:pointer; }
 .row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 0; border-bottom:1px solid var(--border); }
 .row:last-child { border-bottom:0; }
@@ -121,36 +124,43 @@ function periods() {
   // Payments cover the oldest days first
   let pool = D.payments.reduce((s, x) => s + num(x.amount), 0);
   for (const p of out) { const t = Math.min(pool, p.due); p.paid = t; pool -= t; }
+  // Then his "I've paid" amounts still waiting for the owner mark the next days "In process"
+  let wait = waitingClaims().reduce((s, c) => s + num(c.amount), 0);
+  for (const p of out) { const t = Math.min(wait, p.due - p.paid); p.wait = t; wait -= t; }
   return out;
 }
-/* UPI payment link. The note shows in the owner's bank/UPI history, e.g. "Rent for 16-17 Oct". */
-function upiLink(amount, note) {
-  return 'upi://pay?pa=' + encodeURIComponent(D.upi.id) + '&pn=' + encodeURIComponent(D.upi.name || 'MNS Tours and Travels')
-    + '&am=' + Number(amount).toFixed(2) + '&cu=INR&tn=' + encodeURIComponent(note.slice(0, 50));
+const waitingClaims = () => (D.claims || []).filter(c => c.status === 'pending');
+const shortLabel = p => label({ ...p, off: [] });
+function rangeText(list) {
+  if (!list.length) return '';
+  return list.length === 1 ? shortLabel(list[0]) : shortLabel(list[0]) + ' to ' + shortLabel(list[list.length - 1]);
 }
-// Plain hyphen + no "(day off)" so every UPI app shows the note correctly
-const shortLabel = p => label({ ...p, off: [] }).replace(/[–—]/g, '-').replace(/\s+-\s+/g, '-');
-// Vehicle number first (e.g. "MH04NJ1723 Rent for 16-17 Oct") so each car's rent is easy to spot in the bank history
-const vehicleNo = () => (D.car.regNo || '').replace(/\s+/g, '').toUpperCase();
-function rentNote(pend) {
-  const v = vehicleNo() ? vehicleNo() + ' ' : '';
-  if (!pend.length) return v + 'Rent';
-  if (pend.length === 1) return v + 'Rent for ' + shortLabel(pend[0]);
-  return v + 'Rent ' + shortLabel(pend[0]) + ' to ' + shortLabel(pend[pend.length - 1]);
+let paidForm = false, sending = false;
+async function sendPaid() {
+  const v = document.getElementById('paidAmt').value;
+  const amount = Math.round(parseFloat(String(v).replace(/[^\d.]/g, '')) * 100) / 100;
+  if (!(amount > 0)) { document.getElementById('paidAmt').focus(); return; }
+  if (sending) return; sending = true;
+  const pend = periods().filter(p => p.paid + p.wait < p.due);
+  try {
+    const res = await fetch(apiBase() + '/driver/claim', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + auth.token },
+      body: JSON.stringify({ amount, label: pend.length ? 'Rent ' + rangeText(pend) : 'Rent advance' }) });
+    const body = await res.json();
+    if (res.status === 401 || res.status === 403) { toLogin(); return; }
+    if (!res.ok) { alert(body.error || 'Could not send'); return; }
+    paidForm = false; await loadData(); flash('Sent — waiting for the owner to confirm');
+  } catch { alert('No internet — please try again'); }
+  finally { sending = false; }
 }
-let showOther = false;
-function copyText(t, msg) {
-  const done = () => { const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg; document.body.appendChild(el); setTimeout(() => el.remove(), 1600); };
-  if (navigator.clipboard) navigator.clipboard.writeText(String(t)).then(done, done);
-  else { const i = document.createElement('input'); i.value = t; document.body.appendChild(i); i.select(); document.execCommand('copy'); i.remove(); done(); }
+async function cancelClaim(id) {
+  if (!confirm('Cancel this "I’ve paid"?')) return;
+  await fetch(apiBase() + '/driver/claim/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + auth.token },
+    body: JSON.stringify({ id }) }).catch(() => {});
+  loadData();
 }
-function payOther() {
-  const v = document.getElementById('otherAmt').value;
-  const amt = Math.round(parseFloat(String(v).replace(/[^\d.]/g, '')) * 100) / 100;
-  if (!(amt > 0)) { document.getElementById('otherAmt').focus(); return; }
-  const pend = periods().filter(p => p.paid < p.due);
-  location.href = upiLink(amt, pend.length ? rentNote(pend) : (vehicleNo() ? vehicleNo() + ' ' : '') + 'Rent advance');
-}
+function flash(msg) { const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg; document.body.appendChild(el); setTimeout(() => el.remove(), 2200); }
+const timeShort = s => new Date(s).toLocaleString('en-IN', { day:'numeric', month:'short', hour:'numeric', minute:'2-digit' });
 function label(p) {
   if (D.driver.rentCycle !== 'daily') return fmtRange(p.from, p.to);
   const base = fmtRange(ymd(addDays(parseYmd(p.from), -1)), p.from);
@@ -159,6 +169,7 @@ function label(p) {
 function status(p) {
   if (p.due === 0) return '<span class="badge b-off">Car off</span>';
   if (p.paid >= p.due) return '<span class="badge b-paid">Paid</span>';
+  if (p.paid + (p.wait || 0) >= p.due) return '<span class="badge b-wait">In process</span>';
   if (p.paid > 0) return '<span class="badge b-part">Part ' + inr(p.paid) + '</span>';
   return '<span class="badge b-due">Pending</span>';
 }
@@ -167,9 +178,10 @@ function status(p) {
 function render() {
   const P = periods();
   const due = P.reduce((s, p) => s + p.due, 0), paid = D.payments.reduce((s, x) => s + num(x.amount), 0);
-  const pending = Math.max(0, due - paid), advance = Math.max(0, paid - due);
-  const pendDays = P.filter(p => p.paid < p.due);
-  const upi = D.upi.id ? upiLink(pending, rentNote(pendDays)) : '';
+  const waitAmt = waitingClaims().reduce((s, c) => s + num(c.amount), 0);
+  const pending = Math.max(0, due - paid - waitAmt), advance = Math.max(0, paid - due);
+  const pendDays = P.filter(p => p.paid + p.wait < p.due);
+  const rejected = (D.claims || []).filter(c => c.status === 'rejected' && c.resolvedAt && (Date.now() - new Date(c.resolvedAt)) < 3 * 864e5);
   const cycle = { daily:'per day', weekly:'per week', monthly:'per month' }[D.driver.rentCycle] || '';
   const daysList = (showAll ? P.slice().reverse() : P.slice(-10).reverse());
 
@@ -178,25 +190,24 @@ function render() {
     <div class="sub">${esc(D.car.name)}${D.car.regNo ? ' · ' + esc(D.car.regNo) : ''} · ${inr(D.driver.rentAmount)} ${cycle}</div>
 
     <div class="card due ${pending ? 'pend' : 'clear'}">
-      <div class="label">${pending ? 'Rent pending' : advance ? 'Paid in advance' : 'All rent paid'}</div>
-      <div class="amt">${pending ? inr(pending) : advance ? inr(advance) : '✓'}</div>
-      <div class="sub">${pending ? pendDays.length + ' day' + (pendDays.length === 1 ? '' : 's') + ' pending · ' + pendDays.slice(0, 3).map(label).join(', ') + (pendDays.length > 3 ? '…' : '') : 'Thank you! Nothing due right now.'}</div>
-      ${pending && upi ? `<a class="pay" href="${upi}">Pay ${inr(pending)} now (UPI)</a>` : ''}
-      ${D.upi.id ? (showOther
-        ? `<div class="other-row"><input id="otherAmt" type="number" inputmode="decimal" placeholder="Amount ₹" autofocus>
-             <button class="pay" style="margin:0" onclick="payOther()">Pay</button></div>`
-        : `<button class="pay pay-other" onclick="showOther=true;render();setTimeout(()=>document.getElementById('otherAmt').focus(),50)">Pay other amount</button>`) : ''}
-      ${D.upi.id ? `
-        <div class="manual-pay">
-          <div class="mp-title">If the Pay button shows an error</div>
-          <div class="mp-row"><span>UPI ID</span><b>${esc(D.upi.id)}</b><button onclick="copyText('${esc(D.upi.id)}','UPI ID copied')">Copy</button></div>
-          ${pending ? `<div class="mp-row"><span>Amount</span><b>${inr(pending)}</b><button onclick="copyText('${pending}','Amount copied')">Copy</button></div>` : ''}
-          <div class="mp-row"><span>Note</span><b>${esc(rentNote(pendDays))}</b><button onclick="copyText(${JSON.stringify(rentNote(pendDays)).replace(/"/g, '&quot;')},'Note copied')">Copy</button></div>
-          <div class="mp-help">Open GPay / PhonePe / Paytm → Pay UPI ID → paste the UPI ID → enter the amount → pay.</div>
-        </div>
-        <div class="note">Payments show here once the owner records them.</div>` : ''}
+      <div class="label">${pending ? 'Rent pending' : waitAmt ? 'Waiting for owner to confirm' : advance ? 'Paid in advance' : 'All rent paid'}</div>
+      <div class="amt">${pending ? inr(pending) : waitAmt ? inr(waitAmt) : advance ? inr(advance) : '✓'}</div>
+      <div class="sub">${pending ? pendDays.length + ' day' + (pendDays.length === 1 ? '' : 's') + ' pending · ' + pendDays.slice(0, 3).map(label).join(', ') + (pendDays.length > 3 ? '…' : '')
+        : waitAmt ? 'You marked it paid — it shows as Paid once the owner confirms.' : 'Thank you! Nothing due right now.'}</div>
+      ${paidForm
+        ? `<div class="paid-form"><label>Amount you paid</label>
+             <div class="other-row"><input id="paidAmt" type="number" inputmode="decimal" value="${pending || ''}" placeholder="Amount ₹">
+               <button class="pay" style="margin:0" onclick="sendPaid()">Send</button></div>
+             <button class="more" onclick="paidForm=false;render()">Cancel</button></div>`
+        : `<button class="pay" onclick="paidForm=true;render();setTimeout(()=>document.getElementById('paidAmt').select(),50)">✓ I've paid</button>
+           <div class="note">Pay the owner by UPI as usual, then tap here and enter the amount.</div>`}
       ${D.driver.rentCycle === 'daily' ? `<div class="note">Daily rent is due at 8 PM and covers last night + today.</div>` : ''}
     </div>
+
+    ${waitingClaims().length ? `<div class="card"><h3>Waiting for owner</h3>${waitingClaims().map(c => `<div class="row">
+        <div><div class="t">${inr(c.amount)}</div><div class="s">${esc(c.label || '')} · sent ${timeShort(c.createdAt)}</div></div>
+        <div class="r"><span class="badge b-wait">In process</span><button class="more" style="padding:0" onclick="cancelClaim('${c.id}')">Cancel</button></div></div>`).join('')}</div>` : ''}
+    ${rejected.map(c => `<div class="card rej"><b>${inr(c.amount)} not received</b> — the owner marked your payment of ${timeShort(c.createdAt)} as not received. Please contact the owner.</div>`).join('')}
 
     <div class="tabs"><button class="${tab === 'days' ? 'on' : ''}" onclick="tab='days';render()">Rent days</button>
       <button class="${tab === 'pays' ? 'on' : ''}" onclick="tab='pays';render()">Payments</button></div>
