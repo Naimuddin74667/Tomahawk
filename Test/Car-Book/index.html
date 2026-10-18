@@ -355,7 +355,7 @@ function migrate(parsed) {
 }
 function newCode() { const a = 'abcdefghjkmnpqrstuvwxyz23456789'; let s = ''; for (let i = 0; i < 10; i++) s += a[Math.floor(Math.random() * a.length)]; return s; }
 let saveTimer = null;
-function viewOnly() { if (!isViewer()) return false; toast('View only — you can\u2019t make changes'); return true; }
+function viewOnly() { return isViewer(); }   // view-only logins: edit actions silently do nothing
 /* View-only logins (e.g. Uncle) see everything but can't change anything. */
 const isViewer = () => (cloudCfg() || {}).role === 'viewer';
 function applyRole() { document.body.classList.toggle('readonly', isViewer()); }
@@ -432,7 +432,7 @@ async function liveCheck() {
   try {
     const r = await cloudFetch('/state');
     if (r.status < 400 && r.body.data && r.body.savedAt > (DB._savedAt || '')) {
-      applyCloud(r.body.data); setCloudState('ok'); toast('Updated');
+      applyCloud(r.body.data); setCloudState('ok'); if (!isViewer()) toast('Updated');
     } else if (r.status < 400) setCloudState('ok');
     if (r.status < 400) setClaims(r.body.claims);
   } catch { setCloudState('error', 'Offline — will sync when back online'); }
@@ -1122,6 +1122,7 @@ function claimBanner() {
     ${isViewer() ? '' : '<button class="btn primary sm" onclick="openClaimConfirm(true)">Review</button>'}</div>`;
 }
 function dueBanner() {
+  if (isViewer()) return '';            // partner view: just the numbers, no reminders
   const list = pendingRent(); if (!list.length) return claimBanner();
   // Rent the driver already marked as paid (waiting for you) isn't counted twice
   const total = sum(list, x => x.total) - sum(CLAIMS, c => num(c.amount));
