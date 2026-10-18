@@ -40,6 +40,9 @@ body { font-family:var(--font-body); background:var(--bg); color:var(--text); fo
 .due.clear .amt { color:var(--green); } .due.pend .amt { color:var(--red); }
 .pay { display:block; width:100%; margin-top:14px; padding:15px; border:0; border-radius:14px; background:var(--accent); color:#fff; font-family:inherit; font-size:16px; font-weight:700; text-decoration:none; }
 .note { color:var(--text2); font-size:12px; margin-top:8px; }
+.other-row { display:grid; grid-template-columns:1fr 100px; gap:8px; margin-top:10px; }
+.other-row input { padding:14px; border:1.5px solid var(--accent); border-radius:14px; font-size:18px; font-family:inherit; background:var(--surface); min-width:0; text-align:center; }
+.pay-other { background:var(--surface); color:var(--accent); border:1.5px solid var(--accent); margin-top:10px; cursor:pointer; }
 .row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 0; border-bottom:1px solid var(--border); }
 .row:last-child { border-bottom:0; }
 .row .t { font-weight:600; } .row .s { color:var(--text2); font-size:12px; margin-top:2px; }
@@ -112,6 +115,26 @@ function periods() {
   for (const p of out) { const t = Math.min(pool, p.due); p.paid = t; pool -= t; }
   return out;
 }
+/* UPI payment link. The note shows in the owner's bank/UPI history, e.g. "Rent for 16-17 Oct". */
+function upiLink(amount, note) {
+  return 'upi://pay?pa=' + encodeURIComponent(D.upi.id) + '&pn=' + encodeURIComponent(D.upi.name || 'MNS Tours and Travels')
+    + '&am=' + Number(amount).toFixed(2) + '&cu=INR&tn=' + encodeURIComponent(note.slice(0, 50));
+}
+// Plain hyphen + no "(day off)" so every UPI app shows the note correctly
+const shortLabel = p => label({ ...p, off: [] }).replace(/[–—]/g, '-').replace(/\s+-\s+/g, '-');
+function rentNote(pend) {
+  if (!pend.length) return 'Rent';
+  if (pend.length === 1) return 'Rent for ' + shortLabel(pend[0]);
+  return 'Rent for ' + shortLabel(pend[0]) + ' to ' + shortLabel(pend[pend.length - 1]);
+}
+let showOther = false;
+function payOther() {
+  const v = document.getElementById('otherAmt').value;
+  const amt = Math.round(parseFloat(String(v).replace(/[^\d.]/g, '')) * 100) / 100;
+  if (!(amt > 0)) { document.getElementById('otherAmt').focus(); return; }
+  const pend = periods().filter(p => p.paid < p.due);
+  location.href = upiLink(amt, pend.length ? rentNote(pend) : 'Rent advance');
+}
 function label(p) {
   if (D.driver.rentCycle !== 'daily') return fmtRange(p.from, p.to);
   const base = fmtRange(ymd(addDays(parseYmd(p.from), -1)), p.from);
@@ -130,8 +153,7 @@ function render() {
   const due = P.reduce((s, p) => s + p.due, 0), paid = D.payments.reduce((s, x) => s + num(x.amount), 0);
   const pending = Math.max(0, due - paid), advance = Math.max(0, paid - due);
   const pendDays = P.filter(p => p.paid < p.due);
-  const upi = D.upi.id ? 'upi://pay?pa=' + encodeURIComponent(D.upi.id) + '&pn=' + encodeURIComponent(D.upi.name || 'MNS Tours and Travels')
-    + '&am=' + pending.toFixed(2) + '&cu=INR&tn=' + encodeURIComponent('Rent ' + D.driver.name) : '';
+  const upi = D.upi.id ? upiLink(pending, rentNote(pendDays)) : '';
   const cycle = { daily:'per day', weekly:'per week', monthly:'per month' }[D.driver.rentCycle] || '';
   const daysList = (showAll ? P.slice().reverse() : P.slice(-10).reverse());
 
@@ -143,7 +165,12 @@ function render() {
       <div class="label">${pending ? 'Rent pending' : advance ? 'Paid in advance' : 'All rent paid'}</div>
       <div class="amt">${pending ? inr(pending) : advance ? inr(advance) : '✓'}</div>
       <div class="sub">${pending ? pendDays.length + ' day' + (pendDays.length === 1 ? '' : 's') + ' pending · ' + pendDays.slice(0, 3).map(label).join(', ') + (pendDays.length > 3 ? '…' : '') : 'Thank you! Nothing due right now.'}</div>
-      ${pending && upi ? `<a class="pay" href="${upi}">Pay ${inr(pending)} now (UPI)</a>
+      ${pending && upi ? `<a class="pay" href="${upi}">Pay ${inr(pending)} now (UPI)</a>` : ''}
+      ${D.upi.id ? (showOther
+        ? `<div class="other-row"><input id="otherAmt" type="number" inputmode="decimal" placeholder="Amount ₹" autofocus>
+             <button class="pay" style="margin:0" onclick="payOther()">Pay</button></div>`
+        : `<button class="pay pay-other" onclick="showOther=true;render();setTimeout(()=>document.getElementById('otherAmt').focus(),50)">Pay other amount</button>`) : ''}
+      ${D.upi.id ? `
         <div class="note">Opens your UPI app. Payments show here once the owner records them.</div>` : ''}
       ${D.driver.rentCycle === 'daily' ? `<div class="note">Daily rent is due at 8 PM and covers last night + today.</div>` : ''}
     </div>
