@@ -5,12 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0d7a6f">
 <link rel="manifest" href="manifest.json">
-<link rel="apple-touch-icon" href="logo-192.png">
+<link rel="apple-touch-icon" href="logo-192.png?v=2">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="MNS Rent">
 <title>MNS Tours &amp; Travels — My Rent</title>
-<link rel="icon" type="image/png" href="favicon.png">
+<link rel="icon" type="image/png" href="favicon.png?v=2">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -51,7 +51,6 @@ body { font-family:var(--font-body); background:var(--bg); color:var(--text); fo
 .mp-help { color:var(--text2); font-size:12px; margin-top:6px; }
 .toast { position:fixed; bottom:30px; left:50%; transform:translateX(-50%); background:var(--text); color:var(--bg); padding:9px 16px; border-radius:10px; font-weight:600; font-size:13px; z-index:99; }
 .b-wait { background:rgba(67,56,202,.10); color:#4338ca; }
-.half-btn { display:block; width:100%; margin-top:6px; text-align:center; }
 .paid-form { margin-top:14px; text-align:left; } .paid-form label { font-size:12px; font-weight:600; color:var(--text2); }
 .card.rej { border-color:var(--red); background:var(--red-soft); font-size:13px; }
 .pay-other { background:var(--surface); color:var(--accent); border:1.5px solid var(--accent); margin-top:10px; cursor:pointer; }
@@ -71,13 +70,29 @@ body { font-family:var(--font-body); background:var(--bg); color:var(--text); fo
 .foot { text-align:center; color:var(--text2); font-size:11px; margin-top:18px; }
 .install-btn[hidden] { display:none !important; }
 .logo-img { width:32px; height:32px; border-radius:9px; box-shadow:0 0 0 1px var(--border); background:#fff; }
+/* "I've paid" confirm popup — bottom sheet, same pattern as the owner app */
+.overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:flex-end; justify-content:center; z-index:50; }
+.overlay.open { display:flex; }
+.modal { background:var(--surface); width:100%; max-width:520px; border-radius:20px 20px 0 0; padding:22px 18px calc(18px + env(safe-area-inset-bottom)); animation:sheet-up .18s ease-out; }
+.modal h3 { font-family:var(--font-display); font-size:18px; text-align:center; }
+@keyframes sheet-up { from { transform:translateY(40px); opacity:0; } to { transform:none; opacity:1; } }
+.cf-amt { font-family:var(--font-display); font-size:42px; font-weight:700; color:var(--accent); text-align:center; margin:12px 0 2px; }
+.cf-for { text-align:center; color:var(--text2); font-size:13px; }
+.half-check { display:flex; align-items:center; justify-content:center; gap:8px; margin-top:16px; font-size:13px; color:var(--text2); }
+.half-check input { width:18px; height:18px; accent-color:var(--accent); }
+.cf-cancel { display:block; width:100%; text-align:center; padding:14px 0 4px; }
+.pay:disabled, .more:disabled { opacity:.75; }
+/* Spinner shown on the button while the payment is being saved */
+.spin { display:inline-block; width:16px; height:16px; margin-right:8px; vertical-align:-3px; border:2.5px solid rgba(255,255,255,.45); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="top"><h1><img class="logo-img" src="logo.png" alt="MNS">MNS Tours &amp; Travels</h1><div style="display:flex;gap:6px"><button class="icon-btn install-btn" hidden onclick="installApp()">⤓ Install</button><button class="icon-btn" onclick="loadData()">↻ Refresh</button></div></div>
+  <div class="top"><h1><img class="logo-img" src="logo.png?v=2" alt="MNS">MNS Tours &amp; Travels</h1><div style="display:flex;gap:6px"><button class="icon-btn install-btn" hidden onclick="installApp()">⤓ Install</button><button class="icon-btn" onclick="loadData()">↻ Refresh</button></div></div>
   <div id="app"><div class="msg">Loading…</div></div>
 </div>
+<div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
 
 <script>
 /* ── Drivers log in on the main page (mobile + PIN). This screen uses that login. ── */
@@ -136,24 +151,67 @@ function rangeText(list) {
   if (!list.length) return '';
   return list.length === 1 ? shortLabel(list[0]) : shortLabel(list[0]) + ' to ' + shortLabel(list[list.length - 1]);
 }
-let sending = false;
-/* One tap: full day (the usual rent). Half day is the rare option. */
-async function sendPaid(half) {
-  const full = num(D.driver.rentAmount), amount = half ? full / 2 : full;
-  if (sending) return; sending = true;
+let sending = false;   // true while an "I've paid" is on its way — blocks double taps
+
+/* Step 1: "I've paid" opens a confirm popup. Full day by default; small checkbox for a half day. */
+function openPaid() {
+  if (sending) return;
+  const full = num(D.driver.rentAmount);
+  const next = periods().find(p => p.paid + p.wait < p.due);
+  const daily = D.driver.rentCycle === 'daily';
+  document.getElementById('modal').innerHTML = `<h3>Confirm payment</h3>
+    <div class="cf-amt" id="cfAmt">${inr(full)}</div>
+    <div class="cf-for">${next ? 'Rent ' + esc(shortLabel(next)) : 'Rent advance'} · paid to the owner by UPI</div>
+    ${daily ? `<label class="half-check"><input type="checkbox" id="cfHalf" onchange="updateConfirm()"> Half day only (${inr(full / 2)})</label>` : ''}
+    <button class="pay" id="cfGo" onclick="sendPaid()">Confirm ${inr(full)}</button>
+    <button class="more cf-cancel" id="cfCancel" onclick="closePaid()">Cancel</button>`;
+  document.getElementById('overlay').classList.add('open');
+}
+const paidAmount = () => {
+  const full = num(D.driver.rentAmount), half = document.getElementById('cfHalf');
+  return half && half.checked ? full / 2 : full;
+};
+function updateConfirm() {   // checkbox ticked/unticked → update the amount shown
+  document.getElementById('cfAmt').textContent = inr(paidAmount());
+  document.getElementById('cfGo').textContent = 'Confirm ' + inr(paidAmount());
+}
+function closePaid() {
+  if (sending) return;       // can't close while saving
+  document.getElementById('overlay').classList.remove('open');
+}
+// Tap on the dark area outside the popup = Cancel
+document.getElementById('overlay').addEventListener('click', e => { if (e.target.id === 'overlay') closePaid(); });
+
+/* Lock the popup and show a spinner while saving, so a second tap can't send it twice */
+function setSending(on) {
+  sending = on;
+  const go = document.getElementById('cfGo');
+  if (go) { go.disabled = on; go.innerHTML = on ? '<span class="spin"></span>Sending…' : 'Confirm ' + inr(paidAmount()); }
+  ['cfCancel', 'cfHalf'].forEach(id => { const el = document.getElementById(id); if (el) el.disabled = on; });
+}
+
+/* Step 2: Confirm → send to the owner */
+async function sendPaid() {
+  if (sending) return;
+  const amount = paidAmount(), half = amount < num(D.driver.rentAmount);
   // Label the next day this payment covers, e.g. "Rent 16–17 Oct" (+ "half day")
   const next = periods().find(p => p.paid + p.wait < p.due);
   const label = (next ? 'Rent ' + shortLabel(next) : 'Rent advance') + (half ? ' (half day)' : '');
+  setSending(true);
   try {
     const res = await fetch(apiBase() + '/driver/claim', { method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + auth.token },
-      body: JSON.stringify({ amount, label }) });
-    const body = await res.json();
+      body: JSON.stringify({ amount, label, day: next ? next.from : null }) });
+    const body = await res.json().catch(() => ({}));
     if (res.status === 401 || res.status === 403) { toLogin(); return; }
-    if (!res.ok) { alert(body.error || 'Could not send'); return; }
-    await loadData(); flash(inr(amount) + ' sent — waiting for the owner to confirm');
+    if (!res.ok) { alert(body.error || 'Could not send — please try again'); return; }
+    // Show it as "In process" straight away; the full refresh runs in the background
+    D.claims = (D.claims || []).concat([{ id: body.id, amount, label, status: 'pending', createdAt: new Date().toISOString() }]);
+    setSending(false); closePaid(); render();
+    flash('✓ ' + inr(amount) + ' sent — waiting for the owner to confirm');
+    loadData();
   } catch { alert('No internet — please try again'); }
-  finally { sending = false; }
+  finally { if (sending) setSending(false); }
 }
 async function cancelClaim(id) {
   if (!confirm('Cancel this "I’ve paid"?')) return;
@@ -161,7 +219,7 @@ async function cancelClaim(id) {
     body: JSON.stringify({ id }) }).catch(() => {});
   loadData();
 }
-function flash(msg) { const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg; document.body.appendChild(el); setTimeout(() => el.remove(), 2200); }
+function flash(msg) { const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg; document.body.appendChild(el); setTimeout(() => el.remove(), 2800); }
 const timeShort = s => new Date(s).toLocaleString('en-IN', { day:'numeric', month:'short', hour:'numeric', minute:'2-digit' });
 function label(p) {
   if (D.driver.rentCycle !== 'daily') return fmtRange(p.from, p.to);
@@ -196,8 +254,7 @@ function render() {
       <div class="amt">${pending ? inr(pending) : waitAmt ? inr(waitAmt) : advance ? inr(advance) : '✓'}</div>
       <div class="sub">${pending ? pendDays.length + ' day' + (pendDays.length === 1 ? '' : 's') + ' pending · ' + pendDays.slice(0, 3).map(label).join(', ') + (pendDays.length > 3 ? '…' : '')
         : waitAmt ? 'You marked it paid — it shows as Paid once the owner confirms.' : 'Thank you! Nothing due right now.'}</div>
-      <button class="pay" onclick="sendPaid(false)">✓ I've paid ${inr(D.driver.rentAmount)}</button>
-      ${D.driver.rentCycle === 'daily' ? `<button class="more half-btn" onclick="sendPaid(true)">Paid half day (${inr(num(D.driver.rentAmount) / 2)})</button>` : ''}
+      <button class="pay" onclick="openPaid()">✓ I've paid ${inr(D.driver.rentAmount)}</button>
       <div class="note">Pay the owner by UPI as usual, then tap here.</div>
       ${D.driver.rentCycle === 'daily' ? `<div class="note">Daily rent is due at 8 PM and covers last night + today.</div>` : ''}
     </div>
