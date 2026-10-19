@@ -304,6 +304,56 @@ a { color: inherit; text-decoration: none; }
 .edit-actions .admin-mini-btn { padding: 7px 16px; font-size: 12px; }
 @media (max-width: 640px) { .admin-panel { padding: 18px; } }
 </style>
+
+<!-- Skeleton loader (shared pattern, Oct 2026): grey shimmer placeholders
+     shown while live data loads, instead of "Loading…" text or stale data. -->
+<style>
+:root { --sk-a: rgba(128,128,150,.10); --sk-b: rgba(128,128,150,.22); }
+@keyframes sk-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+.sk-block {
+  display: inline-block; height: 12px; border-radius: 4px; vertical-align: middle; max-width: 100%;
+  background: linear-gradient(90deg, var(--sk-a) 0%, var(--sk-b) 50%, var(--sk-a) 100%);
+  background-size: 800px 100%; animation: sk-shimmer 1.2s linear infinite;
+}
+.sk-row td { padding-top: 16px !important; padding-bottom: 16px !important; }
+.sk-row:hover, .sk-row:hover td { background: transparent !important; }
+.sk-list-item { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+@media (prefers-reduced-motion: reduce) { .sk-block { animation: none; } }
+</style>
+<script>
+// skRows(cols, n) → HTML for n placeholder table rows with `cols` cells.
+// First cell gets a two-line block (name + sub-line); the rest one block.
+function skRows(cols, n) {
+  var w = [60, 44, 70, 36, 52, 40, 64, 30];
+  var html = '';
+  for (var i = 0; i < (n || 6); i++) {
+    html += '<tr class="sk-row">';
+    for (var c = 0; c < cols; c++) {
+      html += '<td>' + (c === 0
+        ? '<span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span>'
+        : '<span class="sk-block" style="width:' + w[(c + i) % w.length] + 'px"></span>') + '</td>';
+    }
+    html += '</tr>';
+  }
+  return html;
+}
+// skList(n) → HTML for n placeholder list items (for non-table lists).
+function skList(n) {
+  var html = '';
+  for (var i = 0; i < (n || 4); i++) {
+    html += '<div class="sk-list-item"><span class="sk-block" style="width:32px;height:32px;border-radius:50%"></span>' +
+      '<span style="flex:1"><span class="sk-block" style="width:' + (160 + (i % 3) * 30) + 'px"></span><br>' +
+      '<span class="sk-block" style="width:110px;height:9px;margin-top:8px"></span></span></div>';
+  }
+  return html;
+}
+// skClear() → on a failed load, swap any number placeholders back to "—"
+// and drop placeholder tiles, so nothing keeps shimmering after an error.
+function skClear() {
+  document.querySelectorAll('.sk-num').forEach(function (el) { if (el.parentNode) el.parentNode.textContent = '\u2014'; });
+  document.querySelectorAll('.sk-tile').forEach(function (el) { el.remove(); });
+}
+</script>
 </head>
 <body>
 
@@ -605,7 +655,7 @@ a { color: inherit; text-decoration: none; }
 
   // List shows only Name (@username below), Email, Role. Click a row to edit.
   async function loadUsers() {
-    userListEl.innerHTML = '<div style="padding:10px 0;color:var(--text-faint);font-size:11px;">Loading…</div>';
+    userListEl.innerHTML = skList(5);
     const res = await api('adminListUsers', { method: 'POST', body: {} });
     if (!res.ok) { userListEl.innerHTML = '<div style="color:#f87171;font-size:11px;">' + escapeHtml(res.error || 'Failed to load users') + '</div>'; return; }
     userListEl.innerHTML = '';

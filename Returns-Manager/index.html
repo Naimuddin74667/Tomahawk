@@ -474,6 +474,56 @@ html[data-theme="light"] .icon-moon{display:none}
 .hdr-role-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:20px;background:var(--tm-bg);color:var(--tm);border:1px solid var(--tm-border,var(--bd));margin-left:2px}
 .access-denied-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:'DM Sans',sans-serif;color:var(--tx);background:var(--bg);text-align:center;padding:20px}
 </style>
+
+<!-- Skeleton loader (shared pattern, Oct 2026): grey shimmer placeholders
+     shown while live data loads, instead of "Loading…" text or stale data. -->
+<style>
+:root { --sk-a: rgba(128,128,150,.10); --sk-b: rgba(128,128,150,.22); }
+@keyframes sk-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+.sk-block {
+  display: inline-block; height: 12px; border-radius: 4px; vertical-align: middle; max-width: 100%;
+  background: linear-gradient(90deg, var(--sk-a) 0%, var(--sk-b) 50%, var(--sk-a) 100%);
+  background-size: 800px 100%; animation: sk-shimmer 1.2s linear infinite;
+}
+.sk-row td { padding-top: 16px !important; padding-bottom: 16px !important; }
+.sk-row:hover, .sk-row:hover td { background: transparent !important; }
+.sk-list-item { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+@media (prefers-reduced-motion: reduce) { .sk-block { animation: none; } }
+</style>
+<script>
+// skRows(cols, n) → HTML for n placeholder table rows with `cols` cells.
+// First cell gets a two-line block (name + sub-line); the rest one block.
+function skRows(cols, n) {
+  var w = [60, 44, 70, 36, 52, 40, 64, 30];
+  var html = '';
+  for (var i = 0; i < (n || 6); i++) {
+    html += '<tr class="sk-row">';
+    for (var c = 0; c < cols; c++) {
+      html += '<td>' + (c === 0
+        ? '<span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span>'
+        : '<span class="sk-block" style="width:' + w[(c + i) % w.length] + 'px"></span>') + '</td>';
+    }
+    html += '</tr>';
+  }
+  return html;
+}
+// skList(n) → HTML for n placeholder list items (for non-table lists).
+function skList(n) {
+  var html = '';
+  for (var i = 0; i < (n || 4); i++) {
+    html += '<div class="sk-list-item"><span class="sk-block" style="width:32px;height:32px;border-radius:50%"></span>' +
+      '<span style="flex:1"><span class="sk-block" style="width:' + (160 + (i % 3) * 30) + 'px"></span><br>' +
+      '<span class="sk-block" style="width:110px;height:9px;margin-top:8px"></span></span></div>';
+  }
+  return html;
+}
+// skClear() → on a failed load, swap any number placeholders back to "—"
+// and drop placeholder tiles, so nothing keeps shimmering after an error.
+function skClear() {
+  document.querySelectorAll('.sk-num').forEach(function (el) { if (el.parentNode) el.parentNode.textContent = '—'; });
+  document.querySelectorAll('.sk-tile').forEach(function (el) { el.remove(); });
+}
+</script>
 </head>
 <body>
 <script>(function(){var t=localStorage.getItem('tm_theme');if(t){document.documentElement.setAttribute('data-theme',t);}else{document.documentElement.setAttribute('data-theme','dark');}})();</script>
@@ -2641,6 +2691,19 @@ function renderListStats(){
 }
 
 // ── Dashboard ─────────────────────────────────────────────────
+// Skeleton for the dashboard's numbers + recent list during the first live load.
+function showDashSkeleton(){
+  ['m-total','m-fba-total','m-putaway','m-pending','m-cp','m-co','d-approved','d-cr','d-rej','d-maint'].forEach(id=>{
+    const e=document.getElementById(id);
+    if(e) e.innerHTML='<span class="sk-block sk-num" style="width:44px;height:20px"></span>';
+  });
+  ['nb-pending','nb-cl','nb-maint','nb-putaway','nb-trash','nb-wrong'].forEach(id=>{
+    const e=document.getElementById(id);
+    if(e) e.innerHTML='<span class="sk-block sk-num" style="width:14px;height:9px"></span>';
+  });
+  const rl=document.getElementById('recent-list');
+  if(rl) rl.innerHTML=skList(5);
+}
 function updateDashboard(){
   document.getElementById('dash-greeting').textContent=greeting();
   const pend=returns.filter(r=>r.status==='Return Pending').length;
@@ -3139,6 +3202,7 @@ async function sbLoad(isRetry) {
       setTimeout(() => sbLoad(true), 2000);
     } else {
       setSyncStatus('error', 'Load failed');
+      skClear(); const rl=document.getElementById('recent-list'); if(rl) rl.innerHTML='<div class="empty-ri">Couldn\'t load returns — refresh to retry</div>';
       toast('Load failed: ' + err.message);
     }
   }
@@ -3937,11 +4001,15 @@ function initTheme() {
   document.documentElement.setAttribute('data-theme', theme);
   updateThemeButtons(theme);
 }
-initTheme();updateFBABadges();
+initTheme();
 if(IS_LIVE){
+  // Live: show skeleton placeholders (not the browser-saved copy, not "0")
+  // until sbLoad() brings the real D1 data, then updateDashboard() fills them.
+  showDashSkeleton();
   setSyncStatus('','Loading...');
   sbLoad();
 }else{
+  updateFBABadges();
   setSyncStatus('synced','Local only');
 }
 if(SYNC_FK_SHEET){

@@ -217,6 +217,56 @@
 .role-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:var(--radius-xl);background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent-border);margin-left:2px}
 .access-denied-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:'DM Sans',sans-serif;color:var(--text-primary,#e8e8f0);background:var(--bg-base,#0c0c14);text-align:center;padding:20px}
 </style>
+
+<!-- Skeleton loader (shared pattern, Oct 2026): grey shimmer placeholders
+     shown while live data loads, instead of "Loading…" text or stale data. -->
+<style>
+:root { --sk-a: rgba(128,128,150,.10); --sk-b: rgba(128,128,150,.22); }
+@keyframes sk-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+.sk-block {
+  display: inline-block; height: 12px; border-radius: 4px; vertical-align: middle; max-width: 100%;
+  background: linear-gradient(90deg, var(--sk-a) 0%, var(--sk-b) 50%, var(--sk-a) 100%);
+  background-size: 800px 100%; animation: sk-shimmer 1.2s linear infinite;
+}
+.sk-row td { padding-top: 16px !important; padding-bottom: 16px !important; }
+.sk-row:hover, .sk-row:hover td { background: transparent !important; }
+.sk-list-item { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+@media (prefers-reduced-motion: reduce) { .sk-block { animation: none; } }
+</style>
+<script>
+// skRows(cols, n) → HTML for n placeholder table rows with `cols` cells.
+// First cell gets a two-line block (name + sub-line); the rest one block.
+function skRows(cols, n) {
+  var w = [60, 44, 70, 36, 52, 40, 64, 30];
+  var html = '';
+  for (var i = 0; i < (n || 6); i++) {
+    html += '<tr class="sk-row">';
+    for (var c = 0; c < cols; c++) {
+      html += '<td>' + (c === 0
+        ? '<span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span>'
+        : '<span class="sk-block" style="width:' + w[(c + i) % w.length] + 'px"></span>') + '</td>';
+    }
+    html += '</tr>';
+  }
+  return html;
+}
+// skList(n) → HTML for n placeholder list items (for non-table lists).
+function skList(n) {
+  var html = '';
+  for (var i = 0; i < (n || 4); i++) {
+    html += '<div class="sk-list-item"><span class="sk-block" style="width:32px;height:32px;border-radius:50%"></span>' +
+      '<span style="flex:1"><span class="sk-block" style="width:' + (160 + (i % 3) * 30) + 'px"></span><br>' +
+      '<span class="sk-block" style="width:110px;height:9px;margin-top:8px"></span></span></div>';
+  }
+  return html;
+}
+// skClear() → on a failed load, swap any number placeholders back to "—"
+// and drop placeholder tiles, so nothing keeps shimmering after an error.
+function skClear() {
+  document.querySelectorAll('.sk-num').forEach(function (el) { if (el.parentNode) el.parentNode.textContent = '\u2014'; });
+  document.querySelectorAll('.sk-tile').forEach(function (el) { el.remove(); });
+}
+</script>
 </head>
 <body>
 <script>(function(){var t=localStorage.getItem('tm_theme');if(t==='light'){document.documentElement.setAttribute('data-theme','light');}})();</script>
@@ -573,17 +623,17 @@
       <div class="ro-stats-row">
         <div class="ro-stat-card is-active-view" id="ledgerCardTotal" onclick="ledgerSetCardFilter('all')" title="Show all consignments">
           <div class="ro-stat-label">Total Consignments</div>
-          <div class="ro-stat-value" id="ledgerStatTotal">&mdash;</div>
+          <div class="ro-stat-value" id="ledgerStatTotal"><span class="sk-block sk-num" style="width:48px;height:22px"></span></div>
           <div class="ro-stat-sub">all tracked consignments</div>
         </div>
         <div class="ro-stat-card" id="ledgerCardActive" onclick="ledgerSetCardFilter('active')" title="Filter: not yet Inwarded or Short Received">
           <div class="ro-stat-label">Active Consignments</div>
-          <div class="ro-stat-value accent" id="ledgerStatActive">&mdash;</div>
+          <div class="ro-stat-value accent" id="ledgerStatActive"><span class="sk-block sk-num" style="width:48px;height:22px"></span></div>
           <div class="ro-stat-sub">not yet Inwarded or Short Received</div>
         </div>
         <div class="ro-stat-card" id="ledgerCardPendingPickup" onclick="ledgerSetCardFilter('pendingPickup')" title="Filter: not yet picked up from our warehouse">
           <div class="ro-stat-label">Pending For Pickup</div>
-          <div class="ro-stat-value accent" id="ledgerStatPendingPickup">&mdash;</div>
+          <div class="ro-stat-value accent" id="ledgerStatPendingPickup"><span class="sk-block sk-num" style="width:48px;height:22px"></span></div>
           <div class="ro-stat-sub">not yet picked up from our warehouse</div>
         </div>
       </div>
@@ -605,7 +655,7 @@
             </tr>
           </thead>
           <tbody id="ledgerTbody">
-            <tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>
+            <tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:44px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td><td><span class="sk-block" style="width:60px"></span></td><td><span class="sk-block" style="width:44px"></span></td></tr><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td><td><span class="sk-block" style="width:60px"></span></td><td><span class="sk-block" style="width:44px"></span></td><td><span class="sk-block" style="width:70px"></span></td></tr><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td><td><span class="sk-block" style="width:60px"></span></td><td><span class="sk-block" style="width:44px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td></tr><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td><td><span class="sk-block" style="width:60px"></span></td><td><span class="sk-block" style="width:44px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td></tr><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td><td><span class="sk-block" style="width:60px"></span></td><td><span class="sk-block" style="width:44px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td></tr><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td><td><span class="sk-block" style="width:60px"></span></td><td><span class="sk-block" style="width:44px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td></tr>
           </tbody>
         </table>
       </div>
@@ -1206,7 +1256,7 @@ function flushPendingLedgerSyncs() {
 
 function ledgerLoad() {
   var tbody = document.getElementById('ledgerTbody');
-  if(tbody) tbody.innerHTML = '<tr><td colspan="10" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr>';
+  if(tbody) tbody.innerHTML = skRows(10, 6);
   fetch(getWorkerBase() + '?action=fkLedgerLoad')
     .then(function(r){ return r.json(); })
     .then(function(data){

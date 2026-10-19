@@ -613,6 +613,64 @@
 .topbar-logout-btn[hidden]{display:none}
 .access-denied-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:var(--sans);color:var(--text);background:var(--bg);text-align:center;padding:20px}
 </style>
+
+<!-- Skeleton loader (shared pattern, Oct 2026): grey shimmer placeholders
+     shown while live data loads, instead of "Loading…" text or stale data. -->
+<style>
+:root { --sk-a: rgba(128,128,150,.10); --sk-b: rgba(128,128,150,.22); }
+@keyframes sk-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+.sk-block {
+  display: inline-block; height: 12px; border-radius: 4px; vertical-align: middle; max-width: 100%;
+  background: linear-gradient(90deg, var(--sk-a) 0%, var(--sk-b) 50%, var(--sk-a) 100%);
+  background-size: 800px 100%; animation: sk-shimmer 1.2s linear infinite;
+}
+.sk-row td { padding-top: 16px !important; padding-bottom: 16px !important; }
+.sk-row:hover, .sk-row:hover td { background: transparent !important; }
+.sk-list-item { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+@media (prefers-reduced-motion: reduce) { .sk-block { animation: none; } }
+
+/* While the first cloud load runs, data tabs show a skeleton instead of
+   the copy saved in this browser (which can be days old). */
+.st-sk { display: none; padding: 8px 0; }
+body.st-loading .st-sk { display: block; }
+body.st-loading #tab-master > :not(.st-sk), body.st-loading #tab-loose > :not(.st-sk),
+body.st-loading #tab-final > :not(.st-sk), body.st-loading #tab-bin > :not(.st-sk),
+body.st-loading #tab-uc > :not(.st-sk) { display: none !important; }
+</style>
+<script>
+// skRows(cols, n) → HTML for n placeholder table rows with `cols` cells.
+// First cell gets a two-line block (name + sub-line); the rest one block.
+function skRows(cols, n) {
+  var w = [60, 44, 70, 36, 52, 40, 64, 30];
+  var html = '';
+  for (var i = 0; i < (n || 6); i++) {
+    html += '<tr class="sk-row">';
+    for (var c = 0; c < cols; c++) {
+      html += '<td>' + (c === 0
+        ? '<span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span>'
+        : '<span class="sk-block" style="width:' + w[(c + i) % w.length] + 'px"></span>') + '</td>';
+    }
+    html += '</tr>';
+  }
+  return html;
+}
+// skList(n) → HTML for n placeholder list items (for non-table lists).
+function skList(n) {
+  var html = '';
+  for (var i = 0; i < (n || 4); i++) {
+    html += '<div class="sk-list-item"><span class="sk-block" style="width:32px;height:32px;border-radius:50%"></span>' +
+      '<span style="flex:1"><span class="sk-block" style="width:' + (160 + (i % 3) * 30) + 'px"></span><br>' +
+      '<span class="sk-block" style="width:110px;height:9px;margin-top:8px"></span></span></div>';
+  }
+  return html;
+}
+// skClear() → on a failed load, swap any number placeholders back to "—"
+// and drop placeholder tiles, so nothing keeps shimmering after an error.
+function skClear() {
+  document.querySelectorAll('.sk-num').forEach(function (el) { if (el.parentNode) el.parentNode.textContent = '—'; });
+  document.querySelectorAll('.sk-tile').forEach(function (el) { el.remove(); });
+}
+</script>
 </head>
 <body>
 
@@ -1339,6 +1397,7 @@ async function apiPost(action, body) {
 async function loadFromWorker() {
   if (IS_LOCAL) { setSyncStatus('local'); return; }
   setSyncStatus('syncing');
+  showLoadSkeleton();
   try {
     const data = await apiGet('loadStock');
     if (!data.ok) throw new Error(data.error);
@@ -1370,7 +1429,33 @@ async function loadFromWorker() {
   } catch(e) {
     setSyncStatus('error');
     showToast('⚠ Cloud sync failed — using local data', true);
+  } finally {
+    hideLoadSkeleton();
   }
+}
+
+// Skeleton on the data tabs during a cloud load (see .st-sk CSS).
+function showLoadSkeleton() {
+  ['tab-master', 'tab-loose', 'tab-final', 'tab-bin', 'tab-uc'].forEach(id => {
+    const page = document.getElementById(id);
+    if (page && !page.querySelector('.st-sk')) {
+      const sk = document.createElement('div');
+      sk.className = 'st-sk';
+      sk.innerHTML = '<span class="sk-block" style="width:200px;height:22px;margin-bottom:18px"></span>' + skList(6);
+      page.prepend(sk);
+    }
+  });
+  document.body.classList.add('st-loading');
+}
+// Remove the skeleton and redraw whichever tab is open with fresh data.
+function hideLoadSkeleton() {
+  document.body.classList.remove('st-loading');
+  const active = document.querySelector('.page.active');
+  const tab = active ? active.id.replace('tab-', '') : '';
+  if (tab === 'master') renderMaster();
+  if (tab === 'loose') renderLoose();
+  if (tab === 'final') renderFinal();
+  if (tab === 'uc') renderUC();
 }
 
 loadFromWorker();

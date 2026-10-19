@@ -263,6 +263,56 @@
 .role-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:var(--radius-xl);background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent-border);margin-left:2px}
 .access-denied-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:'DM Sans',sans-serif;color:var(--text-primary,#e8e8f0);background:var(--bg-base,#0c0c14);text-align:center;padding:20px}
 </style>
+
+<!-- Skeleton loader (shared pattern, Oct 2026): grey shimmer placeholders
+     shown while live data loads, instead of "Loading…" text or stale data. -->
+<style>
+:root { --sk-a: rgba(128,128,150,.10); --sk-b: rgba(128,128,150,.22); }
+@keyframes sk-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+.sk-block {
+  display: inline-block; height: 12px; border-radius: 4px; vertical-align: middle; max-width: 100%;
+  background: linear-gradient(90deg, var(--sk-a) 0%, var(--sk-b) 50%, var(--sk-a) 100%);
+  background-size: 800px 100%; animation: sk-shimmer 1.2s linear infinite;
+}
+.sk-row td { padding-top: 16px !important; padding-bottom: 16px !important; }
+.sk-row:hover, .sk-row:hover td { background: transparent !important; }
+.sk-list-item { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+@media (prefers-reduced-motion: reduce) { .sk-block { animation: none; } }
+</style>
+<script>
+// skRows(cols, n) → HTML for n placeholder table rows with `cols` cells.
+// First cell gets a two-line block (name + sub-line); the rest one block.
+function skRows(cols, n) {
+  var w = [60, 44, 70, 36, 52, 40, 64, 30];
+  var html = '';
+  for (var i = 0; i < (n || 6); i++) {
+    html += '<tr class="sk-row">';
+    for (var c = 0; c < cols; c++) {
+      html += '<td>' + (c === 0
+        ? '<span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span>'
+        : '<span class="sk-block" style="width:' + w[(c + i) % w.length] + 'px"></span>') + '</td>';
+    }
+    html += '</tr>';
+  }
+  return html;
+}
+// skList(n) → HTML for n placeholder list items (for non-table lists).
+function skList(n) {
+  var html = '';
+  for (var i = 0; i < (n || 4); i++) {
+    html += '<div class="sk-list-item"><span class="sk-block" style="width:32px;height:32px;border-radius:50%"></span>' +
+      '<span style="flex:1"><span class="sk-block" style="width:' + (160 + (i % 3) * 30) + 'px"></span><br>' +
+      '<span class="sk-block" style="width:110px;height:9px;margin-top:8px"></span></span></div>';
+  }
+  return html;
+}
+// skClear() → on a failed load, swap any number placeholders back to "—"
+// and drop placeholder tiles, so nothing keeps shimmering after an error.
+function skClear() {
+  document.querySelectorAll('.sk-num').forEach(function (el) { if (el.parentNode) el.parentNode.textContent = '\u2014'; });
+  document.querySelectorAll('.sk-tile').forEach(function (el) { el.remove(); });
+}
+</script>
 </head>
 <body>
 <script>(function(){var t=localStorage.getItem('tm_theme');if(t==='light'){document.documentElement.setAttribute('data-theme','light');}})();</script>
@@ -532,17 +582,17 @@ html[data-theme="light"] .bulk-table th,html[data-theme="light"] .bulk-footer{ba
   <div class="ro-stats-row">
     <div class="ro-stat-card is-active-view" id="cardAll" onclick="ledgerSetFilter('all')">
       <div class="ro-stat-label">Total POs</div>
-      <div class="ro-stat-value" id="statAll">&mdash;</div>
+      <div class="ro-stat-value" id="statAll"><span class="sk-block sk-num" style="width:48px;height:22px"></span></div>
       <div class="ro-stat-sub">all uploaded POs</div>
     </div>
     <div class="ro-stat-card" id="cardActive" onclick="ledgerSetFilter('active')">
       <div class="ro-stat-label">Active</div>
-      <div class="ro-stat-value" id="statActive">&mdash;</div>
+      <div class="ro-stat-value" id="statActive"><span class="sk-block sk-num" style="width:48px;height:22px"></span></div>
       <div class="ro-stat-sub">not received, picked up, cancelled or expired</div>
     </div>
     <div class="ro-stat-card" id="cardAwaiting" onclick="ledgerSetFilter('awaiting')">
       <div class="ro-stat-label">Awaiting Appointment</div>
-      <div class="ro-stat-value accent" id="statAwaiting">&mdash;</div>
+      <div class="ro-stat-value accent" id="statAwaiting"><span class="sk-block sk-num" style="width:48px;height:22px"></span></div>
       <div class="ro-stat-sub">active, no appointment booked</div>
     </div>
     <div class="ro-stat-card" id="cardUrgent" onclick="ledgerSetFilter('urgent')">
@@ -571,7 +621,7 @@ html[data-theme="light"] .bulk-table th,html[data-theme="light"] .bulk-footer{ba
           <th>PO Expiry</th><th>Appointment</th><th>Gatepass</th><th class="tc">Status</th>
         </tr>
       </thead>
-      <tbody id="ledgerTbody"><tr><td colspan="11" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">Loading...</td></tr></tbody>
+      <tbody id="ledgerTbody"><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:44px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td><td><span class="sk-block" style="width:60px"></span></td><td><span class="sk-block" style="width:44px"></span></td><td><span class="sk-block" style="width:70px"></span></td></tr><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td><td><span class="sk-block" style="width:60px"></span></td><td><span class="sk-block" style="width:44px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td></tr><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td><td><span class="sk-block" style="width:60px"></span></td><td><span class="sk-block" style="width:44px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td></tr><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td><td><span class="sk-block" style="width:60px"></span></td><td><span class="sk-block" style="width:44px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td></tr><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td><td><span class="sk-block" style="width:60px"></span></td><td><span class="sk-block" style="width:44px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td></tr><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td><td><span class="sk-block" style="width:60px"></span></td><td><span class="sk-block" style="width:44px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td></tr></tbody>
     </table>
   </div>
   <div id="ledgerPager" style="display:none;flex-shrink:0;align-items:center;justify-content:center;gap:1rem;padding:.45rem 1.4rem;border-top:1px solid var(--border);background:var(--surface)">
@@ -1305,9 +1355,11 @@ function ledgerLoad() {
       if (!g.po_number) return;
       (S.gatepass[g.po_number] = S.gatepass[g.po_number] || []).push(g);
     });
+    window._imLoaded = true;
     ledgerRender();
     invFillPoSelect(); lblFillPoSelect();
   }).catch(function (e) {
+    skClear();
     document.getElementById('ledgerTbody').innerHTML = '<tr><td colspan="11" style="padding:3rem;text-align:center;color:#e05555;font-size:11px">Failed to load: ' + esc(e.message) + '</td></tr>';
   });
 }
@@ -1357,6 +1409,9 @@ function gatepassCell(po) {
 }
 
 function ledgerRender() {
+  // Keep the skeleton until the first live load lands (applyRoleUI calls
+  // this early, which used to flash "0" / "No POs yet").
+  if (!window._imLoaded) return;
   var tb = document.getElementById('ledgerTbody');
   if (!tb) return;
   var q = (document.getElementById('ledgerSearch').value || '').trim().toLowerCase();
