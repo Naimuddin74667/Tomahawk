@@ -1024,16 +1024,14 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 (function () {
 
   // ---- CONFIG -------------------------------------------------
-  // No longer called directly — proxied + edge-cached via Worker action
-  // sa_loadAll instead (see loadData()). Kept here for reference/debugging.
-  var UC_INVENTORY_GAS_URL = 'https://script.google.com/macros/s/AKfycbwPnZl404I0IVHgIxy6QRxSCdep3XbqufE73w8ZdA1qugPEdygzoRhtht10RWT6fkjGTQ/exec';
+  // All stock / bundle data comes from the Worker (sa_loadAll), which reads
+  // only the Supabase API mirror — no Google Sheet / Apps Script.
   var WORKER_URL = 'https://tomahawk-returns.naimuddin.workers.dev';
 
   // ---- BUNDLE MASTER DATA ---------------------------------------------------
-  // Live bundle/master SKU composition, fetched from the Stock Alert GAS
-  // bridge (?type=bundles), which reads UC_BundleComposition (+ category
-  // from UC_ItemMaster) off the primary UC sheet. No more manual re-export —
-  // this refreshes on every Refresh/load, same as UC_Inventory does.
+  // Live bundle/master SKU composition from the Supabase mirror
+  // (stock_alert_bundles(): uc_bundle_composition + category from
+  // uc_item_types), via sa_loadAll. Refreshes on every Refresh/load.
   // Cached to localStorage so the Bundle SKU view still shows something if a
   // given refresh fails (e.g. flaky connection) — see loadCachedBundleData().
   // Shape: { masterSku: { name, category, enabled, components: [{sku, qty}] } }
@@ -1181,10 +1179,8 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 
   // ---- FETCH ------------------------------------------------------
   // Single combined round trip — the Worker's sa_loadAll action fetches
-  // UC_Inventory + bundles from the GAS bridge (edge-cached there for 5 min,
-  // since those two Apps Script calls are the slow part — cold starts +
-  // full-sheet reads) and bundles them with all four D1 metadata queries
-  // into one response. This replaces what used to be 6 separate client-side
+  // UC stock + bundles from the Supabase mirror (60 s edge cache) and
+  // bundles them with all the D1 metadata queries into one response. This replaces what used to be 6 separate client-side
   // fetches with 1.
   function loadData() {
     refreshBtn.classList.add('is-loading');
@@ -1217,8 +1213,8 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
         defaultRecQtyInput.value = (appSettings.default_rec_qty != null && appSettings.default_rec_qty !== '') ? appSettings.default_rec_qty : '';
         renderRecQtySettingsList();
 
-        // Bundle SKU data — live from UC_BundleComposition via the GAS
-        // bridge. If this fetch failed or errored, keep whatever's already
+        // Bundle SKU data — live from the Supabase mirror. If this fetch
+        // failed or errored, keep whatever's already
         // in BUNDLE_MASTER_DATA (the localStorage cache from last success),
         // so the Bundle SKU view doesn't just go blank on a flaky refresh.
         var bundlesData = data.bundles || {};
@@ -1281,8 +1277,7 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   }
 
   // Header label: which feed the rows came from + when it was last synced.
-  // 'supabase' = live API mirror (primary); 'sheet-fallback' = Supabase was
-  // down so the Worker served the old GAS sheet (up to ~2 h stale).
+  // 'supabase' = live API mirror (the only source now — no sheet fallback).
   function describeSource(invData) {
     if (invData.source === 'supabase') {
       if (!invData.syncedAt) return 'Supabase';
@@ -1290,7 +1285,6 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       if (isNaN(d)) return 'Supabase';
       return 'Supabase · synced ' + d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
     }
-    if (invData.source === 'sheet-fallback') return 'sheet fallback (Supabase down)';
     return 'live';
   }
 
@@ -1308,9 +1302,9 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   // A SKU with no channel listing of its own is still NOT "Ideal Stock" if
   // it's a component of a bundle that IS linked to a marketplace — it gets
   // sold through that bundle. Uses the real bundle recipes from
-  // UC_BundleComposition (BUNDLE_MASTER_DATA, via the GAS bridge's
-  // ?type=bundles route) and each bundle's hasChannelListing flag (GAS v17:
-  // true = at least one LINKED row in UC_ChannelListings, any channel).
+  // uc_bundle_composition (BUNDLE_MASTER_DATA, from the Supabase mirror)
+  // and each bundle's hasChannelListing flag (true = at least one LINKED
+  // row in uc_channel_listings, any channel).
   // Replaces the old SKU-naming heuristic (SPR_/Bare-Tool pattern guessing).
   // Result: bundleComponentMap = { childSku: [linkedParentSku, ...] }
   // NOTE: an older localStorage bundle cache (pre-v17) has no

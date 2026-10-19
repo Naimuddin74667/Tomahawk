@@ -12,10 +12,9 @@ const CORS = {
 
 const GSHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ6Rf-UNZQV6mN-NjbbX8YPJf-B0lEoPRWsozKmfoDTB5KpXXthHfGH_qnJDEhR_uB38gy_0n3N7fwv/pub?gid=997578035&single=true&output=csv';
 
-// Stock Alert — UC_Inventory GAS bridge (same endpoint the frontend used to
-// call directly). Now only a FALLBACK for sa_loadAll — primary source is the
-// Supabase API mirror (stock_alert_inventory / stock_alert_bundles functions).
-const SA_UC_GAS_URL = 'https://script.google.com/macros/s/AKfycbwPnZl404I0IVHgIxy6QRxSCdep3XbqufE73w8ZdA1qugPEdygzoRhtht10RWT6fkjGTQ/exec';
+// UC / Amazon data (stock, bundles, gate passes, Amazon listings and
+// inbound shipments) comes ONLY from the Supabase API mirror — the old
+// UC_Inventory_API Apps Script bridge was cut off in Oct 2026.
 
 // Amazon FC Appointment Email Watcher — manually paused (temporary, while
 // the shipment-tracking logic is being reworked). Blocks both the 15-min
@@ -430,25 +429,76 @@ async function runStockAlertCheck(env, opts) {
   return { count: list.length, newCount: newOnes.length, reason, sent };
 }
 
-// ── Shared edge-cached GAS fetch — used by Returns Verifier's bundle list
-// (rsv_getBundleSkus). The Ops Chatbot no longer uses it — it reads the
-// Supabase mirror live (see chatInventoryLive). Kept separate from
-// sa_loadAll's own local cachedGasFetch. Same pattern:
-// Cloudflare's default cache keyed by a synthetic internal URL, 5 min TTL,
-// so repeat questions don't hit Apps Script every time. ──
-async function fetchGasCached(gasUrl, cacheKeyUrl) {
-  const cache = caches.default;
-  const cacheKey = new Request(cacheKeyUrl);
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached.json();
-  const res = await fetch(gasUrl);
-  if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
-  const text = await res.text();
-  const response = new Response(text, {
-    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300' }
+// ── Supabase API mirror — shared read helpers (SK's sync, ~15 min) ──
+// Calls a read-only SQL function in the mirror and returns its JSON.
+async function supabaseRpcJson(env, fnName, args) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured on Worker');
+  const r = await fetch(env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/rpc/' + fnName, {
+    method: 'POST', headers: supabaseHeaders(env), body: JSON.stringify(args || {})
   });
-  await cache.put(cacheKey, response.clone());
-  return JSON.parse(text);
+  if (!r.ok) throw new Error('Supabase ' + fnName + ' failed: ' + r.status + ' ' + (await r.text()).slice(0, 200));
+  return r.json();
+}
+
+// UC gate passes addressed to one party (toPartyCode: 'Blinkit', 'Instamart',
+// 'Amazon-FBA', 'FK-FBF' …), live from uc_gatepass (one row per gate pass ×
+// SKU). Returns one entry per gate pass, newest first:
+//   { gatepass_code, status, type, facility, reference, created, quantity, items:[{sku, qty}] }
+async function ucGatepassesLive(env, partyCode) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured on Worker');
+  const base = env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/uc_gatepass'
+    + '?select=gatepass_code,facility,status,gp_type,sku,quantity,created_at,ref:raw->gatepass->>reference'
+    + '&raw->gatepass->>toPartyCode=eq.' + encodeURIComponent(partyCode)
+    + '&order=created_at.desc,gatepass_code.asc';
+  const byCode = new Map();
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const r = await fetch(base + '&limit=' + PAGE + '&offset=' + from, { headers: supabaseHeaders(env) });
+    if (!r.ok) throw new Error('Supabase uc_gatepass ' + r.status);
+    const rows = await r.json();
+    rows.forEach(row => {
+      let gp = byCode.get(row.gatepass_code);
+      if (!gp) {
+        gp = { gatepass_code: row.gatepass_code, status: row.status, type: row.gp_type, facility: row.facility,
+               reference: String(row.ref || '').trim(), created: row.created_at, quantity: 0, items: [] };
+        byCode.set(row.gatepass_code, gp);
+      }
+      const q = Number(row.quantity) || 0;
+      gp.quantity += q;
+      if (row.sku) gp.items.push({ sku: row.sku, qty: q });
+    });
+    if (rows.length < PAGE) break;
+  }
+  return [...byCode.values()];
+}
+
+// First run of 6+ digits in a gate-pass reference — the RO / PO / consignment
+// number ("RO 43886110058068", "50033210036310.0", " 204685953").
+function gpRefNumber(ref) {
+  const m = String(ref || '').match(/\d{6,}/);
+  return m ? m[0] : null;
+}
+
+// Amazon gate-pass references are FBA shipment IDs, sometimes with a hand-typed
+// suffix ("FBA15M8YWFT5-760qty"). Shipment IDs never contain "-", so keep
+// everything before the first one.
+function gpAmazonRef(ref) {
+  return String(ref || '').split('-')[0].trim();
+}
+
+// Bundle (parent) SKU codes from uc_bundle_composition.
+async function ucBundleParentSkus(env) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured on Worker');
+  const base = env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/uc_bundle_composition?select=parent_sku';
+  const set = new Set();
+  for (let from = 0; ; from += 1000) {
+    const r = await fetch(base + '&limit=1000&offset=' + from, { headers: supabaseHeaders(env) });
+    if (!r.ok) throw new Error('Supabase uc_bundle_composition ' + r.status);
+    const rows = await r.json();
+    rows.forEach(x => { if (x.parent_sku) set.add(x.parent_sku); });
+    if (rows.length < 1000) break;
+  }
+  return [...set].sort();
 }
 
 // ── OPS CHATBOT data — read LIVE from the Supabase API mirror on every
@@ -1962,13 +2012,10 @@ export default {
         }
 
         // ── RETURNS VERIFIER — bundle SKU codes to exclude ─────────────
-        // Same GAS bridge route Stock Alert uses (?type=bundles, reads
-        // UC_BundleComposition). Edge-cached 5 min via fetchGasCached.
-        // Shape from GAS: { bundles: { masterSku: { name, enabled, components } } }
+        // Live from the Supabase mirror (uc_bundle_composition parent SKUs).
         if (action === 'rsv_getBundleSkus') {
-          const data = await fetchGasCached(SA_UC_GAS_URL + '?type=bundles', 'https://cache.internal/rsv-uc-bundles-v1');
-          const map = (data && data.bundles) || {};
-          return json({ ok: true, bundles: Object.keys(map) });
+          try { return json({ ok: true, bundles: await ucBundleParentSkus(env) }); }
+          catch (e) { return json({ ok: false, error: e.message, bundles: [] }, 502); }
         }
 
         // ── RETURNS VERIFIER — list submitted slips (newest first) ─────
@@ -2251,19 +2298,10 @@ export default {
             return JSON.parse(text);
           }
 
-          // FALLBACK source — old UC_Inventory_API GAS sheet bridge (~2 h stale).
-          function gasFetch(gasUrl, cacheKeyUrl) {
-            return cachedJson(cacheKeyUrl, 300, async () => {
-              const res = await fetch(gasUrl);
-              if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
-              return res.text();
-            });
-          }
-
-          // PRIMARY source — Supabase API mirror (SK's 15-min UC sync).
-          // Calls the read-only DB functions stock_alert_inventory() /
-          // stock_alert_bundles(), which return the same JSON shape the GAS
-          // bridge did, so the frontend logic is unchanged. 60 s edge cache.
+          // ONLY source — Supabase API mirror (SK's 15-min UC sync); the old
+          // Google Sheet fallback was removed Oct 2026. Calls the read-only DB
+          // functions stock_alert_inventory() / stock_alert_bundles() (same
+          // JSON shape the sheet bridge used to return). 60 s edge cache.
           function supabaseRpc(fnName, cacheKeyUrl) {
             return cachedJson(cacheKeyUrl, 60, async () => {
               if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured on Worker');
@@ -2281,33 +2319,23 @@ export default {
             });
           }
 
-          // Supabase first; if it errors (or returns nothing), fall back to the sheet.
-          async function withFallback(primary, fallback, isValid) {
+          // Returns { error } instead of throwing, so the page can show it.
+          async function supabaseOnly(load, isValid) {
             try {
-              const data = await primary();
-              if (isValid(data)) return data;
-              throw new Error('Supabase returned empty data');
+              const data = await load();
+              return isValid(data) ? data : { error: 'Supabase returned empty data' };
             } catch (e) {
-              try {
-                const fb = await fallback();
-                fb.source = 'sheet-fallback';
-                fb.fallbackReason = e.message;
-                return fb;
-              } catch (e2) {
-                return { error: e.message + ' | fallback: ' + e2.message };
-              }
+              return { error: e.message };
             }
           }
 
           const [inventory, bundles, overridesRows, archivedRows, recQtyRows, settingsRows, g4BoxRows] = await Promise.all([
-            withFallback(
+            supabaseOnly(
               () => supabaseRpc('stock_alert_inventory', 'https://cache.internal/sa-sb-inventory-v1'),
-              () => gasFetch(SA_UC_GAS_URL, 'https://cache.internal/sa-uc-inventory-v1'),
               d => d && Array.isArray(d.rows) && d.rows.length > 0
             ),
-            withFallback(
+            supabaseOnly(
               () => supabaseRpc('stock_alert_bundles', 'https://cache.internal/sa-sb-bundles-v1'),
-              () => gasFetch(SA_UC_GAS_URL + '?type=bundles', 'https://cache.internal/sa-uc-bundles-v1'),
               d => d && d.bundles && Object.keys(d.bundles).length > 0
             ),
             env.DB.prepare('SELECT sku_code, name, qty_per_box, confirmed, updated_at FROM sa_qty_overrides ORDER BY sku_code ASC').all(),
@@ -2523,124 +2551,43 @@ export default {
         }
 
         // ── BLINKIT — gatepass lookup (Ready to Dispatch signal) ──────
-        // Proxies + edge-caches the GAS bridge's Blinkit-filtered
-        // UC_Gatepass data, same 5-min caching pattern sa_loadAll
-        // already uses for UC_Inventory — avoids hitting Apps Script on
-        // every RO Ledger load.
+        // UC gate passes to Blinkit, live from the Supabase mirror. ro_number
+        // is the first 6+ digit run in the reference ("RO 43886110058068",
+        // "50033210036310.0"). Fields used by the RO Ledger: ro_number,
+        // gatepass_code, status.
         if (action === 'blinkitGetGatepass') {
-          const cache = caches.default;
-          const cacheKey = new Request('https://cache.internal/blinkit-gatepass-v1');
-          const cached = await cache.match(cacheKey);
-          if (cached) {
-            return new Response(await cached.text(), { headers: { ...CORS, 'X-Cache': 'HIT' } });
-          }
-          const res = await fetch(SA_UC_GAS_URL + '?type=blinkitGatepass');
-          if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
-          const text = await res.text();
-
-          // Backfill ro_number when GAS's own extraction comes back empty.
-          // Most Blinkit gatepasses have a reference like "RO 43886110058068",
-          // which GAS parses into ro_number cleanly. Some (e.g. bare-numeric
-          // "50033210036310.0", no "RO " text) don't match that upstream
-          // extraction, so ro_number comes back missing and the gatepass
-          // silently never links to its RO in the Ledger. This pulls the
-          // longest 6+ digit run out of whatever reference-like field is
-          // present as a fallback. Purely additive — a record that already
-          // has ro_number from GAS is left untouched, and any failure here
-          // just falls through to caching the raw GAS text unchanged.
-          let text2 = text;
           try {
-            const parsed = JSON.parse(text);
-            if (parsed && Array.isArray(parsed.records)) {
-              let backfilled = 0;
-              parsed.records.forEach(rec => {
-                if (!rec.ro_number) {
-                  const raw = rec.reference ?? rec.Reference ?? rec.ref ?? rec.purpose ?? '';
-                  const m = String(raw).match(/\d{6,}/);
-                  if (m) { rec.ro_number = m[0]; backfilled++; }
-                }
-              });
-              if (backfilled > 0) text2 = JSON.stringify(parsed);
-            }
+            const records = (await ucGatepassesLive(env, 'Blinkit')).map(g => Object.assign(g, { ro_number: gpRefNumber(g.reference) }));
+            return json({ ok: true, source: 'supabase', records });
           } catch (e) {
-            // GAS response wasn't valid JSON — fall through, cache raw text.
+            return json({ ok: false, error: e.message, records: [] }, 502);
           }
-
-          const response = new Response(text2, {
-            headers: { ...CORS, 'Cache-Control': 'public, max-age=300', 'X-Cache': 'MISS' }
-          });
-          await cache.put(cacheKey, response.clone());
-          return response;
         }
 
         // ── FLIPKART — gatepass lookup (GP Number) ──────
-        // Sibling of blinkitGetGatepass above. No backfill-regex block
-        // needed here — getFlipkartGatepassPayload() on the GAS side
-        // already guarantees every record has a clean consignment_no
-        // (rows without one are simply skipped there, since Flipkart's
-        // reference column doesn't have Blinkit's messy "RO "-prefix /
-        // decimal-suffix formatting to begin with).
+        // UC gate passes to Flipkart FBF, live from the Supabase mirror.
+        // consignment_no = the number in the reference; rows without one are
+        // skipped (syncFkGatepasses uses the same list).
         if (action === 'fkGetGatepass') {
-          const cache = caches.default;
-          const cacheKey = new Request('https://cache.internal/fk-gatepass-v1');
-          const cached = await cache.match(cacheKey);
-          if (cached) {
-            return new Response(await cached.text(), { headers: { ...CORS, 'X-Cache': 'HIT' } });
+          try {
+            return json({ ok: true, source: 'supabase', records: await fkGatepassRecords(env) });
+          } catch (e) {
+            return json({ ok: false, error: e.message, records: [] }, 502);
           }
-          const res = await fetch(SA_UC_GAS_URL + '?type=flipkartGatepass');
-          if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
-          const text = await res.text();
-
-          const response = new Response(text, {
-            headers: { ...CORS, 'Cache-Control': 'public, max-age=300', 'X-Cache': 'MISS' }
-          });
-          await cache.put(cacheKey, response.clone());
-          return response;
         }
 
         // ── AMAZON — gatepass lookup (Gatepass column) ──────
-        // Sibling of blinkitGetGatepass / fkGetGatepass above. No
-        // backfill-regex block needed — getAmazonGatepassPayload() on the
-        // GAS side already returns a clean, exact FBA shipment ID in
-        // `reference` (no "RO "-prefix / decimal-suffix mess to clean up).
+        // UC gate passes to Amazon FBA, live from the Supabase mirror, matched
+        // on the FC Appointments tab by shipment ID (reference). One record
+        // per gate pass: gatepass_code, reference, status, type, facility,
+        // quantity (total units).
         if (action === 'amazonGetGatepass') {
-          const cache = caches.default;
-          const cacheKey = new Request('https://cache.internal/amazon-gatepass-v1');
-          const cached = await cache.match(cacheKey);
-          if (cached) {
-            return new Response(await cached.text(), { headers: { ...CORS, 'X-Cache': 'HIT' } });
-          }
-          const res = await fetch(SA_UC_GAS_URL + '?type=amazonGatepass');
-          if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
-          const text = await res.text();
-
-          // Clean up `reference`: warehouse staff sometimes append a qty
-          // suffix by hand — e.g. "FBA15M8YWFT5-760qty" instead of the
-          // bare shipment ID — which would silently fail the exact-match
-          // lookup on the FC Appointments tab. FBA shipment IDs never
-          // contain a hyphen themselves, so stripping everything from the
-          // first "-" onward reliably recovers the bare ID either way.
-          let text2 = text;
           try {
-            const parsed = JSON.parse(text);
-            if (parsed && Array.isArray(parsed.records)) {
-              parsed.records.forEach(rec => {
-                if (rec.reference) {
-                  const clean = String(rec.reference).split('-')[0].trim();
-                  if (clean) rec.reference = clean;
-                }
-              });
-              text2 = JSON.stringify(parsed);
-            }
+            const records = (await ucGatepassesLive(env, 'Amazon-FBA')).map(g => Object.assign(g, { reference: gpAmazonRef(g.reference) }));
+            return json({ ok: true, source: 'supabase', records });
           } catch (e) {
-            // GAS response wasn't valid JSON — fall through, cache raw text.
+            return json({ ok: false, error: e.message, records: [] }, 502);
           }
-
-          const response = new Response(text2, {
-            headers: { ...CORS, 'Cache-Control': 'public, max-age=300', 'X-Cache': 'MISS' }
-          });
-          await cache.put(cacheKey, response.clone());
-          return response;
         }
 
         // ── BLINKIT RO EMAIL WATCHER — fetch one attachment's raw bytes ──
@@ -2847,33 +2794,18 @@ export default {
 
         // ── DELHIVERY — Amazon listing info per UC SKU (selling price,
         //   package weight in grams, L/W/H in cm) for auto-filling the
-        //   Create-Pickup form. Built by the UC_Inventory_API GAS bridge
-        //   (?type=amzProductInfo) from the Amazon API Sheet's AMZ_Fees
-        //   tab + UC_ChannelListings, falling back to the Flipkart API
-        //   Sheet's FK-Listings-Report when there's no Amazon listing
-        //   (GAS v19 — each product carries source: amazon|flipkart). Cached 30 min — the Amazon sheet
-        //   itself only refreshes AMZ_Fees every 2 hours.
+        //   Create-Pickup form. Live from the Supabase mirror via the
+        //   cp_amz_product_info() SQL function: amz_listings price (highest-
+        //   priced listing per UC SKU), amz_catalog package weight/size, UC SKU
+        //   from UC's Easy Ship channel link. Shape: { products: { ucSku:
+        //   { price, weight, length, width, height, amzSku, source } } }.
         if (action === 'delhiveryAmzProductInfo') {
-          const cache = caches.default;
-          const cacheKey = new Request('https://cache.internal/cp-amz-product-info-v2');
-          const cached = await cache.match(cacheKey);
-          if (cached) return json(await cached.json());
-          let data;
           try {
-            const res = await fetch(SA_UC_GAS_URL + '?type=amzProductInfo');
-            if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
-            data = await res.json();
+            const data = await supabaseRpcJson(env, 'cp_amz_product_info');
+            return json({ ok: true, products: (data && data.products) || {}, syncedAt: (data && data.syncedAt) || null, source: 'supabase' });
           } catch (e) {
             return json({ ok: false, error: 'Amazon product info unavailable: ' + e.message }, 502);
           }
-          if (!data || !data.products) {
-            return json({ ok: false, error: (data && data.error) || 'GAS bridge returned no products — is the amzProductInfo route deployed?' }, 502);
-          }
-          const out = { ok: true, products: data.products, syncedAt: data.syncedAt || null };
-          await cache.put(cacheKey, new Response(JSON.stringify(out), {
-            headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=1800' }
-          }));
-          return json(out);
         }
 
         // ── DELHIVERY — pincode serviceability pre-check, called from
@@ -5255,29 +5187,23 @@ function splitShipmentIds(str) {
 // posture as fetchAmazonExpectedShipments).
 async function fetchAmazonGatepassSkuTotals(env) {
   try {
-    const cache = caches.default;
-    const cacheKey = new Request('https://cache.internal/amazon-gatepass-sku-totals-v1');
-    const cached = await cache.match(cacheKey);
-    let text;
-    if (cached) {
-      text = await cached.text();
-    } else {
-      const res = await fetch(SA_UC_GAS_URL + '?type=amazonGatepass');
-      if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
-      text = await res.text();
-      await cache.put(cacheKey, new Response(text, { headers: { 'Cache-Control': 'public, max-age=300' } }));
-    }
-    const data = JSON.parse(text);
-    if (!data || !data.ok) throw new Error((data && data.error) || 'Unexpected response');
+    const totals = new Map();   // "<shipment_id>|<sku>" -> qty, summed across E3/G4 gate passes
+    (await ucGatepassesLive(env, 'Amazon-FBA')).forEach(g => {
+      const ref = gpAmazonRef(g.reference);
+      if (!ref) return;
+      g.items.forEach(it => {
+        const key = ref + '|' + String(it.sku).trim();
+        totals.set(key, (totals.get(key) || 0) + it.qty);
+      });
+    });
     const exact = new Map();
     const byShipment = new Map();
-    (data.sku_totals || []).forEach(r => {
-      if (!r.reference || !r.sku_code) return;
-      const ref = String(r.reference).trim();
-      const sku = String(r.sku_code).trim();
-      exact.set(ref + '|' + sku, r.quantity);
+    totals.forEach((qty, key) => {
+      exact.set(key, qty);
+      const cut = key.indexOf('|');
+      const ref = key.slice(0, cut), sku = key.slice(cut + 1);
       if (!byShipment.has(ref)) byShipment.set(ref, []);
-      byShipment.get(ref).push({ sku, quantity: r.quantity });
+      byShipment.get(ref).push({ sku, quantity: qty });
     });
     return { exact, byShipment };
   } catch (err) {
@@ -5286,17 +5212,18 @@ async function fetchAmazonGatepassSkuTotals(env) {
   }
 }
 
-// Fetches per-shipment detail Tomahawk actually expects, from the BOM7
-// "Amazon Year 2026" sheet (row 3638 onward) — see
-// getAmazonExpectedShipmentsPayload() in the GAS bridge. Two jobs:
+// Fetches every FBA inbound shipment Tomahawk created, with its SKU lines,
+// live from the Supabase mirror (amz_expected_shipments() SQL function over
+// amz_inbound_shipments + items — Amazon's own record; replaced the BOM7
+// "Amazon Year 2026" sheet, Oct 2026). Two jobs:
 //   1. GATE — a shipment only gets tracked in amazon_shipments if it's
-//      BOTH in this sheet AND has a matching FC Appointment email.
+//      BOTH one of our inbound shipments AND has a matching FC Appointment email.
 //   2. Real per-shipment no_of_skus/no_of_units — Amazon's email only
 //      ever gives an appointment-level total shared across every
-//      shipment ID under that appointment; this sheet has each
-//      shipment's own product block, so its counts are used instead
-//      wherever available. Boxes has no per-shipment breakdown in this
-//      sheet, so it's left alone (stays the email's appointment total).
+//      shipment ID under that appointment; the inbound shipment has each
+//      shipment's own SKU lines, so its counts are used instead
+//      wherever available. Boxes has no per-shipment breakdown here,
+//      so it's left alone (stays the email's appointment total).
 //      Every other field (date, dest FC, etc.) still comes from the
 //      email, per explicit instruction.
 // Returns null (meaning "couldn't fetch, don't filter or override this
@@ -5305,22 +5232,10 @@ async function fetchAmazonGatepassSkuTotals(env) {
 // override for that run and falls back to email-only values.
 async function fetchAmazonExpectedShipments(env) {
   try {
-    const cache = caches.default;
-    const cacheKey = new Request('https://cache.internal/amazon-expected-shipments-v2');
-    const cached = await cache.match(cacheKey);
-    let text;
-    if (cached) {
-      text = await cached.text();
-    } else {
-      const res = await fetch(SA_UC_GAS_URL + '?type=amazonExpectedShipments');
-      if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
-      text = await res.text();
-      await cache.put(cacheKey, new Response(text, { headers: { 'Cache-Control': 'public, max-age=300' } }));
-    }
-    const data = JSON.parse(text);
-    if (!data || !data.ok) throw new Error((data && data.error) || 'Unexpected response');
+    const data = await supabaseRpcJson(env, 'amz_expected_shipments');
+    if (!data || !data.ok || !Array.isArray(data.records)) throw new Error('Unexpected response');
     const detailMap = new Map();
-    (data.records || []).forEach(r => {
+    data.records.forEach(r => {
       if (!r.shipment_id) return;
       detailMap.set(String(r.shipment_id).trim(), {
         no_of_skus: (typeof r.no_of_skus === 'number') ? r.no_of_skus : null,
@@ -5330,7 +5245,7 @@ async function fetchAmazonExpectedShipments(env) {
     });
     return detailMap;
   } catch (err) {
-    console.error('fetchAmazonExpectedShipments failed, skipping the sheet gate/override this run:', err.message);
+    console.error('fetchAmazonExpectedShipments failed, skipping the gate/override this run:', err.message);
     return null;
   }
 }
@@ -8272,22 +8187,25 @@ async function checkFkQcTicketEmails(env) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// FLIPKART GATEPASS SYNC — GAS bridge (UC_Gatepass), scheduled
+// FLIPKART GATEPASS SYNC — Supabase mirror (uc_gatepass), scheduled
 // ══════════════════════════════════════════════════════════════════
-// Calls the flipkartGatepass GAS route directly (bypassing the
-// fkGetGatepass edge cache, since this runs on its own cron schedule
-// rather than in response to a page load) and writes gp_number into any
-// matching fk_ledger row. Deliberately CLOSED-only — an open/pending
+// Reads UC gate passes to Flipkart FBF live from the Supabase mirror
+// (fkGatepassRecords) and writes gp_number into any matching fk_ledger row. Deliberately CLOSED-only — an open/pending
 // gatepass can still change, so only a closed one is treated as final
 // enough to record. Never creates a new fk_ledger row (same rule as the
 // email watchers) — a consignment not yet in the Ledger is skipped, not
 // backfilled with a bare row.
+// Flipkart FBF gate passes with their consignment number (the number in the
+// reference) — rows without one are skipped.
+async function fkGatepassRecords(env) {
+  return (await ucGatepassesLive(env, 'FK-FBF'))
+    .map(g => Object.assign(g, { consignment_no: gpRefNumber(g.reference) }))
+    .filter(g => g.consignment_no);
+}
+
 async function syncFkGatepasses(env) {
   await ensureFkLedgerTable(env.DB);
-  const res = await fetch(SA_UC_GAS_URL + '?type=flipkartGatepass');
-  if (!res.ok) throw new Error('GAS fetch failed: ' + res.status);
-  const data = await res.json();
-  if (!data || !Array.isArray(data.records)) throw new Error('Unexpected GAS response shape');
+  const data = { records: await fkGatepassRecords(env) };
 
   let updated = 0, unmatched = 0, skippedNotClosed = 0;
   for (const rec of data.records) {
@@ -8955,22 +8873,20 @@ async function handleInstamart(method, act, url, body, env) {
       return json({ ok: true, data: row ? (row.value || '{}') : '{}' });
     }
 
-    // UC gatepasses with toPartyCode = "Instamart", via the same GAS bridge
-    // Blinkit uses (route ?type=instamartGatepass). Edge-cached 5 min.
+    // UC gate passes to Instamart, live from the Supabase mirror. po_number is
+    // the first 6+ digit run in the reference. Shape used by the PO Ledger:
+    // { po_number, gatePassCode, status, total_qty, items:[{sku, qty}] }.
     if (act === 'imGetGatepass') {
-      const cache = caches.default;
-      const cacheKey = new Request('https://cache.internal/instamart-gatepass-v1');
-      const cached = await cache.match(cacheKey);
-      if (cached) return new Response(await cached.text(), { headers: { ...CORS, 'X-Cache': 'HIT' } });
-      const res = await fetch(SA_UC_GAS_URL + '?type=instamartGatepass');
-      if (!res.ok) return json({ ok: false, error: 'GAS fetch failed: ' + res.status, records: [] }, 502);
-      const text = await res.text();
-      // GAS returns an HTML error page (not JSON) if the route isn't deployed
-      // yet — don't cache that, just report it so the ledger shows "—".
-      try { JSON.parse(text); } catch (e) { return json({ ok: false, error: 'Gatepass route not available yet', records: [] }); }
-      const response = new Response(text, { headers: { ...CORS, 'Cache-Control': 'public, max-age=300', 'X-Cache': 'MISS' } });
-      await cache.put(cacheKey, response.clone());
-      return response;
+      try {
+        const records = (await ucGatepassesLive(env, 'Instamart')).map(g => ({
+          po_number: gpRefNumber(g.reference), gatePassCode: g.gatepass_code, status: g.status,
+          type: g.type, facility: g.facility, reference: g.reference, created: g.created,
+          total_qty: g.quantity, items: g.items
+        }));
+        return json({ ok: true, source: 'supabase', records });
+      } catch (e) {
+        return json({ ok: false, error: e.message, records: [] }, 502);
+      }
     }
 
     return null;
