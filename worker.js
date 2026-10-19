@@ -232,12 +232,12 @@ const WA_MULTI_PREFIX = 'stock_alert_l';
 // Each family has its own template set, saved state table and settings keys.
 const WA_KINDS = {
   // everySlot: true = send the full list at every slot whenever it isn't
-  // empty (user's choice for out-of-stock, Oct 2026); false = only when a
-  // NEW SKU joined the list since the previous slot.
+  // empty (user's choice for both out-of-stock and low-stock, Oct 2026);
+  // false = only when a NEW SKU joined the list since the previous slot.
   oos: { prefix: 'stock_alert_l', emoji: '🔴', phrase: 'are out of stock in E3 warehouse', label: 'out-of-stock',
          state: 'sa_oos_state', key: 'wa_', hist: '', oneLineFallback: true, everySlot: true },
   low: { prefix: 'stock_low_l',   emoji: '🟠', phrase: 'are low stock in E3 warehouse',    label: 'low-stock',
-         state: 'sa_low_state', key: 'wa_low_', hist: 'low-', oneLineFallback: false, everySlot: false }
+         state: 'sa_low_state', key: 'wa_low_', hist: 'low-', oneLineFallback: false, everySlot: true }
 };
 function waKind(k) { return WA_KINDS[k] ? k : 'oos'; }
 const WA_MULTI_MAX = 10;
