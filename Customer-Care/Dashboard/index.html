@@ -1363,6 +1363,122 @@ async function to4x6Pdf(bytes) {
   return new Blob([await out.save()], { type: 'application/pdf' });
 }
 
+// ── Gatepass mark (GP / RP circle) on Customer Care forward labels ─────
+// Shopify orders also ship on Ekart but go through Unicommerce, so they
+// need no gatepass. To tell packers apart, every forward label from this
+// module gets a bold circle near the top-right corner:
+//   GP = Replacement / FOC → collect the GATEPASS from Santosh before packing
+//   RP = Repair send-back  → same machine goes back, no gatepass
+// Works on any courier's PDF (Delhivery, Ekart, and later Shadowfax): the
+// page is rendered with PDF.js and the circle goes on the blank spot
+// closest to the top-right corner, so it never covers the AWB barcode,
+// address or routing code. If the mark can't be added the download stops
+// with an error — an unmarked label would look like a Shopify one.
+function caseMarkFor(o) {
+  if (!o || o.direction === 'reverse') return null;           // courier collects — no label from us
+  var t = String(o.job_type || '').toLowerCase();
+  var p = String(o.order_id || '').toUpperCase().split('-')[0];
+  if (/repair/.test(t) || p === 'FRPR' || p === 'RPR') return 'RP';
+  return 'GP'; // Replacement, FOC (old REP/FOC prefixes too) — and anything unclear asks for a gatepass
+}
+
+// Fixed spot on our own Delhivery portal-style label: middle of the top
+// (logo) line, between "INDUSTRIAL TOOLS…" and the Delhivery logo.
+// PDF points, bottom-left origin, A6 page (297.6 × 419.5).
+var DELHIVERY_MARK_SPOT = { x: 148.3, y: 419.53 - 31.25, r: 14 };
+
+// spot (optional) = fixed { x, y, r } — skips the blank-spot search.
+async function addCaseMark(blob, mark, spot) {
+  if (!mark) return blob;
+  var PDFLib = await loadScriptOnce(PDF_LIB_URL, 'PDFLib');
+  var pdfjsLib = await loadScriptOnce(PDFJS_URL, 'pdfjsLib');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+  var bytes = new Uint8Array(await blob.arrayBuffer());
+  var view = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+  var out = await PDFLib.PDFDocument.load(bytes, { ignoreEncryption: true });
+  var bold = await out.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  var pages = out.getPages();
+  for (var n = 0; n < pages.length; n++) {
+    var vp0 = (await view.getPage(n + 1)).getViewport({ scale: 1 });
+    var where = spot || await findMarkSpot(await view.getPage(n + 1));
+    drawCaseMark(PDFLib, pages[n], bold, mark, where, vp0.rotation || 0);
+  }
+  return new Blob([await out.save()], { type: 'application/pdf' });
+}
+
+// Finds where the circle fits. Tries big → small, scanning the top-right
+// area from the corner inwards; a spot counts as free when (almost) no
+// ink falls inside the circle's square plus a small gap. Returns the
+// centre in PDF points and the radius.
+async function findMarkSpot(page) {
+  var S = 2;                                             // render scale (px per pt)
+  var vp = page.getViewport({ scale: S });
+  var W = Math.ceil(vp.width), H = Math.ceil(vp.height);
+  var canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  var ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+  await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  var px = ctx.getImageData(0, 0, W, H).data;
+  // Summed-area table of "ink" pixels → any square's ink count in O(1).
+  var sat = new Int32Array((W + 1) * (H + 1));
+  for (var y = 0; y < H; y++) {
+    var row = 0;
+    for (var x = 0; x < W; x++) {
+      var i = (y * W + x) * 4;
+      if (px[i] < 245 || px[i + 1] < 245 || px[i + 2] < 245) row++;   // light divider lines count too
+      sat[(y + 1) * (W + 1) + x + 1] = sat[y * (W + 1) + x + 1] + row;
+    }
+  }
+  function ink(x0, y0, x1, y1) {
+    return sat[y1 * (W + 1) + x1] - sat[y0 * (W + 1) + x1] - sat[y1 * (W + 1) + x0] + sat[y0 * (W + 1) + x0];
+  }
+  var edge = 8 * S;                                      // keep clear of the page edge / label border
+  var gap = 2 * S;                                       // white gap around the circle
+  var step = 2 * S;
+  var radii = [24, 21, 18, 16, 14];                      // pt — about 17 down to 10 mm across
+  // For each size, find the free spot nearest the top-right corner. Then
+  // keep the one sitting highest on the label (the top line — beside the
+  // brand logo on our Ekart labels), and the biggest size at that height.
+  var pick = null;
+  for (var k = 0; k < radii.length; k++) {
+    var d = Math.round(radii[k] * 2 * S), box = d + gap * 2;
+    var best = null;
+    for (var top = edge; top + box <= H * 0.42; top += step) {
+      for (var left = W - edge - box; left >= W * 0.45; left -= step) {
+        if (ink(left, top, left + box, top + box) > d * 0.2) continue; // a few stray pixels are OK
+        var dist = (W - edge - box - left) + (top - edge);
+        if (!best || dist < best.dist) best = { left: left, top: top, box: box, r: radii[k], dist: dist };
+        break; // further left on this row is only further from the corner
+      }
+    }
+    if (best && (!pick || best.top < pick.top - step)) pick = best;
+  }
+  if (pick) {
+    var c = vp.convertToPdfPoint(pick.left + pick.box / 2, pick.top + pick.box / 2);
+    return { x: c[0], y: c[1], r: pick.r };
+  }
+  // Nowhere blank enough: corner anyway — the white fill hides what's under it.
+  var cr = 18, cc = vp.convertToPdfPoint(W - edge - cr * S - gap, edge + cr * S + gap);
+  return { x: cc[0], y: cc[1], r: cr };
+}
+
+function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
+  var r = spot.r, ring = Math.max(2.5, r * 0.14);
+  page.drawCircle({ x: spot.x, y: spot.y, size: r, color: PDFLib.rgb(1, 1, 1),
+    borderColor: PDFLib.rgb(0, 0, 0), borderWidth: ring });
+  var size = r * 0.95;
+  var w = font.widthOfTextAtSize(mark, size), h = font.heightAtSize(size, { descender: false });
+  // Offset from the centre to the text origin, turned with the page so the
+  // letters read upright on the printed label.
+  var a = rotation * Math.PI / 180, dx = -w / 2, dy = -h * 0.42;
+  page.drawText(mark, {
+    x: spot.x + dx * Math.cos(a) - dy * Math.sin(a),
+    y: spot.y + dx * Math.sin(a) + dy * Math.cos(a),
+    size: size, font: font, color: PDFLib.rgb(0, 0, 0), rotate: PDFLib.degrees(rotation)
+  });
+}
+
 </script>
 
 <script>
@@ -2483,7 +2599,7 @@ async function to4x6Pdf(bytes) {
       var session = window.TM_getSession();
       var headers = {};
       if (session && session.token) headers['X-Tomahawk-Session'] = session.token;
-      var blob = null;
+      var blob = null, markSpot = null;
       if (o.courier === 'Ekart') {
         var er = await fetch(window.TM_WORKER + '?action=ekartGetLabel&waybill=' + encodeURIComponent(o.waybill), { headers: headers });
         if (!er.ok || (er.headers.get('Content-Type') || '').indexOf('application/pdf') === -1) {
@@ -2500,6 +2616,7 @@ async function to4x6Pdf(bytes) {
           if (dj && dj.ok) pkg = dj.pkg;
         } catch (e3) { /* no Delhivery data — draw from our log row */ }
         blob = await buildPortalLabelPdf(labelDataFor(o, pkg));
+        markSpot = DELHIVERY_MARK_SPOT;   // our own layout — circle in the middle of the logo line
       } catch (drawErr) {
         console.warn('Portal-style label failed, using Delhivery API PDF:', drawErr);
         var resp = await fetch(window.TM_WORKER + '?action=delhiveryGetLabel&file=1&waybill=' + encodeURIComponent(o.waybill), { headers: headers });
@@ -2511,6 +2628,7 @@ async function to4x6Pdf(bytes) {
         }
         blob = await to4x6Pdf(await resp.arrayBuffer());
       }
+      blob = await addCaseMark(blob, caseMarkFor(o), markSpot);   // GP / RP circle
       var a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = String(o.order_id || 'label').replace(/[^A-Za-z0-9_-]/g, '_') + '_' + o.waybill + '.pdf';
