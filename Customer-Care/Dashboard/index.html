@@ -791,6 +791,12 @@ html .site-header [hidden] { display: none !important; }
         <tbody id="req-body"><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:44px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td></tr><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td></tr><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td><td><span class="sk-block" style="width:60px"></span></td></tr><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td><td><span class="sk-block" style="width:60px"></span></td><td><span class="sk-block" style="width:44px"></span></td></tr></tbody>
       </table>
     </div>
+    <!-- Pagination footer for requests (hidden when everything fits on one page) -->
+    <div class="pager" id="req-pager">
+      <button class="pager-btn" id="req-pager-prev">&#8592; Prev</button>
+      <span class="pager-ind" id="req-pager-ind"></span>
+      <button class="pager-btn" id="req-pager-next">Next &#8594;</button>
+    </div>
   </div>
 
   <div class="panel" id="case-panel">
@@ -3357,6 +3363,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // (opens Create Pickup prefilled; booking the pickup approves it). Every
   // action emails the customer (worker: ccClaimAction). ──
   var requests = [], reqFilter = 'review', openReqId = null;
+  var reqPage = 1;   // requests pagination — 10 per page, same as the cases list
   var REQ_STATUS = {
     'new': ['To review', 'b-amber'], waiting_customer: ['Waiting for customer', 'b-blue'],
     tip_sent: ['Tip sent', 'b-blue'], quote_sent: ['Quote sent', 'b-blue'],
@@ -3423,7 +3430,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         esc(f.label) + ' <b>' + requests.filter(f.test).length + '</b></button>';
     }).join('');
     chips.querySelectorAll('.req-chip').forEach(function (b) {
-      b.addEventListener('click', function () { reqFilter = b.dataset.k; renderRequests(); });
+      b.addEventListener('click', function () { reqFilter = b.dataset.k; reqPage = 1; renderRequests(); });
     });
     var q = document.getElementById('req-q').value.trim().toLowerCase();
     var test = REQ_FILTERS.filter(function (f) { return f.key === reqFilter; })[0].test;
@@ -3431,7 +3438,11 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       return test(r) && (!q || [r.claim_id, r.name, r.phone, r.order_id, r.product, r.email].join(' ').toLowerCase().indexOf(q) !== -1);
     });
     var body = document.getElementById('req-body');
-    if (!rows.length) { body.innerHTML = '<tr><td colspan="7" class="muted">Nothing here.</td></tr>'; return; }
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="7" class="muted">Nothing here.</td></tr>'; renderReqPager(0, 1); return; }
+    var total = rows.length, totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (reqPage > totalPages) reqPage = totalPages;
+    if (reqPage < 1) reqPage = 1;
+    rows = rows.slice((reqPage - 1) * PAGE_SIZE, reqPage * PAGE_SIZE);
     body.innerHTML = rows.map(function (r) {
       var st = REQ_STATUS[r.status || 'new'] || [r.status, 'b-gray'];
       var cs = reqCaseStatus(r);
@@ -3444,6 +3455,13 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         '<td><span class="badge ' + st[1] + '">' + esc(st[0]) + '</span>' + (cs ? '<div class="sub">' + esc(r.case_id + ' · ' + cs) + '</div>' : '') + '</td>' +
         '<td class="muted">' + (r.file_count || 0) + ' file(s)</td></tr>';
     }).join('');
+    // Pad a short last page to 10 rows so the pager doesn't jump (only when paging)
+    if (total > PAGE_SIZE) {
+      for (var i = rows.length; i < PAGE_SIZE; i++) {
+        body.insertAdjacentHTML('beforeend', '<tr aria-hidden="true"><td colspan="7">&nbsp;<div class="sub">&nbsp;</div></td></tr>');
+      }
+    }
+    renderReqPager(total, totalPages);
     body.querySelectorAll('tr[data-id]').forEach(function (tr) {
       tr.addEventListener('click', function () { openRequest(tr.dataset.id); });
     });
@@ -3537,7 +3555,18 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       alert("Couldn't save: " + e.message); btn.disabled = false; btn.textContent = old;
     }
   }
-  document.getElementById('req-q').addEventListener('input', renderRequests);
+  function renderReqPager(total, totalPages) {
+    var wrap = document.getElementById('req-pager');
+    if (total <= PAGE_SIZE) { wrap.style.display = 'none'; return; } // single page — nothing to paginate
+    wrap.style.display = 'flex';
+    document.getElementById('req-pager-ind').textContent =
+      ((reqPage - 1) * PAGE_SIZE + 1) + '\u2013' + Math.min(reqPage * PAGE_SIZE, total) + ' of ' + total + ' \u00b7 Page ' + reqPage + ' of ' + totalPages;
+    document.getElementById('req-pager-prev').disabled = reqPage <= 1;
+    document.getElementById('req-pager-next').disabled = reqPage >= totalPages;
+  }
+  document.getElementById('req-pager-prev').addEventListener('click', function () { reqPage--; renderRequests(); });
+  document.getElementById('req-pager-next').addEventListener('click', function () { reqPage++; renderRequests(); });
+  document.getElementById('req-q').addEventListener('input', function () { reqPage = 1; renderRequests(); });
   document.getElementById('req-refresh').addEventListener('click', function () { loadRequests().then(function () { renderTiles(); renderRequests(); }); });
 
   async function load(force) {
