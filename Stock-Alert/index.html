@@ -290,6 +290,25 @@ html[data-theme="light"]       .icon-moon { display: none; }
 @media (max-width: 1000px) { .stats-row { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 900px) { .stats-row { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 480px) { .stats-row { grid-template-columns: 1fr 1fr; gap: 8px; } .stat-value { font-size: 21px; } }
+
+/* ---- Skeleton loader: grey shimmer blocks shown until live data arrives.
+   body.sa-loading is set on first load and removed when loadData() settles. */
+@keyframes sk-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+.sk-block {
+  display: inline-block; height: 12px; border-radius: 4px; vertical-align: middle;
+  background: linear-gradient(90deg, var(--bg-raised) 0%, var(--bg-hover) 50%, var(--bg-raised) 100%);
+  background-size: 800px 100%; animation: sk-shimmer 1.2s linear infinite;
+}
+body.sa-loading .stat-value { color: transparent !important; position: relative; }
+body.sa-loading .stat-value::after {
+  content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  width: 56px; height: 24px; border-radius: 6px;
+  background: linear-gradient(90deg, var(--bg-raised) 0%, var(--bg-hover) 50%, var(--bg-raised) 100%);
+  background-size: 800px 100%; animation: sk-shimmer 1.2s linear infinite;
+}
+.sk-row td { padding: 16px 14px !important; }
+.sk-row:hover { background: transparent !important; }
+@media (prefers-reduced-motion: reduce) { .sk-block, body.sa-loading .stat-value::after { animation: none; } }
 </style>
 
 <!-- ============================================================
@@ -1172,7 +1191,8 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
     statusDot.classList.remove('is-error');
     statusText.textContent = 'Loading stock…';
     if (!allRows.length) {
-      tableBody.innerHTML = '<tr><td colspan="8"><div class="loading-state">Fetching live stock…</div></td></tr>';
+      document.body.classList.add('sa-loading');
+      tableBody.innerHTML = skeletonRows(6);
     }
 
     fetch(WORKER_URL + '?action=sa_loadAll')
@@ -1225,7 +1245,23 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       })
       .finally(function () {
         refreshBtn.classList.remove('is-loading');
+        document.body.classList.remove('sa-loading');
       });
+  }
+
+  // Placeholder table rows (same 8 columns as the real table) shown while
+  // the first live load is in flight — the "skeleton" loading pattern.
+  function skeletonRows(n) {
+    var widths = [[180, 120], [70], [40], [30], [36], [30], [30], [56]];
+    var html = '';
+    for (var i = 0; i < n; i++) {
+      html += '<tr class="sk-row">' + widths.map(function (w, c) {
+        var main = '<span class="sk-block" style="width:' + w[0] + 'px"></span>';
+        var sub = w[1] ? '<br><span class="sk-block" style="width:' + w[1] + 'px;height:9px;margin-top:8px"></span>' : '';
+        return '<td' + (c >= 2 && c <= 6 ? ' style="text-align:right"' : '') + '>' + main + sub + '</td>';
+      }).join('') + '</tr>';
+    }
+    return html;
   }
 
   // ---- INVENTORY CACHE (instant paint on repeat visits) ------------------
@@ -1845,19 +1881,10 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   document.getElementById('card-idle-skus').classList.add('is-active-view');
   renderHeader();
 
-  // Paint instantly from the last successful load, if any, while the live
-  // fetch runs in the background — avoids a blank loading state on every
-  // visit. Gets overwritten the moment loadData() resolves.
-  var cachedInv = loadCachedInventory();
-  if (cachedInv.length) {
-    allRows = cachedInv;
-    buildIdleSet();
-    computeBundleComponents();
-    populateFilterOptions();
-    applyFilters();
-    statusText.textContent = allRows.length + ' SKUs · cached, refreshing…';
-  }
-
+  // First load shows a skeleton (shimmer placeholders) until live data
+  // arrives. The old "instant paint" from last visit's localStorage cache
+  // was removed (Oct 2026) — it showed stale stock and wrong Low Stock
+  // counts (Rec. Qty/settings weren't cached) for a few seconds.
   loadData();
 
   // ---- AUTO-REFRESH (every 15 min, matches SK's Supabase sync) ----------
