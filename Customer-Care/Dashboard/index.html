@@ -268,6 +268,9 @@ table.log-table tr:last-child td { border-bottom: none; }
 .req-chip.on { border-color: var(--accent); color: var(--accent); }
 #req-panel .case-table { height: auto !important; }
 #req-panel .case-table tr { height: auto !important; }
+/* A full page of 10 requests stretches to fill the panel, rows evenly spread,
+   last row meeting the pager line. Short lists (under 10) keep natural height. */
+body.cc-fit #req-panel .case-table.req-full { height: 100% !important; }
 .req-files { display: flex; flex-wrap: wrap; gap: 10px; }
 .req-files img, .req-files video { height: 150px; max-width: 100%; border-radius: 8px; border: 1px solid var(--border); object-fit: cover; background: var(--bg); }
 .req-ev { font-size: 12px; padding: 6px 0; border-bottom: 1px dashed var(--border); }
@@ -325,9 +328,9 @@ table.log-table tr:last-child td { border-bottom: none; }
 body.cc-fit .page { max-width: none; margin: 0; padding: 12px 16px; }
 body.cc-fit .page-head { margin-bottom: 10px; }
 body.cc-fit .tiles { margin-bottom: 10px; }
-body.cc-fit .page > .panel { padding: 12px 14px; }
+body.cc-fit .page > .panel { padding: 12px 14px 2px; }   /* 2px bottom: pager sits at the panel's bottom edge */
 body.cc-fit .panel-head-row { margin-bottom: 8px; }
-body.cc-fit .pager { padding-top: 8px; margin-top: 0; }
+body.cc-fit .pager { padding: 6px 0 4px; margin-top: 0; }
 .case-table thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
 /* Pagination footer — same pattern as the Blinkit RO Ledger */
 .pager { display: none; align-items: center; justify-content: center; gap: 1rem; padding: 12px 0 0; border-top: 1px solid var(--border); margin-top: 4px; }
@@ -3444,11 +3447,13 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       return test(r) && (!q || [r.claim_id, r.name, r.phone, r.order_id, r.product, r.email].join(' ').toLowerCase().indexOf(q) !== -1);
     });
     var body = document.getElementById('req-body');
-    if (!rows.length) { body.innerHTML = '<tr><td colspan="7" class="muted">Nothing here.</td></tr>'; renderReqPager(0, 1); return; }
+    if (!rows.length) { body.closest('table').classList.remove('req-full'); body.innerHTML = '<tr><td colspan="7" class="muted">Nothing here.</td></tr>'; renderReqPager(0, 1); return; }
     var total = rows.length, totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (reqPage > totalPages) reqPage = totalPages;
     if (reqPage < 1) reqPage = 1;
     rows = rows.slice((reqPage - 1) * PAGE_SIZE, reqPage * PAGE_SIZE);
+    // Stretch to fill the panel only when a full 10-row page is shown (incl. padded last page)
+    body.closest('table').classList.toggle('req-full', total >= PAGE_SIZE);
     body.innerHTML = rows.map(function (r) {
       var st = REQ_STATUS[r.status || 'new'] || [r.status, 'b-gray'];
       var cs = reqCaseStatus(r);
