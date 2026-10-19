@@ -267,6 +267,44 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
 .role-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:20px;background:var(--surface2);color:var(--accent);border:1px solid var(--border);margin-left:2px}
 .access-denied-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:'DM Sans',sans-serif;color:var(--text);background:var(--bg);text-align:center;padding:20px}
 </style>
+<style>
+/* ── Shopify Labels tab (sl-*) ── */
+#tab-shopify [hidden] { display: none !important; }
+.sl-wrap { max-width: 560px; margin: 32px auto 0; padding: 0 16px; }
+.sl-intro { font-size: 11px; color: var(--text2); line-height: 1.6; margin-bottom: 14px; }
+.sl-busy { display: flex; align-items: center; gap: 10px; color: var(--text2); font-size: 12px; margin-top: 16px; }
+.sl-spin { width: 16px; height: 16px; flex-shrink: 0; border: 2px solid rgba(245,168,0,0.2); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+.sl-banner { background: rgba(229,72,77,0.08); border: 1px solid rgba(229,72,77,0.35); border-radius: 8px; padding: 10px 14px; font-size: 12px; color: #e5484d; margin-top: 12px; }
+.sl-results { max-width: 1200px; margin: 0 auto; padding: 16px; }
+.sl-results .sl-banner { margin: 0 0 12px; }
+.sl-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.sl-spacer { flex: 1; }
+.sl-chip { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px; background: var(--surface2); border: 1px solid var(--border); color: var(--text2); }
+.sl-chip.ok   { color: #4ade80; border-color: rgba(74,222,128,0.45); }
+.sl-chip.part { color: #fbbf24; border-color: rgba(251,191,36,0.45); }
+.sl-chip.skip { color: #f87171; border-color: rgba(248,113,113,0.45); }
+html[data-theme="light"] .sl-chip.ok   { color: #15803d; }
+html[data-theme="light"] .sl-chip.part { color: #b45309; }
+html[data-theme="light"] .sl-chip.skip { color: #dc2626; }
+.sl-grid { display: grid; grid-template-columns: 1fr minmax(260px, 340px); gap: 16px; align-items: start; }
+@media (max-width: 980px) { .sl-grid { grid-template-columns: 1fr; } }
+.sl-table-wrap { overflow-x: auto; }
+/* The results table uses the same white "paper" table as the picklist */
+.sl-table td { color: #111118; vertical-align: top; }
+.sl-table tbody tr { cursor: pointer; }
+.sl-table tbody tr:hover td { background: #fff6dd; }
+.sl-table tbody tr.sel td { background: #fff1c7 !important; }
+.sl-mono { font-family: Consolas, "Courier New", monospace; font-size: 12px; }
+.sl-order { font-weight: 700; color: #5e8e1e; }
+.sl-note { font-size: 11px; color: #555566; margin-top: 2px; }
+.sl-status { font-weight: 700; white-space: nowrap; }
+.sl-status.ok { color: #15803d; } .sl-status.part { color: #b45309; } .sl-status.skip { color: #dc2626; }
+.sl-preview { position: sticky; top: 76px; }
+.sl-preview-cap { font-size: 11px; color: var(--text2); margin-bottom: 6px; }
+/* The preview is a piece of paper, so it stays white in both themes */
+.sl-preview canvas { width: 100%; height: auto; display: block; background: #fff; border: 1px solid var(--border); border-radius: 4px; }
+@media print { #tab-shopify { display: none !important; } }
+</style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 </head>
@@ -397,6 +435,7 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('picklist',this)">Picklist Generator</button>
   <button class="tab-btn" onclick="switchTab('cropper',this)">Label Cropper</button>
+  <button class="tab-btn" onclick="switchTab('shopify',this)">Shopify Labels</button>
 </div>
 
 <div id="tab-picklist" class="tab-content active">
@@ -470,6 +509,46 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
         <a class="btn btn-outline" id="lc-dl-link" style="display:block;text-align:center;text-decoration:none;" href="#" download="cropped_shipping_labels.pdf">&#8595; Download didn't start? Click here</a>
       </div>
 
+    </div>
+  </div>
+</div>
+
+<div id="tab-shopify" class="tab-content">
+  <div class="sl-wrap" id="sl-upload">
+    <div class="sl-intro">Upload the Ekart label PDF printed from Uniware for Shopify orders &rarr; writes the Shopify order number (#2879) and the SKUs onto each label &rarr; one PDF to print. Barcodes, AWB, address and price stay exactly as they are.</div>
+    <div class="drop-zone" id="sl-dropzone" style="width:100%;">
+      <div class="icon">&#127991;&#65039;</div>
+      <div class="label"><strong>Drop label PDFs here</strong> or click to browse</div>
+      <input type="file" id="sl-file-input" accept="application/pdf,.pdf" multiple style="display:none;">
+      <button class="btn btn-dark" id="sl-choose-btn" type="button">Choose File</button>
+    </div>
+    <div class="sl-banner" id="sl-upload-banner" hidden></div>
+  </div>
+
+  <div class="sl-wrap" style="margin-top:0;">
+    <div class="sl-busy" id="sl-busy" hidden><div class="sl-spin"></div><span id="sl-busy-text">Working&hellip;</span></div>
+  </div>
+
+  <div class="sl-results" id="sl-results" hidden>
+    <div class="sl-banner" id="sl-banner" hidden></div>
+    <div class="sl-toolbar">
+      <span id="sl-summary" style="display:flex;gap:8px;flex-wrap:wrap;"></span>
+      <span class="sl-spacer"></span>
+      <button class="btn btn-outline" id="sl-retry" type="button" hidden>&#8635; Retry lookup</button>
+      <button class="btn btn-outline" id="sl-reset" type="button">&#8617; New PDF</button>
+      <button class="btn btn-dark" id="sl-download" type="button">&#8595; Download PDF</button>
+    </div>
+    <div class="sl-grid">
+      <div class="sl-table-wrap">
+        <table class="sl-table">
+          <thead><tr><th>#</th><th>AWB</th><th>Order No</th><th>SKUs on label</th><th>Status</th></tr></thead>
+          <tbody id="sl-rows"></tbody>
+        </table>
+      </div>
+      <div class="sl-preview">
+        <div class="sl-preview-cap" id="sl-preview-cap">Preview</div>
+        <canvas id="sl-preview-canvas"></canvas>
+      </div>
     </div>
   </div>
 </div>
@@ -1611,6 +1690,540 @@ function switchTab(name, btn) {
       lcProcessBtn.disabled = false;
     }
   };
+})();
+
+// ── SHOPIFY LABELS ──
+// Ekart labels that Uniware prints for Shopify orders show Shopify's internal
+// order ID and one merged product line. This tab reads each label, looks the
+// order up in the Supabase mirror (Worker action shopifyLabelLookup) and
+// stamps the Shopify order no. (#2879) and one line per SKU onto it — spare
+// parts (UC's RECO-DUMMY) get "SPARE PART: <Shopify name>". Barcodes, AWB,
+// address and price are never touched. Namespaced sl* like lc* above.
+// The CORE part has no DOM code, so it can be tested on its own.
+(function () {
+// CORE-START
+var PLACEHOLDER_SKUS = ['RECO-DUMMY'];   // UC stand-in SKUs (spare parts) — real SKU comes from the Shopify order
+
+// pdf.js text items → { s, x, y, w, size, upright }
+function readTextItems(raw) {
+  return (raw || [])
+    .filter(function (it) { return it && typeof it.str === 'string' && it.str.trim() && it.transform; })
+    .map(function (it) {
+      var t = it.transform;
+      return {
+        s: it.str.replace(/\s+/g, ' '),
+        x: t[4], y: t[5], w: it.width || 0,
+        size: Math.hypot(t[2], t[3]) || it.height || 8,
+        upright: Math.abs(t[1]) < 0.01 && Math.abs(t[2]) < 0.01 && t[0] > 0
+      };
+    });
+}
+
+// Items sharing a baseline become one line (top of page first, left to right)
+function groupLines(items) {
+  var lines = [];
+  items.slice().sort(function (a, b) { return b.y - a.y || a.x - b.x; }).forEach(function (it) {
+    var tol = Math.max(1.5, it.size * 0.35);
+    var line = lines.find(function (l) { return Math.abs(l.y - it.y) <= tol; });
+    if (line) line.items.push(it); else lines.push({ y: it.y, items: [it] });
+  });
+  lines.forEach(function (l) { l.items.sort(function (a, b) { return a.x - b.x; }); });
+  return lines.sort(function (a, b) { return b.y - a.y; });
+}
+
+// Finds a regex inside one line's joined text. Returns where it starts/ends
+// (x), the text left over in the last matched item, and the items after it.
+function findText(lines, re) {
+  for (var i = 0; i < lines.length; i++) {
+    var its = lines[i].items, str = '', spans = [];
+    its.forEach(function (it) {
+      if (str) str += ' ';
+      spans.push({ it: it, start: str.length, end: str.length + it.s.length });
+      str += it.s;
+    });
+    var m = re.exec(str);
+    if (!m) continue;
+    var ms = m.index, me = m.index + m[0].length;
+    var hit = spans.filter(function (sp) { return sp.end > ms && sp.start < me; });
+    if (!hit.length) continue;
+    var first = hit[0], last = hit[hit.length - 1];
+    var frac = function (sp, pos) { return Math.max(0, Math.min(1, (pos - sp.start) / Math.max(1, sp.it.s.length))); };
+    return {
+      line: lines[i], first: first.it, last: last.it,
+      x: first.it.x + first.it.w * frac(first, ms),
+      endX: last.it.x + last.it.w * frac(last, me),
+      y: lines[i].y, size: first.it.size,
+      rest: last.it.s.slice(Math.max(0, me - last.start)),
+      after: its.slice(its.indexOf(last.it) + 1)
+    };
+  }
+  return null;
+}
+
+// Value printed after a label like "Order No:" — same line, then wrapped
+// lines below it in the same column, as long as they match `okRe`.
+function collectValue(lines, hit, okRe, stopY) {
+  var segs = [];
+  if (hit.rest.trim() && okRe.test(hit.rest.trim())) {
+    segs.push({ s: hit.rest, x: hit.endX, y: hit.y, w: hit.last.x + hit.last.w - hit.endX, size: hit.last.size });
+  }
+  for (var k = 0; k < hit.after.length; k++) {
+    if (!okRe.test(hit.after[k].s.trim())) break;
+    segs.push(hit.after[k]);
+  }
+  var colX = hit.x - 2, lastY = hit.y, maxGap = hit.size * 2.6;
+  for (var i = 0; i < lines.length; i++) {
+    var l = lines[i];
+    if (l.y >= hit.y - 0.5) continue;              // at or above the label
+    if (stopY != null && l.y <= stopY + 0.5) break;
+    if (lastY - l.y > maxGap) break;               // too far below — value has ended
+    var its = l.items.filter(function (it) { return it.x >= colX; });
+    if (!its.length) continue;                      // only other-column text on this line
+    if (!its.every(function (it) { return okRe.test(it.s.trim()); })) break;
+    its.forEach(function (it) { segs.push(it); });
+    lastY = l.y;
+  }
+  return segs;
+}
+
+// Everything the fixer needs to know about one label page
+function parseLabelPage(items) {
+  var info = { orderId: null, awb: null, invoice: null, orderNo: null, products: null, problems: [] };
+  var up = items.filter(function (i) { return i.upright; });
+  if (!up.length) { info.problems.push('No readable text on this page (scanned image?)'); return info; }
+  var lines = groupLines(up);
+
+  // AWB — Ekart style, e.g. LUAP0001693916
+  var awbItem = up.find(function (i) { return /^[A-Z]{2,6}\d{8,15}$/.test(i.s.trim()); });
+  if (awbItem) info.awb = awbItem.s.trim();
+
+  // Product table header ("Product … Price … Total") — also the floor for the Order No value
+  var header = null, prodHit = null, priceHit = null;
+  for (var i = 0; i < lines.length && !header; i++) {
+    var p = findText([lines[i]], /\bProduct\b/i), pr = findText([lines[i]], /\bPrice\b/i);
+    if (p && pr && pr.x > p.x) { header = lines[i]; prodHit = p; priceHit = pr; }
+  }
+
+  // Order No
+  var ol = findText(lines, /Order\s*(No|Number|ID)\.?\s*:?/i);
+  if (ol) {
+    var segs = collectValue(lines, ol, /^[#\d\s-]+$/, header ? header.y : null);
+    var digits = segs.map(function (s) { return s.s; }).join('').replace(/\D/g, '');
+    if (digits.length >= 6) info.orderNo = { label: ol, segs: segs, digits: digits };
+  }
+
+  // Invoice No (helps pick the right package when an order ships in parts)
+  var il = findText(lines, /Invoice\s*(No|Number)\.?\s*:?/i);
+  if (il) {
+    var invSegs = collectValue(lines, il, /^[A-Z0-9\-\/\s]+$/i, ol ? ol.y : (header ? header.y : null));
+    var inv = invSegs.map(function (s) { return s.s; }).join('').replace(/\s+/g, '');
+    if (inv) info.invoice = inv;
+  }
+
+  // Shopify order ID: Order No value first; barcode caption (12–16 digits) as fallback
+  if (info.orderNo && info.orderNo.digits.length >= 12) info.orderId = info.orderNo.digits;
+  else {
+    var cap = up.find(function (it) { return /^\d{12,16}$/.test(it.s.trim()); });
+    if (cap) info.orderId = cap.s.trim();
+  }
+  if (!info.orderId) info.problems.push('No Shopify order ID found on this page');
+
+  // Product cell — every text item between the header row and the "Total" row,
+  // left of the Price column
+  if (header) {
+    var totalLine = lines.find(function (l) {
+      return l.y < header.y - 1 && l.items.some(function (it) { return /^Total\b/i.test(it.s.trim()) && Math.abs(it.x - prodHit.x) < 15; });
+    });
+    if (totalLine) {
+      var leftX = prodHit.x - 3, rightX = priceHit.x - 3, desc = [];
+      lines.forEach(function (l) {
+        if (l.y >= header.y - 1 || l.y <= totalLine.y + 1) return;
+        l.items.forEach(function (it) { if (it.x >= leftX && it.x < rightX) desc.push(it); });
+      });
+      if (desc.length) {
+        var hSize = prodHit.size, tSize = totalLine.items[0].size;
+        info.products = {
+          desc: desc,
+          text: desc.map(function (d) { return d.s; }).join(' ').trim(),
+          left: Math.min.apply(null, desc.map(function (d) { return d.x; })),
+          right: priceHit.x - 6,                       // stay clear of the column line
+          headerBottom: header.y - hSize * 0.25,
+          totalTop: totalLine.y + tSize * 0.8,
+          size: Math.max.apply(null, desc.map(function (d) { return d.size; }))
+        };
+      }
+    }
+  }
+  if (!info.orderNo) info.problems.push('Order No box not found');
+  if (!info.products) info.problems.push('Product box not found');
+  return info;
+}
+
+function normCode(s) { return String(s || '').toUpperCase().replace(/[\s-]/g, ''); }
+
+// Which UC shipping package is this label for? AWB → invoice → the only live one
+function pickPackage(order, info) {
+  var pk = order.packages || [];
+  var byAwb = info.awb && pk.find(function (p) { return p.awb && normCode(p.awb) === normCode(info.awb); });
+  if (byAwb) return byAwb;
+  var byInv = info.invoice && pk.find(function (p) { return p.invoice && normCode(p.invoice) === normCode(info.invoice); });
+  if (byInv) return byInv;
+  var live = pk.filter(function (p) { return !/CANCEL/i.test(p.status || ''); });
+  return live.length === 1 ? live[0] : null;
+}
+
+// The label font (Helvetica, WinAnsi) can't draw every character a Shopify
+// title may hold (₹, emoji…), so anything it can't encode is dropped.
+var WINANSI_EXTRA = '€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ';
+function pdfSafe(t) {
+  return String(t == null ? '' : t).split('').map(function (ch) {
+    var c = ch.charCodeAt(0);
+    if (c === 9 || c === 10 || c === 13) return ' ';
+    return (c >= 0x20 && c <= 0x7e) || (c >= 0xa0 && c <= 0xff) || WINANSI_EXTRA.indexOf(ch) !== -1 ? ch : '';
+  }).join('').replace(/ {2,}/g, ' ').trim();
+}
+
+// Qty is only printed when more than one. The no-break spaces keep "× 2"
+// on the same line as its SKU when a long line has to wrap.
+function withQty(text, qty) { return qty > 1 ? text + ' × ' + qty : text; }
+function skuLine(sku, qty) { return pdfSafe(withQty(sku, qty)); }
+
+// Spare parts: UC only says "Spare Parts & Free Replacements" (RECO-DUMMY),
+// so the label names the part from the Shopify title, brand word removed:
+// "TOMAHAWK T12-A Chainsaw — Chain 6 inch" → "SPARE PART: T12-A Chainsaw — Chain 6 inch"
+function spareLine(title, qty) {
+  var name = String(title || '').replace(/^\s*TOMAHAWK\s*[®™]?\s*/i, '').replace(/[®™]/g, '').trim();
+  return pdfSafe(withQty('SPARE PART: ' + (name || 'see Shopify order'), qty));
+}
+function isPlaceholder(sku) { return PLACEHOLDER_SKUS.indexOf(sku) !== -1; }
+
+// Decides what goes on the label: { orderNo, lines, status: ok|part|skip, notes }
+function decideFix(info, order, lookupError) {
+  var fix = { orderNo: null, lines: null, status: 'skip', notes: [] };
+  if (!info.orderId) { fix.notes.push(info.problems[0] || 'No Shopify order ID found'); return fix; }
+  if (lookupError) { fix.notes.push('Lookup failed: ' + lookupError); return fix; }
+  if (!order) { fix.notes.push('Not in the mirror yet (syncs every ~15 min) or not a Shopify order'); return fix; }
+
+  if (order.name) fix.orderNo = order.name;
+  else fix.notes.push('Shopify order # not synced yet');
+
+  var pkg = pickPackage(order, info);
+  var shopItems = (order.shopify_items || []).filter(function (it) { return it.qty > 0; });
+  var lines = null;
+  if (pkg) {
+    var real = pkg.items.filter(function (it) { return !isPlaceholder(it.sku) && it.qty > 0; });
+    var spareQty = pkg.items.filter(function (it) { return isPlaceholder(it.sku); })
+      .reduce(function (n, it) { return n + it.qty; }, 0);
+    lines = real.map(function (it) { return skuLine(it.sku, it.qty); });
+    if (spareQty) {
+      // Shopify lines UC links to RECO-DUMMY are the spares; if a SKU has no
+      // UC link yet, any Shopify line that isn't one of the package's real SKUs.
+      var have = real.map(function (it) { return it.sku; });
+      var spares = shopItems.filter(function (it) { return it.uc_sku ? isPlaceholder(it.uc_sku) : have.indexOf(it.sku) === -1; });
+      if (spares.length) {
+        spares.forEach(function (it) { lines.push(spareLine(it.title || it.sku, it.qty)); });
+      } else {
+        lines.push(pdfSafe(withQty('SPARE PART', spareQty)));
+        fix.notes.push('Spare part — Shopify lines not synced yet, part name missing');
+      }
+    }
+  } else if (!(order.packages || []).length && shopItems.length) {
+    lines = shopItems.map(function (it) { return it.uc_sku && isPlaceholder(it.uc_sku) ? spareLine(it.title || it.sku, it.qty) : skuLine(it.uc_sku || it.sku || it.title, it.qty); });
+    fix.notes.push('UC package not synced yet — items taken from the Shopify order');
+  } else if ((order.packages || []).length > 1) {
+    fix.notes.push('Order ships in several packages and this label could not be matched to one');
+  } else {
+    fix.notes.push('No item data synced for this order yet');
+  }
+  if (lines && lines.length) fix.lines = lines;
+
+  if (!info.orderNo && fix.orderNo) { fix.orderNo = null; fix.notes.push('Order No box not found on the label'); }
+  if (!info.products && fix.lines) { fix.lines = null; fix.notes.push('Product box not found on the label'); }
+  fix.status = fix.orderNo && fix.lines ? 'ok' : (fix.orderNo || fix.lines ? 'part' : 'skip');
+  return fix;
+}
+
+// Lays the SKU lines out to fit the box (w × h points). Tries, in order:
+//   1. one item per line, biggest font that fits (down to 7pt)
+//   2. one item per line, long ones wrapped at spaces (down to 5.5pt)
+//   3. items run on as a comma list, wrapping between items
+//   4. the comma list cut short with "+N more" (only for very big orders)
+// Returns { size, lh, rows } — rows are the text lines to draw.
+function fitLines(lines, font, w, h, maxSize) {
+  var MIN = 5.5, MIN_NOWRAP = 7, s;
+  var widthOf = function (t, sz) { return font.widthOfTextAtSize(t, sz); };
+  var fitsH = function (n, sz) { return n * sz * 1.2 - sz * 0.2 <= h; };
+  var clip = function (t, sz) {
+    if (widthOf(t, sz) <= w) return t;
+    while (t.length > 3 && widthOf(t + '…', sz) > w) t = t.slice(0, -1);
+    return t + '…';
+  };
+  // one item broken into rows at normal spaces (no-break spaces hold "× 2")
+  var wordWrap = function (t, sz) {
+    var rows = [], cur = '';
+    t.split(' ').forEach(function (wd) {
+      var next = cur ? cur + ' ' + wd : wd;
+      if (cur && widthOf(next, sz) > w) { rows.push(cur); cur = wd; } else cur = next;
+    });
+    if (cur) rows.push(cur);
+    return rows.map(function (r) { return clip(r, sz); });
+  };
+  // greedy wrap of whole entries, joined by ", "
+  var wrap = function (entries, sz) {
+    var rows = [], cur = '';
+    entries.forEach(function (e) {
+      var next = cur ? cur + ', ' + e : e;
+      if (cur && widthOf(next, sz) > w) { rows.push(cur + ','); cur = e; } else cur = next;
+    });
+    if (cur) rows.push(cur);
+    return rows.map(function (r) { return clip(r, sz); });
+  };
+
+  for (s = maxSize; s >= MIN_NOWRAP; s -= 0.25) {
+    var widest = Math.max.apply(null, lines.map(function (t) { return widthOf(t, s); }));
+    if (widest <= w && fitsH(lines.length, s)) return { size: s, lh: s * 1.2, rows: lines };
+  }
+  for (s = maxSize; s >= MIN; s -= 0.25) {
+    var wrapped = [];
+    lines.forEach(function (t) { wrapped = wrapped.concat(wordWrap(t, s)); });
+    if (fitsH(wrapped.length, s)) return { size: s, lh: s * 1.2, rows: wrapped };
+  }
+  for (s = maxSize; s >= MIN; s -= 0.25) {
+    var rows = wrap(lines, s);
+    if (fitsH(rows.length, s)) return { size: s, lh: s * 1.2, rows: rows };
+  }
+  // Too many SKUs even at the smallest size: keep what fits, then "+N more"
+  s = MIN;
+  var cap = Math.max(1, Math.floor((h + s * 0.2) / (s * 1.2)));
+  for (var keep = lines.length - 1; keep >= 1; keep--) {
+    var r = wrap(lines.slice(0, keep).concat(['+' + (lines.length - keep) + ' more']), s);
+    if (r.length <= cap) return { size: s, lh: s * 1.2, rows: r };
+  }
+  return { size: s, lh: s * 1.2, rows: [clip(lines[0] + ' +' + (lines.length - 1) + ' more', s)] };
+}
+
+// Draws the fix onto a pdf-lib page. White boxes cover only the old text,
+// so table lines and barcodes are never touched.
+function stampPage(page, info, fix, fonts) {
+  var white = PDFLib.rgb(1, 1, 1), black = PDFLib.rgb(0, 0, 0);
+  var blank = function (it) {
+    page.drawRectangle({ x: it.x - 0.6, y: it.y - it.size * 0.28, width: it.w + 1.2, height: it.size * 1.12, color: white });
+  };
+
+  if (fix.orderNo && info.orderNo) {
+    var o = info.orderNo, segs = o.segs;
+    segs.forEach(blank);
+    var first = segs.slice().sort(function (a, b) { return b.y - a.y || a.x - b.x; })[0];
+    var sameLine = Math.abs(first.y - o.label.y) < 2;
+    var x = sameLine ? Math.max(o.label.endX + 2.5, first.x) : first.x;
+    var right = Math.max.apply(null, segs.map(function (sg) { return sg.x + sg.w; }));
+    var size = Math.min(16, Math.max.apply(null, segs.map(function (sg) { return sg.size; })));
+    while (size > 6 && fonts.bold.widthOfTextAtSize(fix.orderNo, size) > right - x + 2) size -= 0.5;
+    page.drawText(fix.orderNo, { x: x, y: first.y, size: size, font: fonts.bold, color: black });
+  }
+
+  if (fix.lines && fix.lines.length && info.products) {
+    var p = info.products;
+    p.desc.forEach(blank);
+    var descTop = Math.max.apply(null, p.desc.map(function (d) { return d.y + d.size * 0.8; }));
+    var descBottom = Math.min.apply(null, p.desc.map(function (d) { return d.y - d.size * 0.25; }));
+    // grow into a bit of the empty space above/below, never up to the row lines
+    var top = descTop + Math.max(0, p.headerBottom - descTop) * 0.35;
+    var bottom = descBottom - Math.max(0, descBottom - p.totalTop) * 0.35;
+    var w = p.right - p.left, h = top - bottom;
+    var fit = fitLines(fix.lines, fonts.bold, w, h, Math.min(11, p.size * 1.15));
+    var blockH = fit.rows.length * fit.lh - (fit.lh - fit.size);
+    var y0 = top - (h - blockH) / 2 - fit.size * 0.8;   // centre the block vertically
+    fit.rows.forEach(function (t, k) {
+      page.drawText(t, { x: p.left, y: y0 - k * fit.lh, size: fit.size, font: fonts.bold, color: black });
+    });
+  }
+}
+// CORE-END
+
+  /* ── Shopify Labels — UI ── */
+  var SL_LOOKUP_URL = 'https://tomahawk-returns.naimuddin.workers.dev/?action=shopifyLabelLookup';
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  var slState = null;   // { files:[{name, bytes}], pages:[{file, page, info, fix}], orders, lookupError, outBytes }
+  function slEl(id) { return document.getElementById(id); }
+  function slEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+  function slBusy(text) {
+    slEl('sl-busy').hidden = !text;
+    if (text) slEl('sl-busy-text').textContent = text;
+  }
+  function slBanner(id, text) {
+    slEl(id).hidden = !text;
+    slEl(id).textContent = text || '';
+  }
+
+  async function slLookup(ids) {
+    var token = null;
+    try { token = (JSON.parse(localStorage.getItem('tm_session_v1') || 'null') || {}).token || null; } catch (e) {}
+    var resp = await fetch(SL_LOOKUP_URL, {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, token ? { 'X-Tomahawk-Session': token } : {}),
+      body: JSON.stringify({ action: 'shopifyLabelLookup', order_ids: ids })
+    });
+    var data = null;
+    try { data = await resp.json(); } catch (e) {}
+    if (!resp.ok || !data || !data.ok) throw new Error((data && data.error) || ('HTTP ' + resp.status));
+    return data.orders || {};
+  }
+
+  // Read every page of every uploaded PDF
+  async function slHandleFiles(fileList) {
+    var files = Array.prototype.filter.call(fileList || [], function (f) { return /\.pdf$/i.test(f.name) || f.type === 'application/pdf'; });
+    if (!files.length) { slBanner('sl-upload-banner', 'Please choose PDF label files.'); return; }
+    slState = { files: [], pages: [], orders: {}, lookupError: null, outBytes: null };
+    slBanner('sl-upload-banner', null);
+    try {
+      for (var f = 0; f < files.length; f++) {
+        var bytes = new Uint8Array(await files[f].arrayBuffer());
+        slState.files.push({ name: files[f].name, bytes: bytes });
+        var doc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+        for (var p = 1; p <= doc.numPages; p++) {
+          slBusy('Reading labels… ' + files[f].name + ' page ' + p + ' of ' + doc.numPages);
+          var page = await doc.getPage(p);
+          var tc = await page.getTextContent();
+          slState.pages.push({ file: f, page: p - 1, info: parseLabelPage(readTextItems(tc.items)), fix: null });
+        }
+        doc.destroy();
+      }
+    } catch (e) {
+      slBusy(null);
+      slBanner('sl-upload-banner', 'Could not read that PDF: ' + e.message);
+      return;
+    }
+    await slLookupAndBuild();
+  }
+
+  async function slLookupAndBuild() {
+    var ids = [];
+    slState.pages.forEach(function (pg) { if (pg.info.orderId && ids.indexOf(pg.info.orderId) === -1) ids.push(pg.info.orderId); });
+    slBusy('Looking up ' + ids.length + ' Shopify order' + (ids.length === 1 ? '' : 's') + '…');
+    slState.lookupError = null;
+    try { slState.orders = ids.length ? await slLookup(ids) : {}; }
+    catch (e) { slState.orders = {}; slState.lookupError = e.message; }
+    slState.pages.forEach(function (pg) { pg.fix = decideFix(pg.info, slState.orders[pg.info.orderId], slState.lookupError); });
+
+    slBusy('Building the PDF…');
+    try { slState.outBytes = await slBuildPdf(); }
+    catch (e) { slBusy(null); slBanner('sl-upload-banner', 'Could not build the PDF: ' + e.message); return; }
+    slBusy(null);
+    slEl('sl-upload').hidden = true;
+    slEl('sl-results').hidden = false;
+    slBanner('sl-banner', slState.lookupError ? 'Order lookup failed (' + slState.lookupError + '). Labels are unchanged — try "Retry lookup".' : null);
+    slRender();
+    var firstFixed = slState.pages.findIndex(function (pg) { return pg.fix.status !== 'skip'; });
+    slSelect(firstFixed === -1 ? 0 : firstFixed);
+  }
+
+  // One output PDF: all pages in upload order, fixed ones stamped, others as-is
+  async function slBuildPdf() {
+    var out = await PDFLib.PDFDocument.create();
+    var fonts = { bold: await out.embedFont(PDFLib.StandardFonts.HelveticaBold) };
+    for (var f = 0; f < slState.files.length; f++) {
+      var src = await PDFLib.PDFDocument.load(slState.files[f].bytes, { ignoreEncryption: true });
+      var mine = slState.pages.filter(function (pg) { return pg.file === f; });
+      var copied = await out.copyPages(src, mine.map(function (pg) { return pg.page; }));
+      copied.forEach(function (pdfPage, k) {
+        out.addPage(pdfPage);
+        if (mine[k].fix.status !== 'skip') stampPage(pdfPage, mine[k].info, mine[k].fix, fonts);
+      });
+    }
+    return out.save();
+  }
+
+  function slRender() {
+    var n = { ok: 0, part: 0, skip: 0 };
+    slState.pages.forEach(function (pg) { n[pg.fix.status]++; });
+    var total = slState.pages.length;
+    slEl('sl-summary').innerHTML =
+      '<span class="sl-chip">' + total + ' label' + (total === 1 ? '' : 's') + '</span>' +
+      (n.ok ? '<span class="sl-chip ok">' + n.ok + ' fixed</span>' : '') +
+      (n.part ? '<span class="sl-chip part">' + n.part + ' partly fixed</span>' : '') +
+      (n.skip ? '<span class="sl-chip skip">' + n.skip + ' unchanged</span>' : '');
+
+    var multiFile = slState.files.length > 1;
+    slEl('sl-rows').innerHTML = slState.pages.map(function (pg, i) {
+      var f = pg.fix, info = pg.info;
+      var label = { ok: 'Fixed', part: 'Partly fixed', skip: 'Unchanged' }[f.status];
+      var orderCell = f.orderNo
+        ? '<span class="sl-order">' + slEsc(f.orderNo) + '</span>'
+        : '<span class="sl-mono">' + slEsc(info.orderId || '—') + '</span>';
+      var skuCell = f.lines
+        ? '<div class="sl-mono">' + f.lines.map(slEsc).join('<br>') + '</div>'
+        : '<span class="sl-note">' + slEsc(info.products ? info.products.text : '—') + '</span>';
+      return '<tr data-i="' + i + '">' +
+        '<td>' + (i + 1) + (multiFile ? '<div class="sl-note">' + slEsc(slState.files[pg.file].name) + ' p' + (pg.page + 1) + '</div>' : '') + '</td>' +
+        '<td class="sl-mono">' + slEsc(info.awb || '—') + '</td>' +
+        '<td>' + orderCell + '</td>' +
+        '<td>' + skuCell + '</td>' +
+        '<td><span class="sl-status ' + f.status + '">' + label + '</span>' +
+          (f.notes.length ? '<div class="sl-note">' + f.notes.map(slEsc).join('<br>') + '</div>' : '') + '</td>' +
+        '</tr>';
+    }).join('');
+
+    // Retry only helps when something wasn't found or the lookup failed
+    slEl('sl-retry').hidden = !(slState.lookupError || slState.pages.some(function (pg) { return pg.info.orderId && pg.fix.status !== 'ok'; }));
+  }
+
+  // Render one page of the output PDF in the preview pane
+  var slPreviewToken = 0;
+  async function slSelect(i) {
+    if (!slState || !slState.outBytes || i < 0 || i >= slState.pages.length) return;
+    Array.prototype.forEach.call(slEl('sl-rows').children, function (tr) { tr.classList.toggle('sel', Number(tr.getAttribute('data-i')) === i); });
+    var token = ++slPreviewToken;
+    slEl('sl-preview-cap').textContent = 'Preview — label ' + (i + 1) + ' of ' + slState.pages.length;
+    var doc = await pdfjsLib.getDocument({ data: slState.outBytes.slice() }).promise;
+    var page = await doc.getPage(i + 1);
+    if (token !== slPreviewToken) { doc.destroy(); return; }
+    var vp = page.getViewport({ scale: Math.min(3, 700 / page.getViewport({ scale: 1 }).width) });
+    var canvas = slEl('sl-preview-canvas');
+    canvas.width = vp.width; canvas.height = vp.height;
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+    doc.destroy();
+  }
+
+  function slDownload() {
+    if (!slState || !slState.outBytes) return;
+    var d = new Date(), pad = function (v) { return String(v).padStart(2, '0'); };
+    var name = 'shopify-labels-' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + '.pdf';
+    var url = URL.createObjectURL(new Blob([slState.outBytes], { type: 'application/pdf' }));
+    var a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+  }
+
+  function slReset() {
+    slState = null;
+    slEl('sl-file-input').value = '';
+    slEl('sl-results').hidden = true;
+    slEl('sl-upload').hidden = false;
+    slBanner('sl-upload-banner', null);
+  }
+
+  /* wiring */
+  var slInput = slEl('sl-file-input'), slDrop = slEl('sl-dropzone');
+  slInput.addEventListener('change', function () { slHandleFiles(slInput.files); });
+  slDrop.addEventListener('click', function () { slInput.click(); });
+  slEl('sl-choose-btn').addEventListener('click', function (e) { e.stopPropagation(); slInput.click(); });
+  ['dragenter', 'dragover'].forEach(function (ev) { slDrop.addEventListener(ev, function (e) { e.preventDefault(); slDrop.classList.add('drag-over'); }); });
+  ['dragleave', 'drop'].forEach(function (ev) { slDrop.addEventListener(ev, function (e) { e.preventDefault(); slDrop.classList.remove('drag-over'); }); });
+  slDrop.addEventListener('drop', function (e) { slHandleFiles(e.dataTransfer.files); });
+  slEl('sl-rows').addEventListener('click', function (e) {
+    var tr = e.target.closest('tr[data-i]');
+    if (tr) slSelect(Number(tr.getAttribute('data-i')));
+  });
+  slEl('sl-download').addEventListener('click', slDownload);
+  slEl('sl-retry').addEventListener('click', function () { if (slState) slLookupAndBuild(); });
+  slEl('sl-reset').addEventListener('click', slReset);
 })();
 </script>
 </body>

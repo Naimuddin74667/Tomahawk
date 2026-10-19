@@ -778,8 +778,8 @@ const ACTION_TIERS = {
   //   Supabase API mirror (SK's UC sync). Read-only, same tier as above. —
   getOrderPrices: 'viewer_read',
 
-  // — Shopify Label Fixer (Marketplace-Shipments/Shopify): Shopify order #
-  //   + package SKUs per order ID, read from the Supabase mirror. Read-only. —
+  // — Order-Processing "Shopify Labels" tab: Shopify order # + package
+  //   SKUs per order ID, read from the Supabase mirror. Read-only. —
   shopifyLabelLookup: 'viewer_read',
 
   // — Ops Chatbot: read-only stock Q&A, same tier as ucsku_getList. —
@@ -1345,7 +1345,7 @@ export default {
         return json({ ok: true, prices, requested: codes.length, found: Object.keys(prices).length });
       }
 
-      // ── SHOPIFY LABEL FIXER — /Marketplace-Shipments/Shopify/ ────────
+      // ── SHOPIFY LABELS — Order-Processing "Shopify Labels" tab ───────
       // Body: { action:'shopifyLabelLookup', order_ids:['5824788005072', ...] }
       // UC's Ekart label prints Shopify's internal order ID (= UC sale order
       // code) and one merged product line. For each ID this returns the
@@ -6658,7 +6658,7 @@ async function ccOrderLookup(env, marketId) {
   return await resp.json();
 }
 
-// Shopify Label Fixer lookup — reads 4 mirror tables for a batch of Shopify
+// Shopify Labels lookup — reads 4 mirror tables for a batch of Shopify
 // order IDs (digits only, so they are safe to put straight into the URL).
 // Returns { '<order id>': { name, packages:[…], shopify_items:[…] } }.
 async function shopifyLabelLookup(env, ids) {
@@ -6688,12 +6688,30 @@ async function shopifyLabelLookup(env, ids) {
         items: Object.values(p.items || {}).map(it => ({ sku: it.itemSku, name: it.itemName, qty: Number(it.quantity) || 0 }))
       });
     });
+    // Shopify SKU → UC SKU from UC's Shopify channel listings. UC links every
+    // spare part to RECO-DUMMY, so this is how the label knows a line is a spare.
+    const ucSkuOf = await shopifyToUcSkus(get, (shopItems || []).map(it => it.sku));
     (shopItems || []).forEach(it => {
       const qty = it.current_quantity == null ? Number(it.quantity) : Number(it.current_quantity);
-      if (qty > 0) ensure(String(it.order_id)).shopify_items.push({ sku: it.sku || null, title: it.title || null, qty });
+      if (qty > 0) ensure(String(it.order_id)).shopify_items.push({
+        sku: it.sku || null, title: it.title || null, qty, uc_sku: (it.sku && ucSkuOf[it.sku]) || null
+      });
     });
   }
   return out;
+}
+
+// Seller SKUs can hold spaces, commas and brackets, so each is double-quoted
+// inside PostgREST's in.(…) list and the list is URL-encoded.
+async function shopifyToUcSkus(get, skus) {
+  const list = [...new Set(skus.filter(Boolean).map(String))];
+  const map = {};
+  for (let i = 0; i < list.length; i += 60) {
+    const quoted = list.slice(i, i + 60).map(s => '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',');
+    const rows = await get('uc_channel_listings?select=seller_sku,uniware_sku&channel_name=eq.SHOPIFY&seller_sku=in.(' + encodeURIComponent(quoted) + ')');
+    (rows || []).forEach(r => { if (r.seller_sku && r.uniware_sku) map[r.seller_sku] = r.uniware_sku; });
+  }
+  return map;
 }
 
 // Simple per-IP hourly counter in D1 (old buckets cleaned as we go).
