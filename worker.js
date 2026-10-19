@@ -1035,11 +1035,37 @@ async function ensureHealthTables(DB) {
       resolved_at   TEXT,
       resolved_by   TEXT,
       created_at    TEXT DEFAULT (datetime('now'))
+    )`),
+    // Failures-in-a-row counter per key (see bumpFailStreak)
+    DB.prepare(`CREATE TABLE IF NOT EXISTS health_fail_streaks (
+      key        TEXT PRIMARY KEY,
+      streak     INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now'))
     )`)
   ]);
   // Column added after the original CREATE TABLE — try/catch handles the
   // "already exists" case on every subsequent call cheaply.
   try { await DB.prepare('ALTER TABLE health_bridges ADD COLUMN alert_sent_at TEXT').run(); } catch (e) { /* already exists */ }
+}
+
+// An issue is logged (and emailed) only when the same failure happens this
+// many times in a row — one-off blips (e.g. an Amazon API quota 429) are skipped.
+const HEALTH_FAILS_BEFORE_ISSUE = 3;
+
+// Counts failures in a row for one key: "<bridge>|lane:<lane>" for errors a
+// bridge reports itself, "<bridge>|stale" for missed heartbeats.
+// failed=false resets the count to 0. Returns the new count.
+async function bumpFailStreak(DB, key, failed) {
+  if (!failed) {
+    await DB.prepare("UPDATE health_fail_streaks SET streak = 0, updated_at = datetime('now') WHERE key = ? AND streak <> 0").bind(key).run();
+    return 0;
+  }
+  const row = await DB.prepare(`
+    INSERT INTO health_fail_streaks (key, streak, updated_at) VALUES (?, 1, datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET streak = health_fail_streaks.streak + 1, updated_at = datetime('now')
+    RETURNING streak
+  `).bind(key).first();
+  return row ? row.streak : 1;
 }
 
 // Fires an email via Resend when a bridge goes silent or self-reports an
@@ -1102,11 +1128,19 @@ async function recordHeartbeat(env, bridgeId, displayName, status, detail, expec
     expectedIntervalSeconds || 3600
   ).run();
 
-  // Self-reported failure — alert immediately, don't wait for the next
-  // staleness sweep to notice.
-  if (incomingStatus === 'error') {
+  // A heartbeat arrived, so the bridge isn't silent any more.
+  await bumpFailStreak(env.DB, bridgeId + '|stale', false);
+
+  // Self-reported failure — log/alert only after HEALTH_FAILS_BEFORE_ISSUE
+  // errors in a row. Some bridges (the Supabase syncs) send several lanes
+  // under one id ("lane h2: 0 ok, 4 failed …"), so each lane counts on its
+  // own — an OK from the 15-min lane doesn't hide a failing 2-hour lane.
+  const lane = (String(detail || '').match(/^\s*lane\s+([^:\s]+)\s*:/i) || [])[1] || '';
+  const failed = incomingStatus === 'error';
+  const streak = await bumpFailStreak(env.DB, bridgeId + '|lane:' + lane, failed);
+  if (failed && streak === HEALTH_FAILS_BEFORE_ISSUE) {
     await maybeAlert(env, bridgeId, displayName || bridgeId,
-      (detail || 'Bridge self-reported an error.') + ' (self-reported, not a staleness timeout)');
+      (detail || 'Bridge self-reported an error.') + ' (self-reported, ' + streak + ' times in a row)');
   }
 }
 
@@ -1123,6 +1157,10 @@ async function checkStaleBridgesAndAlert(env) {
     const interval = (b.expected_interval_seconds || 3600) * 1000;
     const age = Date.now() - then;
     if (age > interval * 2) {
+      // Counts watchdog checks (every 15 min) that found it silent; the next
+      // heartbeat resets it (recordHeartbeat). Logs on the 3rd check in a row.
+      const streak = await bumpFailStreak(env.DB, b.id + '|stale', true);
+      if (streak !== HEALTH_FAILS_BEFORE_ISSUE) continue;
       const minutesAgo = Math.round(age / 60000);
       await maybeAlert(env, b.id, b.display_name,
         'Last heartbeat was ' + minutesAgo + ' minutes ago (expected roughly every ' + Math.round(interval / 60000) + ' min).');
@@ -2607,10 +2645,12 @@ export default {
           const bridges = await env.DB.prepare(
             'SELECT * FROM health_bridges ORDER BY display_name ASC'
           ).all();
+          // Only the 10 most recent open issues are shown; open_count is the total.
           const issues = await env.DB.prepare(
-            'SELECT * FROM health_issues ORDER BY resolved ASC, created_at DESC LIMIT 200'
+            'SELECT * FROM health_issues WHERE resolved = 0 ORDER BY created_at DESC, id DESC LIMIT 10'
           ).all();
-          return json({ ok: true, bridges: bridges.results || [], issues: issues.results || [] });
+          const openRow = await env.DB.prepare('SELECT COUNT(*) AS n FROM health_issues WHERE resolved = 0').first();
+          return json({ ok: true, bridges: bridges.results || [], issues: issues.results || [], open_count: openRow ? openRow.n : 0 });
         }
 
         // ── DELHIVERY — list logged order-creation attempts (for

@@ -171,10 +171,6 @@ a { color: inherit; text-decoration: none; }
     { id: 'uc_auto_sync',        name: 'UC API Auto Sync (Google Sheet)',      interval: 3600 },
     { id: 'amazon_auto_sync',    name: 'Amazon Sync Sheet',                    interval: 3600 },
     { id: 'blinkit_ro_watcher',  name: 'Blinkit RO Email Watcher (Worker cron)', interval: 900 },
-    { id: 'gas_flipkart_returns',name: 'GAS: Flipkart_All_Returns bridge',     interval: 7200 },
-    { id: 'gas_uc_inventory',    name: 'GAS: UC_Inventory_API bridge',         interval: 7200 },
-    { id: 'gas_returns_proxy',   name: 'GAS: Returns-Manager legacy proxy',    interval: 7200 },
-    { id: 'amazon_vldd',         name: 'Amazon VLDD integration',              interval: 86400 },
     { id: 'cloudflare_worker',   name: 'Cloudflare Worker / D1 (this backend)',interval: 3600 }
   ];
 
@@ -267,17 +263,21 @@ a { color: inherit; text-decoration: none; }
     return d.innerHTML;
   }
 
-  function renderIssues(issues) {
+  // Shows only the 10 most recent open issues. An issue is only logged once
+  // the same failure has happened 3 times in a row (Worker side).
+  const ISSUES_SHOWN = 10;
+  function renderIssues(issues, openCount) {
     const list = document.getElementById('issue-list');
     list.innerHTML = '';
-    const open = (issues || []).filter(function (i) { return !i.resolved; });
-    const resolved = (issues || []).filter(function (i) { return i.resolved; });
-    document.getElementById('issue-count').textContent = open.length + ' open';
-    if (!issues || issues.length === 0) {
-      list.innerHTML = '<div class="empty-note">No issues have been reported. Good sign.</div>';
+    const open = (issues || []).filter(function (i) { return !i.resolved; }).slice(0, ISSUES_SHOWN);
+    const total = typeof openCount === 'number' ? openCount : open.length;
+    document.getElementById('issue-count').textContent =
+      total > open.length ? 'last ' + open.length + ' of ' + total + ' open' : total + ' open';
+    if (!open.length) {
+      list.innerHTML = '<div class="empty-note">No open issues. Good sign.</div>';
       return;
     }
-    open.concat(resolved.slice(0, 15)).forEach(function (i) {
+    open.forEach(function (i) {
       const card = document.createElement('div');
       card.className = 'issue-card' + (i.resolved ? ' resolved' : '');
       const sevClass = i.severity === 'critical' ? 'sev-critical' : (i.severity === 'info' ? 'sev-info' : 'sev-warning');
@@ -305,7 +305,7 @@ a { color: inherit; text-decoration: none; }
     const res = await api('healthGetStatus');
     if (res.ok) {
       renderBridges(res.bridges);
-      renderIssues(res.issues);
+      renderIssues(res.issues, res.open_count);
     } else if (res.error === 'unauthorized' || res.error === 'invalid session' || res.error === 'not authenticated') {
       // Session died mid-visit (expired/revoked) — send back to the hub to sign in again.
       clearSession();
