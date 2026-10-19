@@ -430,9 +430,10 @@ async function runStockAlertCheck(env, opts) {
   return { count: list.length, newCount: newOnes.length, reason, sent };
 }
 
-// ── Shared edge-cached GAS fetch — used by the Ops Chatbot (chatAsk).
-// Deliberately separate from sa_loadAll's own local cachedGasFetch so this
-// never risks touching Stock Alert's existing behavior. Same pattern:
+// ── Shared edge-cached GAS fetch — used by Returns Verifier's bundle list
+// (rsv_getBundleSkus). The Ops Chatbot no longer uses it — it reads the
+// Supabase mirror live (see chatInventoryLive). Kept separate from
+// sa_loadAll's own local cachedGasFetch. Same pattern:
 // Cloudflare's default cache keyed by a synthetic internal URL, 5 min TTL,
 // so repeat questions don't hit Apps Script every time. ──
 async function fetchGasCached(gasUrl, cacheKeyUrl) {
@@ -448,6 +449,36 @@ async function fetchGasCached(gasUrl, cacheKeyUrl) {
   });
   await cache.put(cacheKey, response.clone());
   return JSON.parse(text);
+}
+
+// ── OPS CHATBOT data — read LIVE from the Supabase API mirror on every
+// question (no Google Sheet / Apps Script, no cache). SK's sync refreshes
+// the mirror from Unicommerce every ~15 min. ──
+// Stock: stock_alert_inventory() — the same function Stock Alert uses —
+// rows { skuCode, name, E3_stock, G4_stock, … } for every UC item type.
+async function chatInventoryLive(env) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured on Worker');
+  const r = await fetch(env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/rpc/stock_alert_inventory', {
+    method: 'POST', headers: supabaseHeaders(env), body: '{}'
+  });
+  if (!r.ok) throw new Error('Supabase stock_alert_inventory ' + r.status);
+  const data = await r.json();
+  return { rows: (data && data.rows) || [], syncedAt: (data && data.syncedAt) || null };
+}
+// Gate-pass reserved: qty per SKU on UC gate passes not yet CLOSED (CREATED /
+// RETURN_AWAITED) — stock committed out but not shipped.
+async function chatGatepassPendingLive(env) {
+  const base = env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/uc_gatepass?select=sku,quantity&status=not.in.(CLOSED,CANCELLED)';
+  const pending = {};
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const r = await fetch(base + '&limit=' + PAGE + '&offset=' + from, { headers: supabaseHeaders(env) });
+    if (!r.ok) throw new Error('Supabase uc_gatepass ' + r.status);
+    const rows = await r.json();
+    rows.forEach(g => { if (g.sku) pending[g.sku] = (pending[g.sku] || 0) + (Number(g.quantity) || 0); });
+    if (rows.length < PAGE) break;
+  }
+  return pending;
 }
 
 // ── Loose SKU matcher for the chatbot — exact code match first, then
@@ -3697,35 +3728,22 @@ export default {
         }
 
         // ── OPS CHATBOT — natural-language stock lookup ───────────────────
-        // "How much stock do I have on <SKU>" style Q&A. Pulls two live
-        // feeds from the same UC_Inventory_API GAS bridge Stock Alert
-        // already uses (SA_UC_GAS_URL):
-        //   - unfiltered  -> UC_Inventory rows: skuCode, name, E3_stock,
-        //     G4_stock, total_stock (2h UC auto-sync cadence)
-        //   - ?type=gatepassPending -> { pending: { skuCode: qty } }, sum of
-        //     `quantity` on UC_Gatepass rows where status != 'CLOSED'
-        //     (open/pending gate passes not yet closed = stock committed
-        //     out but not shipped). NOTE: UC_Gatepass is NOT on the sheet's
-        //     own 2h live-sync list (confirmed separately — see the Aug-2026
-        //     outbound-inventory-pipeline design note), so this number can
-        //     lag behind E3/G4 stock until that gap is closed. Answer still
-        //     returns it, just treat it as "as of last gate pass tab sync"
-        //     rather than realtime.
-        // Both calls are edge-cached 5 min (same pattern as sa_loadAll) so
-        // repeat questions don't hammer Apps Script.
+        // "How much stock do I have on <SKU>" style Q&A. Every question reads
+        // the Supabase API mirror live (chatInventoryLive +
+        // chatGatepassPendingLive) — no GAS bridge, no Google Sheet, no cache.
         if (act === 'chatAsk') {
           const { message } = body || {};
           if (!message || !String(message).trim()) return json({ ok: false, error: 'message required' }, 400);
 
           const [invData, gpData] = await Promise.all([
-            fetchGasCached(SA_UC_GAS_URL, 'https://cache.internal/chat-uc-inventory-v1').catch(e => ({ error: e.message })),
-            fetchGasCached(SA_UC_GAS_URL + '?type=gatepassPending', 'https://cache.internal/chat-gp-pending-v1').catch(e => ({ error: e.message }))
+            chatInventoryLive(env).catch(e => ({ error: e.message })),
+            chatGatepassPendingLive(env).catch(e => ({ error: e.message }))
           ]);
 
-          if (invData.error) return json({ ok: false, error: 'Inventory feed error: ' + invData.error });
-          const invRows = invData.rows || [];
-          const gpMap = (gpData && !gpData.error && gpData.pending) ? gpData.pending : {};
-          const gpUnavailable = !gpData || !!gpData.error;
+          if (invData.error) return json({ ok: false, error: 'Stock lookup failed (Supabase): ' + invData.error });
+          const invRows = invData.rows;
+          const gpUnavailable = !!(gpData && gpData.error);
+          const gpMap = gpUnavailable ? {} : gpData;
 
           let matches = findSkuMatches(message, invRows);
           if (!matches.length) {
@@ -3737,7 +3755,7 @@ export default {
           }
 
           if (!matches.length) {
-            return json({ ok: true, answer: "I couldn't find a SKU matching that in UC_Inventory — try the exact SKU code or part of the product name.", matches: [] });
+            return json({ ok: true, answer: "I couldn't find a SKU matching that in Unicommerce — try the exact SKU code or part of the product name.", matches: [] });
           }
 
           const context = matches.slice(0, 5).map(r => ({
@@ -3745,12 +3763,12 @@ export default {
             name: r.name,
             E3: Number(r.E3_stock) || 0,
             G4: Number(r.G4_stock) || 0,
-            total: Number(r.total_stock) || 0,
+            total: (Number(r.E3_stock) || 0) + (Number(r.G4_stock) || 0),
             gpReserved: gpUnavailable ? null : (Number(gpMap[r.skuCode]) || 0)
           }));
 
           const systemPrompt = 'You are a warehouse inventory assistant for TomahawkTools. Answer using ONLY the stock data provided in the user message — never guess or invent numbers, and say so plainly if the data doesn\'t cover what was asked. Be concise (1-3 sentences), plain text, no markdown, no bullet points.\n\n'
-            + 'Field meanings: E3 and G4 are live stock at those two warehouses (from Unicommerce, synced every 2 hours). total is E3+G4 combined. gpReserved is stock already gate-passed out on an open/pending gate pass that hasn\'t closed yet — it is a separate "committed but not yet shipped" bucket, NOT included in E3/G4/total. gpReserved being null means that feed is temporarily unavailable, not zero.';
+            + 'Field meanings: E3 and G4 are available stock at those two warehouses (from Unicommerce, synced about every 15 minutes). total is E3+G4 combined. gpReserved is stock already gate-passed out on an open/pending gate pass that hasn\'t closed yet — it is a separate "committed but not yet shipped" bucket, NOT included in E3/G4/total. gpReserved being null means that feed is temporarily unavailable, not zero.';
           const userPrompt = 'Stock data (JSON): ' + JSON.stringify(context) + '\n\nQuestion: ' + message;
 
           try {
@@ -3760,11 +3778,11 @@ export default {
                 { role: 'user', content: userPrompt }
               ]
             });
-            return json({ ok: true, answer: (aiResp && aiResp.response) || null, matches: context });
+            return json({ ok: true, answer: (aiResp && aiResp.response) || null, matches: context, synced_at: invData.syncedAt });
           } catch (e) {
             // Workers AI binding missing/erroring — still return the raw
             // numbers so the bot isn't fully broken while that's sorted out.
-            return json({ ok: true, answer: null, matches: context, aiError: e.message });
+            return json({ ok: true, answer: null, matches: context, synced_at: invData.syncedAt, aiError: e.message });
           }
         }
 
