@@ -778,6 +778,10 @@ const ACTION_TIERS = {
   //   Supabase API mirror (SK's UC sync). Read-only, same tier as above. —
   getOrderPrices: 'viewer_read',
 
+  // — Shopify Label Fixer (Marketplace-Shipments/Shopify): Shopify order #
+  //   + package SKUs per order ID, read from the Supabase mirror. Read-only. —
+  shopifyLabelLookup: 'viewer_read',
+
   // — Ops Chatbot: read-only stock Q&A, same tier as ucsku_getList. —
   chatAsk: 'viewer_read',
 
@@ -1339,6 +1343,28 @@ export default {
           });
         }
         return json({ ok: true, prices, requested: codes.length, found: Object.keys(prices).length });
+      }
+
+      // ── SHOPIFY LABEL FIXER — /Marketplace-Shipments/Shopify/ ────────
+      // Body: { action:'shopifyLabelLookup', order_ids:['5824788005072', ...] }
+      // UC's Ekart label prints Shopify's internal order ID (= UC sale order
+      // code) and one merged product line. For each ID this returns the
+      // Shopify order name (#2879), its UC shipping packages (AWB, invoice,
+      // SKU × qty) and the Shopify order lines (real SKUs behind UC's
+      // RECO-DUMMY spare-part placeholder). IDs not synced yet are absent.
+      if (request.method === 'POST' && act === 'shopifyLabelLookup') {
+        const ids = [...new Set(((body && body.order_ids) || [])
+          .map(x => String(x || '').replace(/\D/g, '')).filter(x => x.length >= 6))].slice(0, 1000);
+        if (!ids.length) return json({ ok: true, orders: {} });
+        if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) {
+          return json({ ok: false, error: 'Supabase not configured on Worker (SUPABASE_URL / SUPABASE_SECRET_KEY)' }, 500);
+        }
+        try {
+          const orders = await shopifyLabelLookup(env, ids);
+          return json({ ok: true, orders, requested: ids.length, found: Object.keys(orders).length });
+        } catch (e) {
+          return json({ ok: false, error: e.message }, 502);
+        }
       }
 
       // ── WARRANTY CHECK (public) — /Warranty/ page ─────────────────────
@@ -6630,6 +6656,44 @@ async function ccOrderLookup(env, marketId) {
   });
   if (!resp.ok) throw new Error('Supabase ' + resp.status);
   return await resp.json();
+}
+
+// Shopify Label Fixer lookup — reads 4 mirror tables for a batch of Shopify
+// order IDs (digits only, so they are safe to put straight into the URL).
+// Returns { '<order id>': { name, packages:[…], shopify_items:[…] } }.
+async function shopifyLabelLookup(env, ids) {
+  const base = env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/';
+  async function get(path) {
+    const r = await fetch(base + path, { headers: supabaseHeaders(env) });
+    if (!r.ok) throw new Error('Supabase ' + path.split('?')[0] + ' failed: ' + r.status);
+    return r.json();
+  }
+  const out = {};
+  const ensure = id => (out[id] = out[id] || { name: null, packages: [], shopify_items: [] });
+
+  for (let i = 0; i < ids.length; i += 150) {          // keep each URL short
+    const inList = 'in.(' + ids.slice(i, i + 150).join(',') + ')';
+    const [shopOrders, ucOrders, packages, shopItems] = await Promise.all([
+      get('shopify_orders?select=order_id,name&order_id=' + inList),
+      get('uc_orders?select=code,display_order_code&code=' + inList),
+      get('uc_shipping_packages?select=code,sale_order_code,status,invoice_code,awb:raw->>trackingNumber,items:raw->items&sale_order_code=' + inList),
+      get('shopify_order_items?select=order_id,sku,title,quantity,current_quantity&order_id=' + inList)
+    ]);
+    // Order name: Shopify's own "#2879" first, UC's display code as fallback
+    (ucOrders || []).forEach(o => { if (o.display_order_code) ensure(String(o.code)).name = '#' + String(o.display_order_code).replace(/^#/, ''); });
+    (shopOrders || []).forEach(o => { if (o.name) ensure(String(o.order_id)).name = String(o.name); });
+    (packages || []).forEach(p => {
+      ensure(String(p.sale_order_code)).packages.push({
+        code: p.code, status: p.status, invoice: p.invoice_code || null, awb: p.awb || null,
+        items: Object.values(p.items || {}).map(it => ({ sku: it.itemSku, name: it.itemName, qty: Number(it.quantity) || 0 }))
+      });
+    });
+    (shopItems || []).forEach(it => {
+      const qty = it.current_quantity == null ? Number(it.quantity) : Number(it.current_quantity);
+      if (qty > 0) ensure(String(it.order_id)).shopify_items.push({ sku: it.sku || null, title: it.title || null, qty });
+    });
+  }
+  return out;
 }
 
 // Simple per-IP hourly counter in D1 (old buckets cleaned as we go).
