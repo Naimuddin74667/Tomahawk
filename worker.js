@@ -6810,7 +6810,17 @@ function zbPickHome(locs) {
   return locs.find(l => isMh(l) && /bhiwandi/i.test(l.name)) || locs.find(isMh) || null;
 }
 
+// Returns the item_id, or null when the token has no Items permission
+// (scope ZohoBooks.items.*) — the invoice line then carries the name and
+// SAC itself, which Zoho accepts the same way.
 async function zbRepairItem(env) {
+  try { return await zbRepairItemInner(env); }
+  catch (e) {
+    if (/not authorized|scope|permission/i.test(e.message)) return null;
+    throw e;
+  }
+}
+async function zbRepairItemInner(env) {
   const found = await zbCall(env, 'GET', '/items', null, { name: ZB_ITEM_NAME });
   const hit = (found.items || []).find(i => String(i.name).toLowerCase() === ZB_ITEM_NAME.toLowerCase());
   if (hit) return hit.item_id;
@@ -6885,7 +6895,7 @@ async function rpCreate(env, user, b) {
   const inv = {
     customer_id: customerId, reference_number: claimId,
     place_of_supply: stateCode, gst_treatment: 'consumer',
-    line_items: [{ item_id: itemId, description: desc + ' · ' + (row.product || '') + ' · ' + claimId,
+    line_items: [{ ...(itemId ? { item_id: itemId } : { name: ZB_ITEM_NAME }), description: desc + ' · ' + (row.product || '') + ' · ' + claimId,
       rate: amount, quantity: 1, hsn_or_sac: ZB_SAC,
       tax_id: stateCode === ZB_HOME_STATE ? taxes.intra : taxes.inter }],
     notes: 'Repair charges for service request ' + claimId + '. Thank you for choosing TOMAHAWK® Tools.',
