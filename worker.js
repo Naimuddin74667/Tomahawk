@@ -716,6 +716,7 @@ const ACTION_TIERS = {
   requestTrack: 'public', // public 'track your request' page — request ID/order ID + mobile, steps only, rate-limited
   ccClaimsList: 'viewer_read', ccClaimGet: 'viewer_read', ccClaimFiles: 'viewer_read', // Customer Care: New requests
   ccClaimAction: 'manager_up',
+  ccPaymentInfo: 'manager_up', ccPaymentCreate: 'manager_up', ccPaymentGet: 'viewer_read', // Repair payments (Zoho Books)
   // Shikhar's Care Desk server — checked by the X-Care-Key header (env.CARE_KEY) inside the handler
   externalPickupRecord: 'public', warrantyRegistrations: 'public',
   warrantyRegister: 'public', // public product-registration form (tomahawk.tools) — rate-limited
@@ -962,7 +963,8 @@ const ACTION_TIERS = {
 
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
-const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction']);
+const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction',
+  'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet']);
 
 function getAuthRequirement(act) {
   return ACTION_TIERS[act] || 'manager_up'; // fail-closed default for anything unmapped
@@ -1549,6 +1551,22 @@ export default {
         if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
         const r = await srAction(env, user, body || {});
         return json(r, r.ok ? 200 : 400);
+      }
+
+      // ── Repair payments (Zoho Books invoice + Razorpay link) ──
+      if (request.method === 'GET' && action === 'ccPaymentInfo') {
+        try { return json(await rpSetupInfo(env)); }
+        catch (e) { console.error('ccPaymentInfo:', e.message); return json({ ok: false, error: e.message }, 502); }
+      }
+      if (request.method === 'GET' && action === 'ccPaymentGet') {
+        try { return json(await rpGet(env, String(url.searchParams.get('claim_id') || '').trim(), url.searchParams.get('refresh') === '1')); }
+        catch (e) { console.error('ccPaymentGet:', e.message); return json({ ok: false, error: e.message }, 500); }
+      }
+      if (request.method === 'POST' && act === 'ccPaymentCreate') {
+        const user = authResult.user || (await resolveSession(request, env.DB));
+        if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
+        try { const r = await rpCreate(env, user, body || {}); return json(r, r.ok ? 200 : 400); }
+        catch (e) { console.error('ccPaymentCreate:', e.message); return json({ ok: false, error: e.message }, 502); }
       }
 
       // ── Shikhar's Care Desk → us (server-to-server, X-Care-Key) ──
@@ -4843,6 +4861,8 @@ export default {
     // Service requests — email the customer as the courier / warehouse moves
     // their case on (picked up, reached us, sent back, delivered). */15 ticks.
     ctx.waitUntil(srMilestoneEmails(env).catch(err => console.error('service request milestones:', err.message)));
+    // Repair payments — mark requests Paid once Zoho shows the invoice paid. */15 ticks.
+    ctx.waitUntil(rpCronCheck(env).catch(err => console.error('repair payments:', err.message)));
     // Order-data retention (Supabase mirror) — once a day, on the tick
     // that falls between 20:30 and 20:44 UTC (02:00–02:14 IST).
     const tick = new Date(event.scheduledTime || Date.now());
@@ -6672,6 +6692,284 @@ async function srAction(env, user, b) {
   return { ok: true, emailed };
 }
 
+// ══════════════════════════════════════════════════════════════════
+// REPAIR PAYMENTS — paid (out-of-warranty) repairs billed through Zoho Books
+//
+// Flow: team enters the repair cost (before GST) on an SRN request →
+// Worker creates a GST invoice in Zoho Books (item "Repair Service",
+// SAC 998717, 18%) with the request ID as reference → the invoice's own
+// online link lets the customer pay via Razorpay → Razorpay's webhook tells
+// Zoho, Zoho marks the invoice paid → we poll Zoho (cron + Refresh) and
+// show Paid on the request. Money and invoice stay in the company's books.
+//
+// Secrets (Cloudflare → Variables and Secrets): ZOHO_CLIENT_ID,
+// ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN, ZOHO_BOOKS_ORG_ID.
+// India data centre: accounts.zoho.in / www.zohoapis.in.
+// ══════════════════════════════════════════════════════════════════
+
+const ZB_ACCOUNTS = 'https://accounts.zoho.in/oauth/v2/token';
+const ZB_API = 'https://www.zohoapis.in/books/v3';
+const ZB_ITEM_NAME = 'Repair Service';
+const ZB_SAC = '998717';            // repair of commercial & industrial machinery (accounts-confirmed 22-Oct-2026)
+const ZB_GST_RATE = 18;
+const ZB_HOME_STATE = 'MH';         // bill from the Maharashtra (Bhiwandi) GSTIN
+
+// Indian state / UT name → Zoho place-of-supply code.
+const ZB_STATE_CODES = {
+  'andaman and nicobar islands': 'AN', 'andhra pradesh': 'AD', 'arunachal pradesh': 'AR', 'assam': 'AS',
+  'bihar': 'BR', 'chandigarh': 'CH', 'chhattisgarh': 'CG', 'dadra and nagar haveli and daman and diu': 'DN',
+  'dadra and nagar haveli': 'DN', 'daman and diu': 'DD', 'delhi': 'DL', 'new delhi': 'DL', 'goa': 'GA',
+  'gujarat': 'GJ', 'haryana': 'HR', 'himachal pradesh': 'HP', 'jammu and kashmir': 'JK', 'jharkhand': 'JH',
+  'karnataka': 'KA', 'kerala': 'KL', 'ladakh': 'LA', 'lakshadweep': 'LD', 'madhya pradesh': 'MP',
+  'maharashtra': 'MH', 'manipur': 'MN', 'meghalaya': 'ML', 'mizoram': 'MZ', 'nagaland': 'NL',
+  'odisha': 'OD', 'orissa': 'OD', 'puducherry': 'PY', 'pondicherry': 'PY', 'punjab': 'PB', 'rajasthan': 'RJ',
+  'sikkim': 'SK', 'tamil nadu': 'TN', 'telangana': 'TS', 'tripura': 'TR', 'uttar pradesh': 'UP',
+  'uttarakhand': 'UK', 'uttaranchal': 'UK', 'west bengal': 'WB'
+};
+function zbStateCode(state) {
+  const k = String(state || '').toLowerCase().replace(/&/g, 'and').replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim();
+  return ZB_STATE_CODES[k] || null;
+}
+
+function zbConfigured(env) {
+  return !!(env.ZOHO_CLIENT_ID && env.ZOHO_CLIENT_SECRET && env.ZOHO_REFRESH_TOKEN && env.ZOHO_BOOKS_ORG_ID);
+}
+
+// Access token, cached in D1 (tm_settings) so every isolate shares it —
+// Zoho limits how often a refresh token may be exchanged.
+async function zbToken(env, force) {
+  const KEY = 'zoho_books_token';
+  if (!force) {
+    const row = await env.DB.prepare('SELECT value FROM tm_settings WHERE key = ?').bind(KEY).first();
+    if (row && row.value) {
+      try { const t = JSON.parse(row.value); if (t.token && t.exp > Date.now() + 60000) return t.token; } catch (e) { /* refetch */ }
+    }
+  }
+  const qs = new URLSearchParams({ refresh_token: env.ZOHO_REFRESH_TOKEN, client_id: env.ZOHO_CLIENT_ID,
+    client_secret: env.ZOHO_CLIENT_SECRET, grant_type: 'refresh_token' });
+  const r = await fetch(ZB_ACCOUNTS + '?' + qs.toString(), { method: 'POST' });
+  const j = await r.json().catch(() => ({}));
+  if (!j.access_token) throw new Error('Zoho login failed: ' + (j.error || ('HTTP ' + r.status)));
+  const exp = Date.now() + ((j.expires_in || 3600) - 120) * 1000;
+  await env.DB.prepare("INSERT INTO tm_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+    .bind(KEY, JSON.stringify({ token: j.access_token, exp })).run();
+  return j.access_token;
+}
+
+// One Zoho Books API call. Retries once with a fresh token on 401.
+async function zbCall(env, method, path, body, query) {
+  const qs = new URLSearchParams({ organization_id: env.ZOHO_BOOKS_ORG_ID, ...(query || {}) });
+  const go = async (force) => fetch(ZB_API + path + '?' + qs.toString(), {
+    method,
+    headers: { Authorization: 'Zoho-oauthtoken ' + (await zbToken(env, force)), 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  let r = await go(false);
+  if (r.status === 401) r = await go(true);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || (j.code !== undefined && j.code !== 0)) {
+    const e = new Error('Zoho: ' + (j.message || ('HTTP ' + r.status)));
+    e.zoho = j; throw e;
+  }
+  return j;
+}
+
+// GST taxes for intra-state (CGST+SGST group) and inter-state (IGST) at 18%.
+async function zbTaxIds(env) {
+  const j = await zbCall(env, 'GET', '/settings/taxes');
+  const taxes = (j.taxes || []).filter(t => Number(t.tax_percentage) === ZB_GST_RATE);
+  const inter = taxes.find(t => /igst/i.test(t.tax_name || '') || /igst/i.test(t.tax_specific_type || ''));
+  const intra = taxes.find(t => t !== inter && (t.tax_type === 'tax_group' || /gst/i.test(t.tax_name || '')) && !/igst/i.test(t.tax_name || ''));
+  if (!inter || !intra) throw new Error('Could not find 18% GST and 18% IGST taxes in Zoho Books (Settings → Taxes).');
+  return { intra: intra.tax_id, inter: inter.tax_id, intraName: intra.tax_name, interName: inter.tax_name };
+}
+
+// The GSTIN / branch to bill from. Orgs with several GSTINs have
+// "locations" (newer) or "branches" (older); we pick the Maharashtra one.
+async function zbLocations(env) {
+  for (const [path, key, idKey] of [['/locations', 'locations', 'location_id'], ['/branches', 'branches', 'branch_id']]) {
+    try {
+      const j = await zbCall(env, 'GET', path);
+      const list = (j[key] || []).map(l => ({
+        id: l[idKey], idKey, name: l.location_name || l.branch_name || '',
+        gstin: l.tax_reg_no || l.gst_no || (l.tax_settings && l.tax_settings.tax_reg_no) || '',
+        state: (l.address && (l.address.state_code || l.address.state)) || l.state_code || l.state || '',
+        primary: !!(l.is_primary_location || l.is_primary_branch || l.is_primary)
+      }));
+      if (list.length) return list;
+    } catch (e) { /* this org doesn't use that feature — try the next */ }
+  }
+  return [];
+}
+function zbPickHome(locs) {
+  const isMh = l => l.gstin.slice(0, 2) === '27' || /maharashtra|^mh$/i.test(l.state) || /bhiwandi/i.test(l.name);
+  return locs.find(l => isMh(l) && /bhiwandi/i.test(l.name)) || locs.find(isMh) || null;
+}
+
+async function zbRepairItem(env) {
+  const found = await zbCall(env, 'GET', '/items', null, { name: ZB_ITEM_NAME });
+  const hit = (found.items || []).find(i => String(i.name).toLowerCase() === ZB_ITEM_NAME.toLowerCase());
+  if (hit) return hit.item_id;
+  const made = await zbCall(env, 'POST', '/items', {
+    name: ZB_ITEM_NAME, rate: 0, product_type: 'service', item_type: 'sales',
+    hsn_or_sac: ZB_SAC, description: 'Repair of customer tool (out of warranty)'
+  });
+  return made.item.item_id;
+}
+
+// Customer contact: one per request customer, matched by "Name (phone)".
+async function zbContact(env, row, stateCode) {
+  const name = (String(row.name || 'Customer').trim() + ' (' + row.phone + ')').slice(0, 99);
+  const found = await zbCall(env, 'GET', '/contacts', null, { contact_name: name });
+  const hit = (found.contacts || []).find(c => c.contact_name === name);
+  if (hit) return hit.contact_id;
+  const parts = String(row.name || 'Customer').trim().split(/\s+/);
+  const made = await zbCall(env, 'POST', '/contacts', {
+    contact_name: name, contact_type: 'customer', customer_sub_type: 'individual',
+    gst_treatment: 'consumer', place_of_contact: stateCode,
+    billing_address: { address: row.address || '', city: row.city || '', state: row.state || '', zip: row.pincode || '', country: 'India' },
+    contact_persons: [{ first_name: parts[0], last_name: parts.slice(1).join(' '), mobile: row.phone,
+      email: row.email || undefined, is_primary_contact: true }]
+  });
+  return made.contact.contact_id;
+}
+
+async function ensureRepairPaymentsTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS repair_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    claim_id TEXT NOT NULL, zoho_invoice_id TEXT, invoice_number TEXT,
+    amount REAL, total REAL, description TEXT, invoice_url TEXT,
+    status TEXT DEFAULT 'pending', created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now')), paid_at TEXT, checked_at TEXT
+  )`).run();
+}
+
+// Shown when the team opens the payment panel: is Zoho connected, which
+// GSTIN we bill from, and the tax lines that will apply.
+async function rpSetupInfo(env) {
+  if (!zbConfigured(env)) return { ok: false, error: 'Zoho Books is not connected on the Worker (ZOHO_* secrets missing).' };
+  const [taxes, locs] = await Promise.all([zbTaxIds(env), zbLocations(env)]);
+  const home = zbPickHome(locs);
+  return { ok: true, sac: ZB_SAC, rate: ZB_GST_RATE, taxes: { intra: taxes.intraName, inter: taxes.interName },
+    locations: locs.map(l => ({ name: l.name, gstin: l.gstin, state: l.state, primary: l.primary })),
+    billFrom: home ? { name: home.name, gstin: home.gstin } : null };
+}
+
+// POST ccPaymentCreate { claim_id, amount (before GST), description }
+async function rpCreate(env, user, b) {
+  if (!zbConfigured(env)) return { ok: false, error: 'Zoho Books is not connected on the Worker.' };
+  await ensureServiceRequestCols(env.DB);
+  await ensureRepairPaymentsTable(env.DB);
+  const claimId = String(b.claim_id || '').trim();
+  const amount = Math.round(Number(b.amount) * 100) / 100;
+  const desc = String(b.description || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (!claimId) return { ok: false, error: 'claim_id is required' };
+  if (!(amount > 0) || amount > 200000) return { ok: false, error: 'Enter the repair cost (before GST).' };
+  if (!desc) return { ok: false, error: 'Describe the repair work in a few words.' };
+  const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
+  if (!row) return { ok: false, error: 'No such request' };
+  if (row.warranty_status === 'Under warranty') return { ok: false, error: 'This request is under warranty — no payment needed.' };
+  const open = await env.DB.prepare("SELECT id FROM repair_payments WHERE claim_id = ? AND status IN ('pending','paid')").bind(claimId).first();
+  if (open) return { ok: false, error: 'A payment link already exists for this request. Refresh to see it.' };
+  const stateCode = zbStateCode(row.state);
+  if (!stateCode) return { ok: false, error: 'The request has no valid state ("' + (row.state || '') + '"), needed for GST. Fix the address first.' };
+
+  const [taxes, locs, itemId] = await Promise.all([zbTaxIds(env), zbLocations(env), zbRepairItem(env)]);
+  const home = zbPickHome(locs);
+  if (locs.length && !home) return { ok: false, error: 'Could not find the Maharashtra GSTIN in Zoho Books.' };
+  const customerId = await zbContact(env, row, stateCode);
+  const inv = {
+    customer_id: customerId, reference_number: claimId,
+    place_of_supply: stateCode, gst_treatment: 'consumer',
+    line_items: [{ item_id: itemId, description: desc + ' · ' + (row.product || '') + ' · ' + claimId,
+      rate: amount, quantity: 1, hsn_or_sac: ZB_SAC,
+      tax_id: stateCode === ZB_HOME_STATE ? taxes.intra : taxes.inter }],
+    notes: 'Repair charges for service request ' + claimId + '. Thank you for choosing TOMAHAWK® Tools.',
+    payment_options: { payment_gateways: [{ gateway_name: 'razorpay', configured: true }] }
+  };
+  if (home) inv[home.idKey] = home.id;
+  let created;
+  try { created = await zbCall(env, 'POST', '/invoices', inv); }
+  catch (e) {
+    // Some orgs reject payment_options — the invoice still gets the org's
+    // default online-payment settings, so retry without it.
+    if (!/payment/i.test(e.message)) throw e;
+    delete inv.payment_options;
+    created = await zbCall(env, 'POST', '/invoices', inv);
+  }
+  const invoice = created.invoice;
+  try { await zbCall(env, 'POST', '/invoices/' + invoice.invoice_id + '/status/sent'); } catch (e) { /* stays draft; link may still work */ }
+  const fresh = (await zbCall(env, 'GET', '/invoices/' + invoice.invoice_id)).invoice || invoice;
+  const url = fresh.invoice_url || '';
+
+  await env.DB.prepare(`INSERT INTO repair_payments (claim_id, zoho_invoice_id, invoice_number, amount, total, description, invoice_url, status, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
+    .bind(claimId, invoice.invoice_id, fresh.invoice_number || invoice.invoice_number, amount, Number(fresh.total || invoice.total || 0),
+      desc, url, (user && user.username) || 'unknown').run();
+
+  let emailed = false;
+  if (url) {
+    emailed = await srEmailCustomer(env, row, 'Repair payment', [
+      'Your repair cost is ready. Total payable (incl. 18% GST): ₹' + Number(fresh.total || 0).toFixed(2) + '.',
+      'Invoice no.: ' + (fresh.invoice_number || ''),
+      'Pay securely online here: ' + url,
+      'We start the repair as soon as the payment is received.'
+    ]);
+  }
+  await srAddEvent(env.DB, claimId, { by: (user && user.username) || 'unknown', kind: 'payment_link',
+    note: (fresh.invoice_number || '') + ' · ₹' + Number(fresh.total || 0).toFixed(2) + ' (₹' + amount.toFixed(2) + ' + GST) · ' + desc, emailed }, {});
+  return { ok: true, emailed, payment: await rpLatest(env.DB, claimId) };
+}
+
+async function rpLatest(DB, claimId) {
+  return await DB.prepare('SELECT * FROM repair_payments WHERE claim_id = ? ORDER BY id DESC LIMIT 1').bind(claimId).first();
+}
+
+// Re-read one payment's invoice from Zoho; mark paid / void.
+async function rpCheckOne(env, p) {
+  const inv = (await zbCall(env, 'GET', '/invoices/' + p.zoho_invoice_id)).invoice || {};
+  const st = String(inv.status || '').toLowerCase();
+  let next = p.status;
+  if (st === 'paid') next = 'paid';
+  else if (st === 'void') next = 'void';
+  await env.DB.prepare("UPDATE repair_payments SET status = ?, checked_at = datetime('now'), invoice_url = COALESCE(NULLIF(?, ''), invoice_url)" +
+    (next === 'paid' && p.status !== 'paid' ? ", paid_at = datetime('now')" : '') + ' WHERE id = ?')
+    .bind(next, inv.invoice_url || '', p.id).run();
+  if (next !== p.status && next === 'paid') {
+    await srAddEvent(env.DB, p.claim_id, { by: 'system', kind: 'payment_received',
+      note: (p.invoice_number || '') + ' · ₹' + Number(inv.total || p.total || 0).toFixed(2) + ' paid' }, {});
+  }
+  if (next !== p.status && next === 'void') {
+    await srAddEvent(env.DB, p.claim_id, { by: 'system', kind: 'payment_void', note: (p.invoice_number || '') + ' voided in Zoho' }, {});
+  }
+  return next;
+}
+
+// GET ccPaymentGet&claim_id=… (&refresh=1 re-checks Zoho first)
+async function rpGet(env, claimId, refresh) {
+  await ensureRepairPaymentsTable(env.DB);
+  let p = await rpLatest(env.DB, claimId);
+  if (p && refresh && p.status === 'pending' && zbConfigured(env)) {
+    try { await rpCheckOne(env, p); } catch (e) { return { ok: true, payment: p, checkError: e.message }; }
+    p = await rpLatest(env.DB, claimId);
+  }
+  return { ok: true, payment: p || null };
+}
+
+// Cron (*/15): re-check pending payments, oldest check first.
+async function rpCronCheck(env) {
+  if (!zbConfigured(env)) return { checked: 0 };
+  await ensureRepairPaymentsTable(env.DB);
+  const rows = (await env.DB.prepare(
+    "SELECT * FROM repair_payments WHERE status = 'pending' AND created_at > datetime('now', '-60 days') ORDER BY COALESCE(checked_at, '') ASC LIMIT 15"
+  ).all()).results || [];
+  let paid = 0;
+  for (const p of rows) {
+    try { if ((await rpCheckOne(env, p)) === 'paid') paid++; } catch (e) { console.error('repair payment check', p.claim_id, e.message); }
+  }
+  return { checked: rows.length, paid };
+}
+
 // ── Where is the linked pickup case? (reverse leg + its send-back leg) ──
 async function srCaseLegs(DB, caseId) {
   if (!caseId) return { rev: null, fwd: null };
@@ -6720,7 +7018,7 @@ function srSteps(row, legs) {
   return { steps, final: !!delivered };
 }
 
-// Public: GET ?action=requestTrack&id=<WN-/SN-/NV-/WC-… or order ID>&phone=<10 digits>
+// Public: GET ?action=requestTrack&id=<WRN-/SRN-/NV- (older WN-/SN-/WC-)… or order ID>&phone=<10 digits>
 async function srTrack(env, idRaw, phoneRaw) {
   await ensureServiceRequestCols(env.DB);
   const id = String(idRaw || '').trim().toUpperCase().replace(/[\s#]/g, '');
@@ -6784,11 +7082,12 @@ async function ensureWarrantyClaimsTable(DB) {
 
 function claimErr(msg) { const e = new Error(msg); e.userError = true; return e; }
 
-// Request ID prefix by warranty status (SK 15-Oct-2026):
-//   WN- Under warranty · SN- Out of warranty · NV- Order not verified / Order cancelled
+// Request ID prefix by warranty status (SK 15-Oct-2026; renamed 22-Oct-2026):
+//   WRN- Under warranty · SRN- Out of warranty · NV- Order not verified / Order cancelled
+// Older requests keep their WN- / SN- (and WC-) IDs — lookups match the full ID.
 function srIdPrefix(warrantyStatus) {
-  if (warrantyStatus === 'Under warranty') return 'WN';
-  if (warrantyStatus === 'Out of warranty') return 'SN';
+  if (warrantyStatus === 'Under warranty') return 'WRN';
+  if (warrantyStatus === 'Out of warranty') return 'SRN';
   return 'NV';
 }
 
