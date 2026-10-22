@@ -6731,9 +6731,13 @@ function zbStateCode(state) {
   return ZB_STATE_CODES[k] || null;
 }
 
-function zbConfigured(env) {
-  return !!(env.ZOHO_CLIENT_ID && env.ZOHO_CLIENT_SECRET && env.ZOHO_REFRESH_TOKEN && env.ZOHO_BOOKS_ORG_ID);
+// Accept either naming (ZOHO_* or ZOHO_BOOKS_*) for the four Zoho secrets.
+const ZB_SECRETS = ['CLIENT_ID', 'CLIENT_SECRET', 'REFRESH_TOKEN', 'BOOKS_ORG_ID'];
+function zbSecret(env, k) {
+  return env['ZOHO_' + k] || env['ZOHO_BOOKS_' + k.replace(/^BOOKS_/, '')] || '';
 }
+function zbMissing(env) { return ZB_SECRETS.filter(k => !zbSecret(env, k)).map(k => 'ZOHO_' + k); }
+function zbConfigured(env) { return zbMissing(env).length === 0; }
 
 // Access token, cached in D1 (tm_settings) so every isolate shares it —
 // Zoho limits how often a refresh token may be exchanged.
@@ -6745,8 +6749,8 @@ async function zbToken(env, force) {
       try { const t = JSON.parse(row.value); if (t.token && t.exp > Date.now() + 60000) return t.token; } catch (e) { /* refetch */ }
     }
   }
-  const qs = new URLSearchParams({ refresh_token: env.ZOHO_REFRESH_TOKEN, client_id: env.ZOHO_CLIENT_ID,
-    client_secret: env.ZOHO_CLIENT_SECRET, grant_type: 'refresh_token' });
+  const qs = new URLSearchParams({ refresh_token: zbSecret(env, 'REFRESH_TOKEN'), client_id: zbSecret(env, 'CLIENT_ID'),
+    client_secret: zbSecret(env, 'CLIENT_SECRET'), grant_type: 'refresh_token' });
   const r = await fetch(ZB_ACCOUNTS + '?' + qs.toString(), { method: 'POST' });
   const j = await r.json().catch(() => ({}));
   if (!j.access_token) throw new Error('Zoho login failed: ' + (j.error || ('HTTP ' + r.status)));
@@ -6758,7 +6762,7 @@ async function zbToken(env, force) {
 
 // One Zoho Books API call. Retries once with a fresh token on 401.
 async function zbCall(env, method, path, body, query) {
-  const qs = new URLSearchParams({ organization_id: env.ZOHO_BOOKS_ORG_ID, ...(query || {}) });
+  const qs = new URLSearchParams({ organization_id: zbSecret(env, 'BOOKS_ORG_ID'), ...(query || {}) });
   const go = async (force) => fetch(ZB_API + path + '?' + qs.toString(), {
     method,
     headers: { Authorization: 'Zoho-oauthtoken ' + (await zbToken(env, force)), 'Content-Type': 'application/json' },
@@ -6847,7 +6851,7 @@ async function ensureRepairPaymentsTable(DB) {
 // Shown when the team opens the payment panel: is Zoho connected, which
 // GSTIN we bill from, and the tax lines that will apply.
 async function rpSetupInfo(env) {
-  if (!zbConfigured(env)) return { ok: false, error: 'Zoho Books is not connected on the Worker (ZOHO_* secrets missing).' };
+  if (!zbConfigured(env)) return { ok: false, error: 'Zoho Books is not connected on the Worker. Missing secret(s): ' + zbMissing(env).join(', ') };
   const [taxes, locs] = await Promise.all([zbTaxIds(env), zbLocations(env)]);
   const home = zbPickHome(locs);
   return { ok: true, sac: ZB_SAC, rate: ZB_GST_RATE, taxes: { intra: taxes.intraName, inter: taxes.interName },
@@ -6857,7 +6861,7 @@ async function rpSetupInfo(env) {
 
 // POST ccPaymentCreate { claim_id, amount (before GST), description }
 async function rpCreate(env, user, b) {
-  if (!zbConfigured(env)) return { ok: false, error: 'Zoho Books is not connected on the Worker.' };
+  if (!zbConfigured(env)) return { ok: false, error: 'Zoho Books is not connected on the Worker. Missing secret(s): ' + zbMissing(env).join(', ') };
   await ensureServiceRequestCols(env.DB);
   await ensureRepairPaymentsTable(env.DB);
   const claimId = String(b.claim_id || '').trim();
