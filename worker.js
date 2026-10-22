@@ -716,7 +716,7 @@ const ACTION_TIERS = {
   requestTrack: 'public', // public 'track your request' page — request ID/order ID + mobile, steps only, rate-limited
   ccClaimsList: 'viewer_read', ccClaimGet: 'viewer_read', ccClaimFiles: 'viewer_read', // Customer Care: New requests
   ccClaimAction: 'manager_up',
-  ccPaymentInfo: 'manager_up', ccPaymentCreate: 'manager_up', ccPaymentGet: 'viewer_read', // Repair payments (Zoho Books)
+  ccPaymentInfo: 'manager_up', ccPaymentCreate: 'manager_up', ccPaymentVoid: 'manager_up', ccPaymentGet: 'viewer_read', // Repair payments (Zoho Books)
   // Shikhar's Care Desk server — checked by the X-Care-Key header (env.CARE_KEY) inside the handler
   externalPickupRecord: 'public', warrantyRegistrations: 'public',
   warrantyRegister: 'public', // public product-registration form (tomahawk.tools) — rate-limited
@@ -964,7 +964,7 @@ const ACTION_TIERS = {
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
 const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction',
-  'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet']);
+  'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid']);
 
 function getAuthRequirement(act) {
   return ACTION_TIERS[act] || 'manager_up'; // fail-closed default for anything unmapped
@@ -1561,6 +1561,12 @@ export default {
       if (request.method === 'GET' && action === 'ccPaymentGet') {
         try { return json(await rpGet(env, String(url.searchParams.get('claim_id') || '').trim(), url.searchParams.get('refresh') === '1')); }
         catch (e) { console.error('ccPaymentGet:', e.message); return json({ ok: false, error: e.message }, 500); }
+      }
+      if (request.method === 'POST' && act === 'ccPaymentVoid') {
+        const user = authResult.user || (await resolveSession(request, env.DB));
+        if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
+        try { const r = await rpVoid(env, user, String((body || {}).claim_id || '').trim()); return json(r, r.ok ? 200 : 400); }
+        catch (e) { console.error('ccPaymentVoid:', e.message); return json({ ok: false, error: e.message }, 502); }
       }
       if (request.method === 'POST' && act === 'ccPaymentCreate') {
         const user = authResult.user || (await resolveSession(request, env.DB));
@@ -6957,6 +6963,22 @@ async function rpCheckOne(env, p) {
     await srAddEvent(env.DB, p.claim_id, { by: 'system', kind: 'payment_void', note: (p.invoice_number || '') + ' voided in Zoho' }, {});
   }
   return next;
+}
+
+// POST ccPaymentVoid { claim_id } — cancel an unpaid link: voids the Zoho
+// invoice (so the link stops working) and frees the request for a new one.
+async function rpVoid(env, user, claimId) {
+  if (!zbConfigured(env)) return { ok: false, error: 'Zoho Books is not connected on the Worker.' };
+  await ensureRepairPaymentsTable(env.DB);
+  const p = await env.DB.prepare("SELECT * FROM repair_payments WHERE claim_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1").bind(claimId).first();
+  if (!p) return { ok: false, error: 'No unpaid payment link on this request.' };
+  // Paid in the meantime? Never void a paid invoice from here.
+  if ((await rpCheckOne(env, p)) !== 'pending') return { ok: false, error: 'This invoice is no longer unpaid — click Refresh.' };
+  await zbCall(env, 'POST', '/invoices/' + p.zoho_invoice_id + '/status/void');
+  await env.DB.prepare("UPDATE repair_payments SET status = 'void', checked_at = datetime('now') WHERE id = ?").bind(p.id).run();
+  await srAddEvent(env.DB, claimId, { by: (user && user.username) || 'unknown', kind: 'payment_void',
+    note: (p.invoice_number || '') + ' cancelled (invoice voided in Zoho)' }, {});
+  return { ok: true };
 }
 
 // GET ccPaymentGet&claim_id=… (&refresh=1 re-checks Zoho first)
