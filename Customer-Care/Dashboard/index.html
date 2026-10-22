@@ -820,6 +820,8 @@ html .site-header [hidden] { display: none !important; }
           <option value="Refund">Refund</option>
           <option value="Free Of Cost">Free Of Cost</option>
         </select>
+        <select id="f-courier"><option value="">All couriers</option></select>
+        <select id="f-status"><option value="">All statuses</option></select>
         <span class="log-refresh" id="refresh-btn">&#8635; Refresh</span>
       </div>
     </div>
@@ -2180,13 +2182,40 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     });
   }
 
+  // Courier shown in the row = the leg moving now (same as the Courier column).
+  function rowCourier(c) { return courierName(liveLeg(c) || c.forward || c.reverse); }
+
+  // Courier + Courier-status dropdowns: options come from the cases in the
+  // current tile, with counts. Keeps the current pick even if it hits 0.
+  function fillFilterOptions(list) {
+    fillSelect('f-courier', 'All couriers', list.map(rowCourier));
+    fillSelect('f-status', 'All statuses', list.map(function (c) { return c.st.label; }));
+  }
+  function fillSelect(id, allLabel, values) {
+    var sel = document.getElementById(id), cur = sel.value, n = {};
+    values.forEach(function (v) { if (v) n[v] = (n[v] || 0) + 1; });
+    if (cur && !n[cur]) n[cur] = 0;
+    var keys = Object.keys(n).sort();
+    sel.innerHTML = '<option value="">' + esc(allLabel) + '</option>' + keys.map(function (k) {
+      return '<option value="' + esc(k) + '">' + esc(k) + ' (' + n[k] + ')</option>';
+    }).join('');
+    sel.value = cur;
+  }
+
   function renderTable() {
     var q = document.getElementById('q').value.trim().toLowerCase();
     var kind = document.getElementById('f-kind').value;
     var tile = TILES.filter(function (t) { return t.key === tileFilter; })[0];
     document.getElementById('panel-title').textContent = tile ? tile.label : 'All cases';
-    var rows = cases.filter(function (c) {
-      return tileTest(tileFilter)(c) && (!kind || c.type === kind || (kind === 'Refund' && / Refund$/.test(c.type))) && (!q || c.search.indexOf(q) !== -1);
+    var inTile = cases.filter(tileTest(tileFilter));
+    fillFilterOptions(inTile);
+    var courier = document.getElementById('f-courier').value;
+    var status = document.getElementById('f-status').value;
+    var rows = inTile.filter(function (c) {
+      return (!kind || c.type === kind || (kind === 'Refund' && / Refund$/.test(c.type))) &&
+        (!courier || rowCourier(c) === courier) &&
+        (!status || c.st.label === status) &&
+        (!q || c.search.indexOf(q) !== -1);
     });
     // Needs attention = a work queue: grouped (Delivered → Arriving → Escalation),
     // shown in full with group headers instead of 10-row pages.
@@ -3602,6 +3631,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   }
   document.getElementById('q').addEventListener('input', function () { page = 1; renderTable(); });
   document.getElementById('f-kind').addEventListener('change', function () { page = 1; renderTable(); });
+  ['f-courier', 'f-status'].forEach(function (id) { document.getElementById(id).addEventListener('change', function () { page = 1; renderTable(); }); });
   document.getElementById('refresh-btn').addEventListener('click', function () { load(true); });
   load(false);
 })();
