@@ -3615,7 +3615,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         (p.invoice_url ? '<button class="case-act primary" id="pay-copy">Copy payment link</button>' +
                          '<a class="case-act" target="_blank" rel="noopener" href="' + esc(p.invoice_url) + '">Open link</a>'
                        : '<span class="pay-hint">Zoho did not return a payment link — share the invoice from Zoho Books.</span>') +
-        '<button class="case-act" id="pay-refresh">↻ Refresh</button></div>' : '');
+        '<button class="case-act" id="pay-refresh">↻ Refresh</button>' +
+        (canActReq() ? '<button class="case-act danger" id="pay-void">Cancel link</button>' : '') + '</div>' : '');
     var c = document.getElementById('pay-copy');
     if (c) c.addEventListener('click', function () {
       var msg = 'Hi ' + (String(r.name || '').split(' ')[0] || '') + ', the repair cost for your request ' + r.claim_id + ' is ' + money(p.total) +
@@ -3624,6 +3625,16 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         function () { prompt('Copy this message:', msg); });
     });
     var f = document.getElementById('pay-refresh'); if (f) f.addEventListener('click', function () { loadPayment(r, true); });
+    var v = document.getElementById('pay-void');
+    if (v) v.addEventListener('click', async function () {
+      if (!confirm('Cancel this payment link? Invoice ' + (p.invoice_number || '') + ' will be voided in Zoho Books and the link will stop working.')) return;
+      v.disabled = true; v.textContent = 'Cancelling…';
+      try {
+        var res = await post('ccPaymentVoid', { claim_id: r.claim_id });
+        if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
+        await loadRequests(); renderTiles(); renderRequests(); openRequest(r.claim_id);
+      } catch (e) { alert("Couldn't cancel: " + e.message); v.disabled = false; v.textContent = 'Cancel link'; }
+    });
   }
 
   function payForm(r) {
