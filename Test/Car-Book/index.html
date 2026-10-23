@@ -154,6 +154,12 @@ td.num, th.num { text-align:right; white-space:nowrap; }
 .muted { color:var(--text2); }
 .toast { position:fixed; bottom:80px; left:50%; transform:translateX(-50%); background:var(--text); color:var(--bg); padding:9px 16px; border-radius:8px; font-weight:700; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; z-index:60; }
 .toast.show { opacity:1; }
+/* Undo bar: shown for a few seconds after "Received" in the rent popup. Sits at the top so it never covers the popup's buttons. */
+.undo-bar { position:fixed; top:calc(14px + env(safe-area-inset-top)); left:50%; transform:translate(-50%,-140%); display:flex; align-items:center; gap:14px;
+  background:var(--text); color:var(--bg); padding:8px 8px 8px 16px; border-radius:10px; font-weight:700; font-size:13px; box-shadow:0 6px 18px rgba(0,0,0,.25);
+  z-index:65; transition:transform .2s; max-width:calc(100vw - 32px); }
+.undo-bar.show { transform:translate(-50%,0); }
+.undo-bar button { background:var(--accent); color:var(--accent-ink); border:0; border-radius:7px; padding:8px 14px; font:inherit; font-weight:800; cursor:pointer; white-space:nowrap; }
 
 
 /* ── List rows (used everywhere instead of wide tables — phone first) ── */
@@ -253,7 +259,7 @@ body.readonly .lrow.click { cursor:default; }
 #printArea { display:none; }
 @media print {
   body { background:#fff; color:#000; }
-  .sidebar, .main, .overlay, .toast { display:none !important; }
+  .sidebar, .main, .overlay, .toast, .undo-bar { display:none !important; }
   #printArea { display:block; padding:24px; font-family:var(--font-body); color:#000; }
   #printArea h1 { font-size:20px; margin-bottom:2px; }
   #printArea table td, #printArea table th { border-bottom:1px solid #ccc; color:#000; }
@@ -282,6 +288,7 @@ body.readonly .lrow.click { cursor:default; }
 <div id="login" hidden></div>
 <div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
 <div class="toast" id="toast"></div>
+<div class="undo-bar" id="undoBar" role="status"><span id="undoText"></span><button type="button" onclick="undoRent()">Undo</button></div>
 <div id="printArea"></div>
 
 <script>
@@ -1172,11 +1179,34 @@ function defaultReceiver() {
 }
 function confirmRent(driverId, amount) {
   if (viewOnly()) return;
-  const prefs = DB.prefs || {};
-  DB.payments.push({ id: uid(), driverId, vehicleId: vehOfDriver(DB.drivers.find(x => x.id === driverId)), date: todayStr(), amount, mode: 'Online',
+  const id = uid();
+  DB.payments.push({ id, driverId, vehicleId: vehOfDriver(DB.drivers.find(x => x.id === driverId)), date: todayStr(), amount, mode: 'Online',
                      receivedBy: ACCOUNT, note: 'Confirmed from reminder' });
-  save(); PAGES[currentPage](); toast('Rent ' + inr(amount) + ' added');
+  save(); PAGES[currentPage]();
+  showUndo(id, amount);
   openRentConfirm();   // shows the next pending one, or closes when all clear
+}
+/* ── Undo for the rent popup ──
+   Every "Received" tap made while the bar is still showing is grouped, so one Undo takes them all back. */
+const UNDO_MS = 10000;
+let undoIds = [], undoAmt = 0, undoTimer = null;
+function showUndo(id, amount) {
+  undoIds.push(id); undoAmt += num(amount);
+  document.getElementById('undoText').textContent = 'Rent ' + inr(undoAmt) + ' added';
+  document.getElementById('undoBar').classList.add('show');
+  clearTimeout(undoTimer); undoTimer = setTimeout(hideUndo, UNDO_MS);
+}
+function hideUndo() {
+  clearTimeout(undoTimer); undoIds = []; undoAmt = 0;
+  document.getElementById('undoBar').classList.remove('show');
+}
+function undoRent() {
+  if (viewOnly() || !undoIds.length) { hideUndo(); return; }
+  const ids = new Set(undoIds), amt = undoAmt;
+  DB.payments = DB.payments.filter(p => !ids.has(p.id));
+  hideUndo(); save(); PAGES[currentPage]();
+  toast('Undone · ' + inr(amt) + ' removed');
+  openRentConfirm();   // rent is pending again, so ask again
 }
 function snoozeRent() { try { localStorage.setItem(SNOOZE_KEY, todayStr()); } catch {} closeModal(); }
 

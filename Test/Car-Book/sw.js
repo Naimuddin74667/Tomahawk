@@ -2,7 +2,7 @@
    Makes the app installable and lets it open without internet (last saved version).
    Pages are fetched fresh when online (network first), so updates show up straight away.
    Calls to the Cloudflare Worker are never cached. */
-const CACHE = 'mns-tours-v7';
+const CACHE = 'mns-tours-v8';
 const FILES = ['./', './index.html', './driver.html', './manifest.json',
                './logo-192.png', './logo-512.png', './logo-192-maskable.png', './logo-512-maskable.png',
                './logo.png', './favicon.png'];
