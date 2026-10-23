@@ -154,6 +154,25 @@ td.num, th.num { text-align:right; white-space:nowrap; }
 .muted { color:var(--text2); }
 .toast { position:fixed; bottom:80px; left:50%; transform:translateX(-50%); background:var(--text); color:var(--bg); padding:9px 16px; border-radius:8px; font-weight:700; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; z-index:60; }
 .toast.show { opacity:1; }
+/* Setup: collapsible sections */
+.secs { display:flex; flex-direction:column; gap:10px; max-width:760px; }
+.card.sec { padding:0; overflow:hidden; }
+.sec-head { width:100%; display:flex; align-items:center; gap:12px; padding:14px 16px; min-height:62px; background:none; border:0; color:inherit; font:inherit; text-align:left; cursor:pointer; }
+.sec-head:active { background:var(--surface2); }
+.sec-ico { font-size:20px; width:28px; text-align:center; flex-shrink:0; }
+.sec-t { flex:1; min-width:0; display:flex; flex-direction:column; }
+.sec-t b { font-size:15px; }
+.sec-t small { color:var(--text2); font-size:12px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sec-chev { font-size:24px; line-height:1; color:var(--text2); transition:transform .2s; flex-shrink:0; }
+.sec.open .sec-chev { transform:rotate(90deg); }
+.sec-body { display:none; padding:14px 16px 16px; border-top:1px solid var(--border); }
+.sec.open .sec-body { display:block; }
+.sec-sub { font-size:14px; margin:18px 0 10px; }
+/* Change log */
+.log .lrow .s { white-space:normal; }
+.log-undone { text-decoration:line-through; color:var(--text2); font-weight:500; }
+.log-day { margin-top:12px; }
+.log-day:first-child { margin-top:0; }
 /* Undo bar: shown for a few seconds after "Received" in the rent popup. Sits at the top so it never covers the popup's buttons. */
 .undo-bar { position:fixed; top:calc(14px + env(safe-area-inset-top)); left:50%; transform:translate(-50%,-140%); display:flex; align-items:center; gap:14px;
   background:var(--text); color:var(--bg); padding:8px 8px 8px 16px; border-radius:10px; font-weight:700; font-size:13px; box-shadow:0 6px 18px rgba(0,0,0,.25);
@@ -299,6 +318,10 @@ body.readonly .lrow.click { cursor:default; }
    ════════════════════════════════════════════════════════════ */
 const STORE_KEY = 'mnscar_data_v1';
 const ACCOUNT = 'account';   // rent goes into the business account by default, not to a partner
+// Change log (Setup → Change log): which lists are tracked, and the last state the log has seen
+const LOG_ARR = ['payments','expenses','transfers','offs','drivers','vehicles','partners'];
+const LOG_DAYS = 60, LOG_MAX = 400;
+let LOG_BASE = null, LOG_TAG = '', LOG_UNDO_OF = null, LAST_LOG_ID = null;
 const THEME_KEY = 'mnscar_theme_v1';
 
 const EXPENSE_CATEGORIES = ['EMI','Insurance','Permit & Road Tax','Fitness / PUC','Service','Repair','Tyres & Battery',
@@ -318,7 +341,7 @@ function defaultData() {
            downPaidBy:uncle, loanAmount:622128, netDisbursed:603000, irr:14.01, emi:21314, tenure:36, emiStartDate:'2026-11-05' }) ],
     settings: { upiId:'', upiName:'' },
     partners: [ { id:me, name:'Me', share:50 }, { id:uncle, name:'Uncle', share:50 } ],
-    drivers: [], payments: [], expenses: [], transfers: [], offs: [], rentToAccount: true
+    drivers: [], payments: [], expenses: [], transfers: [], offs: [], rentToAccount: true, log: []
   };
 }
 function load() {
@@ -358,6 +381,9 @@ function migrate(parsed) {
   // Rent belongs to the business account, not a partner (one-time move of earlier entries)
   if (!parsed.rentToAccount) { d.payments.forEach(x => x.receivedBy = 'account'); d.rentToAccount = true; }
   d.drivers.forEach(x => { if (!x.accessCode) x.accessCode = newCode(); });
+  // Change log: every tracked record needs an ID so a change can be undone later
+  LOG_ARR.forEach(c => { d[c] = Array.isArray(d[c]) ? d[c] : []; d[c].forEach(x => { if (x && !x.id) x.id = uid(); }); });
+  d.log = Array.isArray(d.log) ? d.log : [];
   return d;
 }
 function newCode() { const a = 'abcdefghjkmnpqrstuvwxyz23456789'; let s = ''; for (let i = 0; i < 10; i++) s += a[Math.floor(Math.random() * a.length)]; return s; }
@@ -369,6 +395,7 @@ function applyRole() { document.body.classList.toggle('readonly', isViewer()); }
 let saveTimerPending = false;
 function save() {
   if (isViewer()) return;                       // 400ms debounce, same pattern as other apps
+  logChanges();                                 // note what this action changed (Setup → Change log)
   clearTimeout(saveTimer); saveTimerPending = true;
   saveTimer = setTimeout(() => {
     saveTimerPending = false;
@@ -423,7 +450,7 @@ async function pushCloud(force) {
   })();
 }
 function applyCloud(data) {
-  DB = migrate(data);
+  DB = migrate(data); logResetBase();   // changes from another device were logged there
   try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); } catch {}
   if (typeof PAGES !== 'undefined') PAGES[currentPage]();
 }
@@ -465,6 +492,7 @@ async function pullCloud() {
   } catch (e) { setCloudState('error', 'Cloud sync failed: ' + e.message); }
 }
 let DB = load();
+logResetBase();
 
 /* ════════════ Helpers ════════════ */
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -563,9 +591,11 @@ function openPeriod(driverId, day) {
     halves.forEach((x, i) => setOff(driverId, x.date, x.half, !ran[i]));
     const per = driverLedger(drv).periods.find(p => p.from === day);
     const toPay = per ? Math.max(0, per.due - per.paid) : 0;
-    if (received && toPay > 0) DB.payments.push({ id: uid(), driverId, vehicleId: vehOfDriver(drv), date: todayStr(), amount: toPay, mode: 'Online',
+    const paid = received && toPay > 0;
+    if (paid) DB.payments.push({ id: uid(), driverId, vehicleId: vehOfDriver(drv), date: todayStr(), amount: toPay, mode: 'Online',
       receivedBy: ACCOUNT, note: 'Rent for ' + periodLabel(drv, { from: day }) });
-    save(); PAGES[currentPage](); toast('Saved');
+    LAST_LOG_ID = null; save(); PAGES[currentPage]();
+    if (paid) showUndo(LAST_LOG_ID, toPay); else toast('Saved');
     if (pendingRent().length && document.getElementById('modal').dataset.from === 'prompt') openRentConfirm(); else closeModal();
   };
   draw();
@@ -643,6 +673,7 @@ function totals() {
 /* ════════════ Router ════════════ */
 let currentPage = 'dashboard';
 function go(page) {
+  if (page === 'setup' && currentPage !== 'setup') { OPEN_SECS.clear(); logShown = 30; }   // Setup opens with every section closed
   currentPage = page;
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.page === page));
   PAGES[page](); window.scrollTo(0, 0);
@@ -650,6 +681,32 @@ function go(page) {
 document.querySelectorAll('.nav-item').forEach(b => b.addEventListener('click', () => go(b.dataset.page)));
 function render(html) { document.getElementById('page').innerHTML = testBanner() + vehSwitcher() + html; }
 function refresh() { save(); PAGES[currentPage](); }
+
+/* Collapsible Setup sections: closed by default, and a section you're working in stays open while the page redraws. */
+const OPEN_SECS = new Set();
+function sec(key, ico, title, summary, body) {
+  const open = OPEN_SECS.has(key);
+  return `<div class="card sec${open ? ' open' : ''}" data-sec="${key}">
+    <button type="button" class="sec-head" onclick="toggleSec('${key}')" aria-expanded="${open}">
+      <span class="sec-ico" aria-hidden="true">${ico}</span>
+      <span class="sec-t"><b>${title}</b><small id="sum_${key}">${esc(summary)}</small></span>
+      <span class="sec-chev" aria-hidden="true">›</span></button>
+    <div class="sec-body">${body}</div></div>`;
+}
+function toggleSec(key) {
+  const el = document.querySelector('.sec[data-sec="' + key + '"]'); if (!el) return;
+  const open = !el.classList.contains('open');
+  if (open && key === 'log') refreshLogSection();   // always show the latest changes
+  el.classList.toggle('open', open); el.querySelector('.sec-head').setAttribute('aria-expanded', open);
+  if (open) OPEN_SECS.add(key); else OPEN_SECS.delete(key);
+}
+// Redraw just the Change log section (used after edits that don't redraw the whole page)
+function refreshLogSection() {
+  const el = document.querySelector('.sec[data-sec="log"]'); if (!el) return;
+  el.querySelector('.sec-body').innerHTML = changeLogHtml();
+  const n = logTodayCount(), sum = document.getElementById('sum_log');
+  if (sum) sum.textContent = n ? n + ' change' + (n > 1 ? 's' : '') + ' today' : (DB.log || []).length ? 'No changes today' : 'Nothing recorded yet';
+}
 
 /* ════════════ Pages ════════════ */
 const PAGES = {
@@ -720,6 +777,7 @@ rent() {
   }).join('');
   render(`<div class="page-head"><div><h2>Rent</h2><div class="sub">What each driver owes and has paid</div></div>
       <div class="btn-row"><button class="btn primary desk-only" onclick="openPayment()">+ Rent received</button><button class="btn" onclick="openDriver()">+ Driver</button></div></div>
+    ${dueBanner()}
     ${blocks || '<div class="card empty">No driver yet. Add one to start tracking rent.</div>'}`);
 },
 
@@ -815,56 +873,69 @@ setup() {
   }
   const pOpts = DB.partners.map(p => `<option value="${p.id}" ${p.id === c.downPaidBy ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
   const pickFirst = multiVeh() && !selValid();
-  render(`<div class="page-head"><div><h2>Setup</h2><div class="sub">Vehicles, loans, partners, drivers and logins</div></div></div>
-    <div class="grid two">
-      <div>
-      <div class="card"><h3>Vehicles</h3>
-        <div class="list">${DB.vehicles.map(v => lrow(esc(vehLabel(v)) + (v.id === c.id && !pickFirst ? ' <span class="badge b-paid">Editing</span>' : ''),
-          esc(v.name || '') + (v.emi ? ' · EMI ' + inr(v.emi) : ''), '',
-          (v.id === c.id && !pickFirst ? '' : `<button class="btn sm" onclick="setSel('${v.id}')">Edit</button>`) +
-          (multiVeh() ? `<button class="btn sm danger" onclick="removeVehicle('${v.id}')">✕</button>` : ''))).join('')}</div>
-        <button class="btn sm primary" style="margin-top:10px" onclick="openVehicleForm()">+ Add vehicle</button>
-      </div>
-      ${pickFirst ? `<div class="card section empty">Pick a vehicle above (Edit) to change its details.</div>` : `
-      <div class="card section"><h3>Vehicle &amp; loan — <span class="veh-name-live">${esc(vehLabel(c))}</span></h3>
-        ${setupField('regNo','Registration no.','text')}${setupField('name','Model','text')}
-        ${setupField('purchaseDate','Purchase date','date')}${setupField('price','Cash price (₹)','number','What the car costs if bought in cash.')}
-        ${setupField('downPayment','Upfront paid (₹)','number','Down payment + tax, permit, registration, insurance — everything paid at purchase.')}
-        <div class="field"><label>Upfront paid by</label><select onchange="setCar('downPaidBy',this.value)"><option value="">—</option>${pOpts}</select></div>
-        ${setupField('loanAmount','Total loan amount (₹)','number','Incl. loan protection.')}${setupField('netDisbursed','Net disbursed (₹)','number','Loan minus processing charges.')}${setupField('irr','Interest rate IRR (%)','number')}${setupField('emi','EMI amount (₹)','number')}
-        ${setupField('tenure','Tenure (months)','number')}${setupField('emiStartDate','First EMI date','date')}
-        <div class="field"><label>EMI usually paid by</label><select onchange="setCar('emiPaidBy',this.value)">
-          ${payerOptions().filter(o => o[0]).map(([v,l]) => `<option value="${v}" ${(c.emiPaidBy || FROM_RENT) === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
-          <div class="help">Each EMI is marked paid automatically the day after it's due, using this. Tap an EMI to change who paid it.</div></div>
-        <div class="note" id="costNote" style="margin:4px 0 0">${costNoteHtml()}</div>
-      </div>`}
-      </div>
-      <div>
-        <div class="card"><h3>Partners</h3>
-          <table><thead><tr><th>Name</th><th class="num">Profit share %</th><th></th></tr></thead><tbody>
-          ${DB.partners.map(p => `<tr><td><input class="inline" value="${esc(p.name)}" onchange="setPartner('${p.id}','name',this.value)"></td>
-            <td class="num"><input class="inline" type="number" style="width:80px;text-align:right" value="${p.share}" onchange="setPartner('${p.id}','share',this.value)"></td>
-            <td class="num"><button class="btn sm danger" onclick="removePartner('${p.id}')">✕</button></td></tr>`).join('')}
-          </tbody></table>
-          <div class="btn-row" style="margin-top:10px"><button class="btn sm" onclick="addPartner()">+ Partner</button>
-            <span class="muted" style="font-size:12px;align-self:center">Total: ${sum(DB.partners, p => num(p.share))}%</span></div>
-        </div>
-        <div class="card section"><h3>Drivers</h3>
-          ${DB.drivers.map(d => `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
-            <div><b>${esc(d.name)}</b><div class="muted" style="font-size:12px">${multiVeh() ? esc(vehLabel(vehById(d.vehicleId))) + ' · ' : ''}${inr(d.rentAmount)} ${CYCLES[d.rentCycle].toLowerCase()} from ${fmtDate(d.startDate)}</div></div>
-            <div class="btn-row"><button class="btn sm" onclick="shareDriverLink('${d.id}')">Send login</button><button class="btn sm" onclick="openDriver('${d.id}')">Edit</button></div></div>`).join('') || '<div class="muted">No driver yet.</div>'}
-          <button class="btn sm" style="margin-top:10px" onclick="openDriver()">+ Driver</button>
-        </div>
-        <div class="card section">${loginCardInner()}</div>
-        <div class="card section"><h3>Backup</h3>
-          <p class="muted" style="font-size:13px;margin-bottom:10px">A backup file is a copy of everything — handy to keep even with cloud sync on.</p>
-          <div class="btn-row"><button class="btn sm" onclick="exportData()">Download backup</button>
-            <label class="btn sm">Restore backup<input type="file" accept=".json" hidden onchange="importData(this.files[0])"></label>
-            <button class="btn sm danger" onclick="resetData()">Reset all</button></div>
-          ${getSnapshot() ? '' : `<button class="btn sm" style="margin-top:10px" onclick="restartTesting()">Start testing mode</button>
-            <div class="help" style="font-size:11px;color:var(--text2);margin-top:4px">Saves current entries; "Testing completed" brings them back later.</div>`}
-        </div>
-      </div>
+  // One-line summaries shown on each closed section
+  const vehSum = multiVeh() ? DB.vehicles.length + ' vehicles' + (pickFirst ? '' : ' · editing ' + vehLabel(c))
+    : [vehLabel(c) || c.name || 'Not set yet', c.emi ? 'EMI ' + inr(c.emi) + (c.tenure ? ' × ' + c.tenure : '') : '', c.emiStartDate ? 'from ' + fmtShort(c.emiStartDate) : ''].filter(Boolean).join(' · ');
+  const act = DB.drivers.filter(d => !d.endDate);
+  const drvSum = !DB.drivers.length ? 'No driver yet' : act.length === 1
+    ? act[0].name + ' · ' + inr(act[0].rentAmount) + ' ' + CYCLES[act[0].rentCycle].toLowerCase() : act.length + ' active drivers';
+  const partSum = DB.partners.map(p => p.name + ' ' + num(p.share) + '%').join(' · ') || 'No partners yet';
+  const usrSum = USERS.length ? USERS.length + ' users' : 'Logged in as ' + ((cloudCfg() || {}).name || '');
+  const nLog = logTodayCount();
+  const logSum = nLog ? nLog + ' change' + (nLog > 1 ? 's' : '') + ' today' : (DB.log || []).length ? 'No changes today' : 'Nothing recorded yet';
+  const bakSum = getSnapshot() ? 'Testing mode is ON' : 'Download or restore a copy of everything';
+
+  const vehBody = `
+    <div class="list">${DB.vehicles.map(v => lrow(esc(vehLabel(v)) + (v.id === c.id && !pickFirst ? ' <span class="badge b-paid">Editing</span>' : ''),
+      esc(v.name || '') + (v.emi ? ' · EMI ' + inr(v.emi) : ''), '',
+      (v.id === c.id && !pickFirst ? '' : `<button class="btn sm" onclick="setSel('${v.id}')">Edit</button>`) +
+      (multiVeh() ? `<button class="btn sm danger" onclick="removeVehicle('${v.id}')">✕</button>` : ''))).join('')}</div>
+    <button class="btn sm primary" style="margin-top:10px" onclick="openVehicleForm()">+ Add vehicle</button>
+    ${pickFirst ? `<div class="empty">Pick a vehicle above (Edit) to change its details.</div>` : `
+    <h4 class="sec-sub">Details &amp; loan — <span class="veh-name-live">${esc(vehLabel(c))}</span></h4>
+    ${setupField('regNo','Registration no.','text')}${setupField('name','Model','text')}
+    ${setupField('purchaseDate','Purchase date','date')}${setupField('price','Cash price (₹)','number','What the car costs if bought in cash.')}
+    ${setupField('downPayment','Upfront paid (₹)','number','Down payment + tax, permit, registration, insurance — everything paid at purchase.')}
+    <div class="field"><label>Upfront paid by</label><select onchange="setCar('downPaidBy',this.value)"><option value="">—</option>${pOpts}</select></div>
+    ${setupField('loanAmount','Total loan amount (₹)','number','Incl. loan protection.')}${setupField('netDisbursed','Net disbursed (₹)','number','Loan minus processing charges.')}${setupField('irr','Interest rate IRR (%)','number')}${setupField('emi','EMI amount (₹)','number')}
+    ${setupField('tenure','Tenure (months)','number')}${setupField('emiStartDate','First EMI date','date')}
+    <div class="field"><label>EMI usually paid by</label><select onchange="setCar('emiPaidBy',this.value)">
+      ${payerOptions().filter(o => o[0]).map(([v,l]) => `<option value="${v}" ${(c.emiPaidBy || FROM_RENT) === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
+      <div class="help">Each EMI is marked paid automatically the day after it's due, using this. Tap an EMI to change who paid it.</div></div>
+    <div class="note" id="costNote" style="margin:4px 0 0">${costNoteHtml()}</div>`}`;
+
+  const drvBody = `
+    ${DB.drivers.map(d => `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <div><b>${esc(d.name)}</b><div class="muted" style="font-size:12px">${multiVeh() ? esc(vehLabel(vehById(d.vehicleId))) + ' · ' : ''}${inr(d.rentAmount)} ${CYCLES[d.rentCycle].toLowerCase()} from ${fmtDate(d.startDate)}</div></div>
+      <div class="btn-row"><button class="btn sm" onclick="shareDriverLink('${d.id}')">Send login</button><button class="btn sm" onclick="openDriver('${d.id}')">Edit</button></div></div>`).join('') || '<div class="muted">No driver yet.</div>'}
+    <button class="btn sm" style="margin-top:10px" onclick="openDriver()">+ Driver</button>`;
+
+  const parBody = `
+    <table><thead><tr><th>Name</th><th class="num">Profit share %</th><th></th></tr></thead><tbody>
+    ${DB.partners.map(p => `<tr><td><input class="inline" value="${esc(p.name)}" onchange="setPartner('${p.id}','name',this.value)"></td>
+      <td class="num"><input class="inline" type="number" style="width:80px;text-align:right" value="${p.share}" onchange="setPartner('${p.id}','share',this.value)"></td>
+      <td class="num"><button class="btn sm danger" onclick="removePartner('${p.id}')">✕</button></td></tr>`).join('')}
+    </tbody></table>
+    <div class="btn-row" style="margin-top:10px"><button class="btn sm" onclick="addPartner()">+ Partner</button>
+      <span class="muted" style="font-size:12px;align-self:center">Total: ${sum(DB.partners, p => num(p.share))}%</span></div>`;
+
+  const bakBody = `
+    <p class="muted" style="font-size:13px;margin-bottom:10px">A backup file is a copy of everything — handy to keep even with cloud sync on.</p>
+    <div class="btn-row"><button class="btn sm" onclick="exportData()">Download backup</button>
+      <label class="btn sm">Restore backup<input type="file" accept=".json" hidden onchange="importData(this.files[0])"></label>
+      <button class="btn sm danger" onclick="resetData()">Reset all</button></div>
+    ${getSnapshot() ? `<button class="btn sm" style="margin-top:10px" onclick="finishTesting()">Testing completed</button>`
+      : `<button class="btn sm" style="margin-top:10px" onclick="restartTesting()">Start testing mode</button>
+      <div class="help" style="font-size:11px;color:var(--text2);margin-top:4px">Saves current entries; "Testing completed" brings them back later.</div>`}`;
+
+  render(`<div class="page-head"><div><h2>Setup</h2><div class="sub">Tap a section to open it</div></div></div>
+    <div class="secs">
+      ${sec('veh', '🚗', 'Vehicle &amp; loan', vehSum, vehBody)}
+      ${sec('drv', '👤', 'Drivers', drvSum, drvBody)}
+      ${sec('par', '🤝', 'Partners', partSum, parBody)}
+      ${sec('usr', '🔑', 'Logins &amp; users', usrSum, loginCardInner(true))}
+      ${sec('log', '🕘', 'Change log', logSum, changeLogHtml())}
+      ${sec('bak', '💾', 'Backup &amp; testing', bakSum, bakBody)}
     </div>
     <style>.inline{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;width:100%}</style>`);
 }
@@ -1077,12 +1148,7 @@ function setClaims(list, quiet) {
   const before = CLAIMS.map(c => c.id).join();
   CLAIMS = Array.isArray(list) ? list : [];
   if (CLAIMS.map(c => c.id).join() !== before && !quiet && !document.getElementById('overlay').classList.contains('open')) PAGES[currentPage]();
-  if (!quiet) setTimeout(maybeClaimPrompt, 300);
-}
-function maybeClaimPrompt() {
-  if (isViewer() || !cloudCfg()) return;
-  if (document.getElementById('overlay').classList.contains('open')) return;
-  if (CLAIMS.some(c => !claimLater.has(c.id))) openClaimConfirm();
+  // No automatic popup — the banner's "Review" button opens it (fewer mistaken taps)
 }
 function claimDriver(c) { return DB.drivers.find(d => d.id === c.driver_id) || { id: c.driver_id, name: c.driver_name || 'Driver' }; }
 function openClaimConfirm(manual) {
@@ -1098,7 +1164,7 @@ function openClaimConfirm(manual) {
       <div class="muted" style="font-size:12px">Check your UPI / bank SMS before confirming.</div></div>
     <button class="btn primary rc-yes" onclick="resolveClaim('${c.id}', true)">✓ Yes, received ${inr(c.amount)}</button>
     <button class="btn rc-yes" style="margin-top:8px;color:var(--red)" onclick="resolveClaim('${c.id}', false)">Not received</button>
-    <button class="btn rc-yes" style="margin-top:8px" onclick="claimLater.add('${c.id}');closeModal();maybeClaimPrompt()">Later</button>
+    <button class="btn rc-yes" style="margin-top:8px" onclick="claimLater.add('${c.id}');closeModal()">Later</button>
     ${list.length > 1 ? `<p class="muted" style="font-size:12px;text-align:center;margin-top:10px">${list.length - 1} more waiting</p>` : ''}`;
   document.getElementById('overlay').classList.add('open');
 }
@@ -1119,7 +1185,7 @@ async function resolveClaim(id, ok) {
   CLAIMS = CLAIMS.filter(x => x.id !== id);
   toast(ok ? 'Recorded ' + inr(c.amount) : 'Marked not received');
   closeModal(); PAGES[currentPage]();
-  setTimeout(maybeClaimPrompt, 250);
+  if (CLAIMS.length) setTimeout(() => openClaimConfirm(true), 250);
 }
 function claimBanner() {
   if (!CLAIMS.length) return '';
@@ -1136,12 +1202,6 @@ function dueBanner() {
   if (total <= 0) return claimBanner();
   return claimBanner() + `<div class="due-banner"><div><b>${inr(total)}</b> rent pending${list.length === 1 ? ' from ' + esc(list[0].d.name) : ''}</div>
     <button class="btn primary sm" onclick="openRentConfirm(true)">Confirm</button></div>`;
-}
-function checkRentPrompt() {
-  if (isViewer()) return;
-  if (CLAIMS.some(c => !claimLater.has(c.id))) { maybeClaimPrompt(); return; }
-  let snoozed = ''; try { snoozed = localStorage.getItem(SNOOZE_KEY) || ''; } catch {}
-  if (snoozed !== todayStr() && pendingRent().length) openRentConfirm();
 }
 function greeting() { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; }
 
@@ -1164,7 +1224,7 @@ function openRentConfirm(manual) {
           ${x.d.rentCycle === 'daily' ? `<button class="link-btn" onclick="document.getElementById('modal').dataset.from='prompt';openPeriod('${x.d.id}','${p.from}')">Car off / half day</button>` : ''}</div>
       </div>`;
     }).join('')}
-    <button class="btn rc-yes" onclick="snoozeRent()">Not yet — remind me tomorrow</button>`;
+    <button class="btn rc-yes" onclick="closeModal()">Not yet</button>`;
   document.getElementById('overlay').classList.add('open');
 }
 function pickPref(k, v, boxId) {
@@ -1182,16 +1242,18 @@ function confirmRent(driverId, amount) {
   const id = uid();
   DB.payments.push({ id, driverId, vehicleId: vehOfDriver(DB.drivers.find(x => x.id === driverId)), date: todayStr(), amount, mode: 'Online',
                      receivedBy: ACCOUNT, note: 'Confirmed from reminder' });
-  save(); PAGES[currentPage]();
-  showUndo(id, amount);
+  LAST_LOG_ID = null; save(); PAGES[currentPage]();
+  showUndo(LAST_LOG_ID, amount);
   openRentConfirm();   // shows the next pending one, or closes when all clear
 }
-/* ── Undo for the rent popup ──
-   Every "Received" tap made while the bar is still showing is grouped, so one Undo takes them all back. */
+/* ── Undo bar for "Received" taps ──
+   Every tap made while the bar is still showing is grouped, so one Undo takes them all back.
+   It undoes the matching Change log entries, so the log shows the undo too. */
 const UNDO_MS = 10000;
 let undoIds = [], undoAmt = 0, undoTimer = null;
-function showUndo(id, amount) {
-  undoIds.push(id); undoAmt += num(amount);
+function showUndo(logId, amount) {
+  if (!logId) return;
+  undoIds.push(logId); undoAmt += num(amount);
   document.getElementById('undoText').textContent = 'Rent ' + inr(undoAmt) + ' added';
   document.getElementById('undoBar').classList.add('show');
   clearTimeout(undoTimer); undoTimer = setTimeout(hideUndo, UNDO_MS);
@@ -1202,13 +1264,178 @@ function hideUndo() {
 }
 function undoRent() {
   if (viewOnly() || !undoIds.length) { hideUndo(); return; }
-  const ids = new Set(undoIds), amt = undoAmt;
-  DB.payments = DB.payments.filter(p => !ids.has(p.id));
-  hideUndo(); save(); PAGES[currentPage]();
-  toast('Undone · ' + inr(amt) + ' removed');
-  openRentConfirm();   // rent is pending again, so ask again
+  const ids = undoIds.slice().reverse(), amt = undoAmt;   // newest first
+  hideUndo();
+  const done = ids.filter(id => undoLog(id, true)).length;
+  closeModal(); PAGES[currentPage]();
+  toast(done ? 'Undone · ' + inr(amt) + ' removed' : 'Could not undo — see Setup → Change log');
 }
-function snoozeRent() { try { localStorage.setItem(SNOOZE_KEY, todayStr()); } catch {} closeModal(); }
+
+/* ════════════ Change log (Setup → Change log) ════════════
+   Every save compares the data with the last state the log saw and records what changed
+   (added / deleted / edited records, setting changes) as one entry per action.
+   Undo applies the opposite of an entry. The log is part of the data, so it syncs to every phone. */
+function logSnap(d) {
+  const s = {}; LOG_ARR.forEach(c => s[c] = d[c] || []);
+  s.settings = d.settings || {}; s.emiNoAuto = d.emiNoAuto || [];
+  return JSON.parse(JSON.stringify(s));
+}
+function logResetBase() { LOG_BASE = logSnap(DB); }
+const logSame = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+function logDiff(base, cur) {
+  const ops = [];
+  for (const c of LOG_ARR) {
+    const A = new Map(base[c].map(x => [x.id, x])), B = new Map(cur[c].map(x => [x.id, x]));
+    for (const [id, x] of B) {
+      const o = A.get(id);
+      if (!o) { ops.push({ c, t:'add', id, after: x }); continue; }
+      const before = {}, after = {};
+      new Set([...Object.keys(o), ...Object.keys(x)]).forEach(k => { if (!logSame(o[k], x[k])) { before[k] = o[k] ?? null; after[k] = x[k] ?? null; } });
+      if (Object.keys(after).length) {
+        // a few details that say which record it was, for when it no longer exists
+        const ctx = {}; ['driverId','name','regNo','category','emiNo','type','from','to','date','half','amount','note'].forEach(k => { if (x[k] !== undefined) ctx[k] = x[k]; });
+        ops.push({ c, t:'edit', id, before, after, ctx });
+      }
+    }
+    for (const [id, o] of A) if (!B.has(id)) ops.push({ c, t:'del', id, before: o });
+  }
+  new Set([...Object.keys(base.settings), ...Object.keys(cur.settings)]).forEach(k => {
+    if (!logSame(base.settings[k], cur.settings[k])) ops.push({ c:'settings', t:'set', id:k, before: base.settings[k] ?? null, after: cur.settings[k] ?? null });
+  });
+  const ea = new Set(base.emiNoAuto), eb = new Set(cur.emiNoAuto);
+  eb.forEach(v => { if (!ea.has(v)) ops.push({ c:'emiNoAuto', t:'add', id:v }); });
+  ea.forEach(v => { if (!eb.has(v)) ops.push({ c:'emiNoAuto', t:'del', id:v }); });
+  return ops;
+}
+function logChanges() {
+  const cur = logSnap(DB);
+  if (!LOG_BASE) { LOG_BASE = cur; return; }
+  const ops = logDiff(LOG_BASE, cur);
+  LOG_BASE = cur;
+  const undoOf = LOG_UNDO_OF, tag = LOG_TAG; LOG_UNDO_OF = null; LOG_TAG = '';
+  if (!ops.length) return;
+  const e = { id: uid(), at: new Date().toISOString(), by: (cloudCfg() || {}).name || 'You', ops };
+  if (tag) e.tag = tag;
+  if (undoOf) e.undoOf = undoOf;
+  const cutoff = new Date(Date.now() - LOG_DAYS * 864e5).toISOString();
+  DB.log = [...(DB.log || []), e].filter(x => x.at >= cutoff).slice(-LOG_MAX);
+  LAST_LOG_ID = e.id;
+}
+
+/* ── Undo one entry ── */
+const logKey = op => op.c + ':' + op.id;
+function logEntry(id) { return (DB.log || []).find(x => x.id === id); }
+// A later change to the same record that is still in effect (a change + its own undo cancel out)
+function logBlocker(e) {
+  const list = DB.log || [], later = list.slice(list.indexOf(e) + 1), laterIds = new Set(later.map(x => x.id));
+  const keys = new Set(e.ops.map(logKey));
+  return later.find(x => !x.undone && !(x.undoOf && laterIds.has(x.undoOf)) && x.ops.some(op => keys.has(logKey(op))));
+}
+function logUsed(id, c) {   // is a driver / vehicle / partner still used by other records?
+  const others = [DB.payments, DB.expenses, DB.offs, DB.transfers || [], DB.drivers, DB.vehicles].map(a => a.filter(x => !(x.id === id)));
+  return JSON.stringify(others).includes('"' + id + '"');
+}
+function undoLog(id, quiet) {
+  if (viewOnly()) return false;
+  const e = logEntry(id); if (!e || e.undone) return false;
+  const fail = msg => { if (!quiet) alert(msg); return false; };
+  const b = logBlocker(e);
+  if (b) return fail('This was changed again later:\n“' + logTitle(b) + '”\n\nUndo that newer change first.');
+  for (const op of e.ops) {
+    if (!LOG_ARR.includes(op.c)) continue;
+    const exists = (DB[op.c] || []).some(x => x.id === op.id);
+    if ((op.t === 'del') === exists) return fail('Can’t undo — this entry has already been changed or removed.');
+    if (op.t === 'add' && ['drivers','vehicles','partners'].includes(op.c) && logUsed(op.id, op.c))
+      return fail('Can’t undo — other entries still use this ' + op.c.slice(0, -1) + '. Remove those first.');
+  }
+  if (!quiet && !confirm('Undo this change?\n\n' + logTitle(e))) return false;
+  for (const op of e.ops.slice().reverse()) {
+    if (op.c === 'settings') { DB.settings = DB.settings || {}; if (op.before === null) delete DB.settings[op.id]; else DB.settings[op.id] = op.before; continue; }
+    if (op.c === 'emiNoAuto') { const s = new Set(DB.emiNoAuto || []); op.t === 'add' ? s.delete(op.id) : s.add(op.id); DB.emiNoAuto = [...s]; continue; }
+    if (op.t === 'add') DB[op.c] = DB[op.c].filter(x => x.id !== op.id);
+    else if (op.t === 'del') DB[op.c].push(JSON.parse(JSON.stringify(op.before)));
+    else { const x = DB[op.c].find(x => x.id === op.id); Object.entries(op.before).forEach(([k, v]) => { if (v === null) delete x[k]; else x[k] = v; }); }
+  }
+  LOG_UNDO_OF = e.id; LAST_LOG_ID = null;
+  save();                                // logs the undo as its own entry, so it can be undone too
+  e.undone = LAST_LOG_ID || true;
+  if (!quiet) { PAGES[currentPage](); toast('Undone'); }
+  return true;
+}
+
+/* ── How an entry reads in the list ── */
+const LOG_FIELD = { amount:'Amount', date:'Date', note:'Note', mode:'Mode', receivedBy:'Received in', driverId:'Driver', vehicleId:'Vehicle',
+  category:'Category', paidBy:'Paid by', from:'From', to:'To', name:'Name', phone:'Phone', rentAmount:'Rent', rentCycle:'Rent cycle',
+  startDate:'Start date', endDate:'End date', regNo:'Reg. no.', price:'Cash price', downPayment:'Upfront', downPaidBy:'Upfront paid by',
+  loanAmount:'Loan', netDisbursed:'Net disbursed', irr:'IRR %', emi:'EMI', tenure:'Tenure', emiStartDate:'First EMI', emiPaidBy:'EMI paid by',
+  purchaseDate:'Purchase date', share:'Share %', emiNo:'EMI no.', half:'Half', upiId:'UPI ID', upiName:'UPI name' };
+const LOG_MONEY = ['amount','rentAmount','price','downPayment','loanAmount','netDisbursed','emi'];
+function logVal(k, v) {
+  if (v === null || v === undefined || v === '') return '—';
+  if (LOG_MONEY.includes(k)) return inr(num(v));
+  if (/date$/i.test(k) && /^\d{4}-\d{2}-\d{2}$/.test(v)) return fmtShort(v);
+  if (k === 'driverId') return driverName(v);
+  if (k === 'vehicleId') return vehLabel(vehById(v));
+  if (['receivedBy','paidBy','from','to','downPaidBy','emiPaidBy'].includes(k)) return partnerName(v);
+  if (k === 'rentCycle') return CYCLES[v] || v;
+  return String(v);
+}
+function logItem(op) {
+  const cur = LOG_ARR.includes(op.c) && (DB[op.c] || []).find(x => x.id === op.id);
+  if (cur) return cur;
+  return op.t === 'edit' ? Object.assign({}, op.ctx, op.after) : op.after || op.before || {};
+}
+function logNoun(c, x) {   // [what, details]
+  const note = x.note ? ' · ' + x.note : '';
+  switch (c) {
+    case 'payments':  return ['Rent', inr(num(x.amount)) + ' · ' + driverName(x.driverId) + note];
+    case 'expenses':  return x.category === 'EMI' && x.emiNo ? ['EMI #' + x.emiNo, inr(num(x.amount))] : [x.category || 'Expense', inr(num(x.amount)) + note];
+    case 'transfers': return x.type === 'withdraw' ? ['Profit taken', partnerName(x.to) + ' ' + inr(num(x.amount))]
+                                                   : ['Partner payment', partnerName(x.from) + ' → ' + partnerName(x.to) + ' ' + inr(num(x.amount))];
+    case 'drivers':   return ['Driver', x.name || ''];
+    case 'vehicles':  return ['Vehicle', vehLabel(x)];
+    case 'partners':  return ['Partner', x.name || ''];
+  }
+  return [c, ''];
+}
+function logOpText(op) {
+  if (op.c === 'settings') return 'Setting changed: ' + (LOG_FIELD[op.id] || op.id) + ' ' + logVal(op.id, op.before) + ' → ' + logVal(op.id, op.after);
+  const x = logItem(op);
+  if (op.c === 'offs') return (op.t === 'del' ? 'Car back on · ' : 'Car off · ') + fmtShort(x.date) + ' ' + x.half;
+  const [noun, det] = logNoun(op.c, x);
+  if (op.t === 'add') return op.c === 'payments' ? 'Rent received ' + det : op.c === 'expenses' && x.category === 'EMI' ? noun + ' paid ' + det : noun + ' added · ' + det;
+  if (op.t === 'del') return noun + ' deleted · ' + det + (x.date ? ' (' + fmtShort(x.date) + ')' : '');
+  const ch = Object.keys(op.after).filter(k => !['accessCode','id'].includes(k))
+    .map(k => (LOG_FIELD[k] || k) + ' ' + logVal(k, op.before[k]) + ' → ' + logVal(k, op.after[k]));
+  return noun + ' edited · ' + (op.c === 'payments' ? driverName(x.driverId) : det) + (ch.length ? ': ' + ch.join(', ') : '');
+}
+const logVisibleOps = e => e.ops.filter(op => op.c !== 'emiNoAuto');
+function logTitle(e) { const ops = logVisibleOps(e); return ops.length ? logOpText(ops[0]) : 'EMI auto-mark setting'; }
+function logDayLabel(iso) {
+  const d = ymd(new Date(iso));
+  return d === todayStr() ? 'Today' : d === ymd(addDays(new Date(), -1)) ? 'Yesterday' : fmtDate(d);
+}
+let logShown = 30;
+function logTodayCount() { const t = todayStr(); return (DB.log || []).filter(e => ymd(new Date(e.at)) === t).length; }
+function changeLogHtml() {
+  const list = (DB.log || []).slice().reverse();
+  if (!list.length) return '<div class="empty">Nothing recorded yet. Everything you add, edit or delete from now on shows up here, with an Undo button.</div>';
+  let out = '<div class="log">', day = '';
+  for (const e of list.slice(0, logShown)) {
+    const dl = logDayLabel(e.at);
+    if (dl !== day) { out += (day ? '</div>' : '') + `<div class="list-title log-day">${dl}</div><div class="list">`; day = dl; }
+    const orig = e.undoOf ? logEntry(e.undoOf) : null;
+    const title = e.undoOf ? '↩ Undo: ' + (orig ? logTitle(orig) : 'an earlier change') : logTitle(e);
+    const more = e.undoOf ? [] : logVisibleOps(e).slice(1).map(logOpText);
+    const time = new Date(e.at).toLocaleTimeString('en-IN', { hour:'numeric', minute:'2-digit' });
+    const sub = time + ' · ' + esc(e.by) + (e.tag === 'auto' ? ' (automatic)' : '') + more.map(m => '<br>+ ' + esc(m)).join('');
+    const right = e.undone ? '<span class="badge b-up">Undone</span>' : `<button class="btn sm" onclick="undoLog('${e.id}')">Undo</button>`;
+    out += lrow(`<span class="${e.undone ? 'log-undone' : ''}">${esc(title)}</span>`, sub, '', right);
+  }
+  out += '</div></div>';
+  if (list.length > logShown) out += `<button class="link-btn" style="margin-top:8px" onclick="logShown += 30; PAGES.setup()">Show older (${list.length - logShown} more)</button>`;
+  return out + `<div class="help" style="font-size:11px;color:var(--text2);margin-top:8px">Keeps the last ${LOG_DAYS} days. Undo is saved as its own entry, so it can be undone too.</div>`;
+}
 
 /* ════════════ Testing mode ════════════
    A snapshot of the real entries is kept while you try things out.
@@ -1320,7 +1547,7 @@ function autoMarkEmis() {
       added++;
     }
   }
-  if (added) save();
+  if (added) { LOG_TAG = 'auto'; save(); }
   return added;
 }
 function markEmiPaid(no, vid) {
@@ -1400,6 +1627,7 @@ function setCar(k, v) {
   save(); toast('Saved');
   // Update in place (no full re-render, so the next field you tapped keeps focus on the phone)
   const note = document.getElementById('costNote'); if (note) note.innerHTML = costNoteHtml();
+  refreshLogSection();
 }
 /* ════════════ Login ════════════ */
 function showLogin(msg) {
@@ -1457,9 +1685,9 @@ function removeOwner(mobile) {
 }
 const ROLE_LABEL = { owner:'Full access', viewer:'View only', driver:'Driver' };
 let USERS = [];   // logins from the server (owner/viewer view)
-function loginCardInner() {
+function loginCardInner(noTitle) {
   const me = cloudCfg() || {};
-  return `<h3>Users &amp; logins</h3>
+  return `${noTitle ? '' : '<h3>Users &amp; logins</h3>'}
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px">
       <div style="font-size:13px">Logged in as <b>${esc(me.name || '')}</b> · ${esc(me.mobile || '')} · <span class="badge b-up">${ROLE_LABEL[me.role] || ''}</span>
         <div class="muted" style="font-size:12px"><span class="sync-dot" data-s="${cloudState}"></span><span class="sync-text">${SYNC_TEXT[cloudState]}</span></div></div>
@@ -1474,6 +1702,7 @@ async function loadOwners() {
   const box = document.getElementById('ownerList'); if (!box) return;
   try {
     const r = await cloudFetch('/users'); USERS = r.body.users || [];
+    const sum = document.getElementById('sum_usr'); if (sum) sum.textContent = USERS.length + ' users';
     const me = (cloudCfg() || {}).mobile;
     box.innerHTML = USERS.map(u => lrow(
       esc(u.name) + (u.mobile === me ? ' <span class="muted" style="font-weight:400">(you)</span>' : ''),
@@ -1567,16 +1796,16 @@ function importData(file) {
   if (!file) return;
   const r = new FileReader();
   r.onload = () => {
-    try { const d = JSON.parse(r.result); if (!d.car || !d.partners) throw 0;
+    try { const d = JSON.parse(r.result); if (!(d.car || d.vehicles) || !d.partners) throw 0;
       if (!confirm('Replace all current data with this backup?')) return;
-      DB = Object.assign(defaultData(), d); refresh(); toast('Backup restored'); }
+      DB = migrate(d); logResetBase(); refresh(); toast('Backup restored'); }
     catch { alert('That file is not a valid MNS Tours & Travels backup.'); }
   };
   r.readAsText(file);
 }
 function resetData() {
   if (viewOnly()) return;
-  if (prompt('Type DELETE to erase all data in this browser.') === 'DELETE') { DB = defaultData(); refresh(); toast('All data cleared'); }
+  if (prompt('Type DELETE to erase all data in this browser.') === 'DELETE') { DB = defaultData(); logResetBase(); refresh(); toast('All data cleared'); }
 }
 
 /* ════════════ Driver statement (WhatsApp + PDF) ════════════ */
@@ -1633,7 +1862,7 @@ try { if (!localStorage.getItem(TESTFLOW_KEY) && !getSnapshot() && localStorage.
 function afterLoad() {
   const n = autoMarkEmis();
   if (n) { PAGES[currentPage](); setTimeout(() => toast(n + ' EMI' + (n > 1 ? 's' : '') + ' marked paid'), 300); }
-  setTimeout(checkRentPrompt, 400);
+  // No automatic rent popup — confirm from the "rent pending" banner (fewer mistaken taps)
 }
 go('dashboard');
 if ((cloudCfg() || {}).role === 'driver') location.replace('driver.html');
@@ -1642,7 +1871,7 @@ try { localStorage.removeItem('mnscar_cloud_v1'); } catch {}   // old manual con
 if (cloudCfg()) pullCloud().then(afterLoad).then(startLive); else showLogin();
 (function scheduleEightPm() {
   const now = new Date(), at = new Date(now); at.setHours(RENT_DUE_HOUR, 0, 5, 0);
-  if (at > now) setTimeout(() => { PAGES[currentPage](); checkRentPrompt(); }, at - now);
+  if (at > now) setTimeout(() => { PAGES[currentPage](); }, at - now);
 })();
 // "Install app" button — shown only when Chrome offers installation and the app isn't installed yet
 var installEvt = null;   // var: read by the login screen, which can render before this line runs

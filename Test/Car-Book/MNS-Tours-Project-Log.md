@@ -1,6 +1,6 @@
 # MNS Tours & Travels — Project Log
 
-*Conversation and build history up to 18 Oct 2026*
+*Conversation and build history up to 23 Oct 2026*
 
 ---
 
@@ -99,7 +99,12 @@ It is built for phones, since about 99% of use is on a phone. It has its own lig
 18. **Multi-vehicle.** Vehicle number and registration added. Supports more cars later, with a vehicle switcher, per-vehicle EMI and cost, and an "All vehicles" total.
 19. **One-tap ₹1,200.** "I've paid" always means a full day (₹1,200). A small link handled the rare half day (₹600).
 20. **Partner view is silent.** Uncle's view-only login gets no popups, no banners and no notifications.
-21. **Latest request (in progress).** See section 6.
+21. **Half-day claim options (still pending).** See section 6.
+22. **Wrong "received" taps (23 Oct).** Two rent entries were saved by mistake from the Car off / half day screen. They were removed directly in D1 (Console) with a JSON UPDATE on `app_state`; Time Travel confirmed nothing older was lost. The owner then added the missing ₹3,600 so the app matches the ₹6,600 actually received.
+23. **Undo bar.** After "Received", "Received all" or "Save & received", a bar with **Undo** shows at the top for 10 seconds. Taps made while it shows are undone together.
+24. **Change log (Setup).** Every change is recorded automatically (one entry per action) in `DB.log` inside the cloud data, last 60 days / 400 entries. Each row has **Undo**: added → removed, deleted → restored, edited → old values back. An undo is its own entry, so it can be undone. An older entry is blocked if the same record was changed later and that change is still in effect. Owner only; Uncle doesn't see it.
+25. **Setup reorganized.** One column of collapsible sections, all closed each time you open Setup, with a one-line summary on each: Vehicle & loan · Drivers · Partners · Logins & users · Change log · Backup & testing.
+26. **No automatic popups.** The rent popup no longer opens on app start or at 8 PM, and the driver "I've paid" popup no longer opens by itself. Confirm from the banners ("rent pending → Confirm" on Dashboard and Rent, "Review" for driver claims).
 
 ---
 
@@ -110,7 +115,7 @@ It is built for phones, since about 99% of use is on a phone. It has its own lig
 | `index.html` | Owner + partner app: dashboard, rent, expenses, EMIs, vehicles, partner settlement, users & logins, claim popups, testing mode |
 | `driver.html` | Driver screen: his own rent days, paid/pending/"In process", "I've paid" button, waiting and not-received cards |
 | `mns-worker.js` | Cloudflare Worker code. The owner **pastes it by hand** into Cloudflare (Edit code → Deploy). Named this way so Tomahawk's auto-deploy workflow (which watches root `worker.js`) never touches it |
-| `manifest.json`, `sw.js` | PWA install + offline cache (`mns-tours-v6`) |
+| `manifest.json`, `sw.js` | PWA install + offline cache (`mns-tours-v9`) |
 | `logo-192.png`, `logo-512.png`, `*-maskable.png`, `logo.png`, `favicon.png` | Icons |
 
 ### Worker endpoints
@@ -152,6 +157,8 @@ It is built for phones, since about 99% of use is on a phone. It has its own lig
 ## 6. Current status and pending work
 
 **Latest pushed commits**
+- 23 Oct: change log with Undo in Setup, collapsible Setup sections, no automatic popups
+- `84be9f7`: Undo bar after "Received" in the rent popup
 - `bfd3cce`: one-tap "I've paid ₹1,200" + half-day link
 - `915efd1`: view-only partner gets no popups, banners or notifications
 - Earlier: `da5386a` claims flow · `b4a80a6` multi-vehicle · `5c5915c` PIN logins
