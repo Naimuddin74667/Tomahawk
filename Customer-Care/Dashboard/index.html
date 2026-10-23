@@ -1667,22 +1667,22 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (f.cust_called_at && tsMs(f.cust_called_at) >= info.undel.t) return null;
     return info.undel;
   }
-  // Order inside Needs attention: Delivered to us → Arriving today → Expected
-  // next working day → Escalation needed.
-  // Group headers shown on the Needs attention tile.
+  // Fixed order inside Needs attention (always):
+  //   Delivered to us → Arriving (today, then next working day) → Call customer → Escalation needed.
+  // Group headers shown on the Needs attention tile — index = group number from attnGroup().
   var ATTN_GROUPS = [
     { label: 'Delivered to us', hint: 'Check the parcel and confirm receipt', c: '#22c55e' },
-    { label: 'Call customer', hint: 'Delivery attempt failed — call once to understand the issue', c: '#60a5fa' },
     { label: 'Arriving', hint: 'On the way to our Bhiwandi warehouse', c: 'var(--accent)' },
+    { label: 'Call customer', hint: 'Delivery attempt failed — call once to understand the issue', c: '#60a5fa' },
     { label: 'Escalation needed', hint: 'Raise a ticket on the courier portal', c: '#f87171' }
   ];
-  // Ranks: 0 Delivered to us · 1 Call customer · 2/3 Arriving (today / next day) · 4 Escalation
-  function attnGroup(c) { var r = attnRank(c); return r === 0 ? 0 : r === 1 ? 1 : r === 4 ? 3 : 2; }
+  // Ranks: 0 Delivered to us · 1/2 Arriving (today / next day) · 3 Call customer · 4 Escalation
+  function attnGroup(c) { var r = attnRank(c); return r === 0 ? 0 : r <= 2 ? 1 : r === 3 ? 2 : 3; }
   function attnRank(c) {
     if (c.st.attn === 'verify') return 0;
-    if (c.call) return 1;                   // call first; the courier ticket comes after if needed
+    if (c.call) return 3;                   // a call case is not escalated yet; the courier ticket comes after if needed
     if (c.esc && !c.esc.raised) return 4;   // e.g. "at Bhiwandi Hub" for 3 days = escalation, not arriving
-    if (c.st.attn === 'arriving') return c.st.label === 'Out For Delivery' ? 2 : 3;
+    if (c.st.attn === 'arriving') return c.st.label === 'Out For Delivery' ? 1 : 2;
     return 4;
   }
   function tileTest(key) { for (var i = 0; i < TILES.length; i++) if (TILES[i].key === key) return TILES[i].test; return function () { return true; }; } // unknown key → all cases
@@ -2175,7 +2175,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var split = '';
       if (t.key === 'verify' && n) {   // "3 verify · 1 arriving · 15 escalate"
         var g = [0, 0, 0, 0]; cases.filter(t.test).forEach(function (c) { g[attnGroup(c)]++; });
-        split = '<div class="tile-split">' + [['verify', '#22c55e'], ['call', '#60a5fa'], ['arriving', 'var(--accent)'], ['escalate', '#f87171']].map(function (x, i) {
+        split = '<div class="tile-split">' + [['verify', '#22c55e'], ['arriving', 'var(--accent)'], ['call', '#60a5fa'], ['escalate', '#f87171']].map(function (x, i) {
           return g[i] ? '<span><b style="color:' + x[1] + '">' + g[i] + '</b> ' + x[0] + '</span>' : '';
         }).join('') + '</div>';
       }
@@ -2225,7 +2225,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         (!status || c.st.label === status) &&
         (!q || c.search.indexOf(q) !== -1);
     });
-    // Needs attention = a work queue: grouped (Delivered → Arriving → Escalation),
+    // Needs attention = a work queue: grouped (Delivered → Arriving → Call → Escalation),
     // shown in full with group headers instead of 10-row pages.
     var grouped = tileFilter === 'verify';
     if (grouped) rows.sort(function (a, b) { return attnRank(a) - attnRank(b); });
