@@ -190,3 +190,23 @@ It is built for phones, since about 99% of use is on a phone. It has its own lig
 3. Push to `Test/Car-Book/` with a plain push (never force). GitHub Pages updates in about a minute.
 4. If `mns-worker.js` changed, the owner pastes it into Cloudflare → Worker `mns-enterprises` → Edit code → Deploy.
 5. On the phone: close and reopen the app (or hard-refresh) to get the new version.
+
+---
+
+## 8. Driver Manager + Driver Ledger (23 Oct 2026)
+
+**Why:** Uber Fleet payouts land in Naushad's bank. Naushad drives too and pays the owner ₹1,200/day (his ₹600 + ₹600 from Siddique). He didn't know how much cash to collect from Siddique.
+
+**Rule:** Siddique owes Naushad = ₹600/day − platform money (Uber/Ola/Rapido…) that reached Naushad's bank − cash Siddique gave.
+
+**Logins (4 roles)**
+| Role | Who | Sees |
+|---|---|---|
+| owner | Owner | Everything + Driver ledger on the Rent page |
+| viewer | Uncle | Same, read-only |
+| manager | Naushad (old "driver" login, renamed automatically once) | "My rent" (unchanged ₹1,200 + I've paid) and "Driver ledger" (adds entries, drivers, sends driver logins) |
+| driver | Siddique | Only his own ledger, read-only |
+
+**Worker:** new tables `meta`, `ld_drivers`, `ld_entries`; endpoints `/ledger`, `/ledger/driver`, `/ledger/entry`, `/ledger/entry/delete`, `/ledger/login`. One-time: role rename + Siddique's ledger seeded from 16 Oct with Uber credits ₹39.89 (19th), ₹614.45 (20th), ₹151.42 (21st).
+
+**Platforms:** editable list in Setup → Platforms (default Uber, Ola, Rapido, Other), stored in `settings.platforms`.

@@ -778,7 +778,9 @@ rent() {
   render(`<div class="page-head"><div><h2>Rent</h2><div class="sub">What each driver owes and has paid</div></div>
       <div class="btn-row"><button class="btn primary desk-only" onclick="openPayment()">+ Rent received</button><button class="btn" onclick="openDriver()">+ Driver</button></div></div>
     ${dueBanner()}
-    ${blocks || '<div class="card empty">No driver yet. Add one to start tracking rent.</div>'}`);
+    ${blocks || '<div class="card empty">No driver yet. Add one to start tracking rent.</div>'}
+    <div id="ledgerBox">${ledgerHtml()}</div>`);
+  loadLedger();
 },
 
 expenses() {
@@ -884,6 +886,9 @@ setup() {
   const nLog = logTodayCount();
   const logSum = nLog ? nLog + ' change' + (nLog > 1 ? 's' : '') + ' today' : (DB.log || []).length ? 'No changes today' : 'Nothing recorded yet';
   const bakSum = getSnapshot() ? 'Testing mode is ON' : 'Download or restore a copy of everything';
+  const pltBody = `<p class="muted" style="font-size:13px;margin-bottom:10px">Apps the drivers run on. The Driver Manager picks one of these when he enters money that reached his bank.</p>
+    <div class="list">${platforms().map((p, i) => lrow(esc(p), '', '', `<button class="btn sm danger" onclick="removePlatform(${i})">✕</button>`)).join('')}</div>
+    <div class="btn-row" style="margin-top:10px"><input id="newPlat" class="inline" style="max-width:200px" placeholder="e.g. BluSmart"><button class="btn sm" onclick="addPlatform()">+ Add</button></div>`;
 
   const vehBody = `
     <div class="list">${DB.vehicles.map(v => lrow(esc(vehLabel(v)) + (v.id === c.id && !pickFirst ? ' <span class="badge b-paid">Editing</span>' : ''),
@@ -933,6 +938,7 @@ setup() {
       ${sec('veh', '🚗', 'Vehicle &amp; loan', vehSum, vehBody)}
       ${sec('drv', '👤', 'Drivers', drvSum, drvBody)}
       ${sec('par', '🤝', 'Partners', partSum, parBody)}
+      ${sec('plt', '📱', 'Platforms', platforms().join(' · '), pltBody)}
       ${sec('usr', '🔑', 'Logins &amp; users', usrSum, loginCardInner(true))}
       ${sec('log', '🕘', 'Change log', logSum, changeLogHtml())}
       ${sec('bak', '💾', 'Backup &amp; testing', bakSum, bakBody)}
@@ -1653,7 +1659,7 @@ function showLogin(msg) {
       const r = await cloudFetch('/login', { method: 'POST', body: JSON.stringify({ mobile: f.mobile, password: f.password }) });
       if (r.status >= 400) throw new Error(r.body.error || 'Login failed');
       localStorage.setItem(AUTH_KEY, JSON.stringify(r.body));
-      if (r.body.role === 'driver') { location.replace('driver.html'); return; }   // drivers get their own rent screen
+      if (SCREEN_ROLES.includes(r.body.role)) { location.replace('driver.html'); return; }   // Driver Manager + drivers get their own screen
       applyRole();
       if (isViewer()) await pullCloud(); else await firstSync();
       el.hidden = true; el.innerHTML = ''; document.body.classList.remove('locked');
@@ -1683,7 +1689,8 @@ function removeOwner(mobile) {
   if (!confirm('Remove the login for ' + (u.name || mobile) + '? They are logged out at once.')) return;
   cloudFetch('/users?mobile=' + mobile, { method:'DELETE' }).then(r => { if (r.status >= 400) alert(r.body.error); loadOwners(); });
 }
-const ROLE_LABEL = { owner:'Full access', viewer:'View only', driver:'Driver' };
+const ROLE_LABEL = { owner:'Full access', viewer:'View only', manager:'Driver Manager', driver:'Driver' };
+const SCREEN_ROLES = ['manager', 'driver'];   // these logins open driver.html, not the full app
 let USERS = [];   // logins from the server (owner/viewer view)
 function loginCardInner(noTitle) {
   const me = cloudCfg() || {};
@@ -1696,7 +1703,7 @@ function loginCardInner(noTitle) {
     <img src="data:," alt="" style="display:none" onerror="loadOwners()">`}
     <div class="btn-row" style="margin-top:10px">${isViewer() ? '' : '<button class="btn primary sm" onclick="openUserForm()">+ Add user</button>'}
       <button class="btn sm" onclick="openMyPassword()">Change my password</button></div>
-    ${isViewer() ? '' : '<div class="help" style="font-size:11px;color:var(--text2);margin-top:6px">Add a user with their mobile number — the app makes a 6-digit PIN for them. Everyone logs in on the same page with mobile + PIN. Full access changes everything · View only sees everything · Driver sees only his own rent.</div>'}`;
+    ${isViewer() ? '' : '<div class="help" style="font-size:11px;color:var(--text2);margin-top:6px">Add a user with their mobile number — the app makes a 6-digit PIN for them. Everyone logs in on the same page with mobile + PIN. Full access changes everything · View only sees everything · Driver Manager sees his own rent and keeps the driver ledger (he makes logins for the drivers under him).</div>'}`;
 }
 async function loadOwners() {
   const box = document.getElementById('ownerList'); if (!box) return;
@@ -1706,7 +1713,8 @@ async function loadOwners() {
     const me = (cloudCfg() || {}).mobile;
     box.innerHTML = USERS.map(u => lrow(
       esc(u.name) + (u.mobile === me ? ' <span class="muted" style="font-weight:400">(you)</span>' : ''),
-      esc(u.mobile) + ' · ' + ROLE_LABEL[u.role] + (u.role === 'driver' ? ' — ' + esc(driverName(u.driverId)) : ''), '',
+      esc(u.mobile) + ' · ' + (ROLE_LABEL[u.role] || u.role) + (u.role === 'manager' ? ' — pays rent as ' + esc(driverName(u.driverId))
+        : u.role === 'driver' ? ' — under the Driver Manager' : ''), '',
       u.mobile === me ? '' : `<button class="btn sm" onclick="resetPin('${u.mobile}')">New PIN</button><button class="btn sm danger" onclick="removeOwner('${u.mobile}')">✕</button>`)).join('');
   } catch { box.innerHTML = '<div class="muted" style="font-size:13px">Could not load users</div>'; }
 }
@@ -1715,12 +1723,12 @@ function openUserForm(preset) {
   openForm('Add user', [
     { k:'name', label:'Name', type:'text', req:true },
     { k:'mobile', label:'Mobile number', type:'tel', req:true, help:'They log in with this number.' },
-    { k:'role', label:'Access', type:'select', options: [['viewer','View only — sees everything, can’t change'], ['owner','Full access — can change everything'], ['driver','Driver — sees only his own rent']] },
-    { k:'driverId', label:'Which driver', type:'select', showIf:['role','driver'], options: drivers.length ? drivers.map(d => [d.id, d.name]) : [['','— add the driver first —']] }
+    { k:'role', label:'Access', type:'select', options: [['viewer','View only — sees everything, can’t change'], ['owner','Full access — can change everything'], ['manager','Driver Manager — pays his rent + keeps the driver ledger']] },
+    { k:'driverId', label:'Pays rent as', type:'select', showIf:['role','manager'], help:'His rent record on the Rent page.', options: drivers.length ? drivers.map(d => [d.id, d.name]) : [['','— add the driver first —']] }
   ], preset || { role:'viewer' }, d => { createUser(d); });
 }
 async function createUser(d) {
-  if (d.role !== 'driver') delete d.driverId;
+  if (d.role !== 'manager') delete d.driverId;
   const r = await cloudFetch('/users', { method:'POST', body: JSON.stringify(d) });
   if (r.status >= 400) { alert(r.body.error || 'Could not add user'); return; }
   showPin(d.name, r.body.mobile, r.body.pin, true);
@@ -1765,7 +1773,7 @@ async function shareDriverLink(id) {
   if (!USERS.length) { try { USERS = (await cloudFetch('/users')).body.users || []; } catch {} }
   const existing = USERS.find(u => u.mobile === phone);
   if (existing) resetPin(phone);
-  else createUser({ name: d.name, mobile: phone, role: 'driver', driverId: d.id });
+  else createUser({ name: d.name, mobile: phone, role: 'manager', driverId: d.id });
 }
 function costNoteHtml() {
   const c = editVeh(), cc = carCost(c);
@@ -1806,6 +1814,80 @@ function importData(file) {
 function resetData() {
   if (viewOnly()) return;
   if (prompt('Type DELETE to erase all data in this browser.') === 'DELETE') { DB = defaultData(); logResetBase(); refresh(); toast('All data cleared'); }
+}
+
+/* ════════════ Platforms (Uber, Ola, Rapido…) ════════════ */
+const DEFAULT_PLATFORMS = ['Uber', 'Ola', 'Rapido', 'Other'];
+function platforms() { const p = (DB.settings || {}).platforms; return Array.isArray(p) && p.length ? p : DEFAULT_PLATFORMS.slice(); }
+function addPlatform() {
+  if (viewOnly()) return;
+  const el = document.getElementById('newPlat'), name = (el.value || '').trim().slice(0, 30);
+  if (!name) return;
+  const list = platforms(); if (list.some(p => p.toLowerCase() === name.toLowerCase())) { toast('Already in the list'); return; }
+  setSetting('platforms', list.concat([name])); OPEN_SECS.add('plt'); PAGES.setup();
+}
+function removePlatform(i) {
+  if (viewOnly()) return;
+  const list = platforms(); if (list.length <= 1) { toast('Keep at least one'); return; }
+  if (!confirm('Remove ' + list[i] + ' from the list? Entries already saved keep their name.')) return;
+  list.splice(i, 1); setSetting('platforms', list); OPEN_SECS.add('plt'); PAGES.setup();
+}
+
+/* ════════════ Driver Ledger (kept by the Driver Manager) ════════════
+   Drivers under the manager pay him; platform money for their trips lands in his bank.
+     driver owes = daily rent − platform money to bank − cash given
+   Entered by the manager in his app; shown here for you to check. Same maths as driver.html. */
+let LEDGER = null, ledgerAll = {};
+async function loadLedger() {
+  if (!cloudCfg()) return;
+  try {
+    const r = await cloudFetch('/ledger');
+    if (r.status < 400) { LEDGER = r.body; const box = document.getElementById('ledgerBox'); if (box) box.innerHTML = ledgerHtml(); }
+  } catch {}
+}
+function inr2(n) { const a = Math.abs(Math.round(n * 100) / 100);
+  return (n < -0.004 ? '−₹' : '₹') + a.toLocaleString('en-IN', { minimumFractionDigits: a % 1 ? 2 : 0, maximumFractionDigits: 2 }); }
+function ledgerDays(drv) {
+  const es = LEDGER.entries.filter(e => e.driverId === drv.id), today = todayStr();
+  const last = drv.endDate && drv.endDate < today ? drv.endDate : today;
+  const dates = new Set();
+  for (let d = parseYmd(drv.startDate), i = 0; ymd(d) <= last && i < 3000; d = addDays(d, 1), i++) dates.add(ymd(d));
+  es.forEach(e => dates.add(e.date));
+  let bal = 0;
+  return [...dates].sort().map(date => {
+    const of = k => es.filter(e => e.date === date && e.kind === k).reduce((t, e) => t + num(e.amount), 0);
+    const rentDay = date >= drv.startDate && date <= last ? num(drv.rent) : 0;
+    const waive = Math.min(of('waive'), rentDay), rent = rentDay - waive, credit = of('credit'), cash = of('cash');
+    bal = Math.round((bal + rent - credit - cash) * 100) / 100;
+    return { date, rent, waive, credit, cash, bal };
+  });
+}
+function ledgerHtml() {
+  if (!LEDGER) return '';
+  if (!LEDGER.drivers.length) return '<div class="card"><h3>Driver ledger</h3><div class="muted" style="font-size:13px">No drivers under the Driver Manager yet.</div></div>';
+  return LEDGER.drivers.map(drv => {
+    const days = ledgerDays(drv), es = LEDGER.entries.filter(e => e.driverId === drv.id);
+    const s = k => days.reduce((t, d) => t + d[k], 0), bal = days.length ? days[days.length - 1].bal : 0;
+    const byPlat = {}; es.filter(e => e.kind === 'credit').forEach(e => byPlat[e.platform || 'Other'] = (byPlat[e.platform || 'Other'] || 0) + num(e.amount));
+    const rev = days.slice().reverse(), shown = ledgerAll[drv.id] ? rev : rev.slice(0, 7);
+    return `<div class="card section">
+      <div class="driver-head"><div><h3 style="margin:0">Driver ledger · ${esc(drv.name)}</h3>
+        <div class="meta">Kept by the Driver Manager · ${inr2(drv.rent)} per day since ${fmtDate(drv.startDate)}${drv.endDate ? ' · left ' + fmtDate(drv.endDate) : ''}${drv.hasLogin ? ' · has login' : ''}</div></div>
+        <div class="btn-row actions"><button class="btn sm" onclick="loadLedger()">↻ Refresh</button></div></div>
+      <div class="mini-kpis" style="grid-template-columns:repeat(2,1fr)">
+        <div><small>Rent</small><b>${inr2(s('rent'))}</b></div>
+        <div><small>Platform → bank</small><b>${inr2(s('credit'))}</b></div>
+        <div><small>Cash given</small><b>${inr2(s('cash'))}</b></div>
+        <div><small>${bal > 0.004 ? 'Driver still owes' : bal < -0.004 ? 'Manager owes driver' : 'Balance'}</small><b class="${bal > 0.004 ? 'neg' : 'pos'}">${inr2(Math.abs(bal))}</b></div>
+      </div>
+      ${Object.keys(byPlat).length ? `<div class="muted" style="font-size:12px;margin:-4px 0 10px">${Object.keys(byPlat).sort().map(p => esc(p) + ' ' + inr2(byPlat[p])).join(' · ')}</div>` : ''}
+      <table><thead><tr><th>Day</th><th class="num">Rent</th><th class="num">Platform</th><th class="num">Cash</th><th class="num">Balance</th></tr></thead><tbody>
+        ${shown.map(d => `<tr><td style="white-space:nowrap">${fmtShort(d.date)}</td><td class="num">${d.waive && !d.rent ? 'off' : inr2(d.rent)}</td><td class="num">${d.credit ? inr2(d.credit) : '—'}</td>
+          <td class="num">${d.cash ? inr2(d.cash) : '—'}</td><td class="num ${d.bal > 0.004 ? 'neg' : d.bal < -0.004 ? 'pos' : ''}"><b>${inr2(d.bal)}</b></td></tr>`).join('')}
+      </tbody></table>
+      ${rev.length > 7 ? `<button class="link-btn" onclick="ledgerAll['${drv.id}']=!ledgerAll['${drv.id}'];document.getElementById('ledgerBox').innerHTML=ledgerHtml()">${ledgerAll[drv.id] ? 'Show latest only' : 'Show all ' + rev.length + ' days'}</button>` : ''}
+    </div>`;
+  }).join('');
 }
 
 /* ════════════ Driver statement (WhatsApp + PDF) ════════════ */
@@ -1865,7 +1947,7 @@ function afterLoad() {
   // No automatic rent popup — confirm from the "rent pending" banner (fewer mistaken taps)
 }
 go('dashboard');
-if ((cloudCfg() || {}).role === 'driver') location.replace('driver.html');
+if (SCREEN_ROLES.includes((cloudCfg() || {}).role)) location.replace('driver.html');
 applyRole();
 try { localStorage.removeItem('mnscar_cloud_v1'); } catch {}   // old manual connection, replaced by login
 if (cloudCfg()) pullCloud().then(afterLoad).then(startLive); else showLogin();

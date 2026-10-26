@@ -9,7 +9,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="MNS Rent">
-<title>MNS Tours &amp; Travels — My Rent</title>
+<title>MNS Tours &amp; Travels — Rent</title>
 <link rel="icon" type="image/png" href="favicon.png?v=2">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -85,6 +85,30 @@ body { font-family:var(--font-body); background:var(--bg); color:var(--text); fo
 /* Spinner shown on the button while the payment is being saved */
 .spin { display:inline-block; width:16px; height:16px; margin-right:8px; vertical-align:-3px; border:2.5px solid rgba(255,255,255,.45); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
+/* ── Driver Ledger ── */
+.main-tabs { margin-top:0; margin-bottom:4px; }
+.ld-acts { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:14px; }
+.ld-acts .pay { margin-top:0; font-size:14px; padding:13px 8px; }
+.ld-acts .pay.alt { background:var(--surface); color:var(--accent); border:1.5px solid var(--accent); }
+.ld-links { display:flex; flex-wrap:wrap; justify-content:center; gap:4px 16px; margin-top:6px; }
+.ld-links .more { padding:8px 0 0; font-size:13px; }
+.plat { display:flex; flex-wrap:wrap; gap:6px; justify-content:center; margin-top:10px; }
+.plat span { background:var(--surface2); border-radius:20px; padding:4px 10px; font-size:12px; color:var(--text2); }
+.plat b { color:var(--text); }
+.dtable { width:100%; border-collapse:collapse; font-size:13px; }
+.dtable th { text-align:right; color:var(--text2); font-weight:600; font-size:11px; padding:0 4px 8px; text-transform:uppercase; letter-spacing:.02em; }
+.dtable th:first-child, .dtable td:first-child { text-align:left; padding-left:0; }
+.dtable td { text-align:right; padding:10px 4px; border-top:1px solid var(--border); white-space:nowrap; }
+.dtable td:last-child, .dtable th:last-child { padding-right:0; }
+.dtable tr.click td { cursor:pointer; }
+.dtable .z { color:var(--text2); opacity:.5; }
+.pos { color:var(--green); } .neg { color:var(--red); }
+.field { margin-top:12px; text-align:left; }
+.field label { display:block; font-size:12px; font-weight:600; color:var(--text2); margin-bottom:5px; }
+.field input, .field select { width:100%; padding:12px; border:1px solid var(--border); border-radius:10px; font-size:16px; font-family:inherit; background:var(--surface); color:var(--text); }
+.err { color:var(--red); font-size:13px; min-height:18px; margin-top:8px; text-align:center; }
+.danger-link { color:var(--red) !important; }
+.pin-box { font-family:var(--font-display); font-size:36px; font-weight:700; letter-spacing:4px; text-align:center; background:var(--surface2); border-radius:12px; padding:14px; margin-top:12px; }
 </style>
 </head>
 <body>
@@ -101,10 +125,15 @@ const AUTH_KEY = 'mnscar_auth_v1';
 const apiBase = () => { try { return localStorage.getItem('mnscar_api_override') || WORKER_URL; } catch { return WORKER_URL; } };
 const auth = (() => { try { return JSON.parse(localStorage.getItem(AUTH_KEY) || 'null'); } catch { return null; } })();
 function toLogin() { try { localStorage.removeItem(AUTH_KEY); } catch {} location.replace('index.html'); }
-if (!auth || auth.role !== 'driver') location.replace('index.html');   // owners/viewers have the full app
+// Driver Manager (role "manager", was "driver" before) and drivers under him use this screen; owners/viewers have the full app
+const SCREEN_ROLES = ['manager', 'driver'];
+if (!auth || !SCREEN_ROLES.includes(auth.role)) location.replace('index.html');
+let ROLE = auth && auth.role;          // confirmed with the server on every load (GET /me)
 
 const RENT_DUE_HOUR = 20;    // daily rent is collected at 8 PM (covers last night + today)
 let D = null, tab = 'days', showAll = false;
+let L = null, mainTab = 'rent', ldTab = 'days', ldShowAll = {};   // Driver Ledger data + view state
+try { mainTab = localStorage.getItem('mnscar_drvtab_v1') || 'rent'; } catch {}
 
 /* ── Helpers (same rules as the owner app) ── */
 const num = v => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
@@ -182,6 +211,7 @@ function closePaid() {
 // Tap on the dark area outside the popup = Cancel
 document.getElementById('overlay').addEventListener('click', e => { if (e.target.id === 'overlay') closePaid(); });
 
+
 /* Lock the popup and show a spinner while saving, so a second tap can't send it twice */
 function setSending(on) {
   sending = on;
@@ -236,6 +266,16 @@ function status(p) {
 
 /* ── Render ── */
 function render() {
+  if (ROLE === 'driver') { renderLedger(); return; }
+  const tabs = `<div class="tabs main-tabs"><button class="${mainTab === 'rent' ? 'on' : ''}" onclick="setMainTab('rent')">My rent</button>
+    <button class="${mainTab === 'ledger' ? 'on' : ''}" onclick="setMainTab('ledger')">Driver ledger</button></div>`;
+  if (mainTab === 'ledger') { renderLedger(tabs); return; }
+  if (!D) { document.getElementById('app').innerHTML = tabs + '<div class="msg">Loading…</div>'; return; }
+  renderRent(tabs);
+}
+function setMainTab(t) { mainTab = t; try { localStorage.setItem('mnscar_drvtab_v1', t); } catch {} render(); window.scrollTo(0, 0); }
+
+function renderRent(tabs) {
   const P = periods();
   const due = P.reduce((s, p) => s + p.due, 0), paid = D.payments.reduce((s, x) => s + num(x.amount), 0);
   const waitAmt = waitingClaims().reduce((s, c) => s + num(c.amount), 0);
@@ -245,7 +285,7 @@ function render() {
   const cycle = { daily:'per day', weekly:'per week', monthly:'per month' }[D.driver.rentCycle] || '';
   const daysList = (showAll ? P.slice().reverse() : P.slice(-10).reverse());
 
-  document.getElementById('app').innerHTML = `
+  document.getElementById('app').innerHTML = tabs + `
     <div class="hello">Hi ${esc(D.driver.name.split(' ')[0])} 👋</div>
     <div class="sub">${esc(D.car.name)}${D.car.regNo ? ' · ' + esc(D.car.regNo) : ''} · ${inr(D.driver.rentAmount)} ${cycle}</div>
 
@@ -282,20 +322,234 @@ function logoutDriver() {
   toLogin();
 }
 
+const api = (path, opts = {}) => fetch(apiBase() + path, { cache: 'no-store', ...opts,
+  headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + auth.token } })
+  .then(async res => ({ status: res.status, ok: res.ok, body: await res.json().catch(() => ({})) }));
+
 async function loadData() {
-  if (!auth || auth.role !== 'driver') return;
+  if (!auth || !SCREEN_ROLES.includes(auth.role)) return;
   try {
-    const res = await fetch(apiBase() + '/driver', { cache: 'no-store', headers: { Authorization: 'Bearer ' + auth.token } });
-    const body = await res.json();
-    if (res.status === 401 || res.status === 403) { toLogin(); return; }    // PIN was reset / login removed
-    if (!res.ok) { if (!D) showMsg('Can\u2019t open', esc(body.error || 'Please contact the owner.')); return; }
-    D = body; render();
-  } catch (e) { if (!D) showMsg('No connection', 'Check your internet and tap Refresh.'); }   // keep last view if a background refresh fails
+    // Who am I really? (the old "driver" login was renamed to "manager" on the server)
+    const me = await api('/me');
+    if (me.status === 401) { toLogin(); return; }
+    if (me.ok && me.body.role && me.body.role !== ROLE) {
+      ROLE = me.body.role;
+      if (!SCREEN_ROLES.includes(ROLE)) { location.replace('index.html'); return; }
+      try { localStorage.setItem(AUTH_KEY, JSON.stringify({ ...auth, role: ROLE })); } catch {}
+    }
+    const [rent, led] = await Promise.all([ROLE === 'manager' ? api('/driver') : null, api('/ledger')]);
+    if ((rent && (rent.status === 401 || rent.status === 403)) || led.status === 401) { toLogin(); return; }
+    if (led.ok) L = led.body;
+    if (rent) {
+      if (!rent.ok) { if (!D && mainTab === 'rent') showMsg('Can\u2019t open', esc(rent.body.error || 'Please contact the owner.')); }
+      else D = rent.body;
+    }
+    if (ROLE === 'driver' && !led.ok) { if (!L) showMsg('Can\u2019t open', esc(led.body.error || 'Please contact the owner.')); return; }
+    if (!sending) render();
+  } catch (e) { if (!D && !L) showMsg('No connection', 'Check your internet and tap Refresh.'); }   // keep last view if a background refresh fails
+}
+
+/* ════════════ Driver Ledger ════════════
+   For each driver under the manager:
+     driver owes = daily rent − platform money (Uber/Ola/Rapido…) that came to the manager's bank − cash he gave
+   Positive balance = collect from the driver. Negative = the manager owes the driver. */
+const KIND_LABEL = { credit: 'Platform money', cash: 'Cash from driver', waive: 'Rent off' };
+// Exact rupees + paise, so amounts match the bank SMS (₹614.45, not ₹614)
+const inr2 = n => { const a = Math.abs(Math.round(n * 100) / 100); const t = a.toLocaleString('en-IN', { minimumFractionDigits: a % 1 ? 2 : 0, maximumFractionDigits: 2 });
+  return (n < -0.004 ? '−₹' : '₹') + t; };
+const canEditLedger = () => ROLE === 'manager';
+const ldEntries = id => (L ? L.entries : []).filter(e => e.driverId === id);
+
+/* Day-wise rows from the start date to today (or the end date), oldest first, with a running balance. */
+function ledgerDays(drv) {
+  const es = ldEntries(drv.id), today = todayStr();
+  const last = drv.endDate && drv.endDate < today ? drv.endDate : today;
+  const dates = new Set();
+  for (let d = parseYmd(drv.startDate), i = 0; ymd(d) <= last && i < 3000; d = addDays(d, 1), i++) dates.add(ymd(d));
+  es.forEach(e => dates.add(e.date));
+  let bal = 0;
+  return [...dates].sort().map(date => {
+    const of = k => es.filter(e => e.date === date && e.kind === k).reduce((s, e) => s + num(e.amount), 0);
+    const rentDay = date >= drv.startDate && date <= last ? num(drv.rent) : 0;
+    const waive = Math.min(of('waive'), rentDay), rent = rentDay - waive, credit = of('credit'), cash = of('cash');
+    bal = Math.round((bal + rent - credit - cash) * 100) / 100;
+    return { date, rent, waive, credit, cash, bal };
+  });
+}
+function ledgerTotals(drv) {
+  const days = ledgerDays(drv), es = ldEntries(drv.id);
+  const byPlat = {};
+  es.filter(e => e.kind === 'credit').forEach(e => byPlat[e.platform || 'Other'] = (byPlat[e.platform || 'Other'] || 0) + num(e.amount));
+  const s = k => days.reduce((t, d) => t + d[k], 0);
+  return { days, balance: days.length ? days[days.length - 1].bal : 0, rent: s('rent'), credit: s('credit'), cash: s('cash'), byPlat };
+}
+
+function renderLedger(tabs) {
+  const app = document.getElementById('app');
+  if (!L) { app.innerHTML = (tabs || '') + '<div class="msg">Loading…</div>'; return; }
+  const mgr = canEditLedger(), drivers = L.drivers;
+  const blocks = drivers.map(drv => {
+    const T = ledgerTotals(drv), first = drv.name.split(' ')[0];
+    const b = T.balance, owe = b > 0.004, back = b < -0.004;
+    const head = mgr
+      ? (owe ? 'Collect from ' + esc(first) : back ? 'You owe ' + esc(first) : 'All settled with ' + esc(first))
+      : (owe ? 'You need to give' : back ? 'You will get back' : 'All settled');
+    const plats = Object.keys(T.byPlat).sort();
+    const days = T.days.slice().reverse(), shown = ldShowAll[drv.id] ? days : days.slice(0, 10);
+    const es = ldEntries(drv.id).slice().sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || ''));
+    return `
+      ${mgr || L.drivers.length > 1 ? `<div class="hello" style="font-size:19px;margin-top:6px">${esc(drv.name)}</div>` : `<div class="hello">Hi ${esc(first)} 👋</div>`}
+      <div class="sub">${inr2(drv.rent)} per day · since ${fmtDate(drv.startDate)}${drv.endDate ? ' · left ' + fmtDate(drv.endDate) : ''}</div>
+      <div class="card due ${owe ? 'pend' : 'clear'}">
+        <div class="label">${head}</div>
+        <div class="amt">${owe || back ? inr2(Math.abs(b)) : '✓'}</div>
+        <div class="sub">Rent ${inr2(T.rent)} − platform ${inr2(T.credit)} − cash ${inr2(T.cash)}</div>
+        ${plats.length ? `<div class="plat">${plats.map(p => `<span>${esc(p)} <b>${inr2(T.byPlat[p])}</b></span>`).join('')}</div>` : ''}
+        ${mgr ? `<div class="ld-acts"><button class="pay alt" onclick="openEntry('${drv.id}','credit')">+ Platform money</button>
+            <button class="pay" onclick="openEntry('${drv.id}','cash')">+ Cash from ${esc(first)}</button></div>
+          <div class="ld-links"><button class="more" onclick="openEntry('${drv.id}','waive')">Rent off day</button>
+            <button class="more" onclick="shareLedger('${drv.id}')">Send on WhatsApp</button>
+            <button class="more" onclick="driverLogin('${drv.id}')">${drv.hasLogin ? 'New PIN' : 'Send login'}</button>
+            <button class="more" onclick="openLdDriver('${drv.id}')">Edit</button></div>`
+          : `<div class="note">Platform money = what Uber/Ola/Rapido sent to the manager's bank for your trips.</div>`}
+      </div>
+      <div class="tabs"><button class="${ldTab === 'days' ? 'on' : ''}" onclick="ldTab='days';render()">Day-wise</button>
+        <button class="${ldTab === 'entries' ? 'on' : ''}" onclick="ldTab='entries';render()">Entries</button></div>
+      <div class="card">${ldTab === 'days'
+        ? `<table class="dtable"><thead><tr><th>Day</th><th>Rent</th><th>Platform</th><th>Cash</th><th>Balance</th></tr></thead><tbody>
+            ${shown.map(d => `<tr${mgr ? ` class="click" onclick="openDay('${drv.id}','${d.date}')"` : ''}><td>${fmtShort(d.date)}</td>
+              <td${d.rent ? '' : ' class="z"'}>${d.waive && !d.rent ? 'off' : inr2(d.rent)}</td>
+              <td${d.credit ? '' : ' class="z"'}>${d.credit ? inr2(d.credit) : '—'}</td>
+              <td${d.cash ? '' : ' class="z"'}>${d.cash ? inr2(d.cash) : '—'}</td>
+              <td class="${d.bal > 0.004 ? 'neg' : d.bal < -0.004 ? 'pos' : ''}"><b>${inr2(d.bal)}</b></td></tr>`).join('') || '<tr><td colspan="5">No days yet</td></tr>'}
+          </tbody></table>
+          ${days.length > 10 ? `<button class="more" onclick="ldShowAll['${drv.id}']=!ldShowAll['${drv.id}'];render()">${ldShowAll[drv.id] ? 'Show latest only' : 'Show all ' + days.length + ' days'}</button>` : ''}
+          <div class="note">Balance in red = ${mgr ? esc(first) + ' still has to give' : 'you still have to give'}. Green = ${mgr ? 'you owe ' + esc(first) : 'you get back'}.</div>`
+        : (es.map(e => entryRow(e, mgr)).join('') || '<div class="msg" style="padding:24px">No entries yet</div>')}
+      </div>`;
+  }).join('<div style="height:18px"></div>');
+  app.innerHTML = (tabs || '') + (blocks || `<div class="card msg" style="padding:30px 18px"><b>No drivers yet</b>${mgr ? 'Add the driver who runs the car with you.' : 'Please contact the manager.'}</div>`)
+    + (mgr ? `<button class="pay pay-other" style="margin-top:18px" onclick="openLdDriver()">+ Add driver</button>` : '')
+    + `<div class="foot">${mgr ? 'Driver ledger' : 'View only'} · <a href="#" onclick="logoutDriver();return false" style="color:var(--text2)">Log out</a></div>`;
+}
+function entryRow(e, mgr) {
+  const sign = e.kind === 'waive' ? '' : '−';
+  return `<div class="row"${mgr ? ` style="cursor:pointer" onclick="openEntry('${e.driverId}','${e.kind}','${e.id}')"` : ''}>
+    <div><div class="t">${e.kind === 'credit' ? esc(e.platform || 'Platform') + ' → bank' : KIND_LABEL[e.kind]}</div>
+      <div class="s">${fmtDate(e.date)}${e.note ? ' · ' + esc(e.note) : ''}</div></div>
+    <div class="r ${e.kind === 'waive' ? '' : 'pos'}">${sign}${inr2(e.amount)}</div></div>`;
+}
+
+/* Bottom-sheet form helpers (same sheet as the "I've paid" popup) */
+function sheet(html) { document.getElementById('modal').innerHTML = html; document.getElementById('overlay').classList.add('open'); }
+function closeSheet() { document.getElementById('overlay').classList.remove('open'); }
+const ldDriver = id => L.drivers.find(d => d.id === id);
+
+/* Tap a day → what was entered that day, plus quick add */
+function openDay(driverId, date) {
+  const es = ldEntries(driverId).filter(e => e.date === date);
+  sheet(`<h3>${fmtDate(date)}</h3>
+    <div style="margin-top:10px">${es.map(e => entryRow(e, true)).join('') || '<div class="msg" style="padding:16px">Nothing entered for this day</div>'}</div>
+    <div class="ld-acts"><button class="pay alt" onclick="openEntry('${driverId}','credit',null,'${date}')">+ Platform money</button>
+      <button class="pay" onclick="openEntry('${driverId}','cash',null,'${date}')">+ Cash</button></div>
+    <button class="more cf-cancel" onclick="openEntry('${driverId}','waive',null,'${date}')">Mark rent off this day</button>
+    <button class="more cf-cancel" onclick="closeSheet()">Close</button>`);
+}
+
+/* Add / edit one entry */
+function openEntry(driverId, kind, id, date) {
+  const drv = ldDriver(driverId), e = id ? L.entries.find(x => x.id === id) : null;
+  const plats = L.platforms || ['Uber', 'Ola', 'Rapido', 'Other'];
+  const title = { credit: 'Platform money to bank', cash: 'Cash from ' + drv.name.split(' ')[0], waive: 'Rent off day' }[kind];
+  const help = { credit: 'Money Uber / Ola / Rapido sent to your bank for ' + drv.name.split(' ')[0] + '\u2019s trips. Type it exactly as in the bank SMS.',
+                 cash: 'Cash (or UPI) ' + drv.name.split(' ')[0] + ' gave you towards rent.',
+                 waive: 'Car didn\u2019t run — this much rent is not charged for the day.' }[kind];
+  sheet(`<h3>${e ? 'Edit · ' : ''}${esc(title)}</h3><div class="cf-for" style="margin-top:4px">${esc(help)}</div>
+    <form id="entForm">
+      <div class="field"><label>Date</label><input name="date" type="date" required value="${esc(e ? e.date : date || todayStr())}"></div>
+      ${kind === 'credit' ? `<div class="field"><label>Platform</label><select name="platform">${plats.map(p => `<option ${e && e.platform === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></div>` : ''}
+      <div class="field"><label>Amount (₹)</label><input name="amount" type="number" step="0.01" inputmode="decimal" required value="${e ? e.amount : kind === 'waive' ? drv.rent : ''}"></div>
+      <div class="field"><label>Note (optional)</label><input name="note" type="text" maxlength="120" value="${esc(e ? e.note : '')}"></div>
+      <div class="err" id="entErr"></div>
+      <button class="pay" id="entGo">Save</button>
+    </form>
+    ${e ? `<button class="more cf-cancel danger-link" onclick="deleteEntry('${e.id}')">Delete this entry</button>` : ''}
+    <button class="more cf-cancel" onclick="closeSheet()">Cancel</button>`);
+  const f = document.getElementById('entForm');
+  setTimeout(() => { if (!e) f.amount.focus(); }, 80);
+  f.onsubmit = async ev => {
+    ev.preventDefault();
+    const btn = document.getElementById('entGo'); if (btn.disabled) return;
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Saving…';
+    const d = Object.fromEntries(new FormData(f).entries());
+    const r = await api('/ledger/entry', { method: 'POST', body: JSON.stringify({ ...d, id: e ? e.id : undefined, driverId, kind }) }).catch(() => null);
+    if (!r || !r.ok) { btn.disabled = false; btn.textContent = 'Save'; document.getElementById('entErr').textContent = r ? (r.body.error || 'Could not save') : 'No internet — try again'; return; }
+    closeSheet(); flash('✓ Saved'); await loadData();
+  };
+}
+async function deleteEntry(id) {
+  if (!confirm('Delete this entry?')) return;
+  const r = await api('/ledger/entry/delete', { method: 'POST', body: JSON.stringify({ id }) }).catch(() => null);
+  if (!r || !r.ok) { alert(r ? r.body.error || 'Could not delete' : 'No internet'); return; }
+  closeSheet(); flash('Deleted'); loadData();
+}
+
+/* Add / edit a driver under the manager */
+function openLdDriver(id) {
+  const d = id ? ldDriver(id) : null;
+  sheet(`<h3>${d ? 'Edit driver' : 'Add driver'}</h3>
+    <form id="ldForm">
+      <div class="field"><label>Name</label><input name="name" required value="${esc(d ? d.name : '')}"></div>
+      <div class="field"><label>Mobile number</label><input name="mobile" type="tel" inputmode="numeric" placeholder="10-digit — needed for his login" value="${esc(d ? d.mobile : '')}"></div>
+      <div class="field"><label>Rent per day (₹)</label><input name="rent" type="number" step="0.01" inputmode="decimal" required value="${d ? d.rent : 600}"></div>
+      <div class="field"><label>Start date</label><input name="startDate" type="date" required value="${esc(d ? d.startDate : todayStr())}"></div>
+      <div class="field"><label>Left on (only if he stopped)</label><input name="endDate" type="date" value="${esc(d ? d.endDate : '')}"></div>
+      <div class="err" id="ldErr"></div>
+      <button class="pay" id="ldGo">Save</button>
+    </form><button class="more cf-cancel" onclick="closeSheet()">Cancel</button>`);
+  const f = document.getElementById('ldForm');
+  f.onsubmit = async ev => {
+    ev.preventDefault();
+    const btn = document.getElementById('ldGo'); if (btn.disabled) return; btn.disabled = true;
+    const data = Object.fromEntries(new FormData(f).entries());
+    const r = await api('/ledger/driver', { method: 'POST', body: JSON.stringify({ ...data, id: d ? d.id : undefined }) }).catch(() => null);
+    if (!r || !r.ok) { btn.disabled = false; document.getElementById('ldErr').textContent = r ? (r.body.error || 'Could not save') : 'No internet — try again'; return; }
+    closeSheet(); flash('✓ Saved'); loadData();
+  };
+}
+
+/* Make / renew the driver's own login (read-only ledger) and send it on WhatsApp */
+async function driverLogin(id) {
+  const d = ldDriver(id);
+  if ((d.mobile || '').replace(/\D/g, '').length !== 10) { alert('Add ' + d.name.split(' ')[0] + '\u2019s 10-digit mobile number first.'); openLdDriver(id); return; }
+  if (d.hasLogin && !confirm('Make a new PIN for ' + d.name + '? His old PIN stops working.')) return;
+  const r = await api('/ledger/login', { method: 'POST', body: JSON.stringify({ driverId: id }) }).catch(() => null);
+  if (!r || !r.ok) { alert(r ? r.body.error || 'Could not create login' : 'No internet'); return; }
+  const link = new URL('./', location.href).href;
+  const msg = 'Hi ' + d.name.split(' ')[0] + ', your MNS Tours & Travels login to see your rent account:\n' + link + '\nMobile: ' + r.body.mobile + '\nPIN: ' + r.body.pin +
+              '\n\nOpen the link in Chrome and tap "Install" to add it as an app.';
+  window._pinMsg = msg;
+  sheet(`<h3>Login ready</h3><div class="cf-for">${esc(d.name)} · ${esc(r.body.mobile)}</div>
+    <div class="pin-box">${r.body.pin.replace(/(\d{3})(\d{3})/, '$1 $2')}</div>
+    <div class="note" style="text-align:center">Send it now — the PIN can\u2019t be seen again (you can make a new one).</div>
+    <button class="pay" onclick="window.open('https://wa.me/91${r.body.mobile}?text=' + encodeURIComponent(window._pinMsg), '_blank')">Send on WhatsApp</button>
+    <button class="more cf-cancel" onclick="closeSheet();loadData()">Done</button>`);
+}
+
+/* Short statement for WhatsApp */
+function shareLedger(id) {
+  const d = ldDriver(id), T = ledgerTotals(d), b = T.balance;
+  const last = T.days.slice(-7).reverse().map(x => `${fmtShort(x.date)}: rent ${inr2(x.rent)}${x.credit ? ', platform ' + inr2(x.credit) : ''}${x.cash ? ', cash ' + inr2(x.cash) : ''} → ${inr2(x.bal)}`).join('\n');
+  const text = `*MNS Tours & Travels — Rent account*\n${d.name} · ${inr2(d.rent)}/day since ${fmtDate(d.startDate)}\n\n` +
+    `Rent: ${inr2(T.rent)}\nPlatform money (to bank): ${inr2(T.credit)}\nCash given: ${inr2(T.cash)}\n` +
+    `*${b > 0.004 ? 'To give: ' + inr2(b) : b < -0.004 ? 'To get back: ' + inr2(-b) : 'All settled ✅'}*\n\nLast days:\n${last}`;
+  const phone = (d.mobile || '').replace(/\D/g, '').slice(-10);
+  window.open('https://wa.me/' + (phone.length === 10 ? '91' + phone : '') + '?text=' + encodeURIComponent(text), '_blank');
 }
 loadData();
 // Keep it fresh while open: every 30 s, and whenever he comes back to the app
-setInterval(() => { if (!document.hidden && D) loadData(); }, 30000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden && D) loadData(); });
+setInterval(() => { if (!document.hidden && (D || L)) loadData(); }, 30000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && (D || L)) loadData(); });
 // Recheck at 8 PM if left open
 (() => { const n = new Date(), at = new Date(n); at.setHours(RENT_DUE_HOUR, 0, 5, 0); if (at > n) setTimeout(() => D && render(), at - n); })();
 // "Install app" button — shown only when Chrome offers installation and the app isn't installed yet
