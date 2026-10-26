@@ -86,6 +86,11 @@ body { font-family:var(--font-body); background:var(--bg); color:var(--text); fo
 .spin { display:inline-block; width:16px; height:16px; margin-right:8px; vertical-align:-3px; border:2.5px solid rgba(255,255,255,.45); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
 /* ── Driver Ledger ── */
+.mtot { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px; }
+.mtot div { background:var(--surface2); border-radius:10px; padding:10px; }
+.mtot small { display:block; color:var(--text2); font-size:11px; font-weight:600; }
+.mtot b { font-family:var(--font-display); font-size:16px; }
+.icon-btn:disabled { cursor:default; }
 .main-tabs { margin-top:0; margin-bottom:4px; }
 .ld-acts { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:14px; }
 .ld-acts .pay { margin-top:0; font-size:14px; padding:13px 8px; }
@@ -423,7 +428,7 @@ function renderLedger(tabs) {
       <div class="tabs"><button class="${ldTab === 'days' ? 'on' : ''}" onclick="ldTab='days';render()">Day-wise</button>
         <button class="${ldTab === 'entries' ? 'on' : ''}" onclick="ldTab='entries';render()">Entries</button></div>
       <div class="card">${ldTab === 'days'
-        ? `<table class="dtable"><thead><tr><th>Day</th><th>Rent</th><th>Platform</th><th>Cash</th><th>Balance</th></tr></thead><tbody>
+        ? `<table class="dtable"><thead><tr><th>Day</th><th>Rent</th><th>Online</th><th>Cash</th><th>Balance</th></tr></thead><tbody>
             ${shown.map(d => `<tr${mgr ? ` class="click" onclick="openDay('${drv.id}','${d.date}')"` : ''}><td>${fmtShort(d.date)}</td>
               <td${d.rent ? '' : ' class="z"'}>${d.waive && !d.rent ? 'off' : inr2(d.rent)}</td>
               <td${d.credit ? '' : ' class="z"'}>${d.credit ? inr2(d.credit) : '—'}</td>
@@ -432,12 +437,33 @@ function renderLedger(tabs) {
           </tbody></table>
           ${days.length > 10 ? `<button class="more" onclick="ldShowAll['${drv.id}']=!ldShowAll['${drv.id}'];render()">${ldShowAll[drv.id] ? 'Show latest only' : 'Show all ' + days.length + ' days'}</button>` : ''}
           <div class="note">Balance in red = ${mgr ? esc(first) + ' still has to give' : 'you still have to give'}. Green = ${mgr ? 'you owe ' + esc(first) : 'you get back'}.</div>`
-        : (es.map(e => entryRow(e, mgr)).join('') || '<div class="msg" style="padding:24px">No entries yet</div>')}
+        : monthBlock(drv, T, es, mgr)}
       </div>`;
   }).join('<div style="height:18px"></div>');
   app.innerHTML = (tabs || '') + (blocks || `<div class="card msg" style="padding:30px 18px"><b>No drivers yet</b>${mgr ? 'Add the driver who runs the car with you.' : 'Please contact the manager.'}</div>`)
     + (mgr ? `<button class="pay pay-other" style="margin-top:18px" onclick="openLdDriver()">+ Add driver</button>` : '')
     + `<div class="foot">${mgr ? 'Driver ledger' : 'View only'} · <a href="#" onclick="logoutDriver();return false" style="color:var(--text2)">Log out</a></div>`;
+}
+/* ── Entries tab: one month at a time, with that month's totals ── */
+let ldMonth = ymd(new Date()).slice(0, 7);          // 'YYYY-MM', current month by default
+const monthName = m => new Date(+m.slice(0, 4), +m.slice(5) - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+function shiftMonth(n) { const d = new Date(+ldMonth.slice(0, 4), +ldMonth.slice(5) - 1 + n, 1); ldMonth = ymd(d).slice(0, 7); render(); }
+function monthBlock(drv, T, es, mgr) {
+  const days = T.days.filter(d => d.date.startsWith(ldMonth)), list = es.filter(e => e.date.startsWith(ldMonth));
+  const s = k => days.reduce((t, d) => t + d[k], 0), rent = s('rent'), online = s('credit'), cash = s('cash'), net = rent - online - cash;
+  const byPlat = {}; list.filter(e => e.kind === 'credit').forEach(e => byPlat[e.platform || 'Other'] = (byPlat[e.platform || 'Other'] || 0) + num(e.amount));
+  const isNow = ldMonth >= ymd(new Date()).slice(0, 7);
+  return `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <button class="icon-btn" onclick="shiftMonth(-1)">‹</button><b>${monthName(ldMonth)}</b>
+      <button class="icon-btn" onclick="shiftMonth(1)" ${isNow ? 'disabled style="opacity:.3"' : ''}>›</button></div>
+    <div class="mtot">
+      <div><small>Rent</small><b>${inr2(rent)}</b></div>
+      <div><small>Online</small><b class="pos">${inr2(online)}</b></div>
+      <div><small>Cash</small><b class="pos">${inr2(cash)}</b></div>
+      <div><small>${net > 0.004 ? (mgr ? 'Month: to collect' : 'Month: to give') : net < -0.004 ? 'Month: extra paid' : 'Month balance'}</small><b class="${net > 0.004 ? 'neg' : 'pos'}">${inr2(Math.abs(net))}</b></div>
+    </div>
+    ${Object.keys(byPlat).length ? `<div class="plat" style="margin:0 0 6px">${Object.keys(byPlat).sort().map(p => `<span>${esc(p)} <b>${inr2(byPlat[p])}</b></span>`).join('')}</div>` : ''}
+    ${list.map(e => entryRow(e, mgr)).join('') || '<div class="msg" style="padding:24px">No entries this month</div>'}`;
 }
 function entryRow(e, mgr) {
   const sign = e.kind === 'waive' ? '' : '−';
