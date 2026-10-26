@@ -132,6 +132,7 @@ let ROLE = auth && auth.role;          // confirmed with the server on every loa
 
 const RENT_DUE_HOUR = 20;    // daily rent is collected at 8 PM (covers last night + today)
 let D = null, tab = 'days', showAll = false;
+let rentErr = '';   // why "My rent" couldn't load, shown on that tab
 let L = null, mainTab = 'rent', ldTab = 'days', ldShowAll = {};   // Driver Ledger data + view state
 try { mainTab = localStorage.getItem('mnscar_drvtab_v1') || 'rent'; } catch {}
 
@@ -270,7 +271,10 @@ function render() {
   const tabs = `<div class="tabs main-tabs"><button class="${mainTab === 'rent' ? 'on' : ''}" onclick="setMainTab('rent')">My rent</button>
     <button class="${mainTab === 'ledger' ? 'on' : ''}" onclick="setMainTab('ledger')">Driver ledger</button></div>`;
   if (mainTab === 'ledger') { renderLedger(tabs); return; }
-  if (!D) { document.getElementById('app').innerHTML = tabs + '<div class="msg">Loading…</div>'; return; }
+  // Rent screen failed to load (e.g. his rent record was removed or changed) → say so instead of "Loading…" forever
+  if (!D) { document.getElementById('app').innerHTML = tabs + (rentErr
+    ? `<div class="msg"><b>Can\u2019t show your rent</b>${esc(rentErr)}<br><br>The Driver ledger tab still works.</div>`
+    : '<div class="msg">Loading…</div>'); return; }
   renderRent(tabs);
 }
 function setMainTab(t) { mainTab = t; try { localStorage.setItem('mnscar_drvtab_v1', t); } catch {} render(); window.scrollTo(0, 0); }
@@ -341,12 +345,15 @@ async function loadData() {
     if ((rent && (rent.status === 401 || rent.status === 403)) || led.status === 401) { toLogin(); return; }
     if (led.ok) L = led.body;
     if (rent) {
-      if (!rent.ok) { if (!D && mainTab === 'rent') showMsg('Can\u2019t open', esc(rent.body.error || 'Please contact the owner.')); }
-      else D = rent.body;
+      if (!rent.ok) rentErr = rent.body.error || 'Please contact the owner.';
+      else { D = rent.body; rentErr = ''; }
     }
     if (ROLE === 'driver' && !led.ok) { if (!L) showMsg('Can\u2019t open', esc(led.body.error || 'Please contact the owner.')); return; }
     if (!sending) render();
-  } catch (e) { if (!D && !L) showMsg('No connection', 'Check your internet and tap Refresh.'); }   // keep last view if a background refresh fails
+  } catch (e) {   // keep last view if a background refresh fails
+    if (!D && !L) showMsg('No connection', 'Check your internet and tap Refresh.');
+    else if (!D) { rentErr = 'No connection — tap Refresh.'; render(); }
+  }
 }
 
 /* ════════════ Driver Ledger ════════════
