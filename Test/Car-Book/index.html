@@ -1975,8 +1975,27 @@ function ldMonthHtml(drv, days, es, edit) {
       <div><small>Cash</small><b class="pos">${inr2(cash)}</b></div>
       <div><small>${net > 0.004 ? 'Month: still to collect' : net < -0.004 ? 'Month: extra paid' : 'Month balance'}</small><b class="${net > 0.004 ? 'neg' : 'pos'}">${inr2(Math.abs(net))}</b></div></div>
     ${Object.keys(byPlat).length ? `<div class="muted" style="font-size:12px;margin:-4px 0 8px">${Object.keys(byPlat).sort().map(p => esc(p) + ' ' + inr2(byPlat[p])).join(' · ')}</div>` : ''}
-    <div class="list">${list.map(e => ldEntryRow(e, edit)).join('') || '<div class="empty">No entries this month</div>'}</div>`;
+    <div class="list">${ldGroupRows(drv.id, list, edit) || '<div class="empty">No entries this month</div>'}</div>`;
 }
+/* One row per type for the month with its total; tap to see/edit the single entries. */
+const ldOpenGroups = new Set();
+function ldGroupRows(driverId, list, edit) {
+  const groups = {};
+  list.forEach(e => {
+    const key = e.kind === 'credit' ? 'credit:' + (e.platform || 'Other') : e.kind;
+    (groups[key] = groups[key] || { key, kind: e.kind, platform: e.platform, items: [] }).items.push(e);
+  });
+  const order = g => g.kind === 'credit' ? 0 : g.kind === 'cash' ? 1 : 2;
+  return Object.values(groups).sort((a, b) => order(a) - order(b) || String(a.platform).localeCompare(String(b.platform))).map(g => {
+    const id = driverId + '|' + ldMonth + '|' + g.key, open = ldOpenGroups.has(id);
+    const total = g.items.reduce((t, e) => t + num(e.amount), 0);
+    const title = g.kind === 'credit' ? esc(g.platform || 'Platform') + ' → bank' : LD_KIND[g.kind];
+    return lrow(title, monthLabel(ldMonth) + ' · ' + g.items.length + ' entr' + (g.items.length === 1 ? 'y' : 'ies') + (open ? ' ▴' : ' ▾'),
+        g.kind === 'waive' ? inr2(total) : '<span class="pos">' + inr2(total) + '</span>', '', `ldToggleGroup('${esc(id)}')`)
+      + (open ? `<div style="padding-left:12px;border-left:3px solid var(--border)">${g.items.map(e => ldEntryRow(e, edit)).join('')}</div>` : '');
+  }).join('');
+}
+function ldToggleGroup(id) { ldOpenGroups.has(id) ? ldOpenGroups.delete(id) : ldOpenGroups.add(id); redrawLedger(); }
 const LD_KIND = { credit: 'Platform money', cash: 'Cash from driver', waive: 'Rent off' };
 function redrawLedger() { const box = document.getElementById('ledgerBox'); if (box) box.innerHTML = ledgerHtml(); }
 function setLdView(id, v) { ledgerView[id] = v; redrawLedger(); }

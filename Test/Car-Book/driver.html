@@ -463,8 +463,29 @@ function monthBlock(drv, T, es, mgr) {
       <div><small>${net > 0.004 ? (mgr ? 'Month: to collect' : 'Month: to give') : net < -0.004 ? 'Month: extra paid' : 'Month balance'}</small><b class="${net > 0.004 ? 'neg' : 'pos'}">${inr2(Math.abs(net))}</b></div>
     </div>
     ${Object.keys(byPlat).length ? `<div class="plat" style="margin:0 0 6px">${Object.keys(byPlat).sort().map(p => `<span>${esc(p)} <b>${inr2(byPlat[p])}</b></span>`).join('')}</div>` : ''}
-    ${list.map(e => entryRow(e, mgr)).join('') || '<div class="msg" style="padding:24px">No entries this month</div>'}`;
+    ${groupRows(drv.id, list, mgr) || '<div class="msg" style="padding:24px">No entries this month</div>'}`;
 }
+/* One row per type for the month (Uber → bank, Ola → bank, Cash from driver, Rent off) with its total.
+   Tap a row to see the single entries behind it (and edit them, for the manager). */
+const openGroups = new Set();
+function groupRows(driverId, list, mgr) {
+  const groups = {};
+  list.forEach(e => {
+    const key = e.kind === 'credit' ? 'credit:' + (e.platform || 'Other') : e.kind;
+    (groups[key] = groups[key] || { key, kind: e.kind, platform: e.platform, items: [] }).items.push(e);
+  });
+  const order = g => g.kind === 'credit' ? 0 : g.kind === 'cash' ? 1 : 2;
+  return Object.values(groups).sort((a, b) => order(a) - order(b) || String(a.platform).localeCompare(String(b.platform))).map(g => {
+    const id = driverId + '|' + ldMonth + '|' + g.key, open = openGroups.has(id);
+    const total = g.items.reduce((t, e) => t + num(e.amount), 0);
+    const title = g.kind === 'credit' ? esc(g.platform || 'Platform') + ' → bank' : KIND_LABEL[g.kind];
+    return `<div class="row" style="cursor:pointer" onclick="toggleGroup('${esc(id)}')">
+        <div><div class="t">${title}</div><div class="s">${monthName(ldMonth)} · ${g.items.length} entr${g.items.length === 1 ? 'y' : 'ies'} ${open ? '▴' : '▾'}</div></div>
+        <div class="r ${g.kind === 'waive' ? '' : 'pos'}">${g.kind === 'waive' ? '' : '−'}${inr2(total)}</div></div>
+      ${open ? `<div style="padding-left:12px;border-left:3px solid var(--border);margin-bottom:6px">${g.items.map(e => entryRow(e, mgr)).join('')}</div>` : ''}`;
+  }).join('');
+}
+function toggleGroup(id) { openGroups.has(id) ? openGroups.delete(id) : openGroups.add(id); render(); }
 function entryRow(e, mgr) {
   const sign = e.kind === 'waive' ? '' : '−';
   return `<div class="row"${mgr ? ` style="cursor:pointer" onclick="openEntry('${e.driverId}','${e.kind}','${e.id}')"` : ''}>
