@@ -1115,7 +1115,8 @@ function openForm(title, fields, values, onSave, onDelete) {
         return `<option value="${esc(val)}" ${String(val) === String(v) ? 'selected' : ''}>${esc(lab)}</option>`; }).join('')}</select>`;
     else if (f.type === 'textarea') input = `<textarea name="${f.k}" rows="2">${esc(v)}</textarea>`;
     else input = `<input name="${f.k}" type="${f.type || 'text'}" value="${esc(v)}" ${f.req ? 'required' : ''} ${f.type === 'number' ? 'step="any" inputmode="decimal"' : ''}>`;
-    return `<div class="field" ${f.showIf ? `data-show-k="${f.showIf[0]}" data-show-v="${f.showIf[1]}"` : ''}><label>${f.label}</label>${input}${f.help ? '<div class="help">' + f.help + '</div>' : ''}</div>`;
+    const conds = f.showIf ? (Array.isArray(f.showIf[0]) ? f.showIf : [f.showIf]) : null;
+    return `<div class="field" ${conds ? `data-show="${esc(JSON.stringify(conds))}"` : ''}><label>${f.label}</label>${input}${f.help ? '<div class="help">' + f.help + '</div>' : ''}</div>`;
   }).join('')}
   <div class="modal-actions">${onDelete ? '<button type="button" class="btn danger" id="frmDel">Delete</button>' : ''}
     <div class="right"><button type="button" class="btn" onclick="closeModal()">Cancel</button><button class="btn primary">Save</button></div></div></form>`;
@@ -1130,8 +1131,8 @@ function openForm(title, fields, values, onSave, onDelete) {
   };
   // Conditional fields (e.g. "EMI no." only when category is EMI)
   const frm = document.getElementById('frm');
-  const applyShowIf = () => frm.querySelectorAll('[data-show-k]').forEach(el => {
-    el.style.display = frm.elements[el.dataset.showK].value === el.dataset.showV ? '' : 'none'; });
+  const applyShowIf = () => frm.querySelectorAll('[data-show]').forEach(el => {
+    el.style.display = JSON.parse(el.dataset.show).every(([k, v]) => frm.elements[k] && frm.elements[k].value === v) ? '' : 'none'; });
   frm.addEventListener('change', applyShowIf); applyShowIf();
   document.getElementById('overlay').classList.add('open');
   setTimeout(() => { const first = m.querySelector('input[name="amount"]') || m.querySelector('input,select'); if (first && !first.value) first.focus(); }, 80);
@@ -1703,7 +1704,7 @@ function loginCardInner(noTitle) {
     <img src="data:," alt="" style="display:none" onerror="loadOwners()">`}
     <div class="btn-row" style="margin-top:10px">${isViewer() ? '' : '<button class="btn primary sm" onclick="openUserForm()">+ Add user</button>'}
       <button class="btn sm" onclick="openMyPassword()">Change my password</button></div>
-    ${isViewer() ? '' : '<div class="help" style="font-size:11px;color:var(--text2);margin-top:6px">Add a user with their mobile number — the app makes a 6-digit PIN for them. Everyone logs in on the same page with mobile + PIN. Full access changes everything · View only sees everything · Driver Manager sees his own rent and keeps the driver ledger (he makes logins for the drivers under him).</div>'}`;
+    ${isViewer() ? '' : '<div class="help" style="font-size:11px;color:var(--text2);margin-top:6px">Add a user with their mobile number — the app makes a 6-digit PIN for them. Everyone logs in on the same page with mobile + PIN. Full access changes everything · View only sees everything · Driver Manager sees his own rent and keeps the driver ledger · Driver sees only his own ledger under his manager. Tap Access to change what a login can do (PIN stays the same).</div>'}`;
 }
 async function loadOwners() {
   const box = document.getElementById('ownerList'); if (!box) return;
@@ -1713,24 +1714,72 @@ async function loadOwners() {
     const me = (cloudCfg() || {}).mobile;
     box.innerHTML = USERS.map(u => lrow(
       esc(u.name) + (u.mobile === me ? ' <span class="muted" style="font-weight:400">(you)</span>' : ''),
-      esc(u.mobile) + ' · ' + (ROLE_LABEL[u.role] || u.role) + (u.role === 'manager' ? ' — pays rent as ' + esc(driverName(u.driverId))
-        : u.role === 'driver' ? ' — under the Driver Manager' : ''), '',
-      u.mobile === me ? '' : `<button class="btn sm" onclick="resetPin('${u.mobile}')">New PIN</button><button class="btn sm danger" onclick="removeOwner('${u.mobile}')">✕</button>`)).join('');
+      esc(u.mobile) + ' · ' + (ROLE_LABEL[u.role] || u.role) + userLinkText(u), '',
+      u.mobile === me ? '' : `<button class="btn sm" onclick="openUserForm(null,'${u.mobile}')">Access</button><button class="btn sm" onclick="resetPin('${u.mobile}')">New PIN</button><button class="btn sm danger" onclick="removeOwner('${u.mobile}')">✕</button>`)).join('');
+    if (!LEDGER && USERS.some(u => u.role === 'driver')) loadLedger().then(() => { if (LEDGER) loadOwners(); });
   } catch { box.innerHTML = '<div class="muted" style="font-size:13px">Could not load users</div>'; }
 }
-function openUserForm(preset) {
-  const drivers = DB.drivers.filter(d => !d.endDate);
-  openForm('Add user', [
-    { k:'name', label:'Name', type:'text', req:true },
-    { k:'mobile', label:'Mobile number', type:'tel', req:true, help:'They log in with this number.' },
-    { k:'role', label:'Access', type:'select', options: [['viewer','View only — sees everything, can’t change'], ['owner','Full access — can change everything'], ['manager','Driver Manager — pays his rent + keeps the driver ledger']] },
-    { k:'driverId', label:'Pays rent as', type:'select', showIf:['role','manager'], help:'His rent record on the Rent page.', options: drivers.length ? drivers.map(d => [d.id, d.name]) : [['','— add the driver first —']] }
-  ], preset || { role:'viewer' }, d => { createUser(d); });
+/* "under Naushad · ledger: Siddique" etc. for the users list */
+function userLinkText(u) {
+  if (u.role === 'manager') return ' — pays rent as ' + esc(driverName(u.driverId));
+  if (u.role !== 'driver') return '';
+  const ld = LEDGER && LEDGER.drivers.find(x => x.id === u.driverId);
+  const mgr = ld && USERS.find(x => x.mobile === ld.managerMobile);
+  return ' — ' + (ld ? esc(ld.name) : 'ledger') + (mgr ? ' · under ' + esc(mgr.name) : ' · no manager yet');
+}
+
+/* Add a login, or (mobile given) change an existing login's access. PIN stays the same on change. */
+async function openUserForm(preset, mobile) {
+  if (!LEDGER) await loadLedger();
+  if (!USERS.length) { try { USERS = (await cloudFetch('/users')).body.users || []; } catch {} }
+  const u = mobile ? USERS.find(x => x.mobile === mobile) : null;
+  const rentDrivers = DB.drivers.filter(d => !d.endDate);
+  const managers = USERS.filter(x => x.role === 'manager' && x.mobile !== mobile);
+  const ldDrivers = LEDGER ? LEDGER.drivers : [];
+  const ld = u && u.role === 'driver' ? ldDrivers.find(x => x.id === u.driverId) : null;
+  const isDrv = [['role','driver']], isNew = [['role','driver'], ['ledgerDriverId','__new']];
+  const fields = [
+    ...(u ? [] : [{ k:'name', label:'Name', type:'text', req:true },
+                  { k:'mobile', label:'Mobile number', type:'tel', req:true, help:'They log in with this number.' }]),
+    { k:'role', label:'Access', type:'select', options: [
+        ['viewer','View only — sees everything, can’t change'], ['owner','Full access — can change everything'],
+        ['manager','Driver Manager — pays his rent + keeps the driver ledger'], ['driver','Driver — under a Driver Manager, sees only his own ledger']] },
+    { k:'driverId', label:'Pays rent as', type:'select', showIf:['role','manager'], help:'His rent record on the Rent page.',
+      options: rentDrivers.length ? rentDrivers.map(d => [d.id, d.name + ' · ' + inr(d.rentAmount) + ' ' + CYCLES[d.rentCycle].toLowerCase()]) : [['','— add the driver on the Rent page first —']] },
+    { k:'managerMobile', label:'Works under (Driver Manager)', type:'select', showIf:isDrv,
+      options: [['', managers.length ? '— choose —' : '— no Driver Manager yet (add later) —'], ...managers.map(x => [x.mobile, x.name])] },
+    { k:'ledgerDriverId', label:'His ledger', type:'select', showIf:isDrv, help:'Where his rent, platform money and cash are tracked.',
+      options: [...ldDrivers.map(x => [x.id, x.name + ' · ' + inr(x.rent) + '/day since ' + fmtShort(x.startDate)]), ['__new', '+ New ledger for this driver']] },
+    { k:'ldRent', label:'Rent per day (₹)', type:'number', showIf:isNew, def: 600 },
+    { k:'ldStart', label:'Start date', type:'date', showIf:isNew, def: todayStr() },
+  ];
+  const vals = u ? { role: u.role, driverId: u.role === 'manager' ? u.driverId : '', ledgerDriverId: ld ? ld.id : (ldDrivers[0] ? ldDrivers[0].id : '__new'),
+                     managerMobile: ld ? ld.managerMobile : (managers[0] ? managers[0].mobile : '') }
+                 : Object.assign({ role:'viewer', ledgerDriverId: ldDrivers[0] ? ldDrivers[0].id : '__new', managerMobile: managers[0] ? managers[0].mobile : '' }, preset || {});
+  openForm(u ? 'Access · ' + esc(u.name) : 'Add user', fields, vals, d => { saveUser(d, u); });
+}
+function userPayload(d, name) {
+  const out = { role: d.role };
+  if (d.role === 'manager') out.driverId = d.driverId;
+  if (d.role === 'driver') {
+    out.managerMobile = d.managerMobile || ''; out.ledgerDriverId = d.ledgerDriverId;
+    if (d.ledgerDriverId === '__new') out.newDriver = { name, rent: d.ldRent, startDate: d.ldStart };
+  }
+  return out;
+}
+async function saveUser(d, u) {
+  if (u) {
+    const r = await cloudFetch('/users/role', { method:'POST', body: JSON.stringify({ mobile: u.mobile, ...userPayload(d, u.name) }) });
+    if (r.status >= 400) { alert(r.body.error || 'Could not change access'); return; }
+    toast('Access changed'); await loadLedger(); OPEN_SECS.add('usr'); PAGES[currentPage]();
+    return;
+  }
+  createUser({ name: d.name, mobile: d.mobile, ...userPayload(d, d.name) });
 }
 async function createUser(d) {
-  if (d.role !== 'manager') delete d.driverId;
   const r = await cloudFetch('/users', { method:'POST', body: JSON.stringify(d) });
   if (r.status >= 400) { alert(r.body.error || 'Could not add user'); return; }
+  if (d.role === 'driver') loadLedger();
   showPin(d.name, r.body.mobile, r.body.pin, true);
 }
 async function resetPin(mobile) {

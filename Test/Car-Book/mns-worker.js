@@ -23,6 +23,11 @@
      GET    /users                         owner, viewer
      POST   /users           {mobile, name, role, driverId}            owner → {pin}
      POST   /users/reset-pin {mobile}                                  owner → {pin}
+     POST   /users/role      {mobile, role, driverId | ledgerDriverId, managerMobile, newDriver}
+                             owner: change a login's access, PIN stays the same
+       role manager → driverId = his rent record in the owner app
+       role driver  → ledgerDriverId (existing ledger driver) or newDriver {name, rent, startDate},
+                      managerMobile = the Driver Manager he works under
      POST   /users/password  {password}    any logged-in user sets their own password
      DELETE /users?mobile=…                owner
      GET    /state                         owner, viewer
@@ -117,6 +122,30 @@ async function setupTables(DB) {
   }
 }
 
+/* Link a "driver" login to a ledger driver (existing or new) and to his Driver Manager.
+   Returns { id } or { error }. */
+async function linkLedgerDriver(DB, m, name, body) {
+  const mgr = body.managerMobile ? mobile10(body.managerMobile) : '';
+  if (mgr) {
+    const u = await DB.prepare("SELECT role FROM users WHERE mobile = ?1").bind(mgr).first();
+    if (!u || u.role !== 'manager') return { error: 'Pick a Driver Manager from the list' };
+  }
+  let id = String(body.ledgerDriverId || '');
+  if (id && id !== '__new') {
+    const d = await DB.prepare('SELECT id FROM ld_drivers WHERE id = ?1').bind(id).first();
+    if (!d) return { error: 'That ledger driver no longer exists' };
+    await DB.prepare('UPDATE ld_drivers SET mobile = ?1, manager_mobile = ?2 WHERE id = ?3').bind(m, mgr || null, id).run();
+    return { id };
+  }
+  const nd = body.newDriver || {}, rent = money(nd.rent);
+  if (!(rent >= 0) || !rent) return { error: 'Enter the driver\u2019s rent per day' };
+  if (!isYmd(nd.startDate)) return { error: 'Enter the driver\u2019s start date' };
+  id = randomHex(6);
+  await DB.prepare('INSERT INTO ld_drivers (id, name, mobile, rent, start_date, end_date, manager_mobile, created_at) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7)')
+    .bind(id, String(nd.name || name || 'Driver').slice(0, 60), m, rent, nd.startDate, mgr || null, now()).run();
+  return { id };
+}
+
 export default {
   async fetch(req, env) {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
@@ -198,13 +227,18 @@ export default {
         if (m.length !== 10) return err('Enter a 10-digit mobile number', 400);
         if (m === me.mobile) return err('That’s your own login — use “Change my password”', 400);
         if (role === 'manager' && !body.driverId) return err('Choose which driver record this Driver Manager pays rent for', 400);
-        if (role === 'driver') return err('Create driver logins from the Driver Ledger', 400);
+        let link = role === 'manager' ? String(body.driverId) : null;
+        if (role === 'driver') {
+          const r = await linkLedgerDriver(DB, m, body.name, body);
+          if (r.error) return err(r.error, 400);
+          link = r.id;
+        }
         const pin = newPin(), salt = randomHex(16), h = await hashPassword(pin, salt);
         await DB.batch([
           DB.prepare('INSERT INTO users (mobile, name, salt, hash, created_at, role, driver_id, fails, lock_until) ' +
                      'VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, NULL) ON CONFLICT(mobile) DO UPDATE SET name = excluded.name, ' +
                      'salt = excluded.salt, hash = excluded.hash, role = excluded.role, driver_id = excluded.driver_id, fails = 0, lock_until = NULL')
-            .bind(m, String(body.name || '').slice(0, 60) || 'User', salt, h, now(), role, role === 'manager' ? String(body.driverId) : null),
+            .bind(m, String(body.name || '').slice(0, 60) || 'User', salt, h, now(), role, link),
           DB.prepare('DELETE FROM sessions WHERE mobile = ?1').bind(m),   // old PIN stops working everywhere
         ]);
         return json({ ok: true, pin, mobile: m });
@@ -224,6 +258,30 @@ export default {
         return json({ ok: true, pin, mobile: m });
       }
 
+      if (path === '/users/role' && req.method === 'POST') {      // change access, keep the PIN
+        if (!isOwner) return me ? notAllowed() : needLogin();
+        const m = mobile10(body.mobile), user = await getUser(m);
+        if (!user) return err('No such user', 404);
+        if (m === me.mobile) return err('You can\u2019t change your own access', 400);
+        const role = ROLES.includes(body.role) ? body.role : null;
+        if (!role) return err('Choose the access', 400);
+        let link = null;
+        if (role === 'manager') {
+          if (!body.driverId) return err('Choose which driver record this Driver Manager pays rent for', 400);
+          link = String(body.driverId);
+        }
+        if (role === 'driver') {
+          const r = await linkLedgerDriver(DB, m, user.name, body);
+          if (r.error) return err(r.error, 400);
+          link = r.id;
+        }
+        // No longer a manager → his ledger drivers wait for the next manager (unassigned)
+        if (user.role === 'manager' && role !== 'manager')
+          await DB.prepare('UPDATE ld_drivers SET manager_mobile = NULL WHERE manager_mobile = ?1').bind(m).run();
+        await DB.prepare('UPDATE users SET role = ?1, driver_id = ?2 WHERE mobile = ?3').bind(role, link, m).run();
+        return json({ ok: true });
+      }
+
       if (path === '/users/password' && req.method === 'POST') {  // set my own password
         if (!me) return needLogin();
         const pw = String(body.password || '');
@@ -238,7 +296,7 @@ export default {
         if (!isOwner) return me ? notAllowed() : needLogin();
         const m = mobile10(url.searchParams.get('mobile'));
         if (m === me.mobile) return err('You can’t remove your own login', 400);
-        await DB.batch([DB.prepare('DELETE FROM users WHERE mobile = ?1').bind(m),
+        await DB.batch([DB.prepare('UPDATE ld_drivers SET manager_mobile = NULL WHERE manager_mobile = ?1').bind(m),DB.prepare('DELETE FROM users WHERE mobile = ?1').bind(m),
                         DB.prepare('DELETE FROM sessions WHERE mobile = ?1').bind(m)]);
         return json({ ok: true });
       }
