@@ -1891,7 +1891,11 @@ async function loadLedger() {
   if (!cloudCfg()) return;
   try {
     const r = await cloudFetch('/ledger');
-    if (r.status < 400) { LEDGER = r.body; const box = document.getElementById('ledgerBox'); if (box) box.innerHTML = ledgerHtml(); }
+    if (r.status < 400) {
+      LEDGER = r.body;
+      if (!USERS.length && !isViewer()) { try { USERS = (await cloudFetch('/users')).body.users || []; } catch {} }
+      redrawLedger();
+    }
   } catch {}
 }
 function inr2(n) { const a = Math.abs(Math.round(n * 100) / 100);
@@ -1913,16 +1917,28 @@ function ledgerDays(drv) {
 }
 function ledgerHtml() {
   if (!LEDGER) return '';
-  if (!LEDGER.drivers.length) return '<div class="card"><h3>Driver ledger</h3><div class="muted" style="font-size:13px">No drivers under the Driver Manager yet.</div></div>';
+  const edit = !isViewer();
+  const addBtn = edit ? `<button class="btn sm" style="margin-top:10px" onclick="openLdDriverForm()">+ Ledger driver</button>` : '';
+  if (!LEDGER.drivers.length) return `<div class="card"><h3>Driver ledger</h3><div class="muted" style="font-size:13px">No drivers under the Driver Manager yet.</div>${addBtn}</div>`;
   return LEDGER.drivers.map(drv => {
     const days = ledgerDays(drv), es = LEDGER.entries.filter(e => e.driverId === drv.id);
     const s = k => days.reduce((t, d) => t + d[k], 0), bal = days.length ? days[days.length - 1].bal : 0;
     const byPlat = {}; es.filter(e => e.kind === 'credit').forEach(e => byPlat[e.platform || 'Other'] = (byPlat[e.platform || 'Other'] || 0) + num(e.amount));
     const rev = days.slice().reverse(), shown = ledgerAll[drv.id] ? rev : rev.slice(0, 7);
+    const view = ledgerView[drv.id] || 'days', first = esc(drv.name.split(' ')[0]);
+    const mgr = (USERS.find(u => u.mobile === drv.managerMobile) || {}).name;
+    const entriesList = es.slice().sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || ''))
+      .map(e => ldEntryRow(e, edit)).join('') || '<div class="empty">No entries yet</div>';
     return `<div class="card section">
       <div class="driver-head"><div><h3 style="margin:0">Driver ledger · ${esc(drv.name)}</h3>
-        <div class="meta">Kept by the Driver Manager · ${inr2(drv.rent)} per day since ${fmtDate(drv.startDate)}${drv.endDate ? ' · left ' + fmtDate(drv.endDate) : ''}${drv.hasLogin ? ' · has login' : ''}</div></div>
-        <div class="btn-row actions"><button class="btn sm" onclick="loadLedger()">↻ Refresh</button></div></div>
+        <div class="meta">${mgr ? 'Under ' + esc(mgr) + ' · ' : ''}${inr2(drv.rent)} per day since ${fmtDate(drv.startDate)}${drv.endDate ? ' · left ' + fmtDate(drv.endDate) : ''}${drv.hasLogin ? ' · has login' : ''}</div></div>
+        <div class="btn-row actions">
+          ${edit ? `<button class="btn primary sm" onclick="openLdEntry('${drv.id}','cash')">+ Cash from ${first}</button>
+          <button class="btn sm" onclick="openLdEntry('${drv.id}','credit')">+ Platform money</button>
+          <button class="btn sm" onclick="openLdEntry('${drv.id}','waive')">Rent off day</button>
+          <button class="btn sm" onclick="shareLdWhatsApp('${drv.id}')">WhatsApp</button>
+          <button class="btn sm" onclick="openLdDriverForm('${drv.id}')">Edit</button>` : ''}
+          <button class="btn sm" onclick="loadLedger()">↻</button></div></div>
       <div class="mini-kpis" style="grid-template-columns:repeat(2,1fr)">
         <div><small>Rent</small><b>${inr2(s('rent'))}</b></div>
         <div><small>Platform → bank</small><b>${inr2(s('credit'))}</b></div>
@@ -1930,13 +1946,84 @@ function ledgerHtml() {
         <div><small>${bal > 0.004 ? 'Driver still owes' : bal < -0.004 ? 'Manager owes driver' : 'Balance'}</small><b class="${bal > 0.004 ? 'neg' : 'pos'}">${inr2(Math.abs(bal))}</b></div>
       </div>
       ${Object.keys(byPlat).length ? `<div class="muted" style="font-size:12px;margin:-4px 0 10px">${Object.keys(byPlat).sort().map(p => esc(p) + ' ' + inr2(byPlat[p])).join(' · ')}</div>` : ''}
+      <div class="btn-row" style="margin-bottom:8px"><button class="btn sm ${view === 'days' ? 'primary' : ''}" onclick="setLdView('${drv.id}','days')">Day-wise</button>
+        <button class="btn sm ${view === 'entries' ? 'primary' : ''}" onclick="setLdView('${drv.id}','entries')">Entries (${es.length})</button></div>
+      ${view === 'entries' ? `<div class="list">${entriesList}</div>` : `
       <table><thead><tr><th>Day</th><th class="num">Rent</th><th class="num">Platform</th><th class="num">Cash</th><th class="num">Balance</th></tr></thead><tbody>
-        ${shown.map(d => `<tr><td style="white-space:nowrap">${fmtShort(d.date)}</td><td class="num">${d.waive && !d.rent ? 'off' : inr2(d.rent)}</td><td class="num">${d.credit ? inr2(d.credit) : '—'}</td>
+        ${shown.map(d => `<tr ${edit ? `style="cursor:pointer" onclick="openLdDay('${drv.id}','${d.date}')"` : ''}><td style="white-space:nowrap">${fmtShort(d.date)}</td><td class="num">${d.waive && !d.rent ? 'off' : inr2(d.rent)}</td><td class="num">${d.credit ? inr2(d.credit) : '—'}</td>
           <td class="num">${d.cash ? inr2(d.cash) : '—'}</td><td class="num ${d.bal > 0.004 ? 'neg' : d.bal < -0.004 ? 'pos' : ''}"><b>${inr2(d.bal)}</b></td></tr>`).join('')}
       </tbody></table>
-      ${rev.length > 7 ? `<button class="link-btn" onclick="ledgerAll['${drv.id}']=!ledgerAll['${drv.id}'];document.getElementById('ledgerBox').innerHTML=ledgerHtml()">${ledgerAll[drv.id] ? 'Show latest only' : 'Show all ' + rev.length + ' days'}</button>` : ''}
+      ${rev.length > 7 ? `<button class="link-btn" onclick="ledgerAll['${drv.id}']=!ledgerAll['${drv.id}'];redrawLedger()">${ledgerAll[drv.id] ? 'Show latest only' : 'Show all ' + rev.length + ' days'}</button>` : ''}
+      ${edit ? '<div class="muted" style="font-size:11px;margin-top:6px">Tap a day to see or change its entries.</div>' : ''}`}
     </div>`;
-  }).join('');
+  }).join('') + addBtn;
+}
+
+/* ── Owner editing of the Driver Ledger (same server endpoints the Driver Manager uses) ── */
+const ledgerView = {};
+const LD_KIND = { credit: 'Platform money', cash: 'Cash from driver', waive: 'Rent off' };
+function redrawLedger() { const box = document.getElementById('ledgerBox'); if (box) box.innerHTML = ledgerHtml(); }
+function setLdView(id, v) { ledgerView[id] = v; redrawLedger(); }
+const ldDrv = id => LEDGER.drivers.find(d => d.id === id);
+function ldEntryRow(e, edit) {
+  const who = e.createdBy === 'setup' ? 'auto (Uber Fleet)' : e.createdBy || '';
+  return lrow(e.kind === 'credit' ? esc(e.platform || 'Platform') + ' → bank' : LD_KIND[e.kind],
+    fmtDate(e.date) + (who ? ' · by ' + esc(who) : '') + (e.note ? ' · ' + esc(e.note) : ''),
+    (e.kind === 'waive' ? '' : '<span class="pos">') + inr2(num(e.amount)) + (e.kind === 'waive' ? '' : '</span>'), '',
+    edit ? `openLdEntry('${e.driverId}','${e.kind}','${e.id}')` : '');
+}
+async function ldPost(path, body) {
+  const r = await cloudFetch(path, { method:'POST', body: JSON.stringify(body) }).catch(() => null);
+  if (!r || r.status >= 400) { alert(r ? r.body.error || 'Could not save' : 'No internet — try again'); return false; }
+  await loadLedger(); return true;
+}
+function openLdDay(id, date) {
+  const es = LEDGER.entries.filter(e => e.driverId === id && e.date === date);
+  document.getElementById('modal').innerHTML = `<h3>${esc(ldDrv(id).name)} · ${fmtDate(date)}</h3>
+    <div class="list">${es.map(e => ldEntryRow(e, true)).join('') || '<div class="empty">Nothing entered for this day</div>'}</div>
+    <div class="btn-row" style="margin-top:14px"><button class="btn primary sm" onclick="openLdEntry('${id}','cash',null,'${date}')">+ Cash</button>
+      <button class="btn sm" onclick="openLdEntry('${id}','credit',null,'${date}')">+ Platform money</button>
+      <button class="btn sm" onclick="openLdEntry('${id}','waive',null,'${date}')">Rent off</button></div>
+    <div class="modal-actions"><div class="right"><button class="btn" onclick="closeModal()">Close</button></div></div>`;
+  document.getElementById('overlay').classList.add('open');
+}
+function openLdEntry(id, kind, entryId, date) {
+  const drv = ldDrv(id), e = entryId ? LEDGER.entries.find(x => x.id === entryId) : null, first = drv.name.split(' ')[0];
+  const title = { credit: 'Platform money to bank', cash: 'Cash from ' + first, waive: 'Rent off day' }[kind];
+  openForm((e ? 'Edit · ' : '') + esc(title), [
+    { k:'date', label:'Date', type:'date', req:true, def: date || todayStr() },
+    ...(kind === 'credit' ? [{ k:'platform', label:'Platform', type:'select', options: LEDGER.platforms || platforms(),
+        help:'Money Uber / Ola / Rapido sent to the manager’s bank for ' + esc(first) + '’s trips — exactly as in the bank SMS.' }] : []),
+    { k:'amount', label:'Amount (₹)', type:'number', req:true, def: kind === 'waive' ? drv.rent : '',
+      help: kind === 'cash' ? 'Cash or UPI ' + esc(first) + ' gave towards rent.' : kind === 'waive' ? 'Car didn’t run — this much rent is not charged that day.' : '' },
+    { k:'note', label:'Note (optional)', type:'text' }
+  ], e || {}, d => {
+    ldPost('/ledger/entry', { ...d, id: e ? e.id : undefined, driverId: id, kind }).then(ok => ok && toast('Saved'));
+  }, e ? () => { ldPost('/ledger/entry/delete', { id: e.id }); } : null);
+}
+async function openLdDriverForm(id) {
+  const d = id ? ldDrv(id) : null;
+  if (!d && !USERS.length) { try { USERS = (await cloudFetch('/users')).body.users || []; } catch {} }
+  const managers = USERS.filter(u => u.role === 'manager');
+  openForm(d ? 'Edit ledger driver' : 'Add ledger driver', [
+    { k:'name', label:'Name', type:'text', req:true },
+    { k:'mobile', label:'Mobile number', type:'tel', help:'Needed to give him a login (Setup → Logins → + Add user → Driver).' },
+    { k:'rent', label:'Rent per day (₹)', type:'number', req:true, def: 600 },
+    { k:'startDate', label:'Start date', type:'date', req:true, def: todayStr() },
+    { k:'endDate', label:'Left on (only if he stopped)', type:'date' },
+    ...(d ? [] : [{ k:'managerMobile', label:'Under (Driver Manager)', type:'select',
+        options: [['', managers.length ? '— choose —' : '— no Driver Manager yet —'], ...managers.map(u => [u.mobile, u.name])] }])
+  ], d ? { name: d.name, mobile: d.mobile, rent: d.rent, startDate: d.startDate, endDate: d.endDate } : { managerMobile: managers[0] ? managers[0].mobile : '' },
+  f => { ldPost('/ledger/driver', { ...f, id: d ? d.id : undefined }).then(ok => ok && toast('Saved')); });
+}
+function shareLdWhatsApp(id) {
+  const d = ldDrv(id), days = ledgerDays(d), s = k => days.reduce((t, x) => t + x[k], 0), b = days.length ? days[days.length - 1].bal : 0;
+  const last = days.slice(-7).reverse().map(x => `${fmtShort(x.date)}: rent ${inr2(x.rent)}${x.credit ? ', platform ' + inr2(x.credit) : ''}${x.cash ? ', cash ' + inr2(x.cash) : ''} → ${inr2(x.bal)}`).join('\n');
+  const text = `*MNS Tours & Travels — Rent account*\n${d.name} · ${inr2(d.rent)}/day since ${fmtDate(d.startDate)}\n\n` +
+    `Rent: ${inr2(s('rent'))}\nPlatform money (to bank): ${inr2(s('credit'))}\nCash given: ${inr2(s('cash'))}\n` +
+    `*${b > 0.004 ? 'To give: ' + inr2(b) : b < -0.004 ? 'To get back: ' + inr2(-b) : 'All settled ✅'}*\n\nLast days:\n${last}`;
+  const phone = (d.mobile || '').replace(/\D/g, '').slice(-10);
+  window.open('https://wa.me/' + (phone.length === 10 ? '91' + phone : '') + '?text=' + encodeURIComponent(text), '_blank');
 }
 
 /* ════════════ Driver statement (WhatsApp + PDF) ════════════ */
