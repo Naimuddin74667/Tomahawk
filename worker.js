@@ -1529,22 +1529,30 @@ export default {
         await ensureServiceRequestCols(env.DB);
         const days = Math.min(365, Math.max(1, parseInt(url.searchParams.get('days') || '90', 10) || 90));
         const rows = (await env.DB.prepare(
-          "SELECT claim_id, created_at, updated_at, order_id, platform, product, name, phone, email, issue_type, description, address, pincode, city, state, warranty_status, order_date, warranty_until, order_skus, file_count, status, case_id, events_json FROM warranty_claims WHERE created_at > datetime('now', ?) OR COALESCE(status, 'new') NOT IN ('closed','not_covered') ORDER BY created_at DESC LIMIT 500"
+          "SELECT claim_id, created_at, updated_at, order_id, platform, product, name, phone, email, issue_type, description, address, pincode, city, state, warranty_status, order_date, warranty_until, order_skus, file_count, status, case_id, events_json, prev_claim_id FROM warranty_claims WHERE created_at > datetime('now', ?) OR COALESCE(status, 'new') NOT IN ('closed','not_covered') ORDER BY created_at DESC LIMIT 500"
         ).bind('-' + days + ' days').all()).results || [];
         return json({ ok: true, requests: rows.map(r => ({ ...r, events: srEvents(r), events_json: undefined })) });
       }
       if (request.method === 'GET' && action === 'ccClaimGet') {
         await ensureServiceRequestCols(env.DB);
-        const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(String(url.searchParams.get('claim_id') || '').trim()).first();
+        const qid = String(url.searchParams.get('claim_id') || '').trim();
+        const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ? OR prev_claim_id = ?').bind(qid, qid).first();
         if (!row) return json({ ok: false, error: 'No such request' }, 404);
         delete row.ip;
         return json({ ok: true, request: { ...row, events: srEvents(row), events_json: undefined } });
       }
       if (request.method === 'GET' && action === 'ccClaimFiles') {
         await ensureServiceRequestCols(env.DB);
-        const row = await env.DB.prepare('SELECT files_json FROM warranty_claims WHERE claim_id = ?').bind(String(url.searchParams.get('claim_id') || '').trim()).first();
+        const qid = String(url.searchParams.get('claim_id') || '').trim();
+        const row = await env.DB.prepare('SELECT files_json FROM warranty_claims WHERE claim_id = ? OR prev_claim_id = ?').bind(qid, qid).first();
         if (!row) return json({ ok: false, error: 'No such request' }, 404);
         return json({ ok: true, files: await srSignedFiles(env, row) });
+      }
+      if (request.method === 'POST' && act === 'ccClaimVerify') {
+        const user = authResult.user || (await resolveSession(request, env.DB));
+        if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
+        const r = await srVerify(env, user, body || {});
+        return json(r, r.ok ? 200 : 400);
       }
       if (request.method === 'POST' && act === 'ccClaimAction') {
         const user = authResult.user || (await resolveSession(request, env.DB));
@@ -6563,7 +6571,8 @@ const SR_KINDS = {
 async function ensureServiceRequestCols(DB) {
   await ensureWarrantyClaimsTable(DB);
   for (const col of ['case_id TEXT', 'events_json TEXT', 'updated_at TEXT', 'files_json TEXT',
-                     'm_picked_at TEXT', 'm_received_at TEXT', 'm_sent_at TEXT', 'm_delivered_at TEXT']) {
+                     'm_picked_at TEXT', 'm_received_at TEXT', 'm_sent_at TEXT', 'm_delivered_at TEXT',
+                     'prev_claim_id TEXT']) {
     try { await DB.prepare('ALTER TABLE warranty_claims ADD COLUMN ' + col).run(); } catch (e) { /* exists */ }
   }
 }
@@ -6670,8 +6679,9 @@ async function srAction(env, user, b) {
   const kind = String(b.kind || '');
   const k = SR_KINDS[kind];
   if (!claimId || !k) return { ok: false, error: 'claim_id and a valid kind are required' };
-  const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
+  const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ? OR prev_claim_id = ?').bind(claimId, claimId).first();
   if (!row) return { ok: false, error: 'No such request' };
+  if (kind === 'approve' && /^NV-/.test(row.claim_id)) return { ok: false, error: 'Verify the order first (Verify order tab)' };
   const msg = String(b.message || '').trim().slice(0, 1500);
   if (kind === 'note' && !msg) return { ok: false, error: 'Write the note first' };
   if (['ask_info', 'tip', 'quote', 'not_covered'].includes(kind) && !msg)
@@ -6693,9 +6703,98 @@ async function srAction(env, user, b) {
     if (msg && (kind === 'approve' || kind === 'resolve')) lines.push('', msg);
     emailed = await srEmailCustomer(env, row, k.subject, lines);
   }
-  await srAddEvent(env.DB, claimId, { by: (user && user.username) || 'unknown', kind, note: msg || null,
+  await srAddEvent(env.DB, row.claim_id, { by: (user && user.username) || 'unknown', kind, note: msg || null,
     case_id: sets.case_id || null, emailed }, sets);
   return { ok: true, emailed };
+}
+
+// ── Verify an NV- request (27-Oct-2026) ──
+// NV- = the order wasn't found when the customer submitted. The team checks
+// the order (corrected order ID looked up again, or the purchase date read
+// off the invoice) and the request becomes WRN- (under warranty) or SRN-
+// (out of warranty) by the 6-month rule. The old NV- ID is kept in
+// prev_claim_id so tracking, Care Desk and old links keep working.
+// POST ccClaimVerify { claim_id, order_id?, platform?, order_date? (YYYY-MM-DD), dry_run? }
+function warrantyFromDate(dateStr) {
+  const [y, m, d] = String(dateStr).split('-').map(Number);
+  const until = new Date(Date.UTC(y, m - 1 + WARRANTY_MONTHS, d));
+  const todayIst = new Date(Date.now() + 5.5 * 3600 * 1000);
+  const today = new Date(Date.UTC(todayIst.getUTCFullYear(), todayIst.getUTCMonth(), todayIst.getUTCDate()));
+  return { until: until.toISOString().slice(0, 10), under: until >= today, future: new Date(Date.UTC(y, m - 1, d)) > today };
+}
+
+async function srVerify(env, user, b) {
+  await ensureServiceRequestCols(env.DB);
+  const s = (v, max) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, max);
+  const id = s(b.claim_id, 40);
+  const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(id).first();
+  if (!row) return { ok: false, error: 'No such request' };
+  if (!/^NV-/.test(row.claim_id)) return { ok: false, error: 'Only NV- requests need verifying' };
+  if (['closed', 'not_covered'].includes(row.status)) return { ok: false, error: 'This request is closed' };
+
+  const orderId = s(b.order_id, 40) || row.order_id;
+  if (orderId.length < 3) return { ok: false, error: 'Enter the order ID' };
+  const orderKey = orderId.toUpperCase().replace(/[\s#]/g, '');
+  let platform = s(b.platform, 30) || row.platform;
+  if (CLAIM_PLATFORMS.indexOf(platform) === -1) platform = row.platform;
+
+  let w = { found: false }, lookupError = null;
+  try { w = await warrantyLookup(env, orderId); } catch (e) { lookupError = e.message; }
+  let orderDate, until, under, skus = row.order_skus || '', source;
+  if (w.found) {
+    if (w.cancelled) return { ok: false, error: 'This order is cancelled in our records. Use "Not covered" instead.' };
+    orderDate = w.order_date; until = w.warranty_until; under = w.under_warranty;
+    platform = w.platform || platform;
+    skus = (w.items || []).map(it => it.sku + (it.qty > 1 ? ' x' + it.qty : '')).join(', ');
+    source = 'found in our records';
+  } else {
+    const od = s(b.order_date, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(od))
+      return { ok: false, needDate: true, error: (lookupError ? 'Order lookup failed (' + lookupError + '). ' : 'Order not found in our records. ') +
+        'Enter the purchase date from the invoice.' };
+    const wd = warrantyFromDate(od);
+    if (wd.future) return { ok: false, needDate: true, error: 'Purchase date cannot be in the future' };
+    orderDate = od; until = wd.until; under = wd.under; source = 'date from invoice';
+  }
+  const warrantyStatus = under ? 'Under warranty' : 'Out of warranty';
+  const prefix = srIdPrefix(warrantyStatus);
+
+  // One open request per order — don't let a corrected order ID collide.
+  const other = await env.DB.prepare(
+    "SELECT claim_id FROM warranty_claims WHERE order_key = ? AND claim_id <> ? AND COALESCE(status, 'new') NOT IN ('closed','not_covered') LIMIT 1"
+  ).bind(orderKey, row.claim_id).first();
+  if (other) return { ok: false, error: 'Order ' + orderId + ' already has an open request: ' + other.claim_id };
+
+  const preview = { found: !!w.found, source, order_id: orderId, platform, order_date: orderDate,
+    warranty_until: until, warranty_status: warrantyStatus, prefix, items: skus };
+  if (b.dry_run) return { ok: true, preview };
+
+  // New ID keeps the NV request's date: NV-261027-01 → WRN-261027-NN.
+  const datePart = (row.claim_id.split('-')[1] || istYYMMDD());
+  const base = prefix + '-' + datePart + '-';
+  const cnt = await env.DB.prepare('SELECT COUNT(*) AS n FROM warranty_claims WHERE claim_id LIKE ?').bind(base + '%').first();
+  let n = ((cnt && cnt.n) || 0) + 1, newId = null;
+  for (let attempt = 0; attempt < 5 && !newId; attempt++, n++) {
+    const cand = base + String(n).padStart(2, '0');
+    try {
+      await env.DB.prepare(`UPDATE warranty_claims SET claim_id = ?, prev_claim_id = ?, order_id = ?, order_key = ?, platform = ?,
+        warranty_status = ?, order_date = ?, warranty_until = ?, order_skus = ? WHERE claim_id = ?`)
+        .bind(cand, row.claim_id, orderId, orderKey, platform, warrantyStatus, orderDate, until, skus, row.claim_id).run();
+      newId = cand;
+    } catch (e) { if (!/UNIQUE|PRIMARY KEY|constraint/i.test(e.message || '')) throw e; }
+  }
+  if (!newId) return { ok: false, error: 'Could not allocate a ' + prefix + ' ID — try again' };
+  try { await env.DB.prepare('UPDATE repair_payments SET claim_id = ? WHERE claim_id = ?').bind(newId, row.claim_id).run(); } catch (e) { /* no payments table yet */ }
+
+  const fresh = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(newId).first();
+  const emailed = await srEmailCustomer(env, fresh, 'Your order is verified', [
+    'We have verified your order. Your request now has a new ID: ' + newId + ' (your earlier ID ' + row.claim_id + ' also still works).',
+    under ? 'Your product is under warranty until ' + until + '. Our team will now review your request.'
+          : 'Your product is outside the 6-month warranty (it ended on ' + until + '), so the repair is chargeable. We will share the cost with you before doing anything.'
+  ]);
+  await srAddEvent(env.DB, newId, { by: (user && user.username) || 'unknown', kind: 'verified', emailed,
+    note: row.claim_id + ' → ' + newId + ' · order ' + orderId + ' · bought ' + orderDate + ' (' + source + ') · ' + warrantyStatus }, {});
+  return { ok: true, claim_id: newId, prev_claim_id: row.claim_id, warranty_status: warrantyStatus, emailed };
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -7061,8 +7160,8 @@ async function srTrack(env, idRaw, phoneRaw) {
   const phone = String(phoneRaw || '').replace(/\D/g, '').slice(-10);
   if (!id || phone.length !== 10) return { ok: false, error: 'Enter your request ID (or order ID) and mobile number.' };
   const row = await env.DB.prepare(
-    "SELECT * FROM warranty_claims WHERE (UPPER(claim_id) = ? OR order_key = ?) AND phone = ? ORDER BY created_at DESC LIMIT 1"
-  ).bind(id, id, phone).first();
+    "SELECT * FROM warranty_claims WHERE (UPPER(claim_id) = ? OR UPPER(prev_claim_id) = ? OR order_key = ?) AND phone = ? ORDER BY created_at DESC LIMIT 1"
+  ).bind(id, id, id, phone).first();
   if (!row) return { ok: false, notFound: true, error: 'We could not find a request with these details.' };
   const legs = await srCaseLegs(env.DB, row.case_id);
   const s = srSteps(row, legs);
@@ -7296,7 +7395,8 @@ async function externalPickupRecord(env, b) {
 
   await ensureServiceRequestCols(env.DB);
   await ensureDelhiveryTable(env.DB);
-  const claim = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
+  // An NV- ID that our team has since verified still finds the request (prev_claim_id).
+  const claim = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ? OR prev_claim_id = ?').bind(claimId, claimId).first();
   if (!claim) return { ok: false, error: 'No such request: ' + claimId };
 
   // Already recorded (retry from his side) → same answer, nothing new.
@@ -7327,11 +7427,11 @@ async function externalPickupRecord(env, b) {
   `).bind(
     orderNo, waybill, JSON.stringify({ shipments: [ship] }),
     JSON.stringify({ source: 'care-desk', booked_at: bookedAt }),
-    bookedBy, jobType, (claimId + ' · ' + (claim.issue_type || '') + ' · booked by Care Desk').slice(0, 300),
+    bookedBy, jobType, (claim.claim_id + ' · ' + (claim.issue_type || '') + ' · booked by Care Desk').slice(0, 300),
     courier, claim.order_id || null
   ).run();
 
-  await srAddEvent(env.DB, claimId, { by: bookedBy, kind: 'approve', note: 'Pickup booked by Care Desk (' + courier + ' ' + waybill + ')',
+  await srAddEvent(env.DB, claim.claim_id, { by: bookedBy, kind: 'approve', note: 'Pickup booked by Care Desk (' + courier + ' ' + waybill + ')',
     case_id: orderNo, emailed: false }, { status: 'approved', case_id: orderNo });
   return { ok: true, case_id: orderNo };
 }

@@ -3416,7 +3416,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     approved: ['Pickup booked', 'b-green'], closed: ['Closed', 'b-gray'], not_covered: ['Not covered', 'b-gray']
   };
   var REQ_FILTERS = [
-    { key: 'review', label: 'To review', test: function (r) { return (r.status || 'new') === 'new'; } },
+    // NV- = order not found when submitted → verified in its own tab first, then it becomes WRN-/SRN- and moves to To review
+    { key: 'review', label: 'To review', test: function (r) { return (r.status || 'new') === 'new' && !isNV(r); } },
+    { key: 'verify', label: 'Verify order (NV)', test: function (r) { return isNV(r) && ['closed', 'not_covered'].indexOf(r.status) === -1; } },
     { key: 'waiting', label: 'Waiting for customer', test: function (r) { return ['waiting_customer', 'tip_sent', 'quote_sent'].indexOf(r.status) !== -1; } },
     { key: 'approved', label: 'Pickup booked', test: function (r) { return r.status === 'approved'; } },
     { key: 'done', label: 'Closed', test: function (r) { return r.status === 'closed' || r.status === 'not_covered'; } },
@@ -3439,9 +3441,11 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // Mirrors SR_CUSTOMER_EMAILS in worker.js — off for the first go-live.
   var REQ_CUSTOMER_EMAILS = false;
   var REQ_ACT_LABEL = { ask_info: 'Ask for info / video', tip: 'Send a tip', quote: 'Repair quote', not_covered: 'Not covered', resolve: 'Resolved', note: 'Internal note',
-    payment_link: 'Payment link sent', payment_received: 'Payment received', payment_void: 'Invoice voided' };
+    payment_link: 'Payment link sent', payment_received: 'Payment received', payment_void: 'Invoice voided', verified: 'Order verified' };
   function canActReq() { return window.TM_ROLE === 'admin' || window.TM_ROLE === 'manager'; }
-  function reqToReview() { return requests.filter(REQ_FILTERS[0].test); }
+  function isNV(r) { return /^NV-/.test(r.claim_id || ''); }
+  // "New requests" tile = to review + still to verify
+  function reqToReview() { return requests.filter(function (r) { return REQ_FILTERS[0].test(r) || REQ_FILTERS[1].test(r); }); }
 
   async function loadRequests() {
     try {
@@ -3482,7 +3486,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var q = document.getElementById('req-q').value.trim().toLowerCase();
     var test = REQ_FILTERS.filter(function (f) { return f.key === reqFilter; })[0].test;
     var rows = requests.filter(function (r) {
-      return test(r) && (!q || [r.claim_id, r.name, r.phone, r.order_id, r.product, r.email].join(' ').toLowerCase().indexOf(q) !== -1);
+      return test(r) && (!q || [r.claim_id, r.prev_claim_id, r.name, r.phone, r.order_id, r.product, r.email].join(' ').toLowerCase().indexOf(q) !== -1);
     });
     var body = document.getElementById('req-body');
     if (!rows.length) { body.closest('table').classList.remove('req-full'); body.innerHTML = '<tr><td colspan="7" class="muted">Nothing here.</td></tr>'; renderReqPager(0, 1); return; }
@@ -3496,7 +3500,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var st = REQ_STATUS[r.status || 'new'] || [r.status, 'b-gray'];
       var cs = reqCaseStatus(r);
       return '<tr class="case-row' + ((r.status || 'new') === 'new' ? ' attn' : '') + '" data-id="' + esc(r.claim_id) + '">' +
-        '<td class="mono">' + esc(r.claim_id) + '<div class="sub">' + esc(fmtWhen(r.created_at)) + '</div></td>' +
+        '<td class="mono">' + esc(r.claim_id) + '<div class="sub">' + esc(fmtWhen(r.created_at)) + (r.prev_claim_id ? ' · was ' + esc(r.prev_claim_id) : '') + '</div></td>' +
         '<td>' + esc(r.name) + '<div class="sub">' + esc(r.city || '') + '</div></td>' +
         '<td>' + esc(r.product) + '<div class="sub">' + esc(r.platform) + ' · ' + esc(r.order_id) + '</div></td>' +
         '<td>' + esc(r.issue_type) + '</td>' +
@@ -3534,7 +3538,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var acts = '';
     if (canActReq()) {
       var fin = r.status === 'closed' || r.status === 'not_covered';
-      acts = (!r.case_id && !fin ? '<a class="case-act primary" target="_blank" href="../Create-Pickup/?claim=' + encodeURIComponent(r.claim_id) + '">&#10003; Approve &amp; book pickup</a>' : '') +
+      acts = (!r.case_id && !fin && !isNV(r) ? '<a class="case-act primary" target="_blank" href="../Create-Pickup/?claim=' + encodeURIComponent(r.claim_id) + '">&#10003; Approve &amp; book pickup</a>' : '') +
         // Customer emails are off for the first go-live, so only status actions
         // are offered (Ask for info / Tip / Repair quote come back with the emails).
         (!fin ? '<button class="case-act" data-k="resolve">Resolved</button>' +
@@ -3551,6 +3555,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       f('Product', r.product + (r.order_skus ? '  [' + r.order_skus + ']' : ''), 'span3') +
       f('Problem', r.issue_type) + f('Pickup case', r.case_id ? r.case_id + ' · ' + reqCaseStatus(r) : '', 'span2') +
       f('What the customer says', r.description, 'span3') + '</div>' +
+      (isNV(r) && canActReq() && ['closed', 'not_covered'].indexOf(r.status) === -1 ? verifyBoxHtml(r) : '') +
       (r.warranty_status !== 'Under warranty' ? '<div class="cm-sec"><div class="cm-sec-title">Repair payment</div></div><div id="req-pay" class="pay-box"><span class="pay-hint">Loading…</span></div>' : '') +
       '<div class="cm-sec"><div class="cm-sec-title">Photos &amp; video</div></div><div class="req-files" id="req-files"><span class="muted">Loading…</span></div>' +
       (hist ? '<div class="cm-sec"><div class="cm-sec-title">History</div></div>' + hist : '') +
@@ -3560,6 +3565,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       b.addEventListener('click', function () { b.dataset.k === 'reopen' ? sendReq(r, 'reopen', '', b) : compose(r, b.dataset.k); });
     });
     modal.hidden = false;
+    if (isNV(r)) wireVerify(r);
     if (r.warranty_status !== 'Under warranty') loadPayment(r, false);
     api('ccClaimFiles&claim_id=' + encodeURIComponent(r.claim_id)).then(function (res) {
       var el = document.getElementById('req-files'); if (!el || openReqId !== r.claim_id) return;
@@ -3571,6 +3577,62 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
           : '<a href="' + esc(x.url) + '" target="_blank" rel="noopener"><img src="' + esc(x.url) + '" alt="' + esc(x.name) + '"></a>';
       }).join('');
     }).catch(function () { var el = document.getElementById('req-files'); if (el) el.innerHTML = '<span class="muted">Could not load files.</span>'; });
+  }
+
+  // ── Verify order (NV- requests) ──
+  // Team checks the order ID (fix it if the customer typed it wrong) → the
+  // Worker looks it up again. Not in our records (offline / B2B / old order)
+  // → enter the purchase date from the invoice. Warranty is worked out from
+  // the 6-month rule and the request becomes WRN- or SRN-; the old NV- ID
+  // still works for tracking.
+  var VERIFY_PLATFORMS = ['Amazon', 'Flipkart', 'Website (Shopify)', 'Moglix', 'Other'];
+  function verifyBoxHtml(r) {
+    return '<div class="cm-sec"><div class="cm-sec-title">Verify order</div></div>' +
+      '<div class="pay-box" id="vf-box"><div class="pay-form">' +
+        '<label for="vf-oid">Order ID</label><input class="sb-input" id="vf-oid" maxlength="40" value="' + esc(r.order_id || '') + '">' +
+        '<label for="vf-plat">Bought on</label><select class="sb-input" id="vf-plat">' +
+          VERIFY_PLATFORMS.map(function (p) { return '<option' + (p === r.platform ? ' selected' : '') + '>' + esc(p) + '</option>'; }).join('') + '</select>' +
+        '<label for="vf-date">Purchase date</label><div><input class="sb-input" id="vf-date" type="date" style="max-width:180px"> ' +
+          '<span class="pay-hint">only if the order is not in our records (from the invoice)</span></div>' +
+      '</div>' +
+      '<div class="pay-hint" id="vf-res">Check the order ID against the invoice photo, then click Check.</div>' +
+      '<div class="pay-row"><button class="case-act" id="vf-check">Check order</button>' +
+        '<button class="case-act primary" id="vf-go" disabled>Confirm &amp; convert</button></div></div>';
+  }
+  function wireVerify(r) {
+    var chk = document.getElementById('vf-check'), go = document.getElementById('vf-go'), res = document.getElementById('vf-res');
+    if (!chk) return;
+    function payload(dry) {
+      return { claim_id: r.claim_id, order_id: document.getElementById('vf-oid').value.trim(),
+        platform: document.getElementById('vf-plat').value, order_date: document.getElementById('vf-date').value, dry_run: dry };
+    }
+    // Any change means the last check no longer applies
+    ['vf-oid', 'vf-plat', 'vf-date'].forEach(function (id) {
+      document.getElementById(id).addEventListener('input', function () { go.disabled = true; });
+    });
+    chk.addEventListener('click', async function () {
+      chk.disabled = true; go.disabled = true; res.textContent = 'Checking…';
+      try {
+        var x = await post('ccClaimVerify', payload(true));
+        if (!x || !x.ok) { res.innerHTML = '<span style="color:#f87171">' + esc((x && x.error) || 'failed') + '</span>'; return; }
+        var p = x.preview, under = p.warranty_status === 'Under warranty';
+        res.innerHTML = (p.found ? '✓ Order found in our records' : 'Using the purchase date from the invoice') +
+          ' · bought ' + esc(p.order_date) + ' on ' + esc(p.platform) + (p.items ? ' · ' + esc(p.items) : '') +
+          '<br><span class="badge ' + (under ? 'b-green' : 'b-amber') + '">' + esc(p.warranty_status) + '</span> until ' + esc(p.warranty_until) +
+          ' → becomes <b>' + esc(p.prefix) + '-</b>';
+        go.disabled = false;
+      } catch (e) { res.innerHTML = '<span style="color:#f87171">' + esc(e.message) + '</span>'; }
+      finally { chk.disabled = false; }
+    });
+    go.addEventListener('click', async function () {
+      if (!confirm('Convert ' + r.claim_id + ' now? It moves to "To review" with its new ID.')) return;
+      go.disabled = true; go.textContent = 'Converting…';
+      try {
+        var x = await post('ccClaimVerify', payload(false));
+        if (!x || !x.ok) throw new Error((x && x.error) || 'failed');
+        await loadRequests(); renderTiles(); renderRequests(); openRequest(x.claim_id);
+      } catch (e) { alert("Couldn't convert: " + e.message); go.disabled = false; go.textContent = 'Confirm & convert'; }
+    });
   }
 
   // ── Repair payment (Zoho Books invoice → Razorpay link) ──
