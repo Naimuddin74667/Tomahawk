@@ -7213,8 +7213,8 @@ async function rpCronCheck(env) {
 // 2. Chargeable weight = max(actual, L×W×H ÷ 5000), rounded up to 500 g.
 // 3. Delhivery + Ekart estimates for both legs: pickup (customer → warehouse,
 //    reverse) and return delivery (warehouse → customer, forward).
-// 4. Suggested charge (before GST) = cheaper courier's total × (1 + buffer),
-//    rounded up to ₹10. Buffer: Worker var LOGISTICS_BUFFER_PCT (default 15).
+// 4. Suggested charge (before GST) = HIGHER courier's pickup + delivery + ₹70
+//    buffer (Worker var LOGISTICS_BUFFER_RS).
 // Couriers' own docs call these estimates — the team can edit before sending.
 const LQ_DEFAULT = { length: 30, width: 20, height: 15, weight: 2000 };   // used when Amazon has no size
 
@@ -7329,15 +7329,17 @@ async function lqQuote(env, claimId, ov) {
     legs('Delhivery', dir => lqDelhivery(env, pin, chargeable, dir)),
     legs('Ekart', dir => lqEkart(env, pin, dims, chargeable, dir))
   ]);
-  const ok = couriers.filter(c => c.total != null).sort((a, b) => a.total - b.total);
-  const bufferPct = Number(env.LOGISTICS_BUFFER_PCT || 15);
-  const up10 = v => Math.ceil(v * (1 + bufferPct / 100) / 10) * 10;
+  // Quote on the HIGHER courier (safe whichever one ends up booked) + a flat
+  // ₹ buffer split across the two legs. Buffer: Worker var LOGISTICS_BUFFER_RS (default 70).
+  const ok = couriers.filter(c => c.total != null).sort((a, b) => b.total - a.total);
+  const bufferRs = Number(env.LOGISTICS_BUFFER_RS || 70);
   const best = ok[0] || null;
+  const half = Math.ceil(bufferRs / 2);
   return { ok: true, pincode: pin, city: row.city || '', state: row.state || '',
     size: { ...dims, weight: Math.round(actual), volumetric: Math.round(volumetric), chargeable, source, suspect,
             asin: amz ? amz.asin : null, amazonFound: !!(amz && amz.found), amazonError: amzError },
-    couriers, best: best ? best.courier : null, bufferPct,
-    suggested: best ? { pickup: up10(best.pickup), delivery: up10(best.delivery) } : null };
+    couriers, best: best ? best.courier : null, bufferRs,
+    suggested: best ? { pickup: Math.ceil(best.pickup) + half, delivery: Math.ceil(best.delivery) + (bufferRs - half) } : null };
 }
 
 // ── Where is the linked pickup case? (reverse leg + its send-back leg) ──
