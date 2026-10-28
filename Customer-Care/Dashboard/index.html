@@ -425,6 +425,26 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .co-orders th { text-align: left; font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--border); }
 .co-orders td { padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .co-orders tr:last-child td { border-bottom: none; }
+/* Request popup — compact layout (contact line, problem + photos side by side) */
+.rq-contact { font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; }
+.rq-contact b { font-size: 14px; }
+.rq-contact a { color: var(--text); text-decoration: none; }
+.rq-contact a:hover { color: var(--accent); }
+.rq-more { margin-top: 8px; font-size: 12px; }
+.rq-more summary { cursor: pointer; color: var(--text2); font-weight: 600; list-style: none; }
+.rq-more summary::before { content: '\25B8  '; }
+.rq-more[open] summary::before { content: '\25BE  '; }
+.rq-more summary:hover { color: var(--accent); }
+.rq-more .cm-summary { margin-top: 8px; }
+.rq-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-top: 14px; }
+.rq-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; font-size: 13px; }
+.rq-prod { font-weight: 600; }
+.rq-issue { margin-top: 6px; }
+.rq-quote { margin-top: 8px; color: var(--text2); font-style: italic; white-space: pre-wrap; }
+.rq-meta { margin-top: 10px; font-size: 12px; color: var(--text2); }
+.rq-card .req-files img, .rq-card .req-files video { height: 110px; }
+.rq-warn { color: #f87171; font-size: 12px; margin-top: 4px; }
+@media (max-width: 700px) { .rq-grid { grid-template-columns: 1fr; } }
 .cm-k { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2px; }
 .cm-sec { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 18px 0 8px; }
 .cm-sec-title { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); font-family: 'DM Mono', monospace; }
@@ -3538,7 +3558,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     openCaseId = null; openReqId = id;
     var st = REQ_STATUS[r.status || 'new'] || [r.status, 'b-gray'];
     document.getElementById('case-title').textContent = r.claim_id;
-    document.getElementById('case-sub').innerHTML = 'Received ' + esc(fmtWhen(r.created_at)) + ' &nbsp; <span class="badge ' + st[1] + '">' + esc(st[0]) + '</span>';
+    document.getElementById('case-sub').innerHTML = 'Received ' + esc(fmtWhen(r.created_at)) + ageText(r.created_at) + ' &nbsp; <span class="badge ' + st[1] + '">' + esc(st[0]) + '</span>';
     var f = function (k, v, cls) { return '<div' + (cls ? ' class="' + cls + '"' : '') + '><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
     var addr = [r.address, r.city, r.state, r.pincode].filter(Boolean).join(', ');
     var w = r.warranty_status + (r.warranty_until ? ' (until ' + r.warranty_until + ')' : '');
@@ -3559,17 +3579,34 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         '<button class="case-act" data-k="note">Internal note</button>';
     }
     var box = document.getElementById('case-body-modal');
-    box.innerHTML = '<div class="cm-summary">' +
-      f('Customer', r.name) + f('Mobile', r.phone) + f('Email', r.email) +
-      f('Pickup address', addr, 'span3') +
-      f('Order ID', r.order_id) + f('Bought on', r.platform + (r.order_date ? ', ' + r.order_date : '')) +
-      '<div><div class="cm-k">Warranty</div><div>' + warrantyBadge(r.warranty_status) + (r.warranty_until ? ' <span class="muted">until ' + esc(r.warranty_until) + '</span>' : '') + '</div></div>' +
-      f('Product', r.product + (r.order_skus ? '  [' + r.order_skus + ']' : ''), 'span3') +
-      f('Problem', r.issue_type) + f('Pickup case', r.case_id ? r.case_id + ' · ' + reqCaseStatus(r) : '', 'span2') +
-      f('What the customer says', r.description, 'span3') + '</div>' +
-      (isNV(r) && canActReq() && ['closed', 'not_covered'].indexOf(r.status) === -1 ? verifyBoxHtml(r) : '') +
-      (r.warranty_status !== 'Under warranty' ? '<div class="cm-sec"><div class="cm-sec-title">Repair payment</div></div><div id="req-pay" class="pay-box"><span class="pay-hint">Loading…</span></div>' : '') +
-      '<div class="cm-sec"><div class="cm-sec-title">Photos &amp; video</div></div><div class="req-files" id="req-files"><span class="muted">Loading…</span></div>' +
+    var nv = isNV(r);
+    // Repair payment only once the order is verified and it's not under warranty
+    var showPay = !nv && r.warranty_status !== 'Under warranty';
+    var oidWarn = orderIdWarning(r.order_id, r.platform, r.phone);
+    box.innerHTML =
+      // R1 — who: name · phone · city; email + address tucked away until pickup time
+      '<div class="rq-contact"><b>' + esc(r.name || '\u2014') + '</b>' +
+        (r.phone ? '<a href="tel:' + esc(r.phone) + '">&#128222; ' + esc(r.phone) + '</a>' : '') +
+        (r.city ? '<span class="muted">' + esc(r.city) + '</span>' : '') + '</div>' +
+      '<details class="rq-more"><summary>Email &amp; pickup address</summary><div class="cm-summary">' +
+        f('Email', r.email) + f('Pickup address', addr, 'span2') + '</div></details>' +
+      // R2 — what: problem (Col A) beside photos (Col B), so the invoice sits next to the order check
+      '<div class="rq-grid"><div class="rq-card">' +
+        '<div class="cm-k">The problem</div>' +
+        '<div class="rq-prod">' + esc(r.product || '\u2014') + (r.order_skus ? ' <span class="muted">[' + esc(r.order_skus) + ']</span>' : '') + '</div>' +
+        '<div class="rq-issue">' + esc(r.issue_type || '') + '</div>' +
+        (r.description ? '<div class="rq-quote">\u201c' + esc(r.description) + '\u201d</div>' : '') +
+        // Verified requests: order details live here (NV shows them in the Verify box instead)
+        (!nv ? '<div class="rq-meta">' + esc(r.platform || '') + ' \u00b7 <span class="mono">' + esc(r.order_id || '\u2014') + '</span>' +
+            (r.order_date ? ' \u00b7 bought ' + esc(r.order_date) : '') + ' \u00b7 ' + warrantyBadge(r.warranty_status) +
+            (r.warranty_until ? ' until ' + esc(r.warranty_until) : '') + '</div>' +
+          (oidWarn ? '<div class="rq-warn">&#9888; ' + esc(oidWarn) + '</div>' : '') : '') +
+        (r.case_id ? '<div class="rq-meta">Pickup case <b class="mono">' + esc(r.case_id) + '</b> \u00b7 ' + esc(reqCaseStatus(r)) + '</div>' : '') +
+      '</div><div class="rq-card"><div class="cm-k">Photos &amp; video</div>' +
+        '<div class="req-files" id="req-files"><span class="muted">Loading…</span></div></div></div>' +
+      // R3 — verify (NV only)
+      (nv && canActReq() && ['closed', 'not_covered'].indexOf(r.status) === -1 ? verifyBoxHtml(r) : '') +
+      (showPay ? '<div class="cm-sec"><div class="cm-sec-title">Repair payment</div></div><div id="req-pay" class="pay-box"><span class="pay-hint">Loading…</span></div>' : '') +
       (hist ? '<div class="cm-sec"><div class="cm-sec-title">History</div></div>' + hist : '') +
       '<div id="req-compose" style="margin-top:16px" hidden></div>' +
       (acts ? '<div class="cm-acts" id="req-acts">' + acts + '</div>' : '');
@@ -3578,7 +3615,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     });
     modal.hidden = false;
     if (isNV(r)) wireVerify(r);
-    if (r.warranty_status !== 'Under warranty') loadPayment(r, false);
+    if (showPay) loadPayment(r, false);
     api('ccClaimFiles&claim_id=' + encodeURIComponent(r.claim_id)).then(function (res) {
       var el = document.getElementById('req-files'); if (!el || openReqId !== r.claim_id) return;
       var fl = (res && res.files) || [];
@@ -3597,11 +3634,29 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // → enter the purchase date from the invoice. Warranty is worked out from
   // the 6-month rule and the request becomes WRN- or SRN-; the old NV- ID
   // still works for tracking.
+  // "· 3d old" next to the received time (empty if the date can't be read)
+  function ageText(at) {
+    var t = new Date(at).getTime(); if (!t) return '';
+    var d = Math.floor((Date.now() - t) / 86400000);
+    return ' \u00b7 ' + (d <= 0 ? 'today' : d + 'd old');
+  }
+  // Flags order IDs that are clearly wrong — e.g. the customer typed their phone
+  // number. Returns a short warning, or '' if the ID looks fine / can't be judged.
+  function orderIdWarning(oid, platform, phone) {
+    var o = String(oid || '').trim(); if (!o) return 'No order ID given';
+    var digits = o.replace(/\D/g, ''), ph = String(phone || '').replace(/\D/g, '');
+    if (ph.length >= 10 && digits.slice(-10) === ph.slice(-10)) return 'This is the customer\'s phone number, not an order ID — check the invoice';
+    if (/^\+?\d[\d\s-]{9,13}$/.test(o) && /^(91)?[6-9]\d{9}$/.test(digits)) return 'Looks like a phone number — check the invoice';
+    if (platform === 'Flipkart' && !/^OD\d{15,}$/i.test(o)) return 'Flipkart order IDs look like OD123456789012345678';
+    if (platform === 'Amazon' && !/^\d{3}-\d{7}-\d{7}$/.test(o)) return 'Amazon order IDs look like 402-1234567-1234567';
+    return '';
+  }
   var VERIFY_PLATFORMS = ['Amazon', 'Flipkart', 'Website (Shopify)', 'Moglix', 'Other'];
   function verifyBoxHtml(r) {
     return '<div class="cm-sec"><div class="cm-sec-title">Verify order</div></div>' +
       '<div class="pay-box" id="vf-box"><div class="pay-form">' +
-        '<label for="vf-oid">Order ID</label><input class="sb-input" id="vf-oid" maxlength="40" value="' + esc(r.order_id || '') + '">' +
+        '<label for="vf-oid">Order ID</label><div><input class="sb-input" id="vf-oid" maxlength="40" value="' + esc(r.order_id || '') + '">' +
+          '<div class="rq-warn" id="vf-warn"></div></div>' +
         '<label for="vf-plat">Bought on</label><select class="sb-input" id="vf-plat">' +
           VERIFY_PLATFORMS.map(function (p) { return '<option' + (p === r.platform ? ' selected' : '') + '>' + esc(p) + '</option>'; }).join('') + '</select>' +
         '<label for="vf-date">Purchase date</label><div><input class="sb-input" id="vf-date" type="date" style="max-width:180px"> ' +
@@ -3622,6 +3677,14 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     ['vf-oid', 'vf-plat', 'vf-date'].forEach(function (id) {
       document.getElementById(id).addEventListener('input', function () { go.disabled = true; });
     });
+    // Live order-ID sanity warning (phone number typed in, wrong format for the platform)
+    function showWarn() {
+      var m = orderIdWarning(document.getElementById('vf-oid').value, document.getElementById('vf-plat').value, r.phone);
+      document.getElementById('vf-warn').innerHTML = m ? '&#9888; ' + esc(m) : '';
+    }
+    document.getElementById('vf-oid').addEventListener('input', showWarn);
+    document.getElementById('vf-plat').addEventListener('change', showWarn);
+    showWarn();
     chk.addEventListener('click', async function () {
       chk.disabled = true; go.disabled = true; res.textContent = 'Checking…';
       try {
