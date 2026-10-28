@@ -386,6 +386,27 @@ body.cc-fit .pager { padding: 6px 0 4px; margin-top: 0; }
 .pay-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
 .pay-hint { color: var(--text2); font-size: 12px; }
 .pay-total { font-weight: 700; }
+/* Two-step out-of-warranty billing */
+.pay-step + .pay-step { margin-top: 10px; }
+.pay-step-h { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.pay-step-n { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #111; font-weight: 800; font-size: 12px;
+  display: inline-flex; align-items: center; justify-content: center; }
+.pay-step-h .badge { margin-left: auto; }
+.pay-lines { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--text2); }
+.pay-lines b { color: var(--text); font-weight: 600; }
+.lq-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.lq-table th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--text2); padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.lq-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
+.lq-table tr.best td { color: var(--accent); }
+.lq-dims { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.lq-dims .sb-input { width: 80px; }
+.lq-consent { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
+.lq-consent label { display: inline-flex; align-items: center; gap: 5px; color: var(--text); font-size: 13px; cursor: pointer; }
+.rp-part { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; }
+.rp-part .rp-pn { flex: 1; } .rp-part .rp-pa { width: 110px; }
+.linkish { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.rp-x { font-size: 18px; color: var(--text2); }
+.case-act.locked { opacity: .5; pointer-events: none; }
 .pay-form { display: grid; grid-template-columns: 160px 1fr; gap: 8px 12px; align-items: center; }
 .pay-form label { color: var(--text2); font-size: 13px; }
 @media (max-width: 560px) { .pay-form { grid-template-columns: 1fr; } }
@@ -3618,7 +3639,11 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var acts = '';
     if (canActReq()) {
       var fin = r.status === 'closed' || r.status === 'not_covered';
-      acts = (!r.case_id && !fin && !isNV(r) ? '<a class="case-act primary" target="_blank" href="../Create-Pickup/?claim=' + encodeURIComponent(r.claim_id) + '">&#10003; Approve &amp; book pickup</a>' : '') +
+      // Out of warranty: pickup can be booked only once pickup + delivery is paid
+      // (unlocked by renderPayments once Step 1 shows Paid).
+      var oow = r.warranty_status !== 'Under warranty';
+      acts = (!r.case_id && !fin && !isNV(r) ? '<a class="case-act primary' + (oow ? ' locked' : '') + '" id="req-approve" target="_blank" href="../Create-Pickup/?claim=' + encodeURIComponent(r.claim_id) + '">' +
+                (oow ? '&#128274; Book pickup after payment' : '&#10003; Approve &amp; book pickup') + '</a>' : '') +
         // Customer emails are off for the first go-live, so only status actions
         // are offered (Ask for info / Tip / Repair quote come back with the emails).
         (!fin ? '<button class="case-act" data-k="resolve">Resolved</button>' +
@@ -3656,7 +3681,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       (!nv ? orderDetailsHtml(r, oidWarn) : '') +
       // R3 — verify (NV only)
       (nv && canActReq() && ['closed', 'not_covered'].indexOf(r.status) === -1 ? verifyBoxHtml(r) : '') +
-      (showPay ? '<div class="cm-sec"><div class="cm-sec-title">Repair payment</div></div><div id="req-pay" class="pay-box"><span class="pay-hint">Loading…</span></div>' : '') +
+      (showPay ? '<div class="cm-sec"><div class="cm-sec-title">Payments</div></div>' +
+        '<div class="pay-box pay-step" id="pay-logistics"><span class="pay-hint">Loading…</span></div>' +
+        '<div class="pay-box pay-step" id="pay-repair"><span class="pay-hint">Loading…</span></div>' : '') +
       (hist ? '<div class="cm-sec"><div class="cm-sec-title">History</div></div>' + hist : '') +
       '<div id="req-compose" style="margin-top:16px" hidden></div>' +
       (acts ? '<div class="cm-acts" id="req-acts">' + acts + '</div>' : '');
@@ -3835,100 +3862,261 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   var PAY_GST = 18;
   function money(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
+  // Out-of-warranty billing in two steps (28-Oct-2026):
+  //   Step 1 — pickup + delivery, quoted from the pincode (Delhivery + Ekart
+  //            rates, Amazon package size). Customer's consent (call / WhatsApp)
+  //            is ticked before the link goes out. Pickup unlocks once paid.
+  //   Step 2 — service charge + spare parts, sent after inspection.
+  var PAY_STEP = {
+    logistics: { n: 1, title: 'Pickup & delivery', when: 'paid before pickup is booked', btn: '&#8377; Get quote &amp; send link' },
+    repair:    { n: 2, title: 'Service & spare parts', when: 'sent after the technician inspects the product', btn: '&#8377; Send repair quote' }
+  };
+  var payState = {};   // latest payments for the open request: { logistics, repair }
+
   function loadPayment(r, refresh) {
-    var el = document.getElementById('req-pay'); if (!el) return;
-    if (refresh) el.innerHTML = '<span class="pay-hint">Checking Zoho…</span>';
+    ['logistics', 'repair'].forEach(function (k) {
+      var el = document.getElementById('pay-' + k);
+      if (el && refresh) el.innerHTML = stepHead(k) + '<span class="pay-hint">Checking Zoho…</span>';
+    });
     api('ccPaymentGet&claim_id=' + encodeURIComponent(r.claim_id) + (refresh ? '&refresh=1' : '')).then(function (res) {
       if (openReqId !== r.claim_id) return;
       if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
-      renderPayment(r, res.payment, res.checkError);
+      // Older Worker (before two-step billing) returns only `payment` → treat it as the repair step
+      payState = res.payments || { logistics: null, repair: res.payment || null };
+      renderPayStep(r, 'logistics', payState.logistics, res.checkError);
+      renderPayStep(r, 'repair', payState.repair, res.checkError);
+      // Legacy: requests billed before two-step billing (single repair payment, already paid) stay unlocked
+      setApproveLock((payState.logistics && payState.logistics.status === 'paid') ||
+        (!payState.logistics && payState.repair && payState.repair.status === 'paid'));
     }).catch(function (e) {
-      var x = document.getElementById('req-pay'); if (x) x.innerHTML = '<span class="pay-hint">Could not load payment: ' + esc(e.message) + '</span>';
+      ['logistics', 'repair'].forEach(function (k) {
+        var x = document.getElementById('pay-' + k); if (x) x.innerHTML = stepHead(k) + '<span class="pay-hint">Could not load payment: ' + esc(e.message) + '</span>';
+      });
     });
   }
 
-  function renderPayment(r, p, checkError) {
-    var el = document.getElementById('req-pay'); if (!el) return;
+  function setApproveLock(paid) {
+    var a = document.getElementById('req-approve'); if (!a) return;
+    a.classList.toggle('locked', !paid);
+    a.innerHTML = paid ? '&#10003; Approve &amp; book pickup' : '&#128274; Book pickup after payment';
+    a.title = paid ? '' : 'Pickup & delivery must be paid first (Step 1)';
+  }
+
+  function stepHead(kind, badge) {
+    var st = PAY_STEP[kind];
+    return '<div class="pay-step-h"><span class="pay-step-n">' + st.n + '</span><b>' + st.title + '</b>' +
+      '<span class="pay-hint">' + st.when + '</span>' + (badge || '') + '</div>';
+  }
+
+  function renderPayStep(r, kind, p, checkError) {
+    var el = document.getElementById('pay-' + kind); if (!el) return;
     var fin = r.status === 'closed' || r.status === 'not_covered';
     if (!p || p.status === 'void') {
-      el.innerHTML = '<div class="pay-row"><span class="pay-hint">' + (p ? 'Invoice ' + esc(p.invoice_number || '') + ' was voided. ' : '') +
-        'No payment link yet.</span>' +
-        (canActReq() && !fin ? '<button class="case-act primary" id="pay-new">₹ Send payment link</button>' : '') + '</div>';
-      var b = document.getElementById('pay-new'); if (b) b.addEventListener('click', function () { payForm(r); });
+      var hint = kind === 'repair' && !(payState.logistics && payState.logistics.status === 'paid')
+        ? ' Usually after Step 1 is paid and the product has reached us.' : '';
+      el.innerHTML = stepHead(kind) +
+        '<div class="pay-row"><span class="pay-hint">' + (p ? 'Invoice ' + esc(p.invoice_number || '') + ' was voided. ' : '') + 'No payment link yet.' + hint + '</span>' +
+        (canActReq() && !fin ? '<button class="case-act primary" data-new="' + kind + '">' + PAY_STEP[kind].btn + '</button>' : '') + '</div>';
+      var b = el.querySelector('[data-new]');
+      if (b) b.addEventListener('click', function () { kind === 'logistics' ? logisticsForm(r) : repairForm(r); });
       return;
     }
-    var paid = p.status === 'paid';
-    el.innerHTML =
-      '<div class="pay-row"><span class="badge ' + (paid ? 'b-green">Paid ✓' : 'b-amber">Payment pending') + '</span>' +
-        '<span class="mono">' + esc(p.invoice_number || '') + '</span>' +
+    var paid = p.status === 'paid', lines = [];
+    try { lines = JSON.parse(p.lines_json || '[]'); } catch (e) { /* older row — no line breakdown */ }
+    el.innerHTML = stepHead(kind, '<span class="badge ' + (paid ? 'b-green">Paid ✓' : 'b-amber">Payment pending') + '</span>') +
+      '<div class="pay-row"><span class="mono">' + esc(p.invoice_number || '') + '</span>' +
         '<span class="pay-total">' + money(p.total) + '</span>' +
         '<span class="pay-hint">' + money(p.amount) + ' + ' + PAY_GST + '% GST</span></div>' +
-      '<div class="pay-hint">' + esc(p.description || '') + ' · sent by ' + esc(p.created_by || '') + ', ' + esc(fmtWhen(p.created_at)) +
+      (lines.length ? '<div class="pay-lines">' + lines.map(function (l) { return '<span>' + esc(l.label) + ' <b>' + money(l.amount) + '</b></span>'; }).join('') + '</div>' : '') +
+      '<div class="pay-hint">sent by ' + esc(p.created_by || '') + ', ' + esc(fmtWhen(p.created_at)) +
         (paid && p.paid_at ? ' · <span class="bt-green">paid ' + esc(fmtWhen(p.paid_at)) + '</span>' : '') + '</div>' +
       (checkError ? '<div class="pay-hint">Could not check Zoho just now: ' + esc(checkError) + '</div>' : '') +
       (!paid ? '<div class="pay-row">' +
-        (p.invoice_url ? '<button class="case-act primary" id="pay-copy">Copy payment link</button>' +
+        (p.invoice_url ? '<button class="case-act primary" data-copy>Copy payment link</button>' +
                          '<a class="case-act" target="_blank" rel="noopener" href="' + esc(p.invoice_url) + '">Open link</a>'
                        : '<span class="pay-hint">Zoho did not return a payment link — share the invoice from Zoho Books.</span>') +
-        '<button class="case-act" id="pay-refresh">↻ Refresh</button>' +
-        (canActReq() ? '<button class="case-act danger" id="pay-void">Cancel link</button>' : '') + '</div>' : '');
-    var c = document.getElementById('pay-copy');
+        '<button class="case-act" data-refresh>↻ Refresh</button>' +
+        (canActReq() ? '<button class="case-act danger" data-void>Cancel link</button>' : '') + '</div>' : '');
+    var c = el.querySelector('[data-copy]');
     if (c) c.addEventListener('click', function () {
-      var msg = 'Hi ' + (String(r.name || '').split(' ')[0] || '') + ', the repair cost for your request ' + r.claim_id + ' is ' + money(p.total) +
-        ' (incl. GST). Please pay here: ' + p.invoice_url + ' — Team TOMAHAWK Tools';
+      var first = String(r.name || '').split(' ')[0] || '';
+      var msg = kind === 'logistics'
+        ? 'Hi ' + first + ', as discussed, the pickup and return delivery charges for your request ' + r.claim_id + ' are ' + money(p.total) +
+          ' (incl. GST). Please pay here: ' + p.invoice_url + ' — we book the pickup as soon as it is paid. Service and spare-part charges, if any, are shared after inspection. — Team TOMAHAWK Tools'
+        : 'Hi ' + first + ', the repair cost for your request ' + r.claim_id + ' is ' + money(p.total) +
+          ' (incl. GST). Please pay here: ' + p.invoice_url + ' — Team TOMAHAWK Tools';
       navigator.clipboard.writeText(msg).then(function () { c.textContent = 'Copied ✓'; setTimeout(function () { c.textContent = 'Copy payment link'; }, 1800); },
         function () { prompt('Copy this message:', msg); });
     });
-    var f = document.getElementById('pay-refresh'); if (f) f.addEventListener('click', function () { loadPayment(r, true); });
-    var v = document.getElementById('pay-void');
+    var f = el.querySelector('[data-refresh]'); if (f) f.addEventListener('click', function () { loadPayment(r, true); });
+    var v = el.querySelector('[data-void]');
     if (v) v.addEventListener('click', async function () {
       if (!confirm('Cancel this payment link? Invoice ' + (p.invoice_number || '') + ' will be voided in Zoho Books and the link will stop working.')) return;
       v.disabled = true; v.textContent = 'Cancelling…';
       try {
-        var res = await post('ccPaymentVoid', { claim_id: r.claim_id });
+        var res = await post('ccPaymentVoid', { claim_id: r.claim_id, kind: kind });
         if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
         await loadRequests(); renderTiles(); renderRequests(); openRequest(r.claim_id);
       } catch (e) { alert("Couldn't cancel: " + e.message); v.disabled = false; v.textContent = 'Cancel link'; }
     });
   }
 
-  function payForm(r) {
-    var el = document.getElementById('req-pay'); if (!el) return;
-    el.innerHTML =
-      '<div class="pay-form">' +
-        '<label for="pay-amt">Repair cost (before GST)</label><input class="sb-input" id="pay-amt" type="number" min="1" step="0.01" placeholder="e.g. 850">' +
-        '<label for="pay-desc">Work done</label><input class="sb-input" id="pay-desc" maxlength="300" placeholder="e.g. Carbon brush and switch replaced">' +
-        '<label>Customer pays</label><div><span class="pay-total" id="pay-prev">—</span> <span class="pay-hint">incl. ' + PAY_GST + '% GST</span></div>' +
-      '</div>' +
-      '<div class="pay-hint" id="pay-from">Checking Zoho Books connection…</div>' +
-      '<div class="pay-row"><button class="case-act primary" id="pay-send" disabled>Create invoice &amp; link</button>' +
-        '<button class="case-act" id="pay-cancel">Cancel</button></div>';
-    var amt = document.getElementById('pay-amt'), send = document.getElementById('pay-send'), ready = false;
-    function upd() {
-      var v = parseFloat(amt.value);
-      document.getElementById('pay-prev').textContent = v > 0 ? money(Math.round(v * (100 + PAY_GST)) / 100) : '—';
-      send.disabled = !ready || !(v > 0);
-    }
-    amt.addEventListener('input', upd); amt.focus();
-    document.getElementById('pay-cancel').addEventListener('click', function () { loadPayment(r, false); });
+  // "Billed from … · SAC … · tax" line under each form
+  function zohoFromLine(r, boxId, onReady) {
     api('ccPaymentInfo').then(function (res) {
-      var box = document.getElementById('pay-from'); if (!box) return;
+      var box = document.getElementById(boxId); if (!box) return;
       if (!res || !res.ok) { box.textContent = 'Zoho Books not reachable: ' + ((res && res.error) || 'unknown error'); return; }
       box.textContent = 'Billed from ' + (res.billFrom ? res.billFrom.name + ' (' + res.billFrom.gstin + ')' : 'the Zoho Books organisation') +
-        ' · SAC ' + res.sac + ' · ' + (String(r.state || '').toLowerCase() === 'maharashtra' ? res.taxes.intra : res.taxes.inter);
-      ready = true; upd();
-    }).catch(function (e) { var box = document.getElementById('pay-from'); if (box) box.textContent = 'Zoho Books not reachable: ' + e.message; });
-    send.addEventListener('click', async function () {
-      var v = parseFloat(amt.value), d = document.getElementById('pay-desc').value.trim();
-      if (!(v > 0)) { alert('Enter the repair cost.'); return; }
+        ' · ' + (String(r.state || '').toLowerCase() === 'maharashtra' ? res.taxes.intra : res.taxes.inter);
+      onReady();
+    }).catch(function (e) { var box = document.getElementById(boxId); if (box) box.textContent = 'Zoho Books not reachable: ' + e.message; });
+  }
+  function withGst(v) { return Math.round(v * (100 + PAY_GST)) / 100; }
+
+  async function createPayment(r, btn, payload, label) {
+    var tot = payload.lines.reduce(function (t, l) { return t + l.amount; }, 0);
+    if (!confirm('Create a Zoho invoice for ' + money(withGst(tot)) + ' (incl. GST) for ' + label + ' on ' + r.claim_id + '?')) return;
+    var old = btn.textContent; btn.disabled = true; btn.textContent = 'Creating…';
+    try {
+      var res = await post('ccPaymentCreate', Object.assign({ claim_id: r.claim_id }, payload));
+      if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
+      await loadRequests(); renderTiles(); renderRequests(); openRequest(r.claim_id);
+    } catch (e) { alert("Couldn't create the invoice: " + e.message); btn.disabled = false; btn.textContent = old; }
+  }
+
+  // ── Step 1 form: quote from pincode + package size, consent, send ──
+  function logisticsForm(r, ov) {
+    var el = document.getElementById('pay-logistics'); if (!el) return;
+    el.innerHTML = stepHead('logistics') + '<span class="pay-hint">Getting Delhivery and Ekart rates for pincode ' + esc(r.pincode || '') + '…</span>';
+    var qs = 'ccLogisticsQuote&claim_id=' + encodeURIComponent(r.claim_id);
+    if (ov) Object.keys(ov).forEach(function (k) { if (ov[k]) qs += '&' + k + '=' + encodeURIComponent(ov[k]); });
+    api(qs).then(function (q) {
+      if (openReqId !== r.claim_id) return;
+      if (!q || !q.ok) throw new Error((q && q.error) || 'failed');
+      drawLogisticsForm(r, q);
+    }).catch(function (e) {
+      el.innerHTML = stepHead('logistics') + '<div class="pay-hint">Could not get courier rates: ' + esc(e.message) + '. You can still enter the charges by hand.</div>';
+      drawLogisticsForm(r, null);
+    });
+  }
+
+  function drawLogisticsForm(r, q) {
+    var el = document.getElementById('pay-logistics'); if (!el) return;
+    var sz = q && q.size, sug = (q && q.suggested) || { pickup: '', delivery: '' };
+    var srcTxt = !sz ? '' : sz.source === 'amazon' ? 'Amazon ' + esc(sz.asin || '') : sz.source === 'team' ? 'entered by team' : 'default size — Amazon has no size for this product';
+    var kg = function (g) { return (Math.round(g / 100) / 10) + ' kg'; };
+    el.innerHTML = stepHead('logistics') +
+      (sz ? '<div class="pay-hint">Package <b>' + Math.round(sz.length) + '×' + Math.round(sz.width) + '×' + Math.round(sz.height) + ' cm · ' + kg(sz.weight) + '</b> (' + srcTxt + ')' +
+          ' → chargeable <b>' + kg(sz.chargeable) + '</b> to/from ' + esc(q.pincode) + ' ' + esc(q.city || '') +
+          ' <button type="button" class="linkish" id="lq-edit">Edit size</button></div>' +
+        (sz.suspect ? '<div class="rq-warn">&#9888; Amazon size looks too small for this tool — check and edit the size.</div>' : '') +
+        (sz.source === 'default' ? '<div class="rq-warn">&#9888; Using a default size — edit it to the real box size for an accurate quote.</div>' : '') +
+        '<div class="pay-form" id="lq-size" hidden>' +
+          '<label>Box size (cm)</label><div class="lq-dims">' +
+            '<input class="sb-input" id="lq-l" type="number" min="1" value="' + Math.round(sz.length) + '"> × ' +
+            '<input class="sb-input" id="lq-w" type="number" min="1" value="' + Math.round(sz.width) + '"> × ' +
+            '<input class="sb-input" id="lq-h" type="number" min="1" value="' + Math.round(sz.height) + '"></div>' +
+          '<label>Weight (kg)</label><div class="lq-dims"><input class="sb-input" id="lq-kg" type="number" min="0.1" step="0.1" value="' + (Math.round(sz.weight / 100) / 10) + '"> ' +
+            '<button type="button" class="case-act" id="lq-recalc">Recalculate</button></div>' +
+        '</div>' +
+        '<table class="lq-table"><thead><tr><th>Courier</th><th>Pickup</th><th>Delivery</th><th>Total</th></tr></thead><tbody>' +
+          q.couriers.map(function (c) {
+            var best = c.courier === q.best;
+            return '<tr' + (best ? ' class="best"' : '') + '><td>' + esc(c.courier) + (best ? ' ✓ cheapest' : '') + '</td>' +
+              '<td>' + (c.pickup != null ? money(c.pickup) : '—') + '</td><td>' + (c.delivery != null ? money(c.delivery) : '—') + '</td>' +
+              '<td>' + (c.total != null ? '<b>' + money(c.total) + '</b>' : '<span class="muted" title="' + esc(c.error || '') + '">unavailable</span>') + '</td></tr>';
+          }).join('') + '</tbody></table>' : '') +
+      '<div class="pay-form">' +
+        '<label for="lq-pick">Pickup charge (before GST)</label><input class="sb-input" id="lq-pick" type="number" min="0" step="1" value="' + sug.pickup + '">' +
+        '<label for="lq-del">Delivery charge (before GST)</label><input class="sb-input" id="lq-del" type="number" min="0" step="1" value="' + sug.delivery + '">' +
+        '<label>Customer pays</label><div><span class="pay-total" id="lq-tot">—</span> <span class="pay-hint">incl. ' + PAY_GST + '% GST' +
+          (q && q.suggested ? ' · prefilled = cheapest courier + ' + q.bufferPct + '% buffer' : '') + '</span></div>' +
+        '<label>Customer agreed on</label><div class="lq-consent">' +
+          '<label><input type="radio" name="lq-consent" value="call"> Call</label>' +
+          '<label><input type="radio" name="lq-consent" value="whatsapp"> WhatsApp</label>' +
+          '<span class="pay-hint">to pay pickup, delivery, service &amp; spare-part charges</span></div>' +
+      '</div>' +
+      '<div class="pay-hint" id="lq-from">Checking Zoho Books connection…</div>' +
+      '<div class="pay-row"><button class="case-act primary" id="lq-send" disabled>Create invoice &amp; link</button>' +
+        '<button class="case-act" id="lq-cancel">Cancel</button></div>';
+
+    var pick = document.getElementById('lq-pick'), del = document.getElementById('lq-del'), send = document.getElementById('lq-send'), ready = false;
+    function consent() { var c = el.querySelector('input[name="lq-consent"]:checked'); return c ? c.value : ''; }
+    function upd() {
+      var t = (parseFloat(pick.value) || 0) + (parseFloat(del.value) || 0);
+      document.getElementById('lq-tot').textContent = t > 0 ? money(withGst(t)) : '—';
+      send.disabled = !ready || !(t > 0) || !consent();
+      send.title = !consent() ? 'Tick how the customer agreed first' : '';
+    }
+    pick.addEventListener('input', upd); del.addEventListener('input', upd);
+    el.querySelectorAll('input[name="lq-consent"]').forEach(function (x) { x.addEventListener('change', upd); });
+    document.getElementById('lq-cancel').addEventListener('click', function () { loadPayment(r, false); });
+    var ed = document.getElementById('lq-edit');
+    if (ed) ed.addEventListener('click', function () { document.getElementById('lq-size').hidden = false; ed.hidden = true; });
+    var rc = document.getElementById('lq-recalc');
+    if (rc) rc.addEventListener('click', function () {
+      logisticsForm(r, { length: document.getElementById('lq-l').value, width: document.getElementById('lq-w').value,
+        height: document.getElementById('lq-h').value, weight: Math.round(parseFloat(document.getElementById('lq-kg').value || 0) * 1000) || '' });
+    });
+    zohoFromLine(r, 'lq-from', function () { ready = true; upd(); });
+    upd();
+    send.addEventListener('click', function () {
+      var lines = [{ label: 'Pickup charge', amount: parseFloat(pick.value) || 0 }, { label: 'Return delivery charge', amount: parseFloat(del.value) || 0 }]
+        .filter(function (l) { return l.amount > 0; });
+      if (!lines.length) { alert('Enter the pickup and delivery charges.'); return; }
+      if (!consent()) { alert('Tick how the customer agreed to the charges (Call or WhatsApp).'); return; }
+      createPayment(r, send, { kind: 'logistics', lines: lines, consent: consent(),
+        description: 'Pickup & return delivery' + (q && q.size ? ' · ' + Math.round(q.size.chargeable / 100) / 10 + ' kg · ' + q.pincode : '') }, 'pickup & delivery');
+    });
+  }
+
+  // ── Step 2 form: service charge + spare parts ──
+  function repairForm(r) {
+    var el = document.getElementById('pay-repair'); if (!el) return;
+    el.innerHTML = stepHead('repair') +
+      '<div class="pay-form">' +
+        '<label for="rp-svc">Service charge (before GST)</label><input class="sb-input" id="rp-svc" type="number" min="0" step="1" placeholder="e.g. 500">' +
+        '<label>Spare parts</label><div><div id="rp-parts"></div><button type="button" class="linkish" id="rp-add">+ Add spare part</button></div>' +
+        '<label for="rp-desc">Work done</label><input class="sb-input" id="rp-desc" maxlength="300" placeholder="e.g. Switch and carbon brushes replaced">' +
+        '<label>Customer pays</label><div><span class="pay-total" id="rp-tot">—</span> <span class="pay-hint">incl. ' + PAY_GST + '% GST</span></div>' +
+      '</div>' +
+      '<div class="pay-hint" id="rp-from">Checking Zoho Books connection…</div>' +
+      '<div class="pay-row"><button class="case-act primary" id="rp-send" disabled>Create invoice &amp; link</button>' +
+        '<button class="case-act" id="rp-cancel">Cancel</button></div>';
+    var parts = document.getElementById('rp-parts'), send = document.getElementById('rp-send'), ready = false;
+    function lines() {
+      var out = [], svc = parseFloat(document.getElementById('rp-svc').value) || 0;
+      if (svc > 0) out.push({ label: 'Service charge', amount: svc });
+      parts.querySelectorAll('.rp-part').forEach(function (row) {
+        var n = row.querySelector('.rp-pn').value.trim(), a = parseFloat(row.querySelector('.rp-pa').value) || 0;
+        if (a > 0) out.push({ label: 'Spare part: ' + (n || '?'), amount: a, _noName: !n });
+      });
+      return out;
+    }
+    function upd() {
+      var t = lines().reduce(function (s, l) { return s + l.amount; }, 0);
+      document.getElementById('rp-tot').textContent = t > 0 ? money(withGst(t)) : '—';
+      send.disabled = !ready || !(t > 0);
+    }
+    function addPart() {
+      parts.insertAdjacentHTML('beforeend', '<div class="rp-part"><input class="sb-input rp-pn" maxlength="80" placeholder="Part name, e.g. Switch">' +
+        '<input class="sb-input rp-pa" type="number" min="0" step="1" placeholder="₹"><button type="button" class="linkish rp-x" title="Remove">&times;</button></div>');
+      var row = parts.lastElementChild;
+      row.querySelectorAll('input').forEach(function (x) { x.addEventListener('input', upd); });
+      row.querySelector('.rp-x').addEventListener('click', function () { row.remove(); upd(); });
+    }
+    document.getElementById('rp-add').addEventListener('click', addPart);
+    document.getElementById('rp-svc').addEventListener('input', upd);
+    document.getElementById('rp-cancel').addEventListener('click', function () { loadPayment(r, false); });
+    document.getElementById('rp-svc').focus();
+    zohoFromLine(r, 'rp-from', function () { ready = true; upd(); });
+    send.addEventListener('click', function () {
+      var ls = lines(), d = document.getElementById('rp-desc').value.trim();
+      if (!ls.length) { alert('Enter the service charge and/or spare parts.'); return; }
+      if (ls.some(function (l) { return l._noName; })) { alert('Give every spare part a name.'); return; }
       if (!d) { alert('Describe the work done in a few words.'); return; }
-      if (!confirm('Create a Zoho invoice for ' + money(Math.round(v * (100 + PAY_GST)) / 100) + ' (incl. GST) for ' + r.claim_id + '?')) return;
-      send.disabled = true; send.textContent = 'Creating…';
-      try {
-        var res = await post('ccPaymentCreate', { claim_id: r.claim_id, amount: v, description: d });
-        if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
-        await loadRequests(); renderTiles(); renderRequests(); openRequest(r.claim_id);
-      } catch (e) { alert("Couldn't create the invoice: " + e.message); send.disabled = false; send.textContent = 'Create invoice & link'; }
+      createPayment(r, send, { kind: 'repair', description: d,
+        lines: ls.map(function (l) { return { label: l.label, amount: l.amount }; }) }, 'the repair');
     });
   }
 

@@ -717,6 +717,7 @@ const ACTION_TIERS = {
   ccClaimsList: 'viewer_read', ccClaimGet: 'viewer_read', ccClaimFiles: 'viewer_read', // Customer Care: New requests
   ccClaimAction: 'manager_up',
   ccPaymentInfo: 'manager_up', ccPaymentCreate: 'manager_up', ccPaymentVoid: 'manager_up', ccPaymentGet: 'viewer_read', // Repair payments (Zoho Books)
+  ccLogisticsQuote: 'manager_up', // Out-of-warranty pickup + delivery quote (Delhivery + Ekart rates, Amazon dimensions)
   // Shikhar's Care Desk server — checked by the X-Care-Key header (env.CARE_KEY) inside the handler
   externalPickupRecord: 'public', warrantyRegistrations: 'public',
   warrantyRegister: 'public', // public product-registration form (tomahawk.tools) — rate-limited
@@ -964,7 +965,7 @@ const ACTION_TIERS = {
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
 const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction',
-  'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid']);
+  'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccLogisticsQuote']);
 
 function getAuthRequirement(act) {
   return ACTION_TIERS[act] || 'manager_up'; // fail-closed default for anything unmapped
@@ -1574,10 +1575,17 @@ export default {
         try { return json(await rpGet(env, String(url.searchParams.get('claim_id') || '').trim(), url.searchParams.get('refresh') === '1')); }
         catch (e) { console.error('ccPaymentGet:', e.message); return json({ ok: false, error: e.message }, 500); }
       }
+      if (request.method === 'GET' && action === 'ccLogisticsQuote') {
+        try {
+          const q = k => url.searchParams.get(k);
+          return json(await lqQuote(env, String(q('claim_id') || '').trim(),
+            { weight: q('weight'), length: q('length'), width: q('width'), height: q('height') }));
+        } catch (e) { console.error('ccLogisticsQuote:', e.message); return json({ ok: false, error: e.message }, 502); }
+      }
       if (request.method === 'POST' && act === 'ccPaymentVoid') {
         const user = authResult.user || (await resolveSession(request, env.DB));
         if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
-        try { const r = await rpVoid(env, user, String((body || {}).claim_id || '').trim()); return json(r, r.ok ? 200 : 400); }
+        try { const r = await rpVoid(env, user, String((body || {}).claim_id || '').trim(), (body || {}).kind); return json(r, r.ok ? 200 : 400); }
         catch (e) { console.error('ccPaymentVoid:', e.message); return json({ ok: false, error: e.message }, 502); }
       }
       if (request.method === 'POST' && act === 'ccPaymentCreate') {
@@ -7004,7 +7012,18 @@ async function ensureRepairPaymentsTable(DB) {
     status TEXT DEFAULT 'pending', created_by TEXT,
     created_at TEXT DEFAULT (datetime('now')), paid_at TEXT, checked_at TEXT
   )`).run();
+  // Two-phase out-of-warranty billing (28-Oct-2026): 'logistics' = pickup +
+  // delivery (paid before pickup is booked), 'repair' = service + spare parts
+  // (after inspection). Older rows are all 'repair'.
+  for (const col of ["kind TEXT DEFAULT 'repair'", 'lines_json TEXT']) {
+    try { await DB.prepare('ALTER TABLE repair_payments ADD COLUMN ' + col).run(); } catch (e) { /* already there */ }
+  }
 }
+const RP_KINDS = ['logistics', 'repair'];
+function rpKind(k) { return k === 'logistics' ? 'logistics' : 'repair'; }
+// SAC for the pickup + delivery invoice (courier services). Override with the
+// ZB_LOGISTICS_SAC Worker var if accounts want a different code.
+function rpLogisticsSac(env) { return env.ZB_LOGISTICS_SAC || '996812'; }
 
 // Shown when the team opens the payment panel: is Zoho connected, which
 // GSTIN we bill from, and the tax lines that will apply.
@@ -7017,22 +7036,33 @@ async function rpSetupInfo(env) {
     billFrom: home ? { name: home.name, gstin: home.gstin } : null };
 }
 
-// POST ccPaymentCreate { claim_id, amount (before GST), description }
+// POST ccPaymentCreate { claim_id, kind: 'logistics'|'repair', lines: [{label, amount}] (before GST),
+//   description, consent: 'call'|'whatsapp' (logistics only) }
+// Old callers may still send { claim_id, amount, description } → one 'repair' line.
 async function rpCreate(env, user, b) {
   if (!zbConfigured(env)) return { ok: false, error: 'Zoho Books is not connected on the Worker. Missing secret(s): ' + zbMissing(env).join(', ') };
   await ensureServiceRequestCols(env.DB);
   await ensureRepairPaymentsTable(env.DB);
   const claimId = String(b.claim_id || '').trim();
-  const amount = Math.round(Number(b.amount) * 100) / 100;
-  const desc = String(b.description || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  const kind = rpKind(b.kind);
+  const clean = v => String(v || '').replace(/\s+/g, ' ').trim();
+  let lines = Array.isArray(b.lines) ? b.lines : [{ label: b.description, amount: b.amount }];
+  lines = lines.map(l => ({ label: clean(l.label).slice(0, 120), amount: Math.round(Number(l.amount) * 100) / 100 }))
+               .filter(l => l.amount > 0);
+  const amount = Math.round(lines.reduce((t, l) => t + l.amount, 0) * 100) / 100;
+  const desc = (clean(b.description) || lines.map(l => l.label).filter(Boolean).join(', ')).slice(0, 300);
   if (!claimId) return { ok: false, error: 'claim_id is required' };
-  if (!(amount > 0) || amount > 200000) return { ok: false, error: 'Enter the repair cost (before GST).' };
+  if (!lines.length || !(amount > 0) || amount > 200000) return { ok: false, error: kind === 'logistics' ? 'Enter the pickup and delivery charges (before GST).' : 'Enter the repair cost (before GST).' };
+  if (lines.some(l => !l.label)) return { ok: false, error: 'Every charge line needs a name.' };
   if (!desc) return { ok: false, error: 'Describe the repair work in a few words.' };
+  const consent = String(b.consent || '').toLowerCase();
+  if (kind === 'logistics' && !['call', 'whatsapp'].includes(consent))
+    return { ok: false, error: 'Confirm the customer agreed to the charges (on call or WhatsApp) before sending the link.' };
   const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
   if (!row) return { ok: false, error: 'No such request' };
   if (row.warranty_status === 'Under warranty') return { ok: false, error: 'This request is under warranty — no payment needed.' };
-  const open = await env.DB.prepare("SELECT id FROM repair_payments WHERE claim_id = ? AND status IN ('pending','paid')").bind(claimId).first();
-  if (open) return { ok: false, error: 'A payment link already exists for this request. Refresh to see it.' };
+  const open = await env.DB.prepare("SELECT id FROM repair_payments WHERE claim_id = ? AND COALESCE(kind, 'repair') = ? AND status IN ('pending','paid')").bind(claimId, kind).first();
+  if (open) return { ok: false, error: 'A ' + (kind === 'logistics' ? 'pickup & delivery' : 'repair') + ' payment link already exists for this request. Refresh to see it.' };
   const stateCode = zbStateCode(row.state);
   if (!stateCode) return { ok: false, error: 'The request has no valid state ("' + (row.state || '') + '"), needed for GST. Fix the address first.' };
 
@@ -7040,13 +7070,18 @@ async function rpCreate(env, user, b) {
   const home = zbPickHome(locs);
   if (locs.length && !home) return { ok: false, error: 'Could not find the Maharashtra GSTIN in Zoho Books.' };
   const customerId = await zbContact(env, row, stateCode);
+  const taxId = stateCode === ZB_HOME_STATE ? taxes.intra : taxes.inter;
+  // Logistics lines are courier services (own SAC, no item); repair lines
+  // (service + spare parts) bill under the Repair Service item / SAC.
+  const lineItems = lines.map(l => kind === 'logistics'
+    ? { name: l.label, description: l.label + ' · ' + claimId, rate: l.amount, quantity: 1, hsn_or_sac: rpLogisticsSac(env), tax_id: taxId }
+    : { ...(itemId ? { item_id: itemId } : { name: ZB_ITEM_NAME }), description: l.label + ' · ' + (row.product || '') + ' · ' + claimId,
+        rate: l.amount, quantity: 1, hsn_or_sac: ZB_SAC, tax_id: taxId });
   const inv = {
     customer_id: customerId, reference_number: claimId,
     place_of_supply: stateCode, gst_treatment: 'consumer',
-    line_items: [{ ...(itemId ? { item_id: itemId } : { name: ZB_ITEM_NAME }), description: desc + ' · ' + (row.product || '') + ' · ' + claimId,
-      rate: amount, quantity: 1, hsn_or_sac: ZB_SAC,
-      tax_id: stateCode === ZB_HOME_STATE ? taxes.intra : taxes.inter }],
-    notes: 'Repair charges for service request ' + claimId + '. Thank you for choosing TOMAHAWK® Tools.',
+    line_items: lineItems,
+    notes: (kind === 'logistics' ? 'Pickup and return delivery charges' : 'Repair charges') + ' for service request ' + claimId + '. Thank you for choosing TOMAHAWK® Tools.',
     payment_options: { payment_gateways: [{ gateway_name: 'razorpay', configured: true }] }
   };
   if (home) inv[home.idKey] = home.id;
@@ -7064,26 +7099,39 @@ async function rpCreate(env, user, b) {
   const fresh = (await zbCall(env, 'GET', '/invoices/' + invoice.invoice_id)).invoice || invoice;
   const url = fresh.invoice_url || '';
 
-  await env.DB.prepare(`INSERT INTO repair_payments (claim_id, zoho_invoice_id, invoice_number, amount, total, description, invoice_url, status, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
-    .bind(claimId, invoice.invoice_id, fresh.invoice_number || invoice.invoice_number, amount, Number(fresh.total || invoice.total || 0),
-      desc, url, (user && user.username) || 'unknown').run();
+  const by = (user && user.username) || 'unknown';
+  if (kind === 'logistics') {
+    await srAddEvent(env.DB, claimId, { by, kind: 'consent',
+      note: 'Customer agreed to pay pickup, delivery, service and spare-part charges (confirmed on ' + (consent === 'call' ? 'call' : 'WhatsApp') + ')' }, {});
+  }
+  await env.DB.prepare(`INSERT INTO repair_payments (claim_id, kind, lines_json, zoho_invoice_id, invoice_number, amount, total, description, invoice_url, status, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
+    .bind(claimId, kind, JSON.stringify(lines), invoice.invoice_id, fresh.invoice_number || invoice.invoice_number, amount, Number(fresh.total || invoice.total || 0),
+      desc, url, by).run();
 
   let emailed = false;
   if (url) {
-    emailed = await srEmailCustomer(env, row, 'Repair payment', [
-      'Your repair cost is ready. Total payable (incl. 18% GST): ₹' + Number(fresh.total || 0).toFixed(2) + '.',
+    const tot = '₹' + Number(fresh.total || 0).toFixed(2);
+    emailed = await srEmailCustomer(env, row, kind === 'logistics' ? 'Pickup & delivery payment' : 'Repair payment', kind === 'logistics' ? [
+      'As agreed, please pay the pickup and return delivery charges for your product. Total payable (incl. 18% GST): ' + tot + '.',
+      'Invoice no.: ' + (fresh.invoice_number || ''),
+      'Pay securely online here: ' + url,
+      'We book the pickup as soon as the payment is received. Service and spare-part charges (if any) are shared after our technician inspects the product.'
+    ] : [
+      'Your repair cost is ready. Total payable (incl. 18% GST): ' + tot + '.',
       'Invoice no.: ' + (fresh.invoice_number || ''),
       'Pay securely online here: ' + url,
       'We start the repair as soon as the payment is received.'
     ]);
   }
-  await srAddEvent(env.DB, claimId, { by: (user && user.username) || 'unknown', kind: 'payment_link',
-    note: (fresh.invoice_number || '') + ' · ₹' + Number(fresh.total || 0).toFixed(2) + ' (₹' + amount.toFixed(2) + ' + GST) · ' + desc, emailed }, {});
-  return { ok: true, emailed, payment: await rpLatest(env.DB, claimId) };
+  await srAddEvent(env.DB, claimId, { by, kind: 'payment_link',
+    note: (kind === 'logistics' ? 'Pickup & delivery · ' : 'Repair · ') + (fresh.invoice_number || '') + ' · ₹' + Number(fresh.total || 0).toFixed(2) + ' (₹' + amount.toFixed(2) + ' + GST) · ' + desc, emailed }, {});
+  return { ok: true, emailed, payment: await rpLatest(env.DB, claimId, kind) };
 }
 
-async function rpLatest(DB, claimId) {
+// Latest payment row for a request — of one kind, or of any kind when kind is omitted.
+async function rpLatest(DB, claimId, kind) {
+  if (kind) return await DB.prepare("SELECT * FROM repair_payments WHERE claim_id = ? AND COALESCE(kind, 'repair') = ? ORDER BY id DESC LIMIT 1").bind(claimId, rpKind(kind)).first();
   return await DB.prepare('SELECT * FROM repair_payments WHERE claim_id = ? ORDER BY id DESC LIMIT 1').bind(claimId).first();
 }
 
@@ -7099,7 +7147,7 @@ async function rpCheckOne(env, p) {
     .bind(next, inv.invoice_url || '', p.id).run();
   if (next !== p.status && next === 'paid') {
     await srAddEvent(env.DB, p.claim_id, { by: 'system', kind: 'payment_received',
-      note: (p.invoice_number || '') + ' · ₹' + Number(inv.total || p.total || 0).toFixed(2) + ' paid' }, {});
+      note: (p.kind === 'logistics' ? 'Pickup & delivery · ' : 'Repair · ') + (p.invoice_number || '') + ' · ₹' + Number(inv.total || p.total || 0).toFixed(2) + ' paid' }, {});
   }
   if (next !== p.status && next === 'void') {
     await srAddEvent(env.DB, p.claim_id, { by: 'system', kind: 'payment_void', note: (p.invoice_number || '') + ' voided in Zoho' }, {});
@@ -7109,10 +7157,12 @@ async function rpCheckOne(env, p) {
 
 // POST ccPaymentVoid { claim_id } — cancel an unpaid link: voids the Zoho
 // invoice (so the link stops working) and frees the request for a new one.
-async function rpVoid(env, user, claimId) {
+async function rpVoid(env, user, claimId, kind) {
   if (!zbConfigured(env)) return { ok: false, error: 'Zoho Books is not connected on the Worker.' };
   await ensureRepairPaymentsTable(env.DB);
-  const p = await env.DB.prepare("SELECT * FROM repair_payments WHERE claim_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1").bind(claimId).first();
+  const p = kind
+    ? await env.DB.prepare("SELECT * FROM repair_payments WHERE claim_id = ? AND COALESCE(kind, 'repair') = ? AND status = 'pending' ORDER BY id DESC LIMIT 1").bind(claimId, rpKind(kind)).first()
+    : await env.DB.prepare("SELECT * FROM repair_payments WHERE claim_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1").bind(claimId).first();
   if (!p) return { ok: false, error: 'No unpaid payment link on this request.' };
   // Paid in the meantime? Never void a paid invoice from here.
   if ((await rpCheckOne(env, p)) !== 'pending') return { ok: false, error: 'This invoice is no longer unpaid — click Refresh.' };
@@ -7124,14 +7174,19 @@ async function rpVoid(env, user, claimId) {
 }
 
 // GET ccPaymentGet&claim_id=… (&refresh=1 re-checks Zoho first)
+// Returns { payment (latest of any kind — older callers), payments: { logistics, repair } }.
 async function rpGet(env, claimId, refresh) {
   await ensureRepairPaymentsTable(env.DB);
-  let p = await rpLatest(env.DB, claimId);
-  if (p && refresh && p.status === 'pending' && zbConfigured(env)) {
-    try { await rpCheckOne(env, p); } catch (e) { return { ok: true, payment: p, checkError: e.message }; }
-    p = await rpLatest(env.DB, claimId);
+  let checkError = null;
+  if (refresh && zbConfigured(env)) {
+    for (const k of RP_KINDS) {
+      const p = await rpLatest(env.DB, claimId, k);
+      if (p && p.status === 'pending') { try { await rpCheckOne(env, p); } catch (e) { checkError = e.message; } }
+    }
   }
-  return { ok: true, payment: p || null };
+  const payments = {};
+  for (const k of RP_KINDS) payments[k] = (await rpLatest(env.DB, claimId, k)) || null;
+  return { ok: true, payment: (await rpLatest(env.DB, claimId)) || null, payments, ...(checkError ? { checkError } : {}) };
 }
 
 // Cron (*/15): re-check pending payments, oldest check first.
@@ -7146,6 +7201,143 @@ async function rpCronCheck(env) {
     try { if ((await rpCheckOne(env, p)) === 'paid') paid++; } catch (e) { console.error('repair payment check', p.claim_id, e.message); }
   }
   return { checked: rows.length, paid };
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// OUT-OF-WARRANTY PICKUP + DELIVERY QUOTE (28-Oct-2026)
+// ═══════════════════════════════════════════════════════════════════════
+// GET ccLogisticsQuote&claim_id=… (&weight=g&length=&width=&height= cm to override)
+// 1. Package size: Amazon catalog (Supabase amz_catalog packageDimensions /
+//    packageWeight) for the request's ASIN — from the Amazon order, else the
+//    ordered SKU via amz_listings. Team overrides win; missing → category-free default.
+// 2. Chargeable weight = max(actual, L×W×H ÷ 5000), rounded up to 500 g.
+// 3. Delhivery + Ekart estimates for both legs: pickup (customer → warehouse,
+//    reverse) and return delivery (warehouse → customer, forward).
+// 4. Suggested charge (before GST) = cheaper courier's total × (1 + buffer),
+//    rounded up to ₹10. Buffer: Worker var LOGISTICS_BUFFER_PCT (default 15).
+// Couriers' own docs call these estimates — the team can edit before sending.
+const LQ_DEFAULT = { length: 30, width: 20, height: 15, weight: 2000 };   // used when Amazon has no size
+
+async function lqSupabase(env, path) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured on Worker');
+  const r = await fetch(env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/' + path, { headers: supabaseHeaders(env) });
+  if (!r.ok) throw new Error('Supabase ' + path.split('?')[0] + ' ' + r.status);
+  return r.json();
+}
+function lqCm(m) {
+  if (!m || m.value == null) return null;
+  const u = String(m.unit || '').toLowerCase(), v = Number(m.value);
+  return u.startsWith('inch') ? v * 2.54 : u.startsWith('millim') ? v / 10 : u.startsWith('meter') ? v * 100 : v;
+}
+function lqGrams(m) {
+  if (!m || m.value == null) return null;
+  const u = String(m.unit || '').toLowerCase(), v = Number(m.value);
+  return u.startsWith('kilo') ? v * 1000 : u.startsWith('pound') ? v * 453.592 : u.startsWith('ounce') ? v * 28.3495 : v;
+}
+
+// Find the ASIN + Amazon package size for a request (or null).
+async function lqAmazonSize(env, row) {
+  let asin = null;
+  const oid = String(row.order_id || '').trim();
+  if (/^\d{3}-\d{7}-\d{7}$/.test(oid)) {
+    const it = await lqSupabase(env, 'amz_order_items?select=asin&amazon_order_id=eq.' + encodeURIComponent(oid) + '&limit=1');
+    if (it[0] && it[0].asin) asin = it[0].asin;
+  }
+  if (!asin && row.order_skus) {
+    const skus = String(row.order_skus).split(/[,;\s]+/).map(x => x.trim()).filter(x => x && !/^x\d+$/i.test(x)).slice(0, 5);   // "SKU x2, SKU2" → SKUs only
+    if (skus.length) {
+      const inList = skus.map(x => '"' + x.replace(/"/g, '') + '"').join(',');
+      const ls = await lqSupabase(env, 'amz_listings?select=asin&seller_sku=in.(' + encodeURIComponent(inList) + ')&limit=1');
+      if (ls[0] && ls[0].asin) asin = ls[0].asin;
+    }
+  }
+  if (!asin) return null;
+  const cat = await lqSupabase(env, 'amz_catalog?select=asin,title,dims:raw->packageDimensions,wt:raw->packageWeight&asin=eq.' + encodeURIComponent(asin) + '&limit=1');
+  const c = cat[0];
+  if (!c) return { asin, found: false };
+  const d = Array.isArray(c.dims) ? c.dims[0] : c.dims, w = Array.isArray(c.wt) ? c.wt[0] : c.wt;
+  const size = d ? { length: lqCm(d.length), width: lqCm(d.width), height: lqCm(d.height) } : null;
+  const weight = lqGrams(w);
+  if (!size || !size.length || !size.width || !size.height || !weight) return { asin, title: c.title, found: false };
+  return { asin, title: c.title, found: true, length: size.length, width: size.width, height: size.height, weight };
+}
+
+async function lqDelhivery(env, pin, grams, direction) {
+  if (!env.DELHIVERY_API_TOKEN) throw new Error('Delhivery token not set');
+  const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
+  const originPin = env.DELHIVERY_ORIGIN_PIN || '421302';
+  const params = new URLSearchParams({ md: 'S', ss: 'Delivered',
+    d_pin: direction === 'reverse' ? originPin : pin, o_pin: direction === 'reverse' ? pin : originPin,
+    cgm: String(grams), pt: 'Pre-paid' });
+  if (env.DELHIVERY_PICKUP_LOCATION) params.set('cl', env.DELHIVERY_PICKUP_LOCATION);
+  const r = await fetch(base + '/api/kinko/v1/invoice/charges/.json?' + params.toString(), { headers: { 'Authorization': 'Token ' + env.DELHIVERY_API_TOKEN } });
+  const j = await r.json().catch(() => null);
+  if (!r.ok) throw new Error('Delhivery ' + r.status);
+  const e = Array.isArray(j) ? j[0] : j;
+  const t = e && (e.total_amount != null ? e.total_amount : e.charge_amount);
+  if (t == null) throw new Error('Delhivery gave no amount');
+  return Number(t);
+}
+async function lqEkart(env, pin, dims, grams, direction) {
+  if (!ekartConfigured(env)) throw new Error('Ekart credentials not set');
+  const token = await getEkartToken(env);
+  const r = await fetch(ekartBase(env) + '/data/pricing/estimate', {
+    method: 'POST', headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ billingClientType: 'EXISTING_CLIENT', shippingDirection: direction === 'reverse' ? 'REVERSE' : 'FORWARD',
+      serviceType: 'SURFACE', pickupPincode: Number(env.EKART_PICKUP_PIN || 421302), dropPincode: Number(pin),
+      weight: grams, length: Math.ceil(dims.length), width: Math.ceil(dims.width), height: Math.ceil(dims.height),
+      invoiceAmount: 0, codAmount: 0 })
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok) throw new Error('Ekart ' + r.status);
+  const t = j && (j.total != null ? j.total : j.totalAmount);
+  if (t == null) throw new Error('Ekart gave no amount');
+  return Number(t);
+}
+
+async function lqQuote(env, claimId, ov) {
+  await ensureServiceRequestCols(env.DB);
+  const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
+  if (!row) return { ok: false, error: 'No such request' };
+  const pin = String(row.pincode || '').trim();
+  if (!/^\d{6}$/.test(pin)) return { ok: false, error: 'The request has no valid 6-digit pincode — fix the pickup address first.' };
+
+  // Package size: team override → Amazon → default
+  const num = v => { const n = Number(v); return n > 0 ? n : null; };
+  let amz = null, amzError = null;
+  try { amz = await lqAmazonSize(env, row); } catch (e) { amzError = e.message; }
+  const base = amz && amz.found ? amz : LQ_DEFAULT;
+  const dims = { length: num(ov.length) || base.length, width: num(ov.width) || base.width, height: num(ov.height) || base.height };
+  const actual = num(ov.weight) || base.weight;
+  const overridden = !!(num(ov.length) || num(ov.width) || num(ov.height) || num(ov.weight));
+  const source = overridden ? 'team' : (amz && amz.found ? 'amazon' : 'default');
+  const volumetric = dims.length * dims.width * dims.height / 5;   // grams (÷5000 cm³/kg)
+  const chargeable = Math.ceil(Math.max(actual, volumetric) / 500) * 500;
+  // Amazon sometimes lists a tiny size for a big tool — flag it so the team checks.
+  const suspect = source === 'amazon' && (dims.length * dims.width * dims.height < 1000 || actual < 200);
+
+  const legs = async (name, fn) => {
+    const out = { courier: name };
+    const [p, d] = await Promise.allSettled([fn('reverse'), fn('forward')]);
+    out.pickup = p.status === 'fulfilled' ? p.value : null;
+    out.delivery = d.status === 'fulfilled' ? d.value : null;
+    out.error = [p, d].filter(x => x.status === 'rejected').map(x => x.reason.message).join('; ') || null;
+    out.total = out.pickup != null && out.delivery != null ? Math.round((out.pickup + out.delivery) * 100) / 100 : null;
+    return out;
+  };
+  const couriers = await Promise.all([
+    legs('Delhivery', dir => lqDelhivery(env, pin, chargeable, dir)),
+    legs('Ekart', dir => lqEkart(env, pin, dims, chargeable, dir))
+  ]);
+  const ok = couriers.filter(c => c.total != null).sort((a, b) => a.total - b.total);
+  const bufferPct = Number(env.LOGISTICS_BUFFER_PCT || 15);
+  const up10 = v => Math.ceil(v * (1 + bufferPct / 100) / 10) * 10;
+  const best = ok[0] || null;
+  return { ok: true, pincode: pin, city: row.city || '', state: row.state || '',
+    size: { ...dims, weight: Math.round(actual), volumetric: Math.round(volumetric), chargeable, source, suspect,
+            asin: amz ? amz.asin : null, amazonFound: !!(amz && amz.found), amazonError: amzError },
+    couriers, best: best ? best.courier : null, bufferPct,
+    suggested: best ? { pickup: up10(best.pickup), delivery: up10(best.delivery) } : null };
 }
 
 // ── Where is the linked pickup case? (reverse leg + its send-back leg) ──
