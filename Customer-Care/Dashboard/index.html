@@ -561,6 +561,9 @@ body #req-panel .case-table th { font-size: 11px; }
 body.cc-fit #req-panel .case-table .sub, body #req-panel .case-table .sub { font-size: 12px; }
 body #req-panel .case-table td.mono { font-size: 12.5px; }
 body #req-panel .case-table .badge { font-size: 10.5px; }
+/* Long marketplace titles stay on one line (full name on hover) so rows don't grow */
+#req-panel .case-table td.req-prod { max-width: 420px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#req-panel .case-table td.mono { white-space: nowrap; }
 </style>
 
 <!-- Skeleton loader (shared pattern, Oct 2026): grey shimmer placeholders
@@ -833,7 +836,7 @@ html .site-header [hidden] { display: none !important; }
     <div class="req-chips" id="req-chips"></div>
     <div class="table-wrap">
       <table class="case-table">
-        <thead><tr><th>Request</th><th>Customer</th><th>Product</th><th>Problem</th><th>Warranty</th><th>Status</th><th>Files</th></tr></thead>
+        <thead><tr><th>Request</th><th>Customer</th><th>Platform</th><th>Order ID</th><th>Product</th><th>Problem</th><th>Status</th><th>Files</th></tr></thead>
         <tbody id="req-body"><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:44px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td></tr><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:70px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td></tr><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:36px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td><td><span class="sk-block" style="width:60px"></span></td></tr><tr class="sk-row"><td><span class="sk-block" style="width:150px"></span><br><span class="sk-block" style="width:100px;height:9px;margin-top:8px"></span></td><td><span class="sk-block" style="width:52px"></span></td><td><span class="sk-block" style="width:40px"></span></td><td><span class="sk-block" style="width:64px"></span></td><td><span class="sk-block" style="width:30px"></span></td><td><span class="sk-block" style="width:60px"></span></td><td><span class="sk-block" style="width:44px"></span></td></tr></tbody>
       </table>
     </div>
@@ -3530,7 +3533,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       return test(r) && (!q || [r.claim_id, r.prev_claim_id, r.name, r.phone, r.order_id, r.product, r.email].join(' ').toLowerCase().indexOf(q) !== -1);
     });
     var body = document.getElementById('req-body');
-    if (!rows.length) { body.closest('table').classList.remove('req-full'); body.innerHTML = '<tr><td colspan="7" class="muted">Nothing here.</td></tr>'; renderReqPager(0, 1); return; }
+    if (!rows.length) { body.closest('table').classList.remove('req-full'); body.innerHTML = '<tr><td colspan="8" class="muted">Nothing here.</td></tr>'; renderReqPager(0, 1); return; }
     var total = rows.length, totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (reqPage > totalPages) reqPage = totalPages;
     if (reqPage < 1) reqPage = 1;
@@ -3543,16 +3546,17 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var cs = reqCaseStatus(r);
       return '<tr class="case-row' + ((r.status || 'new') === 'new' ? ' attn' : '') + '" data-id="' + esc(r.claim_id) + '">' +
         '<td class="mono">' + esc(r.claim_id) + '<div class="sub">' + esc(fmtWhen(r.created_at)) + (r.prev_claim_id ? ' · was ' + esc(r.prev_claim_id) : '') + '</div></td>' +
-        '<td>' + esc(r.name) + '<div class="sub">' + esc(r.city || '') + '</div></td>' +
-        '<td>' + esc(r.product) + '<div class="sub">' + esc(r.platform) + ' · ' + esc(r.order_id) + '</div></td>' +
+        '<td>' + esc(r.name) + '</td>' +
+        '<td>' + esc(r.platform || '\u2014') + '</td>' +
+        '<td class="mono">' + esc(r.order_id || '\u2014') + '</td>' +
+        '<td class="req-prod" title="' + esc(r.product) + '">' + esc(r.product) + '</td>' +
         '<td>' + esc(r.issue_type) + '</td>' +
-        '<td>' + warrantyBadge(r.warranty_status) + '</td>' +
         '<td><span class="badge ' + st[1] + '">' + esc(st[0]) + '</span>' + (cs ? '<div class="sub">' + esc(r.case_id + ' · ' + cs) + '</div>' : '') + '</td>' +
         '<td class="muted">' + (r.file_count || 0) + ' file(s)</td></tr>';
     }).join('');
     // Pad any page with fewer than 10 requests up to 10 invisible rows, so row height stays fixed
     for (var i = rows.length; i < PAGE_SIZE; i++) {
-      body.insertAdjacentHTML('beforeend', '<tr class="req-pad" aria-hidden="true"><td colspan="7">&nbsp;<div class="sub">&nbsp;</div></td></tr>');
+      body.insertAdjacentHTML('beforeend', '<tr class="req-pad" aria-hidden="true"><td colspan="8">&nbsp;<div class="sub">&nbsp;</div></td></tr>');
     }
     renderReqPager(total, totalPages);
     body.querySelectorAll('tr[data-id]').forEach(function (tr) {
