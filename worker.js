@@ -1486,12 +1486,16 @@ export default {
       if (request.method === 'GET' && action === 'warrantyLookup') {
         const orderId = String(url.searchParams.get('order_id') || '').trim().slice(0, 40);
         if (!orderId) return json({ ok: false, error: 'Enter an order ID' }, 400);
+        // Optional &platform= → format check first; a bad format returns the hint without using up the rate limit
+        const plat = String(url.searchParams.get('platform') || '').trim();
+        const oc = checkOrderId(plat, orderId);
+        if (!oc.ok) return json({ ok: true, found: false, format_ok: false, hint: oc.hint });
         const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
         if (!(await warrantyRateOk(env.DB, ip))) {
           return json({ ok: false, error: 'Too many checks — please try again in an hour.' }, 429);
         }
         try {
-          return json({ ok: true, ...(await warrantyLookup(env, orderId)) });
+          return json({ ok: true, format_ok: true, order_id: oc.order_id, platform_detected: oc.platform, ...(await warrantyLookup(env, oc.order_id)) });
         } catch (e) {
           return json({ ok: false, error: 'Lookup failed — please try again later.' }, 502);
         }
@@ -6517,6 +6521,28 @@ function normOrderId(raw) {
   return v;
 }
 
+// ── Order ID format check (28-Oct-2026) ──
+// Runs after normOrderId(). Amazon / Flipkart / Shopify / Moglix IDs must
+// match their real format, or the form shows the hint. "Other" (offline /
+// dealer) accepts anything 3+ characters and lands as NV- for the team to verify.
+// If the ID clearly belongs to another platform, the platform is corrected.
+// Same rules for the website form are in the snippet emailed to SK.
+const ORDER_ID_RULES = {
+  'Amazon':            { re: /^\d{3}-\d{7}-\d{7}$/, hint: 'Amazon order IDs look like 406-0275589-7275515 (17 digits). Find it in the Amazon app: Your Orders → tap the order → Order details.' },
+  'Flipkart':          { re: /^OD\d{18}$/,          hint: 'Flipkart order IDs start with OD followed by 18 digits, e.g. OD338715477875056100. Find it in the Flipkart app: My Orders → tap the order → Order details.' },
+  'Website (Shopify)': { re: /^\d{3,6}$/,            hint: 'Website order numbers are short numbers like 2844. Find it in your order confirmation email from tomahawk.tools.' },
+  'Moglix':            { re: /^\d{6,8}-\d{1,2}$/,     hint: 'Moglix order IDs look like 6353986-0. Find it in your Moglix order confirmation email.' }
+};
+function checkOrderId(platform, orderId) {
+  const id = normOrderId(orderId);
+  for (const p of ['Amazon', 'Flipkart']) {              // unmistakable formats → fix the platform
+    if (ORDER_ID_RULES[p].re.test(id)) return { ok: true, order_id: id, platform: p };
+  }
+  const rule = ORDER_ID_RULES[platform];
+  if (!rule) return id.length >= 3 ? { ok: true, order_id: id, platform } : { ok: false, hint: 'Please enter your order or invoice number.' };
+  return rule.re.test(id) ? { ok: true, order_id: id, platform } : { ok: false, hint: rule.hint };
+}
+
 async function warrantyLookup(env, orderId) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured');
   const resp = await fetch(env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/rpc/warranty_lookup', {
@@ -7276,8 +7302,10 @@ async function submitWarrantyClaim(env, b, ip) {
   if (f.name.length < 2) throw claimErr('Please enter your full name.');
   if (!/^[6-9]\d{9}$/.test(f.phone)) throw claimErr('Please enter a valid 10-digit mobile number.');
   if (f.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email)) throw claimErr('Please enter a valid email or leave it empty.');
-  if (f.order_id.length < 3) throw claimErr('Please enter your order ID.');
   if (CLAIM_PLATFORMS.indexOf(f.platform) === -1) throw claimErr('Please choose where you bought it.');
+  { const oc = checkOrderId(f.platform, f.order_id);
+    if (!oc.ok) throw claimErr(oc.hint);
+    f.order_id = oc.order_id; f.platform = oc.platform; }
   if (!f.product) throw claimErr('Please tell us which product.');
   if (CLAIM_ISSUES.indexOf(f.issue_type) === -1) throw claimErr('Please choose the issue type.');
   if (f.description.length < 20) throw claimErr('Please describe the issue in a little more detail (at least 20 characters).');
@@ -7479,6 +7507,9 @@ async function submitWarrantyRegistration(env, b, ip) {
   if (!/^[1-9]\d{5}$/.test(f.pincode)) throw claimErr('Please enter a valid 6-digit pincode.');
   if (f.address.length < 10) throw claimErr('Please enter your full address.');
   if (CLAIM_PLATFORMS.indexOf(f.platform) === -1) throw claimErr('Please choose where you bought it.');
+  if (f.order_id) { const oc = checkOrderId(f.platform, f.order_id);
+    if (!oc.ok) throw claimErr(oc.hint);
+    f.order_id = oc.order_id; f.platform = oc.platform; }
   if (!f.product) throw claimErr('Please tell us which product.');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(f.purchase_date) || f.purchase_date > new Date().toISOString().slice(0, 10))
     throw claimErr('Please enter the purchase date.');
