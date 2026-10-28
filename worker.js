@@ -6522,25 +6522,25 @@ function normOrderId(raw) {
 }
 
 // ── Order ID format check (28-Oct-2026) ──
-// Runs after normOrderId(). Amazon / Flipkart / Shopify / Moglix IDs must
-// match their real format, or the form shows the hint. "Other" (offline /
-// dealer) accepts anything 3+ characters and lands as NV- for the team to verify.
-// If the ID clearly belongs to another platform, the platform is corrected.
-// Same rules for the website form are in the snippet emailed to SK.
+// Runs after normOrderId(). Only three fixed formats:
+//   Amazon 17 digits / 3-7-7 · Flipkart OD + 18 digits (or the 18 digits) · Website 4 digits (or #)
+// An ID in one of these formats sets the platform automatically. If the customer
+// picked Amazon / Flipkart / Website and the ID doesn't match, they see the hint.
+// Everything else (Moglix, quick commerce, shop bills…) goes in as "Other" → NV-
+// for the team to verify. Same rules for the website form are in the email to SK.
 const ORDER_ID_RULES = {
   'Amazon':            { re: /^\d{3}-\d{7}-\d{7}$/, hint: 'Amazon order IDs look like 406-0275589-7275515 (17 digits). Find it in the Amazon app: Your Orders → tap the order → Order details.' },
   'Flipkart':          { re: /^OD\d{18}$/,          hint: 'Flipkart order IDs start with OD followed by 18 digits, e.g. OD338715477875056100. Find it in the Flipkart app: My Orders → tap the order → Order details.' },
-  'Website (Shopify)': { re: /^\d{3,6}$/,            hint: 'Website order numbers are short numbers like 2844. Find it in your order confirmation email from tomahawk.tools.' },
-  'Moglix':            { re: /^\d{6,8}-\d{1,2}$/,     hint: 'Moglix order IDs look like 6353986-0. Find it in your Moglix order confirmation email.' }
+  'Website (Shopify)': { re: /^\d{4}$/,              hint: 'Website order numbers look like 2844 (or #2844). Find it in your order confirmation email from tomahawk.tools.' }
 };
 function checkOrderId(platform, orderId) {
   const id = normOrderId(orderId);
-  for (const p of ['Amazon', 'Flipkart']) {              // unmistakable formats → fix the platform
+  for (const p of Object.keys(ORDER_ID_RULES)) {           // fixed format → that platform
     if (ORDER_ID_RULES[p].re.test(id)) return { ok: true, order_id: id, platform: p };
   }
-  const rule = ORDER_ID_RULES[platform];
-  if (!rule) return id.length >= 3 ? { ok: true, order_id: id, platform } : { ok: false, hint: 'Please enter your order or invoice number.' };
-  return rule.re.test(id) ? { ok: true, order_id: id, platform } : { ok: false, hint: rule.hint };
+  if (ORDER_ID_RULES[platform]) return { ok: false, hint: ORDER_ID_RULES[platform].hint };
+  if (id.length < 3) return { ok: false, hint: 'Please enter your order or bill number.' };
+  return { ok: true, order_id: id, platform: 'Other' };      // → lands as NV-
 }
 
 async function warrantyLookup(env, orderId) {
