@@ -268,9 +268,10 @@ table.log-table tr:last-child td { border-bottom: none; }
 .req-chip.on { border-color: var(--accent); color: var(--accent); }
 #req-panel .case-table { height: auto !important; }
 #req-panel .case-table tr { height: auto !important; }
-/* A full page of 10 requests stretches to fill the panel, rows evenly spread,
-   last row meeting the pager line. Short lists (under 10) keep natural height. */
+/* Every requests tab is laid out as 10 equal rows filling the panel (short lists are
+   padded with invisible rows), so spacing is identical across NV / Service / Warranty. */
 body.cc-fit #req-panel .case-table.req-full { height: 100% !important; }
+#req-panel .case-table tr.req-pad td { border-bottom-color: transparent; background: transparent; cursor: default; }
 .req-files { display: flex; flex-wrap: wrap; gap: 10px; }
 .req-files img, .req-files video { height: 150px; max-width: 100%; border-radius: 8px; border: 1px solid var(--border); object-fit: cover; background: var(--bg); }
 .req-ev { font-size: 12px; padding: 6px 0; border-bottom: 1px dashed var(--border); }
@@ -3506,8 +3507,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (reqPage > totalPages) reqPage = totalPages;
     if (reqPage < 1) reqPage = 1;
     rows = rows.slice((reqPage - 1) * PAGE_SIZE, reqPage * PAGE_SIZE);
-    // Stretch to fill the panel only when a full 10-row page is shown (incl. padded last page)
-    body.closest('table').classList.toggle('req-full', total >= PAGE_SIZE);
+    // Always lay out 10 row slots so every tab has the same row height and spacing
+    // (a tab with 7 requests looks the same as one with 29 — just with empty slots at the bottom)
+    body.closest('table').classList.add('req-full');
     body.innerHTML = rows.map(function (r) {
       var st = REQ_STATUS[r.status || 'new'] || [r.status, 'b-gray'];
       var cs = reqCaseStatus(r);
@@ -3520,11 +3522,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         '<td><span class="badge ' + st[1] + '">' + esc(st[0]) + '</span>' + (cs ? '<div class="sub">' + esc(r.case_id + ' · ' + cs) + '</div>' : '') + '</td>' +
         '<td class="muted">' + (r.file_count || 0) + ' file(s)</td></tr>';
     }).join('');
-    // Pad a short last page to 10 rows so the pager doesn't jump (only when paging)
-    if (total > PAGE_SIZE) {
-      for (var i = rows.length; i < PAGE_SIZE; i++) {
-        body.insertAdjacentHTML('beforeend', '<tr aria-hidden="true"><td colspan="7">&nbsp;<div class="sub">&nbsp;</div></td></tr>');
-      }
+    // Pad any page with fewer than 10 requests up to 10 invisible rows, so row height stays fixed
+    for (var i = rows.length; i < PAGE_SIZE; i++) {
+      body.insertAdjacentHTML('beforeend', '<tr class="req-pad" aria-hidden="true"><td colspan="7">&nbsp;<div class="sub">&nbsp;</div></td></tr>');
     }
     renderReqPager(total, totalPages);
     body.querySelectorAll('tr[data-id]').forEach(function (tr) {
