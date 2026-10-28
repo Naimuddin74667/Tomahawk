@@ -6500,10 +6500,27 @@ async function warrantyRateOk(DB, ip, cap) {
 
 // Calls the Supabase SQL function warranty_lookup() (non-personal fields
 // only) and adds the warranty dates. Dates are IST calendar dates.
+// ── Order ID clean-up (28-Oct-2026) ──
+// Customers type the same order many ways. Bring each one to the format our
+// order data uses, so lookups and the "one open request per order" check match.
+// Mirrors normalize_order_id() in Supabase (used by warranty_lookup).
+//   Amazon   40602755897275515 / 406 0275589 7275515 → 406-0275589-7275515
+//   Flipkart od 3387…100 / 338753962859543100        → OD338753962859543100
+//   Shopify  #2844 / 2844                            → 2844
+//   anything else (Moglix 6353986-0, FOC-…)          → uppercased, spaces/# removed
+function normOrderId(raw) {
+  const v = String(raw == null ? '' : raw).toUpperCase().replace(/[\s#]/g, '');
+  const digits = v.replace(/[^0-9A-Z]/g, '');
+  if (/^\d{17}$/.test(digits) && /^\d{3}[-.]?\d{7}[-.]?\d{7}$/.test(v))
+    return digits.slice(0, 3) + '-' + digits.slice(3, 10) + '-' + digits.slice(10);
+  if (/^(OD)?\d{18}$/.test(digits)) return 'OD' + digits.replace(/^OD/, '');
+  return v;
+}
+
 async function warrantyLookup(env, orderId) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured');
   const resp = await fetch(env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/rpc/warranty_lookup', {
-    method: 'POST', headers: supabaseHeaders(env), body: JSON.stringify({ p_order_id: orderId })
+    method: 'POST', headers: supabaseHeaders(env), body: JSON.stringify({ p_order_id: normOrderId(orderId) })
   });
   if (!resp.ok) throw new Error('Supabase ' + resp.status);
   const r = await resp.json();
@@ -6732,9 +6749,9 @@ async function srVerify(env, user, b) {
   if (!/^NV-/.test(row.claim_id)) return { ok: false, error: 'Only NV- requests need verifying' };
   if (['closed', 'not_covered'].includes(row.status)) return { ok: false, error: 'This request is closed' };
 
-  const orderId = s(b.order_id, 40) || row.order_id;
+  const orderId = normOrderId(s(b.order_id, 40) || row.order_id);
   if (orderId.length < 3) return { ok: false, error: 'Enter the order ID' };
-  const orderKey = orderId.toUpperCase().replace(/[\s#]/g, '');
+  const orderKey = normOrderId(orderId);
   let platform = s(b.platform, 30) || row.platform;
   if (CLAIM_PLATFORMS.indexOf(platform) === -1) platform = row.platform;
 
@@ -7160,8 +7177,8 @@ async function srTrack(env, idRaw, phoneRaw) {
   const phone = String(phoneRaw || '').replace(/\D/g, '').slice(-10);
   if (!id || phone.length !== 10) return { ok: false, error: 'Enter your request ID (or order ID) and mobile number.' };
   const row = await env.DB.prepare(
-    "SELECT * FROM warranty_claims WHERE (UPPER(claim_id) = ? OR UPPER(prev_claim_id) = ? OR order_key = ?) AND phone = ? ORDER BY created_at DESC LIMIT 1"
-  ).bind(id, id, id, phone).first();
+    "SELECT * FROM warranty_claims WHERE (UPPER(claim_id) = ? OR UPPER(prev_claim_id) = ? OR order_key IN (?, ?)) AND phone = ? ORDER BY created_at DESC LIMIT 1"
+  ).bind(id, id, id, normOrderId(idRaw), phone).first();
   if (!row) return { ok: false, notFound: true, error: 'We could not find a request with these details.' };
   const legs = await srCaseLegs(env.DB, row.case_id);
   const s = srSteps(row, legs);
@@ -7251,7 +7268,7 @@ async function submitWarrantyClaim(env, b, ip) {
   const clean = (v, max) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, max);
   const f = {
     name: clean(b.name, 80), phone: clean(b.phone, 20).replace(/\D/g, '').slice(-10),
-    email: clean(b.email, 120).toLowerCase(), order_id: clean(b.order_id, 40),
+    email: clean(b.email, 120).toLowerCase(), order_id: normOrderId(clean(b.order_id, 40)),
     platform: clean(b.platform, 30), product: clean(b.product, 120),
     issue_type: clean(b.issue_type, 60), description: String(b.description || '').trim().slice(0, 2000),
     address: clean(b.address, 300), pincode: clean(b.pincode, 6), city: clean(b.city, 60), state: clean(b.state, 60)
@@ -7278,7 +7295,7 @@ async function submitWarrantyClaim(env, b, ip) {
   if (files.reduce((n, x) => n + x.base64.length, 0) > CLAIM_MAX_BYTES) throw claimErr('Files are too large — please use a shorter video or fewer photos.');
 
   await ensureServiceRequestCols(env.DB);
-  const orderKey = f.order_id.toUpperCase().replace(/[\s#]/g, '');
+  const orderKey = normOrderId(f.order_id);
 
   // One open claim per order — return the existing one instead of a duplicate.
   const open = await env.DB.prepare(
@@ -7453,7 +7470,7 @@ async function submitWarrantyRegistration(env, b, ip) {
     name: clean(b.name, 80), phone: clean(b.phone, 20).replace(/\D/g, '').slice(-10),
     email: clean(b.email, 120).toLowerCase(), pincode: clean(b.pincode, 6),
     city: clean(b.city, 60), state: clean(b.state, 60), address: clean(b.address, 300),
-    platform: clean(b.platform, 30), order_id: clean(b.order_id, 40), product: clean(b.product, 120),
+    platform: clean(b.platform, 30), order_id: normOrderId(clean(b.order_id, 40)), product: clean(b.product, 120),
     purchase_date: clean(b.purchase_date, 10), lang: clean(b.lang, 10)
   };
   if (f.name.length < 2) throw claimErr('Please enter your full name.');
