@@ -7290,10 +7290,22 @@ async function insertWithSerialId(DB, prefix, table, col, makeStmt) {
   throw new Error('Could not allocate a ' + prefix + ' ID after 5 tries');
 }
 
+// ── Customer phone / email checks (28-Oct-2026) ──
+// Phone: strip a leading +91 / 91 / 0, then it must be exactly 10 digits starting 6–9.
+// Extra digits are rejected (we used to keep only the last 10). Returns '' if invalid.
+function normPhone(raw) {
+  let d = String(raw == null ? '' : raw).replace(/\D/g, '');
+  if (d.length === 12 && d.startsWith('91')) d = d.slice(2);
+  else if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+  return /^[6-9]\d{9}$/.test(d) ? d : '';
+}
+// Email: name@domain.ext — no spaces, ending of 2+ letters.
+function validEmail(e) { return /^[^@\s]+@[^@\s.]+(\.[^@\s.]+)*\.[a-z]{2,}$/i.test(e); }
+
 async function submitWarrantyClaim(env, b, ip) {
   const clean = (v, max) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, max);
   const f = {
-    name: clean(b.name, 80), phone: clean(b.phone, 20).replace(/\D/g, '').slice(-10),
+    name: clean(b.name, 80), phone: normPhone(clean(b.phone, 20)),
     email: clean(b.email, 120).toLowerCase(), order_id: normOrderId(clean(b.order_id, 40)),
     platform: clean(b.platform, 30), product: clean(b.product, 120),
     issue_type: clean(b.issue_type, 60), description: String(b.description || '').trim().slice(0, 2000),
@@ -7301,7 +7313,7 @@ async function submitWarrantyClaim(env, b, ip) {
   };
   if (f.name.length < 2) throw claimErr('Please enter your full name.');
   if (!/^[6-9]\d{9}$/.test(f.phone)) throw claimErr('Please enter a valid 10-digit mobile number.');
-  if (f.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email)) throw claimErr('Please enter a valid email or leave it empty.');
+  if (f.email && !validEmail(f.email)) throw claimErr('Please enter a valid email, or leave it empty.');
   if (CLAIM_PLATFORMS.indexOf(f.platform) === -1) throw claimErr('Please choose where you bought it.');
   { const oc = checkOrderId(f.platform, f.order_id);
     if (!oc.ok) throw claimErr(oc.hint);
@@ -7495,7 +7507,7 @@ async function ensureWarrantyRegistrationsTable(DB) {
 async function submitWarrantyRegistration(env, b, ip) {
   const clean = (v, max) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, max);
   const f = {
-    name: clean(b.name, 80), phone: clean(b.phone, 20).replace(/\D/g, '').slice(-10),
+    name: clean(b.name, 80), phone: normPhone(clean(b.phone, 20)),
     email: clean(b.email, 120).toLowerCase(), pincode: clean(b.pincode, 6),
     city: clean(b.city, 60), state: clean(b.state, 60), address: clean(b.address, 300),
     platform: clean(b.platform, 30), order_id: normOrderId(clean(b.order_id, 40)), product: clean(b.product, 120),
@@ -7503,7 +7515,7 @@ async function submitWarrantyRegistration(env, b, ip) {
   };
   if (f.name.length < 2) throw claimErr('Please enter your full name.');
   if (!/^[6-9]\d{9}$/.test(f.phone)) throw claimErr('Please enter a valid 10-digit mobile number.');
-  if (f.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email)) throw claimErr('Please enter a valid email or leave it empty.');
+  if (f.email && !validEmail(f.email)) throw claimErr('Please enter a valid email, or leave it empty.');
   if (!/^[1-9]\d{5}$/.test(f.pincode)) throw claimErr('Please enter a valid 6-digit pincode.');
   if (f.address.length < 10) throw claimErr('Please enter your full address.');
   if (CLAIM_PLATFORMS.indexOf(f.platform) === -1) throw claimErr('Please choose where you bought it.');
