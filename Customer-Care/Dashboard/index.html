@@ -455,6 +455,17 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .rq-thumb { position: relative; padding: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface);
   width: 140px; height: 140px; cursor: zoom-in; }
 .rq-thumb:hover { border-color: var(--accent); }
+.rq-card .req-files { flex-wrap: nowrap; }
+.rq-thumb { width: 120px; height: 120px; flex: 0 0 auto; }
+.rq-more-t { display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 26px; font-weight: 800;
+  color: var(--accent); font-family: var(--font-display); }
+.rq-more-t span { font-size: 11px; font-weight: 600; color: var(--text2); font-family: inherit; }
+.rq-order { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 16px; }
+.rq-order .span-all { grid-column: 1 / -1; }
+.rq-wty { display: inline-block; padding: 4px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 800; }
+.rq-wty.ok { color: #22c55e; background: rgba(34,197,94,.12); border: 1px solid rgba(34,197,94,.45); }
+.rq-wty.out { color: #f87171; background: rgba(248,113,113,.12); border: 1px solid rgba(248,113,113,.45); }
+@media (max-width: 700px) { .rq-order { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .rq-thumb img, .rq-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; border: 0; border-radius: 0; }
 .rq-thumb.is-vid::after { content: '\25B6'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   font-size: 28px; color: #fff; background: rgba(0,0,0,.35); text-shadow: 0 1px 4px rgba(0,0,0,.6); }
@@ -3639,14 +3650,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
           '<span class="rq-lbl">Problem :</span><span><span class="rq-chip">' + esc(r.issue_type || '\u2014') + '</span></span>' +
           (r.description ? '<span class="rq-lbl">Customer says :</span><span class="rq-quote">\u201c' + esc(r.description) + '\u201d</span>' : '') +
         '</div>' +
-        // Verified requests: order details live here (NV shows them in the Verify box instead)
-        (!nv ? '<div class="rq-meta">' + esc(r.platform || '') + ' \u00b7 <span class="mono">' + esc(r.order_id || '\u2014') + '</span>' +
-            (r.order_date ? ' \u00b7 bought ' + esc(r.order_date) : '') + ' \u00b7 ' + warrantyBadge(r.warranty_status) +
-            (r.warranty_until ? ' until ' + esc(r.warranty_until) : '') + '</div>' +
-          (oidWarn ? '<div class="rq-warn">&#9888; ' + esc(oidWarn) + '</div>' : '') : '') +
-        (r.case_id ? '<div class="rq-meta">Pickup case <b class="mono">' + esc(r.case_id) + '</b> \u00b7 ' + esc(reqCaseStatus(r)) + '</div>' : '') +
       '</div><div class="rq-card"><div class="cm-k">Photos &amp; video <span id="req-files-n"></span></div>' +
         '<div class="req-files" id="req-files"><span class="muted">Loading…</span></div></div></div>' +
+      // R3 — order details (verified SRN/WRN only; NV shows them in the Verify box)
+      (!nv ? orderDetailsHtml(r, oidWarn) : '') +
       // R3 — verify (NV only)
       (nv && canActReq() && ['closed', 'not_covered'].indexOf(r.status) === -1 ? verifyBoxHtml(r) : '') +
       (showPay ? '<div class="cm-sec"><div class="cm-sec-title">Repair payment</div></div><div id="req-pay" class="pay-box"><span class="pay-hint">Loading…</span></div>' : '') +
@@ -3665,16 +3672,37 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       if (!fl.length) { el.innerHTML = '<span class="muted">' + (r.file_count ? 'Files were emailed to support (not stored for this older request).' : 'No files.') + '</span>'; return; }
       var ok = fl.filter(function (x) { return x.url; });
       document.getElementById('req-files-n').textContent = '(' + fl.length + ')';
-      el.innerHTML = fl.map(function (x) {
-        if (!x.url) return '<span class="muted">' + esc(x.name) + ' (unavailable)</span>';
+      // One line only: first 2 files, then a "+N" tile that opens the viewer on the 3rd
+      var SHOW = 2, extra = ok.length - SHOW;
+      el.innerHTML = ok.slice(0, SHOW).map(function (x) {
         var i = ok.indexOf(x), vid = /^video\//.test(x.mime);
         return '<button type="button" class="rq-thumb' + (vid ? ' is-vid' : '') + '" data-i="' + i + '" title="' + esc(x.name) + '">' +
           (vid ? '<video src="' + esc(x.url) + '" preload="metadata" muted></video>' : '<img src="' + esc(x.url) + '" alt="' + esc(x.name) + '">') + '</button>';
-      }).join('');
+      }).join('') +
+        (extra > 0 ? '<button type="button" class="rq-thumb rq-more-t" data-i="' + SHOW + '">+' + extra + '<span>more</span></button>' : '') +
+        (ok.length < fl.length ? '<span class="muted" style="align-self:center">' + (fl.length - ok.length) + ' unavailable</span>' : '');
       el.querySelectorAll('.rq-thumb').forEach(function (b) {
         b.addEventListener('click', function () { openLightbox(ok, +b.dataset.i); });
       });
     }).catch(function () { var el = document.getElementById('req-files'); if (el) el.innerHTML = '<span class="muted">Could not load files.</span>'; });
+  }
+
+  // Order details box for verified requests: platform, order ID, purchase date,
+  // ordered SKUs, warranty (big badge so Under / Out of warranty is obvious) and pickup case.
+  function orderDetailsHtml(r, oidWarn) {
+    var under = r.warranty_status === 'Under warranty';
+    var cell = function (k, v) { return '<div><div class="cm-k">' + k + '</div><div>' + v + '</div></div>'; };
+    return '<div class="cm-sec"><div class="cm-sec-title">Order details</div></div>' +
+      '<div class="rq-card rq-order">' +
+        cell('Bought on', esc(r.platform || '\u2014')) +
+        cell('Order ID', '<span class="mono">' + esc(r.order_id || '\u2014') + '</span>' +
+          (oidWarn ? '<div class="rq-warn">&#9888; ' + esc(oidWarn) + '</div>' : '')) +
+        cell('Purchase date', esc(r.order_date || '\u2014')) +
+        cell('Warranty', '<span class="rq-wty ' + (under ? 'ok' : 'out') + '">' + (under ? '&#10003; Under warranty' : '&#10007; Out of warranty') + '</span>' +
+          (r.warranty_until ? '<div class="pay-hint" style="margin-top:4px">' + (under ? 'valid till ' : 'ended ') + esc(r.warranty_until) + '</div>' : '')) +
+        (r.order_skus ? '<div class="span-all">' + '<div class="cm-k">Ordered item(s)</div><div class="mono">' + esc(r.order_skus) + '</div></div>' : '') +
+        (r.case_id ? '<div class="span-all"><div class="cm-k">Pickup case</div><div><b class="mono">' + esc(r.case_id) + '</b> \u00b7 ' + esc(reqCaseStatus(r)) + '</div></div>' : '') +
+      '</div>';
   }
 
   // ── Photo / video viewer for request files ──
