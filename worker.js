@@ -7543,6 +7543,11 @@ async function submitWarrantyClaim(env, b, ip) {
   const warrantyStatus = !w.found ? 'Order not verified' : w.cancelled ? 'Order cancelled'
     : w.under_warranty ? 'Under warranty' : 'Out of warranty';
   const skus = w.found ? (w.items || []).map(it => it.sku + (it.qty > 1 ? ' x' + it.qty : '')).join(', ') : '';
+  // Out-of-warranty charges agreement (website checkbox, field charges_consent: true).
+  // Enforced only once the website sends it — turn on with Worker var REQUIRE_CHARGES_CONSENT = '1'.
+  const chargesConsent = b.charges_consent === true;
+  if (warrantyStatus === 'Out of warranty' && !chargesConsent && env.REQUIRE_CHARGES_CONSENT === '1')
+    throw claimErr('Your product is out of warranty. Please tick that you agree to pay the pickup, delivery, service and spare-part charges.');
 
   // Claim ID: <prefix>-YYMMDD-NN (IST date, per-day serial per prefix).
   // Older requests keep their WC- IDs.
@@ -7562,6 +7567,7 @@ async function submitWarrantyClaim(env, b, ip) {
     'A new service request was submitted on the website.', '',
     'Claim ID        : ' + claimId,
     'Warranty status : ' + warrantyStatus + (w.found ? ' (ordered ' + w.order_date + ', valid until ' + w.warranty_until + ')' : ''),
+    'Charges agreed  : ' + (chargesConsent ? 'Yes (ticked on website)' : 'No'),
     '', '— Customer —',
     'Name            : ' + f.name,
     'Mobile          : ' + f.phone,
@@ -7585,6 +7591,11 @@ async function submitWarrantyClaim(env, b, ip) {
     text, attachments: files.map((x, i) => ({ ...x, filename: claimId + '_' + (i + 1) + '_' + x.filename }))
   });
   await env.DB.prepare("UPDATE warranty_claims SET emailed_at = datetime('now') WHERE claim_id = ?").bind(claimId).run();
+  if (chargesConsent) {
+    try { await srAddEvent(env.DB, claimId, { by: 'customer', kind: 'consent',
+      note: 'Agreed on the website to pay pickup, delivery, service and spare-part charges if out of warranty' }, {}); }
+    catch (e) { console.error('consent event failed:', e.message); }
+  }
 
   // Keep the photos / video so the care team can review them on the dashboard
   // (best effort — the email above already carries them).
