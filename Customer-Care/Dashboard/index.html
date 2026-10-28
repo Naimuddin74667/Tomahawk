@@ -2185,7 +2185,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     el.querySelectorAll('.tile').forEach(function (t) {
       t.addEventListener('click', function () {
         tileFilter = t.dataset.f; page = 1; renderTiles();
-        if (tileFilter === 'requests') { showView('requests'); renderRequests(); } else { showView('cases'); renderTable(); }
+        if (tileFilter === 'requests') { reqFilter = pickDefaultReqTab(); reqPage = 1; showView('requests'); renderRequests(); } else { showView('cases'); renderTable(); }
       });
     });
   }
@@ -3408,22 +3408,34 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // ask for info, send a tip, send a repair quote, not covered, or approve
   // (opens Create Pickup prefilled; booking the pickup approves it). Every
   // action emails the customer (worker: ccClaimAction). ──
-  var requests = [], reqFilter = 'review', openReqId = null;
+  var requests = [], reqFilter = 'verify', openReqId = null;
   var reqPage = 1;   // requests pagination — 10 per page, same as the cases list
   var REQ_STATUS = {
     'new': ['To review', 'b-amber'], waiting_customer: ['Waiting for customer', 'b-blue'],
     tip_sent: ['Tip sent', 'b-blue'], quote_sent: ['Quote sent', 'b-blue'],
     approved: ['Pickup booked', 'b-green'], closed: ['Closed', 'b-gray'], not_covered: ['Not covered', 'b-gray']
   };
+  // Tab order: All → NV → Service (SRN-) → Warranty (WRN-) → Waiting → Pickup booked → Closed.
+  // Old SN-/WN- IDs still match. Default tab = first of NV / Service / Warranty that has requests.
+  function isSRN(r) { return /^SR?N-/.test(r.claim_id || ''); }
+  function isToReview(r) { return (r.status || 'new') === 'new' && !isNV(r); }
   var REQ_FILTERS = [
-    // NV- = order not found when submitted → verified in its own tab first, then it becomes WRN-/SRN- and moves to To review
-    { key: 'review', label: 'To review', test: function (r) { return (r.status || 'new') === 'new' && !isNV(r); } },
+    { key: 'all', label: 'All', test: function () { return true; } },
+    // NV- = order not found when submitted → verified in its own tab first, then it becomes WRN-/SRN- and moves to its review tab
     { key: 'verify', label: 'Verify order (NV)', test: function (r) { return isNV(r) && ['closed', 'not_covered'].indexOf(r.status) === -1; } },
+    { key: 'service', label: 'Service requests', test: function (r) { return isToReview(r) && isSRN(r); } },
+    { key: 'warranty', label: 'Warranty requests', test: function (r) { return isToReview(r) && !isSRN(r); } },
     { key: 'waiting', label: 'Waiting for customer', test: function (r) { return ['waiting_customer', 'tip_sent', 'quote_sent'].indexOf(r.status) !== -1; } },
     { key: 'approved', label: 'Pickup booked', test: function (r) { return r.status === 'approved'; } },
-    { key: 'done', label: 'Closed', test: function (r) { return r.status === 'closed' || r.status === 'not_covered'; } },
-    { key: 'all', label: 'All', test: function () { return true; } }
+    { key: 'done', label: 'Closed', test: function (r) { return r.status === 'closed' || r.status === 'not_covered'; } }
   ];
+  function reqTest(key) { return REQ_FILTERS.filter(function (f) { return f.key === key; })[0].test; }
+  // Pick the opening tab: NV first, then Service, then Warranty (falls back to Warranty if all empty).
+  function pickDefaultReqTab() {
+    var order = ['verify', 'service', 'warranty'];
+    for (var i = 0; i < order.length; i++) if (requests.some(reqTest(order[i]))) return order[i];
+    return 'warranty';
+  }
   // Ready-made messages — the team picks one and edits it before sending.
   var REQ_TEMPLATES = {
     ask_info: ['Please send a short video showing the problem. Switch the tool on so we can see and hear what happens.',
@@ -3444,8 +3456,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     payment_link: 'Payment link sent', payment_received: 'Payment received', payment_void: 'Invoice voided', verified: 'Order verified' };
   function canActReq() { return window.TM_ROLE === 'admin' || window.TM_ROLE === 'manager'; }
   function isNV(r) { return /^NV-/.test(r.claim_id || ''); }
-  // "New requests" tile = to review + still to verify
-  function reqToReview() { return requests.filter(function (r) { return REQ_FILTERS[0].test(r) || REQ_FILTERS[1].test(r); }); }
+  // "New requests" tile = to review (SRN + WRN) + still to verify
+  function reqToReview() { return requests.filter(function (r) { return isToReview(r) || reqTest('verify')(r); }); }
 
   async function loadRequests() {
     try {
@@ -3484,7 +3496,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       b.addEventListener('click', function () { reqFilter = b.dataset.k; reqPage = 1; renderRequests(); });
     });
     var q = document.getElementById('req-q').value.trim().toLowerCase();
-    var test = REQ_FILTERS.filter(function (f) { return f.key === reqFilter; })[0].test;
+    var test = reqTest(reqFilter);
     var rows = requests.filter(function (r) {
       return test(r) && (!q || [r.claim_id, r.prev_claim_id, r.name, r.phone, r.order_id, r.product, r.email].join(' ').toLowerCase().indexOf(q) !== -1);
     });
