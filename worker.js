@@ -1346,9 +1346,14 @@ async function refreshFlipkartImages(env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: CORS });
+    }
+    // WhatsApp retry queue — piggybacks on normal traffic, at most every 30 s per isolate.
+    if (ctx && Date.now() - SR_WA_QUEUE_LAST > 30000) {
+      SR_WA_QUEUE_LAST = Date.now();
+      ctx.waitUntil(srWaProcessQueue(env).catch(err => console.error('wa queue:', err.message)));
     }
 
     const url = new URL(request.url);
@@ -4896,6 +4901,8 @@ export default {
     // Service requests — email the customer as the courier / warehouse moves
     // their case on (picked up, reached us, sent back, delivered). */15 ticks.
     ctx.waitUntil(srMilestoneEmails(env).catch(err => console.error('service request milestones:', err.message)));
+    // Service requests — retry failed WhatsApp "Request received" sends. */15 ticks.
+    ctx.waitUntil(srWaProcessQueue(env).catch(err => console.error('wa queue:', err.message)));
     // Repair payments — mark requests Paid once Zoho shows the invoice paid. */15 ticks.
     ctx.waitUntil(rpCronCheck(env).catch(err => console.error('repair payments:', err.message)));
     // Order-data retention (Supabase mirror) — once a day, on the tick
@@ -7622,7 +7629,7 @@ async function zdCall(env, method, path, opt) {
     method,
     headers: { Authorization: 'Zoho-oauthtoken ' + (await zdToken(env, force)), 'Content-Type': 'application/json',
       ...(opt.orgId ? { orgId: String(opt.orgId) } : {}) },
-    body: opt.body ? JSON.stringify(opt.body) : undefined
+    body: opt.rawBody != null ? opt.rawBody : (opt.body ? JSON.stringify(opt.body) : undefined)
   });
   let r = await go(false);
   if (r.status === 401) r = await go(true);
@@ -7705,8 +7712,63 @@ async function srWaLog(env, claimId, ok, step, detail) {
   } catch (e) { console.error('sr_wa_log failed:', e.message); }
 }
 
+// On a failed send: who is the token's user, is the WhatsApp channel healthy,
+// and are there open chat sessions — logged to sr_wa_log for debugging.
+async function zdWaDiagnostics(env, cfg, contactId) {
+  const d = {};
+  const grab = async (k, path, query) => {
+    try { const x = await zdCall(env, 'GET', path, { orgId: cfg.orgId, query }); d[k] = { status: x.status, json: JSON.stringify(x.json).slice(0, 1500) }; }
+    catch (e) { d[k] = { error: e.message }; }
+  };
+  await grab('myinfo', '/myinfo');
+  await grab('channel', '/im/channels/' + cfg.channelId);
+  await grab('sessions', '/im/sessions', { limit: '10' });
+  await grab('contactSessions', '/im/sessions', { contactId: String(contactId), limit: '5' });
+  return d;
+}
+
+// Retry queue — a failed WhatsApp send is retried by the */15 cron (and on
+// normal Worker traffic, at most every 30 s per isolate). Rows can also be
+// added by hand (D1) to re-send without a new form submission.
+let SR_WA_QUEUE_LAST = 0;
+async function srWaEnsureQueue(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS sr_wa_queue (id INTEGER PRIMARY KEY AUTOINCREMENT,
+    claim_id TEXT, payload TEXT, status TEXT DEFAULT 'pending', tries INTEGER DEFAULT 0,
+    next_at TEXT DEFAULT (datetime('now')), last_error TEXT, updated_at TEXT DEFAULT (datetime('now')))`).run();
+}
+async function srWaEnqueue(env, r, delayMin, err) {
+  try {
+    await srWaEnsureQueue(env.DB);
+    await env.DB.prepare(`INSERT INTO sr_wa_queue (claim_id, payload, tries, next_at, last_error)
+      VALUES (?, ?, 1, datetime('now', ?), ?)`).bind(r.claimId, JSON.stringify(r), '+' + (delayMin || 15) + ' minutes', String(err || '').slice(0, 500)).run();
+  } catch (e) { console.error('sr_wa_queue insert failed:', e.message); }
+}
+async function srWaProcessQueue(env) {
+  await srWaEnsureQueue(env.DB);
+  const rows = (await env.DB.prepare(`SELECT * FROM sr_wa_queue WHERE status = 'pending' AND next_at <= datetime('now')
+    ORDER BY id LIMIT 2`).all()).results || [];
+  for (const q of rows) {
+    // claim the row first so two runs never send twice
+    const lock = await env.DB.prepare(`UPDATE sr_wa_queue SET status = 'working', updated_at = datetime('now') WHERE id = ? AND status = 'pending'`).bind(q.id).run();
+    if (!lock.meta || !lock.meta.changes) continue;
+    let r = {};
+    try { r = JSON.parse(q.payload || '{}'); } catch (e) { /* bad row */ }
+    const res = await srSendWhatsAppReceived(env, r, { fromQueue: true });
+    const tries = (q.tries || 0) + 1;
+    if (res.sent) {
+      await env.DB.prepare(`UPDATE sr_wa_queue SET status = 'sent', tries = ?, updated_at = datetime('now') WHERE id = ?`).bind(tries, q.id).run();
+      try { await srAddEvent(env.DB, r.claimId, { by: 'system', kind: 'note', note: 'WhatsApp "Request received" sent to customer (retry)' }, {}); } catch (e) { /* request may be gone */ }
+    } else {
+      const done = tries >= 4 || res.skipped;
+      await env.DB.prepare(`UPDATE sr_wa_queue SET status = ?, tries = ?, last_error = ?, next_at = datetime('now', ?), updated_at = datetime('now') WHERE id = ?`)
+        .bind(done ? 'failed' : 'pending', tries, String(res.error || res.skipped || '').slice(0, 500), '+' + (15 * tries) + ' minutes', q.id).run();
+    }
+  }
+  return rows.length;
+}
+
 // r = { claimId, name, phone (10 digits), email, product }
-async function srSendWhatsAppReceived(env, r) {
+async function srSendWhatsAppReceived(env, r, opts) {
   const mode = String(env.SR_WA_MODE || 'test').toLowerCase();
   if (mode === 'off') return { sent: false, skipped: 'off' };
   if (mode !== 'live' && SR_WA_TEST_PHONES.indexOf(r.phone) === -1) return { sent: false, skipped: 'test mode' };
@@ -7750,32 +7812,41 @@ async function srSendWhatsAppReceived(env, r) {
     const headerMessage = fill((items.header && items.header.message) || '');
     if (!message || /\$\{/.test(message)) throw new Error('apply returned no usable message text');
     step = 'send';
-    // Zoho doesn't document the exact shape it wants, so try likely variants in order
-    // and stop at the first success (the customer gets one message only).
-    const rawMsg = tr.message || '';
-    const rawHeader = (items.header && items.header.message) ? items.header.message : '';
+    // Zoho doesn't document the exact request shape, so try likely variants in order and
+    // stop at the first success (the customer only ever gets one message).
+    //  - cannedMessageId is a "long" in Zoho's docs → also try it as a JSON number
+    //    (built as raw text: the ID is too big for a JS number).
+    //  - the template has a URL button → also send urlMessage.
+    const btn = ((items.buttons || []).find(x => /URL/i.test(x.type || '')) || {});
+    const urlMessage = btn.action || '';
+    const id = String(cfg.templateId);
     const variants = [
-      { tag: 'filled+header', receiverId: '+91' + r.phone, message, headerMessage },
-      { tag: 'raw+header',    receiverId: '+91' + r.phone, message: rawMsg, headerMessage: rawHeader },
-      { tag: 'filled-noheader', receiverId: '+91' + r.phone, message },
-      { tag: '91-number',     receiverId: '91' + r.phone, message, headerMessage },
-      { tag: '10-digit',      receiverId: r.phone, message, headerMessage }
+      { tag: 'num-id+url', numeric: true,  url: true },
+      { tag: 'str-id+url', numeric: false, url: true },
+      { tag: 'num-id',     numeric: true,  url: false }
     ];
     let sent = null, body = null;
     trace.sendTries = [];
     for (const v of variants) {
-      body = { receiverId: v.receiverId, receiverType: 'PHONENUMBER', cannedMessageId: String(cfg.templateId), language: 'en', message: v.message };
-      if (v.headerMessage) body.headerMessage = v.headerMessage;
-      sent = await zdCall(env, 'POST', '/im/channels/' + cfg.channelId + '/initiateSession', { orgId, body });
+      body = { receiverId: '+91' + r.phone, receiverType: 'PHONENUMBER', cannedMessageId: id, language: 'en', message };
+      if (headerMessage) body.headerMessage = headerMessage;
+      if (v.url && urlMessage) body.urlMessage = urlMessage;
+      const raw = JSON.stringify(body);
+      const rawBody = v.numeric ? raw.replace('"cannedMessageId":"' + id + '"', '"cannedMessageId":' + id) : raw;
+      sent = await zdCall(env, 'POST', '/im/channels/' + cfg.channelId + '/initiateSession', { orgId, rawBody });
       trace.sendTries.push({ tag: v.tag, status: sent.status, reply: JSON.stringify(sent.json).slice(0, 300) });
-      if (sent.ok) break;
+      if (sent.ok) { trace.winner = v.tag; break; }
     }
-    if (!sent.ok) throw new Error('initiateSession ' + sent.status + ': ' + JSON.stringify(sent.json).slice(0, 300));
+    if (!sent.ok) {
+      trace.diag = await zdWaDiagnostics(env, cfg, contact.id);
+      throw new Error('initiateSession ' + sent.status + ': ' + JSON.stringify(sent.json).slice(0, 300));
+    }
     trace.apply = undefined;   // keep the success log short
     await srWaLog(env, r.claimId, true, 'sent', JSON.stringify({ body, trace }));
     return { sent: true };
   } catch (e) {
     await srWaLog(env, r.claimId, false, step, e.message + ' | ' + JSON.stringify(trace));
+    if (!(opts && opts.fromQueue)) await srWaEnqueue(env, r, 15, step + ': ' + e.message);
     return { sent: false, error: step + ': ' + e.message };
   }
 }
