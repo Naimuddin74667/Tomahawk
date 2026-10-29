@@ -3790,6 +3790,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         cell('Warranty', '<span class="rq-wty ' + (under ? 'ok' : 'out') + '">' + (under ? '&#10003; Under warranty' : '&#10007; Out of warranty') + '</span>' +
           (r.warranty_until ? '<div class="pay-hint" style="margin-top:4px">' + (under ? 'valid till ' : 'ended ') + esc(r.warranty_until) + '</div>' : '')) +
         (r.order_skus ? '<div class="span-all">' + '<div class="cm-k">Ordered item(s)</div><div class="mono">' + esc(r.order_skus) + '</div></div>' : '') +
+        ((r.confirmed_sku || r.confirmed_product) ? '<div class="span-all"><div class="cm-k">Confirmed product</div><div><b class="mono">' +
+          esc(r.confirmed_sku || ('Other — ' + r.confirmed_product)) + '</b></div></div>' : '') +
         (r.case_id ? '<div class="span-all"><div class="cm-k">Pickup case</div><div><b class="mono">' + esc(r.case_id) + '</b> \u00b7 ' + esc(reqCaseStatus(r)) +
           (reqCase(r) ? ' <button class="co-edit" id="rq-open-case">Open case &#8594;</button>' : '') + '</div></div>' : '') +
       '</div>';
@@ -3869,6 +3871,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
           VERIFY_PLATFORMS.map(function (p) { return '<option' + (p === r.platform ? ' selected' : '') + '>' + esc(p) + '</option>'; }).join('') + '</select>' +
         '<label for="vf-date">Purchase date</label><div><input class="sb-input" id="vf-date" type="date" style="max-width:180px"> ' +
           '<span class="pay-hint">only if the order is not in our records (from the invoice)</span></div>' +
+        // Product the claim is for — always confirmed here (UC SKU, or typed as Other)
+        '<label for="vf-prod">Product</label><div><input class="sb-input" id="vf-prod" list="vf-skus" autocomplete="off" placeholder="Search UC SKU — or type the product name" value="' +
+          esc(r.confirmed_sku || r.confirmed_product || '') + '"><datalist id="vf-skus"></datalist>' +
+          '<div class="pay-hint" id="vf-prod-hint">Check the photo / invoice and confirm which product this is.</div><div id="vf-items" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"></div></div>' +
       '</div>' +
       '<div class="pay-hint" id="vf-res">Check the order ID against the invoice photo, then click Check.</div>' +
       '<div class="pay-row"><button class="case-act" id="vf-check">Check order</button>' +
@@ -3877,13 +3883,37 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   function wireVerify(r) {
     var chk = document.getElementById('vf-check'), go = document.getElementById('vf-go'), res = document.getElementById('vf-res');
     if (!chk) return;
+    var prodEl = document.getElementById('vf-prod'), prodHint = document.getElementById('vf-prod-hint');
+    var checked = false;   // last Check passed and nothing it depends on changed since
+    // UC SKU match (case/spacing-insensitive) → the canonical SKU, else null (= Other)
+    function ucSkuOf(v) {
+      var k = skuKey(v); if (!k || !skuList) return null;
+      for (var i = 0; i < skuList.length; i++) if (skuKey(skuList[i]) === k) return skuList[i];
+      return null;
+    }
+    function prodState() {
+      var v = prodEl.value.trim(), sku = ucSkuOf(v);
+      if (!v) { prodHint.innerHTML = 'Check the photo / invoice and confirm which product this is.'; prodHint.style.color = ''; }
+      else if (sku) { prodHint.innerHTML = '&#10003; UC SKU <b>' + esc(sku) + '</b>'; prodHint.style.color = 'var(--green, #4ade80)'; }
+      else { prodHint.textContent = 'Not a UC SKU — will be saved as Other: "' + v + '"'; prodHint.style.color = 'var(--accent)'; }
+      go.disabled = !(checked && v);
+      return { v: v, sku: sku };
+    }
+    loadSkuSources().then(function () {
+      var dl = document.getElementById('vf-skus');
+      if (dl) dl.innerHTML = (skuList || []).map(function (x) { return '<option value="' + esc(x) + '">'; }).join('');
+      if (document.getElementById('vf-prod')) prodState();
+    });
+    prodEl.addEventListener('input', prodState);
     function payload(dry) {
+      var ps = prodState();
       return { claim_id: r.claim_id, order_id: document.getElementById('vf-oid').value.trim(),
-        platform: document.getElementById('vf-plat').value, order_date: document.getElementById('vf-date').value, dry_run: dry };
+        platform: document.getElementById('vf-plat').value, order_date: document.getElementById('vf-date').value, dry_run: dry,
+        product_sku: ps.sku || '', product_other: ps.sku ? '' : ps.v };
     }
     // Any change means the last check no longer applies
     ['vf-oid', 'vf-plat', 'vf-date'].forEach(function (id) {
-      document.getElementById(id).addEventListener('input', function () { go.disabled = true; });
+      document.getElementById(id).addEventListener('input', function () { checked = false; go.disabled = true; });
     });
     // Live order-ID sanity warning (phone number typed in, wrong format for the platform)
     function showWarn() {
@@ -3903,12 +3933,24 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
           ' · bought ' + esc(p.order_date) + ' on ' + esc(p.platform) + (p.items ? ' · ' + esc(p.items) : '') +
           '<br><span class="badge ' + (under ? 'b-green' : 'b-amber') + '">' + esc(p.warranty_status) + '</span> until ' + esc(p.warranty_until) +
           ' → becomes <b>' + esc(p.prefix) + '-</b>';
-        go.disabled = false;
+        // Order found → offer its items as one-click product picks (single item: pre-filled)
+        var items = p.item_skus || [], box = document.getElementById('vf-items');
+        if (items.length === 1 && !prodEl.value.trim()) prodEl.value = items[0];
+        box.innerHTML = items.length > 1 ? '<span class="pay-hint" style="align-self:center">Items in this order:</span>' + items.map(function (x) {
+          return '<button type="button" class="co-edit" data-item="' + esc(x) + '">' + esc(x) + '</button>'; }).join('') : '';
+        box.querySelectorAll('[data-item]').forEach(function (b) {
+          b.addEventListener('click', function () { prodEl.value = b.dataset.item; prodState(); });
+        });
+        checked = true;
+        prodState();
+        if (!prodEl.value.trim()) res.insertAdjacentHTML('beforeend', '<br><span style="color:var(--accent)">Now confirm the product to convert.</span>');
       } catch (e) { res.innerHTML = '<span style="color:#f87171">' + esc(e.message) + '</span>'; }
       finally { chk.disabled = false; }
     });
     go.addEventListener('click', async function () {
-      if (!confirm('Convert ' + r.claim_id + ' now? It moves to "To review" with its new ID.')) return;
+      var ps = prodState();
+      if (!ps.v) { alert('Confirm the product first.'); return; }
+      if (!confirm('Convert ' + r.claim_id + ' now?\nProduct: ' + (ps.sku || 'Other — ' + ps.v) + '\n\nIt moves to "To review" with its new ID.')) return;
       go.disabled = true; go.textContent = 'Converting…';
       try {
         var x = await post('ccClaimVerify', payload(false));

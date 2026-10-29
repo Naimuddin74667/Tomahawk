@@ -1560,7 +1560,7 @@ export default {
         await ensureServiceRequestCols(env.DB);
         const days = Math.min(365, Math.max(1, parseInt(url.searchParams.get('days') || '90', 10) || 90));
         const rows = (await env.DB.prepare(
-          "SELECT claim_id, created_at, updated_at, order_id, platform, product, name, phone, email, issue_type, description, address, pincode, city, state, warranty_status, order_date, warranty_until, order_skus, file_count, status, case_id, events_json, prev_claim_id FROM warranty_claims WHERE created_at > datetime('now', ?) OR COALESCE(status, 'new') NOT IN ('closed','not_covered') ORDER BY created_at DESC LIMIT 500"
+          "SELECT claim_id, created_at, updated_at, order_id, platform, product, name, phone, email, issue_type, description, address, pincode, city, state, warranty_status, order_date, warranty_until, order_skus, file_count, status, case_id, events_json, prev_claim_id, confirmed_sku, confirmed_product FROM warranty_claims WHERE created_at > datetime('now', ?) OR COALESCE(status, 'new') NOT IN ('closed','not_covered') ORDER BY created_at DESC LIMIT 500"
         ).bind('-' + days + ' days').all()).results || [];
         return json({ ok: true, requests: rows.map(r => ({ ...r, events: srEvents(r), events_json: undefined })) });
       }
@@ -6714,7 +6714,10 @@ async function ensureServiceRequestCols(DB) {
   await ensureWarrantyClaimsTable(DB);
   for (const col of ['case_id TEXT', 'events_json TEXT', 'updated_at TEXT', 'files_json TEXT',
                      'm_picked_at TEXT', 'm_received_at TEXT', 'm_sent_at TEXT', 'm_delivered_at TEXT',
-                     'prev_claim_id TEXT']) {
+                     'prev_claim_id TEXT',
+                     // Product the team confirmed while verifying an NV- request (29-Oct-2026):
+                     // confirmed_sku = a UC SKU, or confirmed_product = free text ("Other").
+                     'confirmed_sku TEXT', 'confirmed_product TEXT']) {
     try { await DB.prepare('ALTER TABLE warranty_claims ADD COLUMN ' + col).run(); } catch (e) { /* exists */ }
   }
 }
@@ -6910,8 +6913,19 @@ async function srVerify(env, user, b) {
   if (other) return { ok: false, error: 'Order ' + orderId + ' already has an open request: ' + other.claim_id };
 
   const preview = { found: !!w.found, source, order_id: orderId, platform, order_date: orderDate,
-    warranty_until: until, warranty_status: warrantyStatus, prefix, items: skus };
+    warranty_until: until, warranty_status: warrantyStatus, prefix, items: skus,
+    item_skus: (w.items || []).map(it => it.sku).filter(Boolean) };   // lets the team pick the claimed item
   if (b.dry_run) return { ok: true, preview };
+
+  // Product the claim is for — always confirmed by the team (picked from the
+  // order's items / UC SKU list, or typed as Other when it isn't a UC SKU).
+  const confSku = s(b.product_sku, 60), confOther = confSku ? '' : s(b.product_other, 120);
+  if (!confSku && !confOther) return { ok: false, error: 'Confirm the product first' };
+  // The confirmed SKU leads order_skus, so Create-Pickup pre-picks it.
+  if (confSku) {
+    const rest = String(skus || '').split(',').map(x => x.trim()).filter(x => x && x.replace(/\s+x\d+$/, '') !== confSku);
+    skus = [confSku].concat(rest).join(', ');
+  }
 
   // New ID keeps the NV request's date: NV-261027-01 → WRN-261027-NN.
   const datePart = (row.claim_id.split('-')[1] || istYYMMDD());
@@ -6922,8 +6936,8 @@ async function srVerify(env, user, b) {
     const cand = base + String(n).padStart(2, '0');
     try {
       await env.DB.prepare(`UPDATE warranty_claims SET claim_id = ?, prev_claim_id = ?, order_id = ?, order_key = ?, platform = ?,
-        warranty_status = ?, order_date = ?, warranty_until = ?, order_skus = ? WHERE claim_id = ?`)
-        .bind(cand, row.claim_id, orderId, orderKey, platform, warrantyStatus, orderDate, until, skus, row.claim_id).run();
+        warranty_status = ?, order_date = ?, warranty_until = ?, order_skus = ?, confirmed_sku = ?, confirmed_product = ? WHERE claim_id = ?`)
+        .bind(cand, row.claim_id, orderId, orderKey, platform, warrantyStatus, orderDate, until, skus, confSku || null, confOther || null, row.claim_id).run();
       newId = cand;
     } catch (e) { if (!/UNIQUE|PRIMARY KEY|constraint/i.test(e.message || '')) throw e; }
   }
@@ -6937,7 +6951,8 @@ async function srVerify(env, user, b) {
           : 'Your product is outside the 6-month warranty (it ended on ' + until + '), so the repair is chargeable. We will share the cost with you before doing anything.'
   ]);
   await srAddEvent(env.DB, newId, { by: (user && user.username) || 'unknown', kind: 'verified', emailed,
-    note: row.claim_id + ' → ' + newId + ' · order ' + orderId + ' · bought ' + orderDate + ' (' + source + ') · ' + warrantyStatus }, {});
+    note: row.claim_id + ' → ' + newId + ' · order ' + orderId + ' · bought ' + orderDate + ' (' + source + ') · ' + warrantyStatus +
+      ' · product ' + (confSku || ('Other: ' + confOther)) }, {});
   return { ok: true, claim_id: newId, prev_claim_id: row.claim_id, warranty_status: warrantyStatus, emailed };
 }
 
