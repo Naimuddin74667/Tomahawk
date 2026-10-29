@@ -714,6 +714,7 @@ const ACTION_TIERS = {
   warrantyLookup: 'public', // public Warranty Check page — non-personal order facts only, rate-limited
   warrantyClaimSubmit: 'public', // public warranty claim form — rate-limited, emails support
   requestTrack: 'public', // public 'track your request' page — request ID/order ID + mobile, steps only, rate-limited
+  orderTrack: 'public', // public 'Track my order' (Shopify) — order no. + mobile, status/items/courier only, rate-limited
   ccClaimsList: 'viewer_read', ccClaimGet: 'viewer_read', ccClaimFiles: 'viewer_read', // Customer Care: New requests
   ccClaimAction: 'manager_up',
   ccPaymentInfo: 'manager_up', ccPaymentCreate: 'manager_up', ccPaymentVoid: 'manager_up', ccPaymentGet: 'viewer_read', // Repair payments (Zoho Books)
@@ -1536,6 +1537,17 @@ export default {
       }
 
       // ── SERVICE REQUESTS (public tracking + Customer Care "New requests") ──
+      // ── TRACK MY ORDER (public, Shopify website orders) ──
+      // GET ?action=orderTrack&order=2940&phone=98xxxxxxxx → status, items,
+      // courier + AWB + live courier stage. Order no. AND mobile must match.
+      if (request.method === 'GET' && action === 'orderTrack') {
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        if (!(await warrantyRateOk(env.DB, 'otrack:' + ip, 30))) {
+          return json({ ok: false, error: 'Too many checks — please try again in an hour.' }, 429);
+        }
+        try { return json(await orderTrack(env, url.searchParams.get('order'), url.searchParams.get('phone'))); }
+        catch (e) { console.error('orderTrack failed:', e.message); return json({ ok: false, error: 'Something went wrong — please try again later.' }, 500); }
+      }
       if (request.method === 'GET' && action === 'requestTrack') {
         const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
         if (!(await warrantyRateOk(env.DB, 'track:' + ip, 30))) {
@@ -7420,6 +7432,93 @@ async function srTrack(env, idRaw, phoneRaw) {
   const s = srSteps(row, legs);
   return { ok: true, claim_id: row.claim_id, product: row.product, created_at: row.created_at,
            status: row.status, steps: s.steps, final: s.final };
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TRACK MY ORDER — public, Shopify website orders (29-Oct-2026)
+// ═══════════════════════════════════════════════════════════════════════
+// Reads the Supabase mirror (shopify_orders / _order_items / _fulfillments).
+// The mobile number must match shopify_orders.phone (10 digits, added to SK's
+// sync for this page) — order numbers are sequential, so the number alone is
+// never enough. Returns no name / address / price breakdown.
+// Live courier stage comes from Delhivery / Ekart tracking (best effort).
+async function orderTrack(env, orderRaw, phoneRaw) {
+  const num = String(orderRaw || '').replace(/\D/g, '');
+  const phone = normPhone(phoneRaw);
+  if (!num || num.length > 10 || !phone) return { ok: false, error: 'Enter your order number (e.g. #2940) and the mobile number used on the order.' };
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured on Worker');
+  const sb = env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/';
+  const get = async path => {
+    const r = await fetch(sb + path, { headers: supabaseHeaders(env) });
+    if (!r.ok) { const t = await r.text(); const e = new Error('Supabase ' + r.status + ' ' + t.slice(0, 160)); e.missingCol = /column .* does not exist|42703/.test(t); throw e; }
+    return r.json();
+  };
+  let orders;
+  try {
+    orders = await get('shopify_orders?select=order_id,name,created_at,financial_status,fulfillment_status,cancelled_at,is_cod,current_total_price,phone' +
+      '&name=eq.' + encodeURIComponent('#' + num) + '&limit=1');
+  } catch (e) {
+    if (e.missingCol) return { ok: false, notReady: true, error: 'Order tracking is being set up. Please message us on WhatsApp with your order number.' };
+    throw e;
+  }
+  const o = orders[0];
+  // Same answer for "no such order" and "wrong mobile" — never confirm an order exists.
+  const mismatch = { ok: false, notFound: true, error: 'We could not find an order with these details. Check the order number and the mobile number used while ordering.' };
+  if (!o || normPhone(o.phone) !== phone) return mismatch;
+
+  const [items, fuls] = await Promise.all([
+    get('shopify_order_items?select=title,variant_title,quantity,current_quantity,fulfillment_status&order_id=eq.' + o.order_id),
+    get('shopify_fulfillments?select=status,shipment_status,courier,tracking_number,tracking_url,created_at&order_id=eq.' + o.order_id + '&order=created_at.desc')
+  ]);
+  const shipments = [];
+  for (const f of fuls.filter(x => String(x.status || '').toLowerCase() !== 'cancelled')) {
+    const awb = String(f.tracking_number || '').trim();
+    const courier = /ekart/i.test(f.courier || '') ? 'Ekart' : /delhivery/i.test(f.courier || '') ? 'Delhivery' : (f.courier || '');
+    const sh = { courier, awb, shipped_at: f.created_at, stage: null, status: null, location: null, updated_at: null, delivered_at: null,
+      track_url: courier === 'Delhivery' && awb ? 'https://www.delhivery.com/track-v2/package/' + encodeURIComponent(awb)
+               : courier === 'Ekart' && awb ? 'https://ekartlogistics.com/shipmenttrack/' + encodeURIComponent(awb) : (f.tracking_url || null) };
+    try {
+      if (courier === 'Delhivery' && /^\d{6,20}$/.test(awb) && env.DELHIVERY_API_TOKEN) {
+        const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
+        const r = await fetch(base + '/api/v1/packages/json/?waybill=' + awb, { headers: { 'Authorization': 'Token ' + env.DELHIVERY_API_TOKEN } });
+        const j = await r.json().catch(() => null);
+        const s = j && j.ShipmentData && j.ShipmentData[0] && j.ShipmentData[0].Shipment;
+        if (s) {
+          const d = deriveDelhiveryStage(s, 'forward'), st = s.Status || {};
+          Object.assign(sh, { stage: d.stage, status: st.Status || '', location: st.StatusLocation || '', updated_at: st.StatusDateTime || null,
+            delivered_at: delhiveryDeliveredAt(s, d.stage) || null });
+        }
+      } else if (courier === 'Ekart' && /^[A-Za-z0-9]{6,40}$/.test(awb)) {
+        const r = await fetch(ekartBase(env) + '/api/v1/track/' + awb);
+        const j = await r.json().catch(() => null);
+        const tr = j && j.track;
+        if (tr) {
+          const d = deriveEkartStage(tr, 'forward'), last = (tr.details || [])[0] || {};
+          Object.assign(sh, { stage: d.stage, status: tr.status || '', location: last.location || '', updated_at: last.ctime || last.time || null,
+            delivered_at: ekartDeliveredAt(tr, d.stage) || null });
+        }
+      }
+    } catch (e) { console.warn('orderTrack live track', courier, awb, e.message); }
+    shipments.push(sh);
+  }
+
+  // One headline status for the customer
+  const stages = shipments.map(x => x.stage).filter(Boolean);
+  let status;
+  if (o.cancelled_at) status = 'Cancelled';
+  else if (shipments.length && stages.length === shipments.length && stages.every(x => x === 'Delivered')) status = 'Delivered';
+  else if (stages.some(x => x === 'RTO')) status = 'Returning to us';
+  else if (stages.some(x => /out for delivery/i.test(x))) status = 'Out for delivery';
+  else if (stages.length && stages.every(x => x === 'Created' || x === 'Out For Pickup')) status = 'Packed';   // label made, courier not yet collected
+  else if (shipments.length) status = 'Shipped';
+  else status = 'Order confirmed';   // placed, not yet packed / handed to courier
+
+  return { ok: true, order: o.name, placed_at: o.created_at, status, cancelled_at: o.cancelled_at || null,
+    payment: o.is_cod ? 'Cash on delivery' : (String(o.financial_status || '').toLowerCase() === 'paid' ? 'Paid online' : 'Payment ' + (o.financial_status || 'pending')),
+    total: o.current_total_price != null ? Number(o.current_total_price) : null,
+    items: items.filter(i => (i.current_quantity == null ? i.quantity : i.current_quantity) > 0)
+      .map(i => ({ title: i.title + (i.variant_title ? ' — ' + i.variant_title : ''), qty: i.current_quantity == null ? i.quantity : i.current_quantity })),
+    shipments };
 }
 
 // Cron: email the customer when the courier / warehouse moves their case on.
