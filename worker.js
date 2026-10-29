@@ -7750,16 +7750,24 @@ async function srSendWhatsAppReceived(env, r) {
     const headerMessage = fill((items.header && items.header.message) || '');
     if (!message || /\$\{/.test(message)) throw new Error('apply returned no usable message text');
     step = 'send';
-    const base = { receiverId: '+91' + r.phone, receiverType: 'PHONENUMBER', language: 'en', message };
-    if (headerMessage) base.headerMessage = headerMessage;
-    // Zoho has two IDs for a template (the template and its English version) — try both.
-    const ids = [String(cfg.templateId)].concat(tr.id && String(tr.id) !== String(cfg.templateId) ? [String(tr.id)] : []);
+    // Zoho doesn't document the exact shape it wants, so try likely variants in order
+    // and stop at the first success (the customer gets one message only).
+    const rawMsg = tr.message || '';
+    const rawHeader = (items.header && items.header.message) ? items.header.message : '';
+    const variants = [
+      { tag: 'filled+header', receiverId: '+91' + r.phone, message, headerMessage },
+      { tag: 'raw+header',    receiverId: '+91' + r.phone, message: rawMsg, headerMessage: rawHeader },
+      { tag: 'filled-noheader', receiverId: '+91' + r.phone, message },
+      { tag: '91-number',     receiverId: '91' + r.phone, message, headerMessage },
+      { tag: '10-digit',      receiverId: r.phone, message, headerMessage }
+    ];
     let sent = null, body = null;
     trace.sendTries = [];
-    for (const id of ids) {
-      body = { ...base, cannedMessageId: id };
+    for (const v of variants) {
+      body = { receiverId: v.receiverId, receiverType: 'PHONENUMBER', cannedMessageId: String(cfg.templateId), language: 'en', message: v.message };
+      if (v.headerMessage) body.headerMessage = v.headerMessage;
       sent = await zdCall(env, 'POST', '/im/channels/' + cfg.channelId + '/initiateSession', { orgId, body });
-      trace.sendTries.push({ id, status: sent.status, reply: JSON.stringify(sent.json).slice(0, 300) });
+      trace.sendTries.push({ tag: v.tag, status: sent.status, reply: JSON.stringify(sent.json).slice(0, 300) });
       if (sent.ok) break;
     }
     if (!sent.ok) throw new Error('initiateSession ' + sent.status + ': ' + JSON.stringify(sent.json).slice(0, 300));
