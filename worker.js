@@ -7453,18 +7453,24 @@ async function orderTrack(env, orderRaw, phoneRaw) {
     if (!r.ok) { const t = await r.text(); const e = new Error('Supabase ' + r.status + ' ' + t.slice(0, 160)); e.missingCol = /column .* does not exist|42703/.test(t); throw e; }
     return r.json();
   };
-  let orders;
-  try {
-    orders = await get('shopify_orders?select=order_id,name,created_at,financial_status,fulfillment_status,cancelled_at,is_cod,current_total_price,phone' +
-      '&name=eq.' + encodeURIComponent('#' + num) + '&limit=1');
-  } catch (e) {
-    if (e.missingCol) return { ok: false, notReady: true, error: 'Order tracking is being set up. Please message us on WhatsApp with your order number.' };
-    throw e;
+  // Until SK's sync adds shopify_orders.phone, the mobile can't be checked.
+  // In that "limited" mode we still answer, but hide the AWB, tracking link,
+  // order value and payment so a guessed order number reveals only status +
+  // product. Full details switch on by themselves once the column exists.
+  const sel = 'order_id,name,created_at,financial_status,fulfillment_status,cancelled_at,is_cod,current_total_price';
+  const q = '&name=eq.' + encodeURIComponent('#' + num) + '&limit=1';
+  let orders, phoneCheck = true;
+  try { orders = await get('shopify_orders?select=' + sel + ',phone' + q); }
+  catch (e) {
+    if (!e.missingCol) throw e;
+    phoneCheck = false;
+    orders = await get('shopify_orders?select=' + sel + q);
   }
   const o = orders[0];
   // Same answer for "no such order" and "wrong mobile" — never confirm an order exists.
   const mismatch = { ok: false, notFound: true, error: 'We could not find an order with these details. Check the order number and the mobile number used while ordering.' };
-  if (!o || normPhone(o.phone) !== phone) return mismatch;
+  if (!o) return mismatch;
+  if (phoneCheck && normPhone(o.phone) !== phone) return mismatch;
 
   const [items, fuls] = await Promise.all([
     get('shopify_order_items?select=title,variant_title,quantity,current_quantity,fulfillment_status&order_id=eq.' + o.order_id),
@@ -7513,9 +7519,10 @@ async function orderTrack(env, orderRaw, phoneRaw) {
   else if (shipments.length) status = 'Shipped';
   else status = 'Order confirmed';   // placed, not yet packed / handed to courier
 
-  return { ok: true, order: o.name, placed_at: o.created_at, status, cancelled_at: o.cancelled_at || null,
-    payment: o.is_cod ? 'Cash on delivery' : (String(o.financial_status || '').toLowerCase() === 'paid' ? 'Paid online' : 'Payment ' + (o.financial_status || 'pending')),
-    total: o.current_total_price != null ? Number(o.current_total_price) : null,
+  if (!phoneCheck) shipments.forEach(x => { x.awb = null; x.track_url = null; x.location = null; });
+  return { ok: true, limited: !phoneCheck, order: o.name, placed_at: o.created_at, status, cancelled_at: o.cancelled_at || null,
+    payment: !phoneCheck ? null : o.is_cod ? 'Cash on delivery' : (String(o.financial_status || '').toLowerCase() === 'paid' ? 'Paid online' : 'Payment ' + (o.financial_status || 'pending')),
+    total: phoneCheck && o.current_total_price != null ? Number(o.current_total_price) : null,
     items: items.filter(i => (i.current_quantity == null ? i.quantity : i.current_quantity) > 0)
       .map(i => ({ title: i.title + (i.variant_title ? ' — ' + i.variant_title : ''), qty: i.current_quantity == null ? i.quantity : i.current_quantity })),
     shipments };
