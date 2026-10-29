@@ -7583,7 +7583,7 @@ async function srSendReceivedEmail(env, r) {
 // ══════════════════════════════════════════════════════════════════
 const ZD_API = 'https://desk.zoho.in/api/v1';
 const SR_WA_TEMPLATE_NAME = 'request_received';
-const SR_WA_TEST_PHONES = ['8411994164'];
+const SR_WA_TEST_PHONES = ['8411994164', '7776076486'];
 
 async function zdToken(env, force) {
   const KEY = 'zoho_desk_token';
