@@ -7728,7 +7728,11 @@ async function srSendWhatsAppReceived(env, r) {
     trace.cfKeys = keys;
     if (!kId || !kProd) throw new Error('custom fields "Request ID" / "Product" not found on contact (cf keys: ' + keys.join(', ') + ')');
     const product = String(r.product || 'your Tomahawk product').slice(0, 120);
-    const upd = await zdCall(env, 'PATCH', '/contacts/' + contact.id, { orgId, body: { cf: { [kId]: r.claimId, [kProd]: product } } });
+    const firstNow = String((full.json && full.json.firstName) || '').trim();
+    const custFirst = String(r.name || '').trim().split(/\s+/)[0] || '';
+    const patch = { cf: { [kId]: r.claimId, [kProd]: product } };
+    if (!firstNow && custFirst) patch.firstName = custFirst;   // template says "Hi <First Name>"
+    const upd = await zdCall(env, 'PATCH', '/contacts/' + contact.id, { orgId, body: patch });
     if (!upd.ok) throw new Error('contact update ' + upd.status + ': ' + JSON.stringify(upd.json).slice(0, 300));
     // Template with this contact's values filled in
     step = 'apply';
@@ -7740,17 +7744,26 @@ async function srSendWhatsAppReceived(env, r) {
       .replace(/\$\{Contacts\.First Name\}/gi, first)
       .replace(/\$\{Contacts\.Request ID\}/gi, r.claimId)
       .replace(/\$\{Contacts\.Product\}/gi, product);
-    const message = fill(zdPickText(ap.json, ['message', 'content', 'body', 'text']));
-    const headerMessage = fill(zdPickText(ap.json, ['headerMessage', 'header']));
-    const urlMessage = zdPickText(ap.json, ['urlMessage']);
-    if (!message) throw new Error('apply returned no message text');
+    const tr = ((ap.json && ap.json.translations) || []).find(x => x.language === 'en') || ((ap.json && ap.json.translations) || [])[0] || {};
+    const items = tr.templateItems || {};
+    const message = fill(ap.json.message || ap.json.displayMessage || '');
+    const headerMessage = fill((items.header && items.header.message) || '');
+    if (!message || /\$\{/.test(message)) throw new Error('apply returned no usable message text');
     step = 'send';
-    const body = { receiverId: '+91' + r.phone, receiverType: 'PHONENUMBER', cannedMessageId: String(cfg.templateId), language: 'en', message };
-    if (headerMessage) body.headerMessage = headerMessage;
-    if (urlMessage) body.urlMessage = urlMessage;
-    const sent = await zdCall(env, 'POST', '/im/channels/' + cfg.channelId + '/initiateSession', { orgId, body });
-    trace.send = sent.json;
+    const base = { receiverId: '+91' + r.phone, receiverType: 'PHONENUMBER', language: 'en', message };
+    if (headerMessage) base.headerMessage = headerMessage;
+    // Zoho has two IDs for a template (the template and its English version) — try both.
+    const ids = [String(cfg.templateId)].concat(tr.id && String(tr.id) !== String(cfg.templateId) ? [String(tr.id)] : []);
+    let sent = null, body = null;
+    trace.sendTries = [];
+    for (const id of ids) {
+      body = { ...base, cannedMessageId: id };
+      sent = await zdCall(env, 'POST', '/im/channels/' + cfg.channelId + '/initiateSession', { orgId, body });
+      trace.sendTries.push({ id, status: sent.status, reply: JSON.stringify(sent.json).slice(0, 300) });
+      if (sent.ok) break;
+    }
     if (!sent.ok) throw new Error('initiateSession ' + sent.status + ': ' + JSON.stringify(sent.json).slice(0, 300));
+    trace.apply = undefined;   // keep the success log short
     await srWaLog(env, r.claimId, true, 'sent', JSON.stringify({ body, trace }));
     return { sent: true };
   } catch (e) {
