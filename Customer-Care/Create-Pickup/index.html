@@ -1369,10 +1369,35 @@ function initDelhiveryApp() {
   var typeField = document.getElementById('f-type');
   var orderIdReq = 0; // ignores stale replies if Type is switched quickly
 
+  // Website request cases use the request ID instead of the daily serial:
+  // reverse from ?claim=WRN-… → RWRN-…, its send-back → FWRN-… (Worker
+  // nextClaimOrderId; a second round gets -2). Null = normal prefix flow.
+  function claimOrderQuery() {
+    if (pickupMode === 'reverse' && claimFrom) return 'claim=' + encodeURIComponent(claimFrom) + '&dir=reverse';
+    if (pickupMode === 'forward' && sendBackClaim)
+      return 'claim=' + encodeURIComponent(sendBackClaim) + '&dir=forward&from=' + encodeURIComponent(sendBackFrom || '');
+    return null;
+  }
+
   async function refreshOrderId() {
     var prefix = TYPE_PREFIXES[pickupMode][typeField.value];
+    var claimQ = claimOrderQuery();
     var reqNo = ++orderIdReq;
     orderIdField.value = '';
+    if (claimQ && prefix) {
+      orderIdField.placeholder = 'Getting Order ID…';
+      try {
+        var cr = await workerGet('delhiveryNextOrderId&' + claimQ);
+        if (reqNo !== orderIdReq) return false;
+        if (cr && cr.ok && cr.orderId) { orderIdField.value = cr.orderId; return true; }
+        // cr.ok false = request ID in an unexpected (older) format → normal serial below
+        if (cr && cr.ok === false) claimQ = null;
+      } catch (e) { /* message below */ }
+      if (claimQ) {
+        if (reqNo === orderIdReq) orderIdField.placeholder = "Couldn't get the Order ID — switch Type to retry";
+        return false;
+      }
+    }
     if (!prefix) { orderIdField.placeholder = pickupMode === 'reverse' ? 'Fills in once you select Return Reason below' : 'Fills in once you select Type below'; return false; }
     orderIdField.placeholder = 'Getting next Order ID…';
     try {
@@ -1433,6 +1458,7 @@ function initDelhiveryApp() {
     if (m !== 'forward' && m !== 'reverse') return;
     pickupMode = m;
     sendBackFrom = null;
+    sendBackClaim = null;
     claimFrom = null;   // a manual tab switch leaves the service request behind
     var t = MODE_TEXT[m];
     document.getElementById('form-title').textContent = t.title;
@@ -1471,9 +1497,12 @@ function initDelhiveryApp() {
   // Used only when Delhivery rejects an ID as a duplicate (e.g. two
   // people booking at the same second): RPR-22092603 -> RPR-22092604.
   function bumpOrderIdSerial() {
-    var m = /^([A-Z]+-\d{6})(\d+)$/.exec(orderIdField.value.trim());
-    if (!m) return;
-    orderIdField.value = m[1] + String(parseInt(m[2], 10) + 1).padStart(2, '0');
+    var id = orderIdField.value.trim();
+    var m = /^([A-Z]+-\d{6})(\d+)$/.exec(id);
+    if (m) { orderIdField.value = m[1] + String(parseInt(m[2], 10) + 1).padStart(2, '0'); return; }
+    // Request-based ID (RWRN-261027-01 / -2 …) → next round
+    var c = /^([RF][A-Z]{2,4}-\d{6}-\d+)(?:-(\d+))?$/.exec(id);
+    if (c) orderIdField.value = c[1] + '-' + ((parseInt(c[2] || '1', 10)) + 1);
   }
 
   // ── Product — searchable list of enabled UC SKUs (same shared list
@@ -1679,7 +1708,7 @@ function initDelhiveryApp() {
     pinField.value = r.pincode || '';
     pinField.dispatchEvent(new Event('blur'));     // fills City/State + serviceability
     typeField.value = 'Repair';
-    refreshOrderId();
+    refreshOrderId();                      // RWRN-… / RSRN-… from the request ID
     // Product: the order's own SKU when it is a UC SKU, else Other + the customer's words.
     var sku = String(r.order_skus || '').split(',')[0].replace(/\s+x\d+$/, '').trim();
     if (sku && ucSkus.indexOf(sku) !== -1) { applyProduct(sku); productSearch.value = sku; }
@@ -1919,10 +1948,12 @@ function initDelhiveryApp() {
   // checks it, gets the estimate and confirms as usual. The new order is
   // linked to the pickup (sendBackFrom → linked_order_id).
   var sendBackFrom = null;
+  var sendBackClaim = null;   // request ID of the pickup being sent back → FWRN-/FSRN- Order ID
   function startSendBack(o) {
     var sh = (safeJson(o.payload_json).shipments || [])[0] || {};
     switchPickupTab('forward');           // resets the form into forward mode
     sendBackFrom = o.order_id;
+    sendBackClaim = o.claim_id || null;
     document.getElementById('f-name').value = sh.name || '';
     document.getElementById('f-phone').value = String(sh.phone || '').replace(/\D/g, '').slice(-10);
     document.getElementById('f-add').value = sh.add || '';
@@ -1931,7 +1962,7 @@ function initDelhiveryApp() {
     updateCourierMode();
     pinField.dispatchEvent(new Event('blur'));     // fills City/State + serviceability
     typeField.value = o.job_type === 'Replacement' ? 'Replacement' : 'Repaired';
-    refreshOrderId();                               // FRPR / FRPL
+    refreshOrderId();                               // FRPR / FRPL, or FWRN-/FSRN- for a request case
     // Product: "Repair - SKU" → SKU; a UC SKU is picked as-is, anything else goes to Other.
     var desc = String(sh.products_desc || '').replace(/^(Repair|Replacement)\s*-\s*/i, '').trim();
     if (ucSkus.indexOf(desc) !== -1) {
@@ -2446,6 +2477,14 @@ function initDelhiveryApp() {
         '<div style="margin-top:6px;color:var(--text2);">' + (order.tracking
           ? 'Tracking no. saved. Click "Mark arrived" in the list when the parcel reaches us.'
           : 'Add the tracking no. from the list once the customer shares it.') + '</div>';
+      if (claimFrom) {   // self-ship case for a website request → mark the request approved, like a booked pickup
+        var cfs = claimFrom; claimFrom = null;
+        callWorker('ccClaimAction', { claim_id: cfs, kind: 'approve', case_id: order.order }).then(function (a) {
+          resultBody.insertAdjacentHTML('beforeend', '<div style="margin-top:6px;' + (a && a.ok ? 'color:var(--text2)' : 'color:#f87171') + '">' +
+            (a && a.ok ? 'Service request ' + escapeHtml(cfs) + ' approved.'
+                       : 'Case saved, but request ' + escapeHtml(cfs) + ' was not marked approved: ' + escapeHtml((a && a.error) || 'error') + '.') + '</div>');
+        }).catch(function () {});
+      }
       resetFormFields();
       pinStatus.textContent = ''; pinStatus.className = 'field-hint';
       // Stay on Self-ship isn't useful — resetFormFields put the courier back to Ekart.
@@ -2516,6 +2555,7 @@ function initDelhiveryApp() {
           }).catch(function () {});
         }
         sendBackFrom = null;
+        sendBackClaim = null;
         resetFormFields();
         pinStatus.textContent = '';
         pinStatus.className = 'field-hint';

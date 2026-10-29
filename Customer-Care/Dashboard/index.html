@@ -483,6 +483,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .rq-more-t span { font-size: 11px; font-weight: 600; color: var(--text2); font-family: inherit; }
 .rq-order { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 16px; }
 .rq-order .span-all { grid-column: 1 / -1; }
+.cm-summary .span-all { grid-column: 1 / -1; }   /* case popup → Service request block */
 .rq-wty { display: inline-block; padding: 4px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 800; }
 .rq-wty.ok { color: #22c55e; background: rgba(34,197,94,.12); border: 1px solid rgba(34,197,94,.45); }
 .rq-wty.out { color: #f87171; background: rgba(248,113,113,.12); border: 1px solid rgba(248,113,113,.45); }
@@ -2249,7 +2250,11 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       c.product = String(sh.products_desc || '').replace(/^(Repair|Replacement|Refund|Repaired|FOC)\s*-\s*/i, '');
       c.kind = c.reverse ? (c.reverse.job_type || 'Reverse') : 'forward';
       c.type = caseType(c);
-      c.search = [c.id, c.forward && c.forward.order_id, c.reverse && c.reverse.waybill, c.forward && c.forward.waybill, c.customer, c.product, sh.phone, (c.reverse || c.forward).market_order_id].join(' ').toLowerCase();
+      // Website request cases: the request ID (WRN-/SRN-…) is the case ID shown
+      // everywhere; c.id stays the lead order ID (internal key). 29-Oct-2026.
+      c.claim = (c.reverse && c.reverse.claim_id) || (c.forward && c.forward.claim_id) || '';
+      c.caseNo = c.claim || c.id;
+      c.search = [c.claim, c.id, c.forward && c.forward.order_id, c.reverse && c.reverse.waybill, c.forward && c.forward.waybill, c.customer, c.product, sh.phone, (c.reverse || c.forward).market_order_id].join(' ').toLowerCase();
     });
     // Failed bookings and cancelled shipments aren't shown at all.
     out = out.filter(function (c) { return !!c.st; });
@@ -2347,7 +2352,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       // (AWB/courier = the leg moving now; full details in the case popup).
       var lg = liveLeg(c) || c.forward || c.reverse;
       tr.innerHTML =
-        '<td class="mono">' + esc(c.id) + '</td>' +
+        '<td class="mono" title="' + esc(caseLegIds(c)) + '">' + esc(c.caseNo) + '</td>' +
         '<td>' + esc(c.type) + '</td>' +
         '<td class="name-cell" title="' + esc(c.city || '') + '">' + esc(c.customer || '—') + '</td>' +
         '<td class="prod-cell" title="' + esc(c.product || '') + '">' + esc(c.product || '—') + '</td>' +
@@ -2671,7 +2676,12 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (!o._sku) { alert('Enter the product being sent.'); return; }
     yesBtn.disabled = true; yesBtn.textContent = 'Booking…';
     try {
-      var idRes = await api('delhiveryNextOrderId&prefix=' + o._prefix);
+      var rv = c.reverse;   // request case → F + request ID (FWRN-…), else FRPR/FRPL serial
+      var idRes = await api(rv && rv.claim_id
+        ? 'delhiveryNextOrderId&claim=' + encodeURIComponent(rv.claim_id) + '&dir=forward&from=' + encodeURIComponent(rv.order_id)
+        : 'delhiveryNextOrderId&prefix=' + o._prefix);
+      // Request ID in an unexpected (older) format → normal FRPR/FRPL serial.
+      if (rv && rv.claim_id && !(idRes && idRes.ok)) idRes = await api('delhiveryNextOrderId&prefix=' + o._prefix);
       if (!idRes || !idRes.ok || !idRes.orderId) throw new Error("Couldn't get the next Order ID — try again.");
       var order = Object.assign({}, o, { order: idRes.orderId });
       delete order._prefix; delete order._sku;
@@ -2688,8 +2698,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         var remarks = [res.error].concat(pkg && pkg.remarks ? [].concat(pkg.remarks) : []);
         if (!remarks.some(function (x) { return /duplicate|already exists/i.test(String(x || '')); }) || ++attempts >= 5) break;
         var m = /^([A-Z]+-\d{6})(\d+)$/.exec(order.order);
-        if (!m) break;
-        order.order = m[1] + String(parseInt(m[2], 10) + 1).padStart(2, '0');
+        var cm = /^([RF][A-Z]{2,4}-\d{6}-\d+)(?:-(\d+))?$/.exec(order.order);   // FWRN-261027-01 → -2
+        if (m) order.order = m[1] + String(parseInt(m[2], 10) + 1).padStart(2, '0');
+        else if (cm) order.order = cm[1] + '-' + (parseInt(cm[2] || '1', 10) + 1);
+        else break;
       }
       if (!res.ok) {
         var p = res.response && res.response.packages && res.response.packages[0];
@@ -2998,7 +3010,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     document.getElementById('rf-approve').addEventListener('click', async function () {
       var amt = Number(document.getElementById('rf-amt').value);
       if (!(amt > 0)) { alert('Enter the approved amount.'); return; }
-      if (!confirm('Approve refund of ₹' + amt + ' for ' + c.id + '?')) return;
+      if (!confirm('Approve refund of ₹' + amt + ' for ' + c.caseNo + '?')) return;
       this.disabled = true; this.textContent = 'Saving…';
       try {
         var res = await post('delhiveryApproveRefund', { order_id: r.order_id, amount: amt });
@@ -3043,7 +3055,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // Marks every leg of the case cancelled in Tomahawk and hides it. Does
   // NOT cancel the booking with the courier — do that in their panel.
   async function cancelCase(c, btn) {
-    if (!confirm('Cancel ' + c.id + ' and remove it from the Dashboard?\n\nThis only marks it cancelled in Tomahawk — the courier booking itself is NOT cancelled.')) return;
+    if (!confirm('Cancel ' + c.caseNo + ' and remove it from the Dashboard?\n\nThis only marks it cancelled in Tomahawk — the courier booking itself is NOT cancelled.')) return;
     var ids = [c.reverse && c.reverse.order_id, c.forward && c.forward.order_id].filter(Boolean);
     btn.disabled = true;
     try {
@@ -3070,7 +3082,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       if (t === null || !t.trim()) return;
       body.tracking = t.trim();
     } else {
-      if (!confirm(c.id + ': has the customer\'s parcel reached our warehouse?')) return;
+      if (!confirm(c.caseNo + ': has the customer\'s parcel reached our warehouse?')) return;
       body.arrived = true;
     }
     btn.disabled = true;
@@ -3092,7 +3104,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (btn.dataset.act === 'ticket') return ticketPanel(c);
     if (btn.dataset.act === 'addtrk' || btn.dataset.act === 'arrived') return selfShipAction(c, btn);
     var a = ACTS[btn.dataset.act];
-    if (!a || !confirm(c.id + ': ' + a.ask)) return;
+    if (!a || !confirm(c.caseNo + ': ' + a.ask)) return;
     btn.disabled = true;
     try {
       var s = window.TM_getSession(), h = { 'Content-Type': 'application/json' };
@@ -3239,6 +3251,31 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     return '<div class="cm-sec"><div class="cm-sec-title">Refund details</div></div>' + refundDetailsGrid(c);
   }
 
+  // Courier order numbers of a case's legs, e.g. "RWRN-261027-01 · FWRN-261027-01".
+  function caseLegIds(c) {
+    return [c.reverse && c.reverse.order_id, c.forward && c.forward.order_id].filter(Boolean).join(' \u00b7 ');
+  }
+  // The website request behind a case (an NV- ID verified later still matches).
+  function caseRequest(c) {
+    if (!c.claim) return null;
+    return requests.filter(function (r) { return r.claim_id === c.claim || r.prev_claim_id === c.claim; })[0] || null;
+  }
+  // Case popup block: the request's key details + a button to its full view
+  // (photos, history, payments) — so the request ID alone gets you everything.
+  function caseRequestHtml(c) {
+    if (!c.claim) return '';
+    var r = caseRequest(c);
+    var head = '<div class="cm-sec"><div class="cm-sec-title">Service request &mdash; <span class="mono">' + esc(c.claim) + '</span></div>' +
+      (r ? '<button class="co-edit" id="cm-open-req">Open full request &#8594;</button>' : '') + '</div>';
+    if (!r) return head + '<div class="cm-muted" style="font-size:12px">Request details not loaded (older than 90 days).</div>';
+    var f = function (k, v) { return '<div><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
+    return head + '<div class="cm-summary">' +
+      f('Problem', r.issue_type) + f('Warranty', r.warranty_status + (r.warranty_until ? ' (till ' + r.warranty_until + ')' : '')) +
+      f('Received', fmtWhen(r.created_at)) + f('Files', (r.file_count || 0) + ' file(s)') +
+      (r.description ? '<div class="span-all"><div class="cm-k">Customer says</div><div>' + esc(r.description) + '</div></div>' : '') +
+      '</div>';
+  }
+
   var openCaseId = null;
   function openCase(c) {
     openCaseId = c.id;
@@ -3246,8 +3283,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (c.reverse) legs.push([c.reverse, 'Reverse pickup']);
     if (c.forward) legs.push([c.forward, c.reverse ? 'Send-back shipment' : 'Forward shipment']);
     var lead = c.reverse || c.forward, sh = ship(lead);
-    document.getElementById('case-title').textContent = c.id;
-    document.getElementById('case-sub').textContent = '';
+    document.getElementById('case-title').textContent = c.caseNo;
+    // Request cases: the courier order numbers sit under the request ID.
+    document.getElementById('case-sub').textContent = c.claim ? 'Shipments: ' + caseLegIds(c) : '';
     var f = function (k, v, cls) { return '<div' + (cls ? ' class="' + cls + '"' : '') + '><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
     // Summary: name · number · type / product · status
     var summary = '<div class="cm-summary">' +
@@ -3280,7 +3318,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     tkBtn += escBtn;
     var acts = labelBtn + actionsHtml(c) + tkBtn + (trackBtns ? '<span style="margin-left:auto;display:flex;gap:8px">' + trackBtns + '</span>' : '');
     var box = document.getElementById('case-body-modal');
-    box.innerHTML = summary + customerOrderHtml(c) +
+    box.innerHTML = summary + caseRequestHtml(c) + customerOrderHtml(c) +
       legs.map(function (l, i) { return legHtml(l[0], l[1], i); }).join('') +
       refundInfoHtml(c) +
       '<div id="cm-confirm" style="margin-top:18px" hidden></div>' +
@@ -3288,6 +3326,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     box.querySelectorAll('.case-act[data-act]').forEach(function (b) {
       b.addEventListener('click', function () { caseAction(c, b); });
     });
+    var orq = document.getElementById('cm-open-req');
+    if (orq) orq.addEventListener('click', function () { var r = caseRequest(c); if (r) openRequest(r.claim_id); });
     var cb = box.querySelector('.case-act[data-cancel]');
     if (cb) cb.addEventListener('click', function () { cancelCase(c, cb); });
     // Copy AWB number — icon briefly turns into a green tick.
@@ -3504,19 +3544,22 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     tip_sent: ['Tip sent', 'b-blue'], quote_sent: ['Quote sent', 'b-blue'],
     approved: ['Pickup booked', 'b-green'], closed: ['Closed', 'b-gray'], not_covered: ['Not covered', 'b-gray']
   };
-  // Tab order: All → NV → Service (SRN-) → Warranty (WRN-) → Waiting → Pickup booked → Closed.
+  // Tab order: All → NV → Service (SRN-) → Warranty (WRN-) → Waiting → Closed.
+  // Once a pickup is booked the request moves to the cases list (case ID = request ID).
   // Old SN-/WN- IDs still match. Default tab = first of NV / Service / Warranty that has requests.
   function isSRN(r) { return /^SR?N-/.test(r.claim_id || ''); }
   function isToReview(r) { return (r.status || 'new') === 'new' && !isNV(r); }
+  // Pickup booked (or booked and since closed) → it lives on as a normal case
+  // under the same request ID, so it leaves New requests (29-Oct-2026).
+  function isBooked(r) { return !!r.case_id && (r.status === 'approved' || r.status === 'closed'); }
   var REQ_FILTERS = [
-    { key: 'all', label: 'All', test: function () { return true; } },
+    { key: 'all', label: 'All', test: function (r) { return !isBooked(r); } },
     // NV- = order not found when submitted → verified in its own tab first, then it becomes WRN-/SRN- and moves to its review tab
     { key: 'verify', label: 'Verify order (NV)', test: function (r) { return isNV(r) && ['closed', 'not_covered'].indexOf(r.status) === -1; } },
     { key: 'service', label: 'Service requests', test: function (r) { return isToReview(r) && isSRN(r); } },
     { key: 'warranty', label: 'Warranty requests', test: function (r) { return isToReview(r) && !isSRN(r); } },
     { key: 'waiting', label: 'Waiting for customer', test: function (r) { return ['waiting_customer', 'tip_sent', 'quote_sent'].indexOf(r.status) !== -1; } },
-    { key: 'approved', label: 'Pickup booked', test: function (r) { return r.status === 'approved'; } },
-    { key: 'done', label: 'Closed', test: function (r) { return r.status === 'closed' || r.status === 'not_covered'; } }
+    { key: 'done', label: 'Closed', test: function (r) { return !isBooked(r) && (r.status === 'closed' || r.status === 'not_covered'); } }
   ];
   function reqTest(key) { return REQ_FILTERS.filter(function (f) { return f.key === key; })[0].test; }
   // Pick the opening tab: NV first, then Service, then Warranty (falls back to Warranty if all empty).
@@ -3565,15 +3608,15 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var cls = w === 'Under warranty' ? 'b-green' : (w === 'Out of warranty' ? 'b-amber' : (w === 'Order cancelled' ? 'b-red' : 'b-gray'));
     return '<span class="badge ' + cls + '">' + esc(w || 'Not checked') + '</span>';
   }
-  function reqCaseStatus(r) {
-    if (!r.case_id) return '';
+  function reqCase(r) {
+    if (!r.case_id) return null;
     for (var i = 0; i < cases.length; i++) {
       var c = cases[i];
-      if ((c.reverse && c.reverse.order_id === r.case_id) || (c.forward && c.forward.order_id === r.case_id) || c.id === r.case_id)
-        return c.st ? c.st.label : '';
+      if ((c.reverse && c.reverse.order_id === r.case_id) || (c.forward && c.forward.order_id === r.case_id) || c.id === r.case_id) return c;
     }
-    return '';
+    return null;
   }
+  function reqCaseStatus(r) { var c = reqCase(r); return c && c.st ? c.st.label : ''; }
 
   function renderRequests() {
     var chips = document.getElementById('req-chips');
@@ -3590,7 +3633,24 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       return test(r) && (!q || [r.claim_id, r.prev_claim_id, r.name, r.phone, r.order_id, r.product, r.email].join(' ').toLowerCase().indexOf(q) !== -1);
     });
     var body = document.getElementById('req-body');
-    if (!rows.length) { body.closest('table').classList.remove('req-full'); body.innerHTML = '<tr><td colspan="8" class="muted">Nothing here.</td></tr>'; renderReqPager(0, 1); return; }
+    if (!rows.length) {
+      body.closest('table').classList.remove('req-full');
+      // Searched for a request that already has its pickup booked → it's a case now; link to it.
+      var moved = q ? requests.filter(function (r) {
+        return isBooked(r) && reqCase(r) && [r.claim_id, r.prev_claim_id, r.name, r.phone, r.order_id].join(' ').toLowerCase().indexOf(q) !== -1;
+      }).slice(0, 5) : [];
+      body.innerHTML = moved.length ? moved.map(function (r) {
+        return '<tr><td colspan="8" class="muted"><b class="mono">' + esc(r.claim_id) + '</b> (' + esc(r.name || '') + ') has its pickup booked &mdash; it continues as a case. ' +
+          '<button class="co-edit" data-case-of="' + esc(r.claim_id) + '">Open case &#8594;</button></td></tr>';
+      }).join('') : '<tr><td colspan="8" class="muted">Nothing here.</td></tr>';
+      body.querySelectorAll('[data-case-of]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var r = requests.filter(function (x) { return x.claim_id === b.dataset.caseOf; })[0], c = r && reqCase(r);
+          if (c) openCase(c);
+        });
+      });
+      renderReqPager(0, 1); return;
+    }
     var total = rows.length, totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (reqPage > totalPages) reqPage = totalPages;
     if (reqPage < 1) reqPage = 1;
@@ -3690,6 +3750,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     box.querySelectorAll('#req-acts [data-k]').forEach(function (b) {
       b.addEventListener('click', function () { b.dataset.k === 'reopen' ? sendReq(r, 'reopen', '', b) : compose(r, b.dataset.k); });
     });
+    var roc = document.getElementById('rq-open-case');
+    if (roc) roc.addEventListener('click', function () { var c = reqCase(r); if (c) openCase(c); });
     modal.hidden = false;
     if (isNV(r)) wireVerify(r);
     if (showPay) loadPayment(r, false);
@@ -3728,7 +3790,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         cell('Warranty', '<span class="rq-wty ' + (under ? 'ok' : 'out') + '">' + (under ? '&#10003; Under warranty' : '&#10007; Out of warranty') + '</span>' +
           (r.warranty_until ? '<div class="pay-hint" style="margin-top:4px">' + (under ? 'valid till ' : 'ended ') + esc(r.warranty_until) + '</div>' : '')) +
         (r.order_skus ? '<div class="span-all">' + '<div class="cm-k">Ordered item(s)</div><div class="mono">' + esc(r.order_skus) + '</div></div>' : '') +
-        (r.case_id ? '<div class="span-all"><div class="cm-k">Pickup case</div><div><b class="mono">' + esc(r.case_id) + '</b> \u00b7 ' + esc(reqCaseStatus(r)) + '</div></div>' : '') +
+        (r.case_id ? '<div class="span-all"><div class="cm-k">Pickup case</div><div><b class="mono">' + esc(r.case_id) + '</b> \u00b7 ' + esc(reqCaseStatus(r)) +
+          (reqCase(r) ? ' <button class="co-edit" id="rq-open-case">Open case &#8594;</button>' : '') + '</div></div>' : '') +
       '</div>';
   }
 

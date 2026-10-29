@@ -2855,6 +2855,12 @@ export default {
         //   nextDelhiveryOrderId() for how the serial is worked out.
         if (action === 'delhiveryNextOrderId') {
           await ensureDelhiveryTable(env.DB);
+          // Website request cases (29-Oct-2026): &claim=WRN-261027-01&dir=reverse|forward
+          // → RWRN-261027-01 / FWRN-261027-01 (see nextClaimOrderId).
+          if (url.searchParams.get('claim')) {
+            const r = await nextClaimOrderId(env.DB, url.searchParams.get('claim'), url.searchParams.get('dir'), url.searchParams.get('from'));
+            return json(r.error ? { ok: false, error: r.error } : { ok: true, orderId: r.orderId }, r.error ? 400 : 200);
+          }
           const prefix = String(url.searchParams.get('prefix') || '').toUpperCase();
           if (!DELHIVERY_ORDER_PREFIXES.includes(prefix)) {
             return json({ ok: false, error: 'prefix must be one of ' + DELHIVERY_ORDER_PREFIXES.join(', ') }, 400);
@@ -5658,8 +5664,35 @@ async function ensureDelhiveryPickup(env, trigger) {
 async function linkSendBack(DB, forwardId, reverseId) {
   await DB.batch([
     DB.prepare("UPDATE delhivery_orders SET linked_order_id = ? WHERE order_id = ? AND direction = 'reverse'").bind(forwardId, reverseId),
-    DB.prepare("UPDATE delhivery_orders SET linked_order_id = ? WHERE order_id = ? AND COALESCE(direction, 'forward') = 'forward' AND delhivery_ok = 1").bind(reverseId, forwardId)
+    DB.prepare("UPDATE delhivery_orders SET linked_order_id = ? WHERE order_id = ? AND COALESCE(direction, 'forward') = 'forward' AND delhivery_ok = 1").bind(reverseId, forwardId),
+    // The send-back belongs to the same website request as its reverse pickup.
+    DB.prepare("UPDATE delhivery_orders SET claim_id = (SELECT claim_id FROM delhivery_orders WHERE order_id = ? AND direction = 'reverse' AND claim_id IS NOT NULL LIMIT 1) " +
+               "WHERE order_id = ? AND COALESCE(direction, 'forward') = 'forward' AND claim_id IS NULL").bind(reverseId, forwardId)
   ]);
+}
+
+// Tag a booked shipment with its website request ID (WRN-/SRN-…).
+async function setOrderClaimId(DB, orderId, claimId) {
+  if (!orderId || !claimId) return;
+  await DB.prepare('UPDATE delhivery_orders SET claim_id = ? WHERE order_id = ? AND delhivery_ok = 1').bind(claimId, orderId).run();
+}
+
+// Older bookings (before claim_id existed) are linked from the request side
+// (warranty_claims.case_id = the reverse order). Fill claim_id for them, and
+// for their send-backs. Runs once per Worker instance; cheap once done.
+let orderClaimBackfillDone = false;
+async function backfillOrderClaimIds(DB) {
+  if (orderClaimBackfillDone) return;
+  try {
+    await ensureServiceRequestCols(DB);
+    await DB.batch([
+      DB.prepare("UPDATE delhivery_orders SET claim_id = (SELECT w.claim_id FROM warranty_claims w WHERE w.case_id = delhivery_orders.order_id LIMIT 1) " +
+                 "WHERE claim_id IS NULL AND order_id IN (SELECT case_id FROM warranty_claims WHERE case_id IS NOT NULL)"),
+      DB.prepare("UPDATE delhivery_orders SET claim_id = (SELECT r.claim_id FROM delhivery_orders r WHERE r.order_id = delhivery_orders.linked_order_id AND r.direction = 'reverse' AND r.claim_id IS NOT NULL LIMIT 1) " +
+                 "WHERE claim_id IS NULL AND COALESCE(direction, 'forward') = 'forward' AND linked_order_id IS NOT NULL")
+    ]);
+    orderClaimBackfillDone = true;
+  } catch (e) { console.error('claim_id backfill failed:', e.message); }
 }
 
 // One-time cleanup (23-Sep-2026, requested by admin): permanently delete
@@ -5755,9 +5788,14 @@ async function ensureDelhiveryTable(DB) {
                      'self_courier TEXT',
                      // Forward leg: team phoned the customer after a failed delivery attempt
                      // (Dashboard "Called"). A newer failed attempt brings the case back.
-                     'cust_called_at TEXT', 'cust_called_by TEXT']) {
+                     'cust_called_at TEXT', 'cust_called_by TEXT',
+                     // claim_id — the website request (WRN-/SRN-…) this shipment belongs to.
+                     // The Dashboard shows it as the case ID (29-Oct-2026). Set on approve,
+                     // by Care Desk bookings, and copied to the send-back forward.
+                     'claim_id TEXT']) {
     try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN ${col}`).run(); } catch (e) { /* column already exists */ }
   }
+  await backfillOrderClaimIds(DB);
   await purgeUnwantedOrders(DB);
   await ensureRefundTables(DB);
 }
@@ -6216,6 +6254,31 @@ async function nextDelhiveryOrderId(DB, prefix) {
     if (/^\d+$/.test(tail)) max = Math.max(max, parseInt(tail, 10));
   });
   return base + pad(max + 1);
+}
+
+// Order ID for a shipment that belongs to a website request (29-Oct-2026).
+// The request ID is the case ID, so the courier order number is built from it:
+//   reverse pickup → R + request ID   (WRN-261027-01 → RWRN-261027-01)
+//   send-back      → F + request ID   (→ FWRN-261027-01)
+// A second round (reopen, or a cancelled booking redone) adds -2, -3 … .
+// from = the reverse order being sent back: RWRN-261027-01-2 → FWRN-261027-01-2,
+// so both legs of a round share the same number.
+async function nextClaimOrderId(DB, claimId, dir, fromId) {
+  const claim = String(claimId || '').trim().toUpperCase();
+  if (!/^[A-Z]{2,3}-\d{6}-\d{1,3}$/.test(claim) || /^NV-/.test(claim)) return { error: 'Not a verified request ID: ' + claim };
+  const letter = dir === 'forward' ? 'F' : 'R';
+  const base = letter + claim;
+  const rows = await DB.prepare('SELECT order_id FROM delhivery_orders WHERE delhivery_ok = 1 AND order_id LIKE ?').bind(base + '%').all();
+  const used = new Set((rows.results || []).map(r => String(r.order_id || '').toUpperCase()));
+  const from = String(fromId || '').trim().toUpperCase();
+  if (letter === 'F' && from.startsWith('R' + claim)) {
+    const twin = 'F' + from.slice(1);
+    if (!used.has(twin)) return { orderId: twin };
+  }
+  if (!used.has(base)) return { orderId: base };
+  let n = 2;
+  while (used.has(base + '-' + n)) n++;
+  return { orderId: base + '-' + n };
 }
 
 // ── DELHIVERY — Forward Order Creation ───────────────────────────────
@@ -6784,6 +6847,8 @@ async function srAction(env, user, b) {
   }
   await srAddEvent(env.DB, row.claim_id, { by: (user && user.username) || 'unknown', kind, note: msg || null,
     case_id: sets.case_id || null, emailed }, sets);
+  // The booked pickup now carries the request ID → Dashboard shows it as the case ID.
+  if (sets.case_id) { await ensureDelhiveryTable(env.DB); await setOrderClaimId(env.DB, sets.case_id, row.claim_id); }
   return { ok: true, emailed };
 }
 
@@ -8149,13 +8214,13 @@ async function externalPickupRecord(env, b) {
 
   await env.DB.prepare(`
     INSERT INTO delhivery_orders (order_id, waybill, status, delhivery_ok, payload_json, response_json, created_by,
-                                  job_type, remark, courier, direction, market_order_id, track_stage, created_at)
-    VALUES (?, ?, 'created', 1, ?, ?, ?, ?, ?, ?, 'reverse', ?, 'Created', datetime('now'))
+                                  job_type, remark, courier, direction, market_order_id, track_stage, claim_id, created_at)
+    VALUES (?, ?, 'created', 1, ?, ?, ?, ?, ?, ?, 'reverse', ?, 'Created', ?, datetime('now'))
   `).bind(
     orderNo, waybill, JSON.stringify({ shipments: [ship] }),
     JSON.stringify({ source: 'care-desk', booked_at: bookedAt }),
     bookedBy, jobType, (claim.claim_id + ' · ' + (claim.issue_type || '') + ' · booked by Care Desk').slice(0, 300),
-    courier, claim.order_id || null
+    courier, claim.order_id || null, claim.claim_id
   ).run();
 
   await srAddEvent(env.DB, claim.claim_id, { by: bookedBy, kind: 'approve', note: 'Pickup booked by Care Desk (' + courier + ' ' + waybill + ')',
