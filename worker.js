@@ -7496,6 +7496,78 @@ function normPhone(raw) {
 // Email: name@domain.ext — no spaces, ending of 2+ letters.
 function validEmail(e) { return /^[^@\s]+@[^@\s.]+(\.[^@\s.]+)*\.[a-z]{2,}$/i.test(e); }
 
+// ── "Request received" email to the customer (29-Oct-2026) ──
+// Sent from a no-reply address through Resend (Worker secret RESEND_API_KEY,
+// domain tomahawk.tools verified in Resend). Until the domain is verified,
+// Resend refuses the sender and we fall back to the Gmail mailbox with the
+// same no-reply wording, so customers always get it.
+const SR_NOREPLY_FROM = 'Tomahawk Tools <no-reply@tomahawk.tools>';
+const SR_HELP_WHATSAPP = '+91 89289 49415';
+function fmtDateIN(iso) {
+  if (!iso) return '';
+  const [y, m, d] = String(iso).slice(0, 10).split('-').map(Number);
+  return d + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m - 1] + ' ' + y;
+}
+async function srSendReceivedEmail(env, r) {
+  const first = String(r.name || '').trim().split(/\s+/)[0] || 'there';
+  const warrantyLine =
+    r.warrantyStatus === 'Under warranty' ? 'Under warranty until ' + fmtDateIN(r.until) :
+    r.warrantyStatus === 'Out of warranty' ? 'Outside the 6-month warranty (ended ' + fmtDateIN(r.until) + '). Repair is chargeable; we will share the cost before doing anything.' :
+    r.warrantyStatus === 'Order cancelled' ? 'This order shows as cancelled in our records. Our team will check and get back to you.' :
+    'We are verifying your order details.';
+  const trackUrl = SR_TRACK_URL + '?id=' + encodeURIComponent(r.claimId);
+  const subject = "We've received your request · " + r.claimId;
+  const text = [
+    'Hi ' + first + ',', '',
+    "We've received your service request.", '',
+    'Request ID : ' + r.claimId,
+    'Product    : ' + (r.product || '-'),
+    'Order ID   : ' + (r.orderId || '-'),
+    'Issue      : ' + (r.issue || '-'),
+    'Warranty   : ' + warrantyLine, '',
+    'Our team will review it within 24 working hours and update you on WhatsApp and email.',
+    'Please keep the product and its accessories ready in case a pickup is arranged.', '',
+    'Track your request anytime: ' + trackUrl, '',
+    '—',
+    "This is an automated email, please don't reply. Need help? WhatsApp us at " + SR_HELP_WHATSAPP + '.', '',
+    'Team TOMAHAWK® Tools'
+  ].join('\n');
+  const esc = x => String(x == null ? '' : x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const row = (k, v) => '<tr><td style="padding:6px 12px 6px 0;color:#777;white-space:nowrap;vertical-align:top">' + k +
+    '</td><td style="padding:6px 0;color:#111;font-weight:600">' + esc(v) + '</td></tr>';
+  const html = '<div style="font-family:Arial,Helvetica,sans-serif;background:#f5f4f0;padding:24px">' +
+    '<div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden">' +
+    '<div style="background:#161616;padding:20px 24px;border-bottom:4px solid #F5A800">' +
+      '<div style="color:#F5A800;font-weight:800;font-size:20px;letter-spacing:1px">TOMAHAWK</div>' +
+      '<div style="color:#fff;font-size:18px;font-weight:700;margin-top:8px">✅ Request received</div></div>' +
+    '<div style="padding:24px;color:#222;font-size:15px;line-height:1.5">' +
+      '<p style="margin:0 0 16px">Hi ' + esc(first) + ", we've received your service request.</p>" +
+      '<table style="border-collapse:collapse;font-size:14px;margin-bottom:16px">' +
+        row('Request ID', r.claimId) + row('Product', r.product || '-') + row('Order ID', r.orderId || '-') +
+        row('Issue', r.issue || '-') + row('Warranty', warrantyLine) + '</table>' +
+      '<p style="margin:0 0 8px">Our team will review it within <b>24 working hours</b> and update you on WhatsApp and email.</p>' +
+      '<p style="margin:0 0 20px;color:#555">Please keep the product and its accessories ready in case a pickup is arranged.</p>' +
+      '<a href="' + esc(trackUrl) + '" style="display:inline-block;background:#F5A800;color:#111;font-weight:700;text-decoration:none;padding:12px 22px;border-radius:8px">Track your request</a>' +
+    '</div>' +
+    '<div style="padding:16px 24px;background:#faf9f6;color:#888;font-size:12px;border-top:1px solid #eee">' +
+      "This is an automated email, please don't reply. Need help? WhatsApp us at " + SR_HELP_WHATSAPP + '.<br>Team TOMAHAWK® Tools · Industrial Tools &amp; Hardware</div>' +
+    '</div></div>';
+
+  if (env.RESEND_API_KEY) {
+    try {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + env.RESEND_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: env.SR_EMAIL_FROM || SR_NOREPLY_FROM, to: [r.email], subject, text, html })
+      });
+      if (res.ok) return 'no-reply';
+      console.error('Resend refused (' + res.status + '): ' + (await res.text().catch(() => '')).slice(0, 200));
+    } catch (e) { console.error('Resend failed:', e.message); }
+  }
+  await sendGmailMessage(env, { to: [r.email], subject, text });   // fallback, same no-reply wording
+  return 'gmail fallback';
+}
+
 async function submitWarrantyClaim(env, b, ip) {
   const clean = (v, max) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, max);
   const f = {
@@ -7604,25 +7676,12 @@ async function submitWarrantyClaim(env, b, ip) {
     if (saved.length) await env.DB.prepare('UPDATE warranty_claims SET files_json = ? WHERE claim_id = ?').bind(JSON.stringify(saved), claimId).run();
   } catch (e) { console.error('service request file store failed:', e.message); }
 
-  // Confirmation to the customer (best effort — never fails the claim).
+  // No-reply confirmation to the customer (best effort — never fails the claim).
   if (f.email) {
     try {
-      await sendGmailMessage(env, {
-        to: [f.email], replyTo: 'support@bullet.co.in',
-        subject: `Your Tomahawk service request ${claimId}`,
-        text: [
-          'Hi ' + f.name + ',', '',
-          'Thank you — we have received your service request.', '',
-          'Request ID : ' + claimId,
-          'Order ID : ' + f.order_id,
-          'Product  : ' + f.product,
-          'Issue    : ' + f.issue_type, '',
-          'Our support team will review the details and photos and contact you on ' + f.phone + ' soon.',
-          'Please keep the product and its accessories ready in case a pickup is arranged.', '',
-          'For any questions, reply to this email or write to support@bullet.co.in quoting your Request ID.', '',
-          'Team TOMAHAWK® Tools', 'Industrial Tools & Hardware'
-        ].join('\n')
-      });
+      const via = await srSendReceivedEmail(env, { claimId, name: f.name, email: f.email, product: f.product,
+        orderId: f.order_id, issue: f.issue_type, warrantyStatus, until: w.warranty_until });
+      await srAddEvent(env.DB, claimId, { by: 'system', kind: 'note', note: 'Confirmation email sent to customer (' + via + ')' }, {});
     } catch (e) { console.error('claim confirmation email failed:', e.message); }
   }
   return { ok: true, claim_id: claimId, warranty_status: warrantyStatus };
