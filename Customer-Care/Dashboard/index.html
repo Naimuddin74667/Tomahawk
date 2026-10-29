@@ -4000,8 +4000,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         try {
           var x = await post('ccInvoiceRequest', { claim_id: r.claim_id, platform: plat.value, message: msg });
           if (!x || !x.ok) throw new Error((x && x.error) || 'failed');
-          box.innerHTML = '<div class="pay-hint" style="margin-bottom:6px">' + (x.emailed ? '&#10003; Upload link emailed to the customer.' : '&#9888; Not emailed — send this link on WhatsApp.') +
-            ' Request is now <b>Waiting for customer</b>; it comes back to review when they upload.</div>' +
+          var ln = function (ok, label, why) { return '<div>' + (ok ? '<span style="color:var(--green,#4ade80)">&#10003; ' + label + ' sent</span>' : '<span style="color:var(--accent)">&#9888; ' + label + ' not sent</span>' + (why ? ' <span class="muted">(' + esc(why) + ')</span>' : '')) + '</div>'; };
+          box.innerHTML = '<div class="pay-hint" style="margin-bottom:6px">' + ln(x.whatsapp, 'WhatsApp', x.whatsapp_note) + ln(x.emailed, 'Email', x.emailed ? '' : 'no email / failed') +
+            (!x.whatsapp && !x.emailed ? '<div>Copy the link below and send it to the customer.</div>' : '') +
+            '<div style="margin-top:4px">Request is now <b>Waiting for customer</b>; it comes back to review when they upload.</div></div>' +
             '<div style="display:flex;gap:8px"><input class="sb-input" id="vf-inv-link" readonly value="' + esc(x.link) + '" style="flex:1">' +
             '<button class="case-act primary" id="vf-inv-copy">Copy link</button></div>';
           document.getElementById('vf-inv-copy').addEventListener('click', function () {

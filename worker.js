@@ -6921,10 +6921,15 @@ async function srInvoiceRequest(env, user, b) {
     try { how = await srSendInvoiceLinkEmail(env, row, note, link); emailed = !!how; }
     catch (e) { console.error('invoice link email failed:', e.message); }
   }
+  // WhatsApp (template invoice_reupload) — best effort, never blocks the link
+  let wa = { sent: false };
+  try { wa = await srSendWhatsAppInvoice(env, row, token); } catch (e) { wa = { sent: false, error: e.message }; }
+  const sentVia = [emailed && 'email', wa.sent && 'WhatsApp'].filter(Boolean);
   await srAddEvent(env.DB, row.claim_id, { by: (user && user.username) || 'unknown', kind: 'invoice_request', emailed,
-    note: note + (emailed ? '' : (row.email ? ' (email failed — send the link on WhatsApp)' : ' (no email — send the link on WhatsApp)')) },
+    note: note + ' · link sent by ' + (sentVia.length ? sentVia.join(' + ') : 'nothing yet — copy the link') +
+      (wa.sent ? '' : ' (WhatsApp: ' + (wa.skipped || wa.error || 'not sent') + ')') },
     { status: 'waiting_customer' });
-  return { ok: true, link, emailed };
+  return { ok: true, link, emailed, whatsapp: wa.sent, whatsapp_note: wa.sent ? '' : (wa.skipped || wa.error || '') };
 }
 
 // Row for a live invoice-upload token, or { error }.
@@ -8185,6 +8190,107 @@ async function srSendWhatsAppReceived(env, r, opts) {
     await srWaLog(env, r.claimId, false, step, e.message + ' | ' + JSON.stringify(trace));
     if (!(opts && opts.fromQueue)) await srWaEnqueue(env, r, 15, step + ': ' + e.message);
     return { sent: false, error: step + ': ' + e.message };
+  }
+}
+
+// ── WhatsApp "Invoice re-upload" (29-Oct-2026) ──
+// Same Zoho Desk route as "Request received", template "invoice_reupload":
+// header "Invoice Re-upload Needed: ${Contacts.Request ID}", body with
+// First Name + Product, and a dynamic URL button
+// …/pages/upload-invoice?t=${Contacts.Upload Token}. The Contact's custom
+// fields Request ID / Product / Upload Token are filled just before sending.
+// Follows SR_WA_MODE (test = SR_WA_TEST_PHONES only). No retry queue: the
+// team sees the result at once and can copy the link instead.
+const SR_WA_INVOICE_TEMPLATE = 'invoice_reupload';
+
+// Template ID by name (cached per name in tm_settings).
+async function zdTemplateIdByName(env, cfg, name) {
+  const KEY = 'zoho_desk_wa_tpl_' + name;
+  const row = await env.DB.prepare('SELECT value FROM tm_settings WHERE key = ?').bind(KEY).first();
+  if (row && row.value) return row.value;
+  let templateId = null;
+  for (const type of ['TEMPLATE', 'TEMPLATE_MESSAGE', 'WHATSAPP_TEMPLATE', 'CANNED', 'CANNED_MESSAGE']) {
+    for (let page = 0, from = 0; page < 6 && !templateId; page++, from += 50) {
+      const tp = await zdCall(env, 'GET', '/im/cannedMessages', { orgId: cfg.orgId,
+        query: { departmentId: String(cfg.departmentId || ''), type, from: String(from), limit: '50' } });
+      const list = (tp.json && tp.json.data) || [];
+      const hit = list.find(t => Object.values(t).some(v => typeof v === 'string' && v.trim().toLowerCase() === name));
+      if (hit) templateId = String(hit.id);
+      if (!tp.ok || list.length < 50) break;
+    }
+    if (templateId) break;
+  }
+  if (!templateId) throw new Error('template "' + name + '" not found (not approved yet?)');
+  await env.DB.prepare("INSERT INTO tm_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(KEY, templateId).run();
+  return templateId;
+}
+
+// row = warranty_claims row, token = raw upload token. → { sent } | { sent:false, skipped|error }
+async function srSendWhatsAppInvoice(env, row, token) {
+  const phone = String(row.phone || '').replace(/\D/g, '').slice(-10);
+  if (!/^[6-9]\d{9}$/.test(phone)) return { sent: false, skipped: 'no valid mobile' };
+  const mode = String(env.SR_WA_MODE || 'test').toLowerCase();
+  if (mode === 'off') return { sent: false, skipped: 'WhatsApp off' };
+  if (mode !== 'live' && SR_WA_TEST_PHONES.indexOf(phone) === -1) return { sent: false, skipped: 'test mode — only test numbers get WhatsApp' };
+  let step = 'setup';
+  const trace = {};
+  try {
+    const cfg = await zdWaSetup(env);
+    const orgId = cfg.orgId;
+    const templateId = await zdTemplateIdByName(env, cfg, SR_WA_INVOICE_TEMPLATE);
+    step = 'contact';
+    const contact = await zdFindOrCreateContact(env, orgId, { phone, name: row.name, email: row.email });
+    step = 'fields';
+    const full = await zdCall(env, 'GET', '/contacts/' + contact.id, { orgId });
+    const cf = (full.json && full.json.cf) || {};
+    const keys = Object.keys(cf);
+    const kId = keys.find(k => /request.?id/i.test(k)), kProd = keys.find(k => /product/i.test(k)), kTok = keys.find(k => /upload.?token/i.test(k));
+    trace.cfKeys = keys;
+    if (!kId || !kProd || !kTok) throw new Error('contact fields Request ID / Product / Upload Token not all found (cf keys: ' + keys.join(', ') + ')');
+    const product = String(row.confirmed_sku || row.product || 'your Tomahawk product').slice(0, 120);
+    const first = String(row.name || '').trim().split(/\s+/)[0] || 'there';
+    const patch = { cf: { [kId]: row.claim_id, [kProd]: product, [kTok]: token } };
+    if (!String((full.json && full.json.firstName) || '').trim() && first !== 'there') patch.firstName = first;
+    const upd = await zdCall(env, 'PATCH', '/contacts/' + contact.id, { orgId, body: patch });
+    if (!upd.ok) throw new Error('contact update ' + upd.status + ': ' + JSON.stringify(upd.json).slice(0, 300));
+    step = 'apply';
+    const ap = await zdCall(env, 'POST', '/im/cannedMessages/' + templateId + '/apply', { orgId, query: { contactId: String(contact.id), language: 'en' } });
+    if (!ap.ok) throw new Error('apply ' + ap.status + ': ' + JSON.stringify(ap.json).slice(0, 300));
+    const fill = t => String(t || '')
+      .replace(/\$\{Contacts\.First Name\}/gi, first)
+      .replace(/\$\{Contacts\.Request ID\}/gi, row.claim_id)
+      .replace(/\$\{Contacts\.Product\}/gi, product)
+      .replace(/\$\{Contacts\.Upload Token\}/gi, token);
+    const tr = ((ap.json && ap.json.translations) || []).find(x => x.language === 'en') || ((ap.json && ap.json.translations) || [])[0] || {};
+    const items = tr.templateItems || {};
+    const message = fill(ap.json.message || ap.json.displayMessage || '');
+    const headerMessage = fill((items.header && items.header.message) || '');
+    if (!message || /\$\{/.test(message)) throw new Error('apply returned no usable message text');
+    // Button URL with this customer's token (dynamic part = Upload Token)
+    const btn = ((items.buttons || []).find(x => /URL/i.test(x.type || '')) || {});
+    let urlMessage = fill(btn.action || '');
+    if (urlMessage && urlMessage.indexOf(token) === -1) urlMessage = urlMessage.replace(/\?t=.*$/, '?t=') + token;
+    if (!urlMessage) urlMessage = token;
+    step = 'send';
+    const id = String(templateId);
+    let sent = null, body = null;
+    trace.sendTries = [];
+    for (const v of [{ tag: 'num-id', numeric: true, url: urlMessage }, { tag: 'str-id', numeric: false, url: urlMessage }, { tag: 'num-id+token', numeric: true, url: token }]) {
+      body = { receiverId: '+91' + phone, receiverType: 'PHONENUMBER', cannedMessageId: id, language: 'en', message, urlMessage: v.url };
+      if (headerMessage) body.headerMessage = headerMessage;
+      const raw = JSON.stringify(body);
+      const rawBody = v.numeric ? raw.replace('"cannedMessageId":"' + id + '"', '"cannedMessageId":' + id) : raw;
+      sent = await zdCall(env, 'POST', '/im/channels/' + cfg.channelId + '/initiateSession', { orgId, rawBody });
+      trace.sendTries.push({ tag: v.tag, status: sent.status, reply: JSON.stringify(sent.json).slice(0, 300) });
+      if (sent.ok) { trace.winner = v.tag; break; }
+    }
+    if (!sent.ok) throw new Error('initiateSession ' + sent.status + ': ' + JSON.stringify(sent.json).slice(0, 300));
+    // Never log the raw token
+    await srWaLog(env, row.claim_id, true, 'invoice sent', JSON.stringify({ trace }).split(token).join('<token>'));
+    return { sent: true };
+  } catch (e) {
+    await srWaLog(env, row.claim_id, false, 'invoice ' + step, (e.message + ' | ' + JSON.stringify(trace)).split(token).join('<token>'));
+    return { sent: false, error: step + ': ' + e.message.split(token).join('<token>') };
   }
 }
 
