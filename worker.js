@@ -715,6 +715,8 @@ const ACTION_TIERS = {
   warrantyClaimSubmit: 'public', // public warranty claim form — rate-limited, emails support
   requestTrack: 'public', // public 'track your request' page — request ID/order ID + mobile, steps only, rate-limited
   orderTrack: 'public', // public 'Track my order' (Shopify) — order no. + mobile, status/items/courier only, rate-limited
+  invoiceUploadInfo: 'public', invoiceUploadSubmit: 'public', // customer re-uploads the invoice — single-use link token, rate-limited
+  ccInvoiceRequest: 'manager_up', // Customer Care: ask the customer to upload the invoice again (makes the link)
   ccClaimsList: 'viewer_read', ccClaimGet: 'viewer_read', ccClaimFiles: 'viewer_read', // Customer Care: New requests
   ccClaimAction: 'manager_up',
   ccPaymentInfo: 'manager_up', ccPaymentCreate: 'manager_up', ccPaymentVoid: 'manager_up', ccPaymentGet: 'viewer_read', // Repair payments (Zoho Books)
@@ -965,7 +967,7 @@ const ACTION_TIERS = {
 
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
-const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction',
+const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest',
   'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccLogisticsQuote']);
 
 function getAuthRequirement(act) {
@@ -1590,6 +1592,32 @@ export default {
         if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
         const r = await srAction(env, user, body || {});
         return json(r, r.ok ? 200 : 400);
+      }
+      // ── Invoice re-upload (29-Oct-2026) — see srInvoiceRequest / srInvoiceUpload ──
+      if (request.method === 'POST' && act === 'ccInvoiceRequest') {
+        const user = authResult.user || (await resolveSession(request, env.DB));
+        if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
+        const r = await srInvoiceRequest(env, user, body || {});
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (request.method === 'GET' && action === 'invoiceUploadInfo') {
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        if (!(await warrantyRateOk(env.DB, 'invinfo:' + ip, 30))) return json({ ok: false, error: 'Too many tries — please try again in an hour.' }, 429);
+        const r = await srInvoiceRowForToken(env.DB, url.searchParams.get('t') || '');
+        if (r.error) return json({ ok: false, error: r.error });
+        return json({ ok: true, claim_id: r.row.claim_id, product: r.row.product || '', note: r.row.inv_request_note || '',
+          first_name: String(r.row.name || '').trim().split(/\s+/)[0] || '' });
+      }
+      if (request.method === 'POST' && act === 'invoiceUploadSubmit') {
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        if (!(await warrantyRateOk(env.DB, 'invup:' + ip, 10))) return json({ ok: false, error: 'Too many tries — please try again in an hour.' }, 429);
+        try {
+          const r = await srInvoiceUpload(env, body || {});
+          return json(r, r.ok ? 200 : 400);
+        } catch (e) {
+          console.error('invoice upload failed:', e.message);
+          return json({ ok: false, error: 'Something went wrong — please try again.' }, 500);
+        }
       }
 
       // ── Repair payments (Zoho Books invoice + Razorpay link) ──
@@ -6717,7 +6745,9 @@ async function ensureServiceRequestCols(DB) {
                      'prev_claim_id TEXT',
                      // Product the team confirmed while verifying an NV- request (29-Oct-2026):
                      // confirmed_sku = a UC SKU, or confirmed_product = free text ("Other").
-                     'confirmed_sku TEXT', 'confirmed_product TEXT']) {
+                     'confirmed_sku TEXT', 'confirmed_product TEXT',
+                     // Invoice re-upload link (29-Oct-2026): SHA-256 of the single-use token + expiry
+                     'inv_token_hash TEXT', 'inv_token_expires TEXT', 'inv_request_note TEXT']) {
     try { await DB.prepare('ALTER TABLE warranty_claims ADD COLUMN ' + col).run(); } catch (e) { /* exists */ }
   }
 }
@@ -6740,13 +6770,16 @@ function sbStorageHeaders(env, extra) {
 }
 function sbBase(env) { return env.SUPABASE_URL.replace(/\/$/, '') + '/storage/v1'; }
 
-async function srUploadFiles(env, claimId, files) {
+// opts.prefix keeps later uploads (e.g. a re-uploaded invoice) from overwriting
+// the first ones; opts.kind tags them (shown on the dashboard).
+async function srUploadFiles(env, claimId, files, opts) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY || !files.length) return [];
+  opts = opts || {};
   const saved = [];
   for (let i = 0; i < files.length; i++) {
     const f = files[i];
     const safe = String(f.filename || 'file').replace(/[^A-Za-z0-9._-]/g, '_').slice(-60);
-    const path = claimId + '/' + (i + 1) + '_' + safe;
+    const path = claimId + '/' + (opts.prefix || '') + (i + 1) + '_' + safe;
     const bin = Uint8Array.from(atob(f.base64), c => c.charCodeAt(0));
     const put = () => fetch(sbBase(env) + '/object/' + SR_BUCKET + '/' + path, {
       method: 'POST', body: bin,
@@ -6764,7 +6797,7 @@ async function srUploadFiles(env, claimId, files) {
         r = await put();
       }
     }
-    if (r.ok) saved.push({ path, mime: f.mime, name: f.filename });
+    if (r.ok) saved.push(opts.kind ? { path, mime: f.mime, name: f.filename, kind: opts.kind, at: new Date().toISOString() } : { path, mime: f.mime, name: f.filename });
     else console.error('service request file upload failed', r.status, path);
   }
   return saved;
@@ -6853,6 +6886,120 @@ async function srAction(env, user, b) {
   // The booked pickup now carries the request ID → Dashboard shows it as the case ID.
   if (sets.case_id) { await ensureDelhiveryTable(env.DB); await setOrderClaimId(env.DB, sets.case_id, row.claim_id); }
   return { ok: true, emailed };
+}
+
+// ══ INVOICE RE-UPLOAD (29-Oct-2026) ═══════════════════════════════
+// NV- requests bought outside Amazon / Flipkart / Website can only be
+// verified from the invoice. When it's wrong or unreadable, the team clicks
+// "Ask for invoice again": a single-use link (7 days) goes to the customer
+// by email, and the team can copy it for WhatsApp. The customer uploads up
+// to 3 photos / PDFs on Customer-Care/Upload-Invoice/; the request goes back
+// to To review and the files show on it tagged "Invoice". Only the token's
+// SHA-256 is stored.
+const CC_UPLOAD_INVOICE_URL = 'https://naimuddin74667.github.io/Tomahawk/Customer-Care/Upload-Invoice/';
+const INVOICE_LINK_PLATFORMS_SKIP = ['Amazon', 'Flipkart', 'Website (Shopify)'];   // these verify by order ID
+const INV_MAX_FILES = 3, INV_MAX_B64 = 14 * 1024 * 1024;   // ~10 MB per file
+
+async function srInvoiceRequest(env, user, b) {
+  await ensureServiceRequestCols(env.DB);
+  const id = String(b.claim_id || '').trim();
+  const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(id).first();
+  if (!row) return { ok: false, error: 'No such request' };
+  if (!/^NV-/.test(row.claim_id)) return { ok: false, error: 'Only NV- requests (order not verified) use this' };
+  if (['closed', 'not_covered'].includes(row.status)) return { ok: false, error: 'This request is closed' };
+  const platform = String(b.platform || row.platform || '');
+  if (INVOICE_LINK_PLATFORMS_SKIP.includes(platform)) return { ok: false, error: 'Amazon / Flipkart / Website orders are verified by order ID' };
+  const note = String(b.message || '').replace(/\s+\n/g, '\n').trim().slice(0, 600);
+  if (!note) return { ok: false, error: 'Write what is wrong with the invoice first' };
+
+  const token = randomToken();
+  const link = CC_UPLOAD_INVOICE_URL + '?t=' + token;
+  await env.DB.prepare("UPDATE warranty_claims SET inv_token_hash = ?, inv_token_expires = datetime('now', '+7 days'), inv_request_note = ? WHERE claim_id = ?")
+    .bind(await sha256Hex(token), note, row.claim_id).run();
+  let emailed = false, how = '';
+  if (row.email) {
+    try { how = await srSendInvoiceLinkEmail(env, row, note, link); emailed = !!how; }
+    catch (e) { console.error('invoice link email failed:', e.message); }
+  }
+  await srAddEvent(env.DB, row.claim_id, { by: (user && user.username) || 'unknown', kind: 'invoice_request', emailed,
+    note: note + (emailed ? '' : (row.email ? ' (email failed — send the link on WhatsApp)' : ' (no email — send the link on WhatsApp)')) },
+    { status: 'waiting_customer' });
+  return { ok: true, link, emailed };
+}
+
+// Row for a live invoice-upload token, or { error }.
+async function srInvoiceRowForToken(DB, token) {
+  await ensureServiceRequestCols(DB);
+  if (!token || token.length < 20) return { error: 'This link is not valid.' };
+  const row = await DB.prepare('SELECT * FROM warranty_claims WHERE inv_token_hash = ? LIMIT 1').bind(await sha256Hex(token)).first();
+  if (!row) return { error: 'This link is not valid or has already been used.' };
+  if (['closed', 'not_covered'].includes(row.status)) return { error: 'This request is already closed.' };
+  if (!row.inv_token_expires || new Date(String(row.inv_token_expires).replace(' ', 'T') + 'Z') < new Date())
+    return { error: 'This link has expired. Please WhatsApp us at ' + SR_HELP_WHATSAPP + ' for a new one.' };
+  return { row };
+}
+
+async function srInvoiceUpload(env, b) {
+  const t = await srInvoiceRowForToken(env.DB, String(b.t || ''));
+  if (t.error) return { ok: false, error: t.error };
+  const row = t.row;
+  const files = (Array.isArray(b.files) ? b.files : []).slice(0, INV_MAX_FILES).map((x, i) => ({
+    mime: String(x.type || ''), base64: String(x.data || ''), filename: String(x.name || ('invoice' + (i + 1))).slice(0, 80)
+  })).filter(x => x.base64 && (/^image\//.test(x.mime) || x.mime === 'application/pdf'));
+  if (!files.length) return { ok: false, error: 'Please add a photo or PDF of your invoice.' };
+  if (files.some(x => x.base64.length > INV_MAX_B64)) return { ok: false, error: 'A file is too large — please keep each file under 10 MB.' };
+
+  const saved = await srUploadFiles(env, row.claim_id, files, { prefix: 'inv' + Date.now() + '_', kind: 'invoice' });
+  if (!saved.length) return { ok: false, error: 'Upload failed — please try again.' };
+  let prev = [];
+  try { prev = JSON.parse(row.files_json || '[]'); } catch (e) { prev = []; }
+  // Token is spent; request goes back to the team's review (NV tab).
+  await env.DB.prepare("UPDATE warranty_claims SET files_json = ?, file_count = COALESCE(file_count, 0) + ?, inv_token_hash = NULL, inv_token_expires = NULL WHERE claim_id = ?")
+    .bind(JSON.stringify(prev.concat(saved)), saved.length, row.claim_id).run();
+  await srAddEvent(env.DB, row.claim_id, { by: 'customer', kind: 'invoice_uploaded', note: saved.length + ' file(s) uploaded' }, { status: 'new' });
+  return { ok: true, claim_id: row.claim_id, count: saved.length };
+}
+
+// No-reply email with the upload link (Resend, Gmail fallback — like "Request received").
+async function srSendInvoiceLinkEmail(env, row, note, link) {
+  const first = srFirstName(row);
+  const subject = 'Please upload your invoice again · ' + row.claim_id;
+  const text = [
+    'Hi ' + first + ',', '',
+    'We need your invoice again to verify your service request ' + row.claim_id + '.', '',
+    note, '',
+    'Upload it here (link valid for 7 days): ' + link, '',
+    'Product : ' + (row.product || '-'), '',
+    '—', "This is an automated email, please don't reply. Need help? WhatsApp us at " + SR_HELP_WHATSAPP + '.', '',
+    'Team TOMAHAWK® Tools'
+  ].join('\n');
+  const esc = x => String(x == null ? '' : x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const html = '<div style="font-family:Arial,Helvetica,sans-serif;background:#f5f4f0;padding:24px">' +
+    '<div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden">' +
+    '<div style="background:#161616;padding:20px 24px;border-bottom:4px solid #F5A800">' +
+      '<div style="color:#F5A800;font-weight:800;font-size:20px;letter-spacing:1px">TOMAHAWK</div>' +
+      '<div style="color:#fff;font-size:18px;font-weight:700;margin-top:8px">Please upload your invoice again</div></div>' +
+    '<div style="padding:24px;color:#222;font-size:15px;line-height:1.5">' +
+      '<p style="margin:0 0 12px">Hi ' + esc(first) + ', we need your invoice again to verify your service request <b>' + esc(row.claim_id) + '</b> (' + esc(row.product || '-') + ').</p>' +
+      '<p style="margin:0 0 20px;padding:10px 14px;background:#fff8e6;border-left:3px solid #F5A800">' + esc(note).replace(/\n/g, '<br>') + '</p>' +
+      '<a href="' + esc(link) + '" style="display:inline-block;background:#F5A800;color:#111;font-weight:700;text-decoration:none;padding:12px 22px;border-radius:8px">Upload invoice</a>' +
+      '<p style="margin:16px 0 0;color:#777;font-size:13px">The link works once and is valid for 7 days.</p>' +
+    '</div>' +
+    '<div style="padding:16px 24px;background:#faf9f6;color:#888;font-size:12px;border-top:1px solid #eee">' +
+      "This is an automated email, please don't reply. Need help? WhatsApp us at " + SR_HELP_WHATSAPP + '.<br>Team TOMAHAWK® Tools · Industrial Tools &amp; Hardware</div>' +
+    '</div></div>';
+  if (env.RESEND_API_KEY) {
+    try {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST', headers: { Authorization: 'Bearer ' + env.RESEND_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: env.SR_EMAIL_FROM || SR_NOREPLY_FROM, to: [row.email], subject, text, html })
+      });
+      if (res.ok) return 'no-reply';
+      console.error('Resend refused (' + res.status + ')');
+    } catch (e) { console.error('Resend failed:', e.message); }
+  }
+  await sendGmailMessage(env, { to: [row.email], subject, text });
+  return 'gmail fallback';
 }
 
 // ── Verify an NV- request (27-Oct-2026) ──

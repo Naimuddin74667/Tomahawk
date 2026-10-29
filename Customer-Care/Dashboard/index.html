@@ -478,6 +478,8 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .rq-thumb:hover { border-color: var(--accent); }
 .rq-card .req-files { flex-wrap: nowrap; }
 .rq-thumb { width: 120px; height: 120px; flex: 0 0 auto; }
+.rq-tag { position: absolute; left: 6px; bottom: 6px; background: var(--accent); color: #111; font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; letter-spacing: .04em; }
+.rq-pdf { display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 20px; color: var(--red, #f87171); text-decoration: none; }
 .rq-more-t { display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 26px; font-weight: 800;
   color: var(--accent); font-family: var(--font-display); }
 .rq-more-t span { font-size: 11px; font-weight: 600; color: var(--text2); font-family: inherit; }
@@ -3585,7 +3587,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // Mirrors SR_CUSTOMER_EMAILS in worker.js — off for the first go-live.
   var REQ_CUSTOMER_EMAILS = false;
   var REQ_ACT_LABEL = { ask_info: 'Ask for info / video', tip: 'Send a tip', quote: 'Repair quote', not_covered: 'Not covered', resolve: 'Resolved', note: 'Internal note',
-    payment_link: 'Payment link sent', payment_received: 'Payment received', payment_void: 'Invoice voided', verified: 'Order verified', consent: 'Customer agreed to charges' };
+    payment_link: 'Payment link sent', payment_received: 'Payment received', payment_void: 'Invoice voided', verified: 'Order verified', consent: 'Customer agreed to charges',
+    invoice_request: 'Asked for invoice again', invoice_uploaded: 'Customer uploaded invoice' };
   function canActReq() { return window.TM_ROLE === 'admin' || window.TM_ROLE === 'manager'; }
   function isNV(r) { return /^NV-/.test(r.claim_id || ''); }
   // "New requests" tile = to review (SRN + WRN) + still to verify
@@ -3759,19 +3762,27 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var el = document.getElementById('req-files'); if (!el || openReqId !== r.claim_id) return;
       var fl = (res && res.files) || [];
       if (!fl.length) { el.innerHTML = '<span class="muted">' + (r.file_count ? 'Files were emailed to support (not stored for this older request).' : 'No files.') + '</span>'; return; }
-      var ok = fl.filter(function (x) { return x.url; });
+      // Re-uploaded invoices (kind 'invoice', newest first) lead the row, tagged "Invoice".
+      var ok = fl.filter(function (x) { return x.url; }).map(function (x, n) { return { f: x, n: n }; }).sort(function (a, b) {
+        var ia = a.f.kind === 'invoice', ib = b.f.kind === 'invoice';
+        return ia !== ib ? (ia ? -1 : 1) : (ia ? b.n - a.n : a.n - b.n);
+      }).map(function (o) { return o.f; });
+      var isPdf = function (x) { return x.mime === 'application/pdf'; };
+      var media = ok.filter(function (x) { return !isPdf(x); });   // the viewer shows photos / videos; PDFs open in a new tab
       document.getElementById('req-files-n').textContent = '(' + fl.length + ')';
       // One line only: first 2 files, then a "+N" tile that opens the viewer on the 3rd
       var SHOW = 2, extra = ok.length - SHOW;
+      var tag = function (x) { return x.kind === 'invoice' ? '<span class="rq-tag">Invoice</span>' : ''; };
       el.innerHTML = ok.slice(0, SHOW).map(function (x) {
-        var i = ok.indexOf(x), vid = /^video\//.test(x.mime);
+        if (isPdf(x)) return '<a class="rq-thumb rq-pdf" href="' + esc(x.url) + '" target="_blank" rel="noopener" title="' + esc(x.name) + '">PDF' + tag(x) + '</a>';
+        var i = media.indexOf(x), vid = /^video\//.test(x.mime);
         return '<button type="button" class="rq-thumb' + (vid ? ' is-vid' : '') + '" data-i="' + i + '" title="' + esc(x.name) + '">' +
-          (vid ? '<video src="' + esc(x.url) + '" preload="metadata" muted></video>' : '<img src="' + esc(x.url) + '" alt="' + esc(x.name) + '">') + '</button>';
+          (vid ? '<video src="' + esc(x.url) + '" preload="metadata" muted></video>' : '<img src="' + esc(x.url) + '" alt="' + esc(x.name) + '">') + tag(x) + '</button>';
       }).join('') +
-        (extra > 0 ? '<button type="button" class="rq-thumb rq-more-t" data-i="' + SHOW + '">+' + extra + '<span>more</span></button>' : '') +
+        (extra > 0 ? '<button type="button" class="rq-thumb rq-more-t" data-i="' + Math.max(0, media.indexOf(ok.slice(SHOW).filter(function (x) { return !isPdf(x); })[0])) + '">+' + extra + '<span>more</span></button>' : '') +
         (ok.length < fl.length ? '<span class="muted" style="align-self:center">' + (fl.length - ok.length) + ' unavailable</span>' : '');
-      el.querySelectorAll('.rq-thumb').forEach(function (b) {
-        b.addEventListener('click', function () { openLightbox(ok, +b.dataset.i); });
+      el.querySelectorAll('button.rq-thumb').forEach(function (b) {
+        b.addEventListener('click', function () { if (media.length) openLightbox(media, +b.dataset.i); });
       });
     }).catch(function () { var el = document.getElementById('req-files'); if (el) el.innerHTML = '<span class="muted">Could not load files.</span>'; });
   }
@@ -3878,12 +3889,16 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       '</div>' +
       '<div class="pay-hint" id="vf-res">Check the order ID against the invoice photo, then click Check.</div>' +
       '<div class="pay-row"><button class="case-act" id="vf-check">Check order</button>' +
-        '<button class="case-act primary" id="vf-go" disabled>Confirm &amp; convert</button></div></div>';
+        '<button class="case-act primary" id="vf-go" disabled>Confirm &amp; convert</button>' +
+        // Bought outside Amazon / Flipkart / Website → verified only from the invoice; ask for it again if wrong
+        '<button class="case-act" id="vf-inv" style="margin-left:auto">&#8635; Ask for invoice again</button></div>' +
+      '<div id="vf-inv-box" style="margin-top:12px" hidden></div></div>';
   }
   function wireVerify(r) {
     var chk = document.getElementById('vf-check'), go = document.getElementById('vf-go'), res = document.getElementById('vf-res');
     if (!chk) return;
     var prodEl = document.getElementById('vf-prod'), prodHint = document.getElementById('vf-prod-hint');
+    wireInvoiceAsk(r);
     var checked = false;   // last Check passed and nothing it depends on changed since
     // UC SKU match (case/spacing-insensitive) → the canonical SKU, else null (= Other)
     function ucSkuOf(v) {
@@ -3957,6 +3972,47 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         if (!x || !x.ok) throw new Error((x && x.error) || 'failed');
         await loadRequests(); renderTiles(); renderRequests(); openRequest(x.claim_id);
       } catch (e) { alert("Couldn't convert: " + e.message); go.disabled = false; go.textContent = 'Confirm & convert'; }
+    });
+  }
+
+  // ── Ask for invoice again (29-Oct-2026) ──
+  // Only for orders bought outside Amazon / Flipkart / Website (those verify by
+  // order ID). Sends the customer a single-use upload link (email) and shows it
+  // here to copy for WhatsApp. The upload sends the request back to To review.
+  var INVOICE_BY_ORDER_ID = ['Amazon', 'Flipkart', 'Website (Shopify)'];
+  var INVOICE_ASK_TEXT = 'The invoice you uploaded is not clear or does not match your order. Please upload a clear photo of the original invoice showing the order number, date and product.';
+  function wireInvoiceAsk(r) {
+    var btn = document.getElementById('vf-inv'), box = document.getElementById('vf-inv-box'), plat = document.getElementById('vf-plat');
+    if (!btn) return;
+    var sync = function () { btn.hidden = INVOICE_BY_ORDER_ID.indexOf(plat.value) !== -1; if (btn.hidden) box.hidden = true; };
+    plat.addEventListener('change', sync); sync();
+    btn.addEventListener('click', function () {
+      box.hidden = false;
+      box.innerHTML = '<div class="cm-k" style="margin-bottom:6px">Message to the customer (edit if needed)</div>' +
+        '<textarea class="sb-input" id="vf-inv-msg" rows="3" style="width:100%;resize:vertical">' + esc(INVOICE_ASK_TEXT) + '</textarea>' +
+        '<div class="pay-row" style="margin-top:8px"><button class="case-act primary" id="vf-inv-send">Send upload link</button>' +
+        '<button class="case-act" id="vf-inv-cancel">Cancel</button></div>';
+      document.getElementById('vf-inv-cancel').addEventListener('click', function () { box.hidden = true; });
+      document.getElementById('vf-inv-send').addEventListener('click', async function () {
+        var send = this, msg = document.getElementById('vf-inv-msg').value.trim();
+        if (!msg) { alert('Write what is wrong with the invoice.'); return; }
+        send.disabled = true; send.textContent = 'Sending…';
+        try {
+          var x = await post('ccInvoiceRequest', { claim_id: r.claim_id, platform: plat.value, message: msg });
+          if (!x || !x.ok) throw new Error((x && x.error) || 'failed');
+          box.innerHTML = '<div class="pay-hint" style="margin-bottom:6px">' + (x.emailed ? '&#10003; Upload link emailed to the customer.' : '&#9888; Not emailed — send this link on WhatsApp.') +
+            ' Request is now <b>Waiting for customer</b>; it comes back to review when they upload.</div>' +
+            '<div style="display:flex;gap:8px"><input class="sb-input" id="vf-inv-link" readonly value="' + esc(x.link) + '" style="flex:1">' +
+            '<button class="case-act primary" id="vf-inv-copy">Copy link</button></div>';
+          document.getElementById('vf-inv-copy').addEventListener('click', function () {
+            var b = this, inp = document.getElementById('vf-inv-link');
+            var done = function () { b.textContent = '✓ Copied'; setTimeout(function () { b.textContent = 'Copy link'; }, 1500); };
+            if (navigator.clipboard) navigator.clipboard.writeText(inp.value).then(done, function () { inp.select(); });
+            else { inp.select(); document.execCommand('copy'); done(); }
+          });
+          loadRequests().then(function () { renderTiles(); renderRequests(); });   // list shows the new status; popup stays open
+        } catch (e) { alert("Couldn't send: " + e.message); send.disabled = false; send.textContent = 'Send upload link'; }
+      });
     });
   }
 
