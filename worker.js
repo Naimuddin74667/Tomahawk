@@ -7779,9 +7779,14 @@ async function submitWarrantyClaim(env, b, ip) {
 
   // One open claim per order — return the existing one instead of a duplicate.
   const open = await env.DB.prepare(
-    "SELECT claim_id FROM warranty_claims WHERE order_key = ? AND COALESCE(status, 'new') NOT IN ('closed','not_covered') AND created_at > datetime('now','-30 days') LIMIT 1"
+    "SELECT claim_id, phone FROM warranty_claims WHERE order_key = ? AND COALESCE(status, 'new') NOT IN ('closed','not_covered') AND created_at > datetime('now','-30 days') LIMIT 1"
   ).bind(orderKey).first();
-  if (open) return { ok: true, existing: true, claim_id: open.claim_id };
+  // Show the existing request ID only to the same customer (same mobile) — never reveal
+  // someone else's request to a person who just typed their order ID.
+  if (open) {
+    if (open.phone === f.phone) return { ok: true, existing: true, claim_id: open.claim_id };
+    throw claimErr('A request already exists for this order. If it is yours, track it on the Track Your Request page using the mobile number you gave then.');
+  }
 
   // Fetch our own order facts (never trust the browser for these).
   let w = { found: false };
