@@ -7568,6 +7568,180 @@ async function srSendReceivedEmail(env, r) {
   return 'gmail fallback';
 }
 
+// ══════════════════════════════════════════════════════════════════
+// WHATSAPP "REQUEST RECEIVED" via ZOHO DESK IM (29-Oct-2026)
+// Sent from the main WhatsApp number (Zoho Desk channel) using the approved
+// Utility template "request_received". A customer reply opens Chat Bot V1,
+// which only creates a ticket on "Still need help?".
+// Template placeholders come from the customer's Desk Contact, so we
+// find/create the Contact, fill its custom fields "Request ID" + "Product",
+// ask Desk to apply the template for that contact, then initiate the session.
+// Secret: ZOHO_DESK_REFRESH_TOKEN (Self Client shared with Books; scopes
+// Desk.contacts.*, Desk.basic.READ/CREATE, Desk.search.READ, Desk.InstantMessages.*).
+// Mode: Worker var SR_WA_MODE = 'off' | 'test' (default: only SR_WA_TEST_PHONES) | 'live'.
+// Every attempt is logged in D1 sr_wa_log (raw Zoho replies, for debugging).
+// ══════════════════════════════════════════════════════════════════
+const ZD_API = 'https://desk.zoho.in/api/v1';
+const SR_WA_TEMPLATE_NAME = 'request_received';
+const SR_WA_TEST_PHONES = ['8411994164'];
+
+async function zdToken(env, force) {
+  const KEY = 'zoho_desk_token';
+  if (!force) {
+    const row = await env.DB.prepare('SELECT value FROM tm_settings WHERE key = ?').bind(KEY).first();
+    if (row && row.value) {
+      try { const t = JSON.parse(row.value); if (t.token && t.exp > Date.now() + 60000) return t.token; } catch (e) { /* refetch */ }
+    }
+  }
+  if (!env.ZOHO_DESK_REFRESH_TOKEN) throw new Error('ZOHO_DESK_REFRESH_TOKEN secret missing');
+  const qs = new URLSearchParams({ refresh_token: env.ZOHO_DESK_REFRESH_TOKEN, client_id: zbSecret(env, 'CLIENT_ID'),
+    client_secret: zbSecret(env, 'CLIENT_SECRET'), grant_type: 'refresh_token' });
+  const r = await fetch(ZB_ACCOUNTS + '?' + qs.toString(), { method: 'POST' });
+  const j = await r.json().catch(() => ({}));
+  if (!j.access_token) throw new Error('Zoho Desk login failed: ' + (j.error || ('HTTP ' + r.status)));
+  const exp = Date.now() + ((j.expires_in || 3600) - 120) * 1000;
+  await env.DB.prepare("INSERT INTO tm_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+    .bind(KEY, JSON.stringify({ token: j.access_token, exp })).run();
+  return j.access_token;
+}
+
+// One Desk API call → { ok, status, json }. Retries once on 401 with a fresh token.
+async function zdCall(env, method, path, opt) {
+  opt = opt || {};
+  const qs = opt.query ? '?' + new URLSearchParams(opt.query).toString() : '';
+  const go = async (force) => fetch(ZD_API + path + qs, {
+    method,
+    headers: { Authorization: 'Zoho-oauthtoken ' + (await zdToken(env, force)), 'Content-Type': 'application/json',
+      ...(opt.orgId ? { orgId: String(opt.orgId) } : {}) },
+    body: opt.body ? JSON.stringify(opt.body) : undefined
+  });
+  let r = await go(false);
+  if (r.status === 401) r = await go(true);
+  const text = await r.text().catch(() => '');
+  let json = {};
+  try { json = text ? JSON.parse(text) : {}; } catch (e) { json = { raw: text.slice(0, 500) }; }
+  return { ok: r.ok, status: r.status, json };
+}
+
+// Org ID + WhatsApp channel ID + template ID — looked up once, cached in tm_settings.
+async function zdWaSetup(env, force) {
+  const KEY = 'zoho_desk_wa_setup';
+  if (!force) {
+    const row = await env.DB.prepare('SELECT value FROM tm_settings WHERE key = ?').bind(KEY).first();
+    if (row && row.value) { try { const c = JSON.parse(row.value); if (c.orgId && c.channelId && c.templateId) return c; } catch (e) { /* refetch */ } }
+  }
+  const orgs = await zdCall(env, 'GET', '/organizations');
+  const orgList = (orgs.json && orgs.json.data) || [];
+  if (!orgList.length) throw new Error('setup/organizations ' + orgs.status + ': ' + JSON.stringify(orgs.json).slice(0, 300));
+  const org = orgList.find(o => /tomahawk/i.test((o.portalName || '') + ' ' + (o.companyName || ''))) || orgList[0];
+  const orgId = org.id;
+  const ch = await zdCall(env, 'GET', '/im/channels', { orgId });
+  const chList = (ch.json && ch.json.data) || [];
+  const wa = chList.find(c => /WHATSAPP/i.test(c.integrationServiceType || '') && c.isActive !== false) ||
+             chList.find(c => /WHATSAPP/i.test(c.integrationServiceType || ''));
+  if (!wa) throw new Error('setup/channels ' + ch.status + ': no WhatsApp channel — ' + JSON.stringify(ch.json).slice(0, 300));
+  let templateId = null, from = 0, lastTpl = null;
+  for (let page = 0; page < 6 && !templateId; page++, from += 50) {
+    const tp = await zdCall(env, 'GET', '/im/cannedMessages', { orgId, query: { from: String(from), limit: '50' } });
+    lastTpl = tp;
+    const list = (tp.json && tp.json.data) || [];
+    const hit = list.find(t => Object.values(t).some(v => typeof v === 'string' && v.trim().toLowerCase() === SR_WA_TEMPLATE_NAME));
+    if (hit) templateId = hit.id;
+    if (list.length < 50) break;
+  }
+  if (!templateId) throw new Error('setup/template "' + SR_WA_TEMPLATE_NAME + '" not found — ' + JSON.stringify(lastTpl && lastTpl.json).slice(0, 300));
+  const c = { orgId, channelId: wa.id, templateId, at: new Date().toISOString() };
+  await env.DB.prepare("INSERT INTO tm_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+    .bind(KEY, JSON.stringify(c)).run();
+  return c;
+}
+
+// Finds the Desk Contact by mobile (any +91/91 format), or creates it.
+async function zdFindOrCreateContact(env, orgId, r) {
+  for (const field of ['mobile', 'phone']) {
+    const s = await zdCall(env, 'GET', '/contacts/search', { orgId, query: { [field]: '*' + r.phone, limit: '5' } });
+    const hit = ((s.json && s.json.data) || [])[0];
+    if (hit) return { id: hit.id, created: false };
+  }
+  const parts = String(r.name || '').trim().split(/\s+/);
+  const firstName = parts.length > 1 ? parts.slice(0, -1).join(' ') : '';
+  const lastName = parts.length > 1 ? parts[parts.length - 1] : (parts[0] || 'Customer');
+  const c = await zdCall(env, 'POST', '/contacts', { orgId, body: { firstName, lastName, mobile: '+91' + r.phone, ...(r.email ? { email: r.email } : {}) } });
+  if (!c.ok || !c.json.id) throw new Error('contact create ' + c.status + ': ' + JSON.stringify(c.json).slice(0, 300));
+  return { id: c.json.id, created: true };
+}
+
+// Pulls a text field out of Zoho's reply (field names aren't documented for "apply").
+function zdPickText(o, keys) {
+  if (!o || typeof o !== 'object') return '';
+  for (const k of keys) if (typeof o[k] === 'string' && o[k].trim()) return o[k];
+  for (const v of Object.values(o)) if (v && typeof v === 'object') { const t = zdPickText(v, keys); if (t) return t; }
+  return '';
+}
+
+async function srWaLog(env, claimId, ok, step, detail) {
+  try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS sr_wa_log (id INTEGER PRIMARY KEY AUTOINCREMENT,
+      claim_id TEXT, at TEXT DEFAULT (datetime('now')), ok INTEGER, step TEXT, detail TEXT)`).run();
+    await env.DB.prepare('INSERT INTO sr_wa_log (claim_id, ok, step, detail) VALUES (?, ?, ?, ?)')
+      .bind(claimId, ok ? 1 : 0, step, String(detail || '').slice(0, 6000)).run();
+  } catch (e) { console.error('sr_wa_log failed:', e.message); }
+}
+
+// r = { claimId, name, phone (10 digits), email, product }
+async function srSendWhatsAppReceived(env, r) {
+  const mode = String(env.SR_WA_MODE || 'test').toLowerCase();
+  if (mode === 'off') return { sent: false, skipped: 'off' };
+  if (mode !== 'live' && SR_WA_TEST_PHONES.indexOf(r.phone) === -1) return { sent: false, skipped: 'test mode' };
+  let step = 'setup';
+  const trace = {};
+  try {
+    const cfg = await zdWaSetup(env);
+    const orgId = cfg.orgId;
+    step = 'contact';
+    const contact = await zdFindOrCreateContact(env, orgId, r);
+    trace.contact = contact;
+    // Fill the template's custom fields (API names discovered from the contact record)
+    step = 'fields';
+    const full = await zdCall(env, 'GET', '/contacts/' + contact.id, { orgId });
+    const cf = (full.json && full.json.cf) || {};
+    const keys = Object.keys(cf);
+    const kId = keys.find(k => /request.?id/i.test(k));
+    const kProd = keys.find(k => /product/i.test(k));
+    trace.cfKeys = keys;
+    if (!kId || !kProd) throw new Error('custom fields "Request ID" / "Product" not found on contact (cf keys: ' + keys.join(', ') + ')');
+    const product = String(r.product || 'your Tomahawk product').slice(0, 120);
+    const upd = await zdCall(env, 'PATCH', '/contacts/' + contact.id, { orgId, body: { cf: { [kId]: r.claimId, [kProd]: product } } });
+    if (!upd.ok) throw new Error('contact update ' + upd.status + ': ' + JSON.stringify(upd.json).slice(0, 300));
+    // Template with this contact's values filled in
+    step = 'apply';
+    const ap = await zdCall(env, 'POST', '/im/cannedMessages/' + cfg.templateId + '/apply', { orgId, query: { contactId: String(contact.id), language: 'en' } });
+    trace.apply = ap.json;
+    if (!ap.ok) throw new Error('apply ' + ap.status + ': ' + JSON.stringify(ap.json).slice(0, 300));
+    const first = String(r.name || '').trim().split(/\s+/)[0] || 'there';
+    const fill = t => String(t || '')
+      .replace(/\$\{Contacts\.First Name\}/gi, first)
+      .replace(/\$\{Contacts\.Request ID\}/gi, r.claimId)
+      .replace(/\$\{Contacts\.Product\}/gi, product);
+    const message = fill(zdPickText(ap.json, ['message', 'content', 'body', 'text']));
+    const headerMessage = fill(zdPickText(ap.json, ['headerMessage', 'header']));
+    const urlMessage = zdPickText(ap.json, ['urlMessage']);
+    if (!message) throw new Error('apply returned no message text');
+    step = 'send';
+    const body = { receiverId: '+91' + r.phone, receiverType: 'PHONENUMBER', cannedMessageId: String(cfg.templateId), language: 'en', message };
+    if (headerMessage) body.headerMessage = headerMessage;
+    if (urlMessage) body.urlMessage = urlMessage;
+    const sent = await zdCall(env, 'POST', '/im/channels/' + cfg.channelId + '/initiateSession', { orgId, body });
+    trace.send = sent.json;
+    if (!sent.ok) throw new Error('initiateSession ' + sent.status + ': ' + JSON.stringify(sent.json).slice(0, 300));
+    await srWaLog(env, r.claimId, true, 'sent', JSON.stringify({ body, trace }));
+    return { sent: true };
+  } catch (e) {
+    await srWaLog(env, r.claimId, false, step, e.message + ' | ' + JSON.stringify(trace));
+    return { sent: false, error: step + ': ' + e.message };
+  }
+}
+
 async function submitWarrantyClaim(env, b, ip) {
   const clean = (v, max) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, max);
   const f = {
@@ -7675,6 +7849,14 @@ async function submitWarrantyClaim(env, b, ip) {
     const saved = await srUploadFiles(env, claimId, files);
     if (saved.length) await env.DB.prepare('UPDATE warranty_claims SET files_json = ? WHERE claim_id = ?').bind(JSON.stringify(saved), claimId).run();
   } catch (e) { console.error('service request file store failed:', e.message); }
+
+  // WhatsApp "Request received" from the main number via Zoho Desk (best effort).
+  try {
+    const productName = (w.found && (w.items || []).map(it => it.name).filter(Boolean)[0]) || f.product;
+    const wa = await srSendWhatsAppReceived(env, { claimId, name: f.name, phone: f.phone, email: f.email, product: productName });
+    if (wa.sent || wa.error) await srAddEvent(env.DB, claimId, { by: 'system', kind: 'note',
+      note: wa.sent ? 'WhatsApp "Request received" sent to customer' : 'WhatsApp not sent (' + wa.error + ')' }, {});
+  } catch (e) { console.error('claim WhatsApp failed:', e.message); }
 
   // No-reply confirmation to the customer (best effort — never fails the claim).
   if (f.email) {
