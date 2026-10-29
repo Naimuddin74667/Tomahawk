@@ -7649,16 +7649,24 @@ async function zdWaSetup(env, force) {
   const wa = chList.find(c => /WHATSAPP/i.test(c.integrationServiceType || '') && c.isActive !== false) ||
              chList.find(c => /WHATSAPP/i.test(c.integrationServiceType || ''));
   if (!wa) throw new Error('setup/channels ' + ch.status + ': no WhatsApp channel — ' + JSON.stringify(ch.json).slice(0, 300));
-  let templateId = null, from = 0, lastTpl = null;
-  for (let page = 0; page < 6 && !templateId; page++, from += 50) {
-    const tp = await zdCall(env, 'GET', '/im/cannedMessages', { orgId, query: { departmentId: String(wa.departmentId || ''), from: String(from), limit: '50' } });
-    lastTpl = tp;
-    const list = (tp.json && tp.json.data) || [];
-    const hit = list.find(t => Object.values(t).some(v => typeof v === 'string' && v.trim().toLowerCase() === SR_WA_TEMPLATE_NAME));
-    if (hit) templateId = hit.id;
-    if (list.length < 50) break;
+  // The template list needs departmentId + type; Zoho doesn't document the type values,
+  // so try the likely ones and keep each reply for the log.
+  let templateId = null;
+  const tries = [];
+  for (const type of ['TEMPLATE', 'TEMPLATE_MESSAGE', 'WHATSAPP_TEMPLATE', 'CANNED', 'CANNED_MESSAGE']) {
+    for (let page = 0, from = 0; page < 6 && !templateId; page++, from += 50) {
+      const tp = await zdCall(env, 'GET', '/im/cannedMessages', { orgId,
+        query: { departmentId: String(wa.departmentId || ''), type, from: String(from), limit: '50' } });
+      const list = (tp.json && tp.json.data) || [];
+      if (page === 0) tries.push(type + ' → ' + tp.status + ' ' + JSON.stringify(tp.json).slice(0, 200));
+      const hit = list.find(t => Object.values(t).some(v => typeof v === 'string' && v.trim().toLowerCase() === SR_WA_TEMPLATE_NAME));
+      if (hit) templateId = hit.id;
+      if (!tp.ok || list.length < 50) break;
+    }
+    if (templateId) break;
   }
-  if (!templateId) throw new Error('setup/template "' + SR_WA_TEMPLATE_NAME + '" not found — ' + JSON.stringify(lastTpl && lastTpl.json).slice(0, 300));
+  const lastTpl = { json: tries };
+  if (!templateId) throw new Error('setup/template "' + SR_WA_TEMPLATE_NAME + '" not found — ' + JSON.stringify(lastTpl.json).slice(0, 1500));
   const c = { orgId, channelId: wa.id, departmentId: wa.departmentId, templateId, at: new Date().toISOString() };
   await env.DB.prepare("INSERT INTO tm_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
     .bind(KEY, JSON.stringify(c)).run();
