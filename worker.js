@@ -1496,7 +1496,16 @@ export default {
           return json({ ok: false, error: 'Too many checks — please try again in an hour.' }, 429);
         }
         try {
-          return json({ ok: true, format_ok: true, order_id: oc.order_id, platform_detected: oc.platform, ...(await warrantyLookup(env, oc.order_id)) });
+          // open_request: an open service request already exists for this order (no ID or details revealed)
+          let openRequest = false;
+          try {
+            await ensureServiceRequestCols(env.DB);
+            const o = await env.DB.prepare("SELECT 1 FROM warranty_claims WHERE order_key = ? AND COALESCE(status, 'new') NOT IN ('closed','not_covered') AND created_at > datetime('now','-30 days') LIMIT 1").bind(oc.order_id).first();
+            openRequest = !!o;
+          } catch (e) { /* ignore — the submit check still applies */ }
+          return json({ ok: true, format_ok: true, order_id: oc.order_id, platform_detected: oc.platform, open_request: openRequest,
+            ...(openRequest ? { open_request_message: 'A request already exists for this order. If it is yours, track it on the Track Your Request page using the mobile number you gave then.' } : {}),
+            ...(await warrantyLookup(env, oc.order_id)) });
         } catch (e) {
           return json({ ok: false, error: 'Lookup failed — please try again later.' }, 502);
         }
