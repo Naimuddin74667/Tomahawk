@@ -7682,9 +7682,13 @@ async function zdWaSetup(env, force) {
 
 // Finds the Desk Contact by mobile (any +91/91 format), or creates it.
 async function zdFindOrCreateContact(env, orgId, r) {
-  for (const field of ['mobile', 'phone']) {
-    const s = await zdCall(env, 'GET', '/contacts/search', { orgId, query: { [field]: '*' + r.phone, limit: '5' } });
-    const hit = ((s.json && s.json.data) || [])[0];
+  // Zoho's search can return unrelated contacts (it ignored the filter once and
+  // returned the whole list), so only accept a contact whose mobile/phone really
+  // ends with this customer's 10 digits.
+  const sameNumber = c => [c.mobile, c.phone].some(x => String(x || '').replace(/\D/g, '').slice(-10) === r.phone);
+  for (const query of [{ mobile: '*' + r.phone }, { phone: '*' + r.phone }, { _all: r.phone }]) {
+    const s = await zdCall(env, 'GET', '/contacts/search', { orgId, query: { ...query, limit: '10' } });
+    const hit = ((s.json && s.json.data) || []).find(sameNumber);
     if (hit) return { id: hit.id, created: false };
   }
   const parts = String(r.name || '').trim().split(/\s+/);
