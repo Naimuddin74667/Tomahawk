@@ -6896,7 +6896,8 @@ async function srAction(env, user, b) {
 // to 3 photos / PDFs on Customer-Care/Upload-Invoice/; the request goes back
 // to To review and the files show on it tagged "Invoice". Only the token's
 // SHA-256 is stored.
-const CC_UPLOAD_INVOICE_URL = 'https://naimuddin74667.github.io/Tomahawk/Customer-Care/Upload-Invoice/';
+// Live page on the website (SK, 30-Oct-2026). Backup copy: naimuddin74667.github.io/Tomahawk/Customer-Care/Upload-Invoice/
+const CC_UPLOAD_INVOICE_URL = 'https://tomahawk.tools/pages/upload-invoice';
 const INVOICE_LINK_PLATFORMS_SKIP = ['Amazon', 'Flipkart', 'Website (Shopify)'];   // these verify by order ID
 const INV_MAX_FILES = 3, INV_MAX_B64 = 14 * 1024 * 1024;   // ~10 MB per file
 
@@ -8324,6 +8325,8 @@ async function submitWarrantyClaim(env, b, ip) {
   const photos = files.filter(x => x.mime.startsWith('image/'));
   if (!photos.length) throw claimErr('Please add at least one photo of the product / issue.');
   if (photos.length > 3 || files.length - photos.length > 1) throw claimErr('Up to 3 photos and 1 video, please.');
+  // Product video is required (30-Oct-2026, matches the live website form) — except for missing parts.
+  if (files.length === photos.length && f.issue_type !== 'Missing part / accessory') throw claimErr('Please add a short video showing the problem.');
   if (files.reduce((n, x) => n + x.base64.length, 0) > CLAIM_MAX_BYTES) throw claimErr('Files are too large — please use a shorter video or fewer photos.');
 
   await ensureServiceRequestCols(env.DB);
