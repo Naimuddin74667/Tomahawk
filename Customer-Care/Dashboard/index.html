@@ -3746,7 +3746,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       (nv && canActReq() && ['closed', 'not_covered'].indexOf(r.status) === -1 ? verifyBoxHtml(r) : '') +
       (showPay ? '<div class="cm-sec"><div class="cm-sec-title">Payments</div></div>' +
         '<div class="pay-box pay-step" id="pay-logistics"><span class="pay-hint">Loading…</span></div>' +
-        '<div class="pay-box pay-step" id="pay-repair"><span class="pay-hint">Loading…</span></div>' : '') +
+        '<div class="pay-box pay-step" id="pay-repair"><span class="pay-hint">Loading…</span></div>' +
+        '<div class="pay-box pay-step" id="pay-final"><span class="pay-hint">Loading…</span></div>' : '') +
       (hist ? '<div class="cm-sec"><div class="cm-sec-title">History</div></div>' + hist : '') +
       '<div id="req-compose" style="margin-top:16px" hidden></div>' +
       (acts ? '<div class="cm-acts" id="req-acts">' + acts + '</div>' : '');
@@ -4030,14 +4031,19 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   //            rates, Amazon package size). Customer's consent (call / WhatsApp)
   //            is ticked before the link goes out. Pickup unlocks once paid.
   //   Step 2 — service charge + spare parts, sent after inspection.
+  //   Steps 1 and 2 are ADVANCES (Zoho retainer invoices, <request ID>-A / -B) —
+  //   GST on a service advance is due when it is received (02-Nov-2026).
+  //   Step 3 — ONE tax invoice (SRV/26-27/####) with every line; both
+  //            advances are applied to it. This is what the accountant files.
   var PAY_STEP = {
-    logistics: { n: 1, title: 'Pickup & delivery', when: 'paid before pickup is booked', btn: '&#8377; Get quote &amp; send link' },
-    repair:    { n: 2, title: 'Service & spare parts', when: 'sent after the technician inspects the product', btn: '&#8377; Send repair quote' }
+    logistics: { n: 1, title: 'Pickup & delivery', when: 'advance · paid before pickup is booked', btn: '&#8377; Get quote &amp; send link' },
+    repair:    { n: 2, title: 'Service & spare parts', when: 'advance · sent after the technician inspects the product', btn: '&#8377; Send repair quote' },
+    final:     { n: 3, title: 'Final invoice', when: 'one tax invoice when the case closes · advances adjusted' }
   };
-  var payState = {};   // latest payments for the open request: { logistics, repair }
+  var payState = {};   // latest payments for the open request: { logistics, repair, final }
 
   function loadPayment(r, refresh) {
-    ['logistics', 'repair'].forEach(function (k) {
+    ['logistics', 'repair', 'final'].forEach(function (k) {
       var el = document.getElementById('pay-' + k);
       if (el && refresh) el.innerHTML = stepHead(k) + '<span class="pay-hint">Checking Zoho…</span>';
     });
@@ -4048,11 +4054,12 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       payState = res.payments || { logistics: null, repair: res.payment || null };
       renderPayStep(r, 'logistics', payState.logistics, res.checkError);
       renderPayStep(r, 'repair', payState.repair, res.checkError);
+      renderFinal(r, payState.final, res.checkError);
       // Legacy: requests billed before two-step billing (single repair payment, already paid) stay unlocked
       setApproveLock((payState.logistics && payState.logistics.status === 'paid') ||
         (!payState.logistics && payState.repair && payState.repair.status === 'paid'));
     }).catch(function (e) {
-      ['logistics', 'repair'].forEach(function (k) {
+      ['logistics', 'repair', 'final'].forEach(function (k) {
         var x = document.getElementById('pay-' + k); if (x) x.innerHTML = stepHead(k) + '<span class="pay-hint">Could not load payment: ' + esc(e.message) + '</span>';
       });
     });
@@ -4078,8 +4085,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var hint = kind === 'repair' && !(payState.logistics && payState.logistics.status === 'paid')
         ? ' Usually after Step 1 is paid and the product has reached us.' : '';
       el.innerHTML = stepHead(kind) +
-        '<div class="pay-row"><span class="pay-hint">' + (p ? 'Invoice ' + esc(p.invoice_number || '') + ' was voided. ' : '') + 'No payment link yet.' + hint + '</span>' +
-        (canActReq() && !fin ? '<button class="case-act primary" data-new="' + kind + '">' + PAY_STEP[kind].btn + '</button>' : '') + '</div>';
+        '<div class="pay-row"><span class="pay-hint">' + (p ? esc(p.invoice_number || '') + ' was voided. ' : '') + 'No payment link yet.' + hint + '</span>' +
+        (canActReq() && !fin && !payState.final ? '<button class="case-act primary" data-new="' + kind + '">' + PAY_STEP[kind].btn + '</button>' : '') + '</div>';
       var b = el.querySelector('[data-new]');
       if (b) b.addEventListener('click', function () { kind === 'logistics' ? logisticsForm(r) : repairForm(r); });
       return;
@@ -4114,13 +4121,61 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var f = el.querySelector('[data-refresh]'); if (f) f.addEventListener('click', function () { loadPayment(r, true); });
     var v = el.querySelector('[data-void]');
     if (v) v.addEventListener('click', async function () {
-      if (!confirm('Cancel this payment link? Invoice ' + (p.invoice_number || '') + ' will be voided in Zoho Books and the link will stop working.')) return;
+      if (!confirm('Cancel this payment link? ' + (p.invoice_number || '') + ' will be voided in Zoho Books and the link will stop working.')) return;
       v.disabled = true; v.textContent = 'Cancelling…';
       try {
         var res = await post('ccPaymentVoid', { claim_id: r.claim_id, kind: kind });
         if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
         await loadRequests(); renderTiles(); renderRequests(); openRequest(r.claim_id);
       } catch (e) { alert("Couldn't cancel: " + e.message); v.disabled = false; v.textContent = 'Cancel link'; }
+    });
+  }
+
+  // Step 3 — the one tax invoice. Shown once Step 1 is paid; made by hand
+  // when the case closes (after Step 2 is paid, or skipped if no repair cost).
+  function renderFinal(r, p, checkError) {
+    var el = document.getElementById('pay-final'); if (!el) return;
+    var adv = [payState.logistics, payState.repair].filter(function (x) { return x && x.status !== 'void'; });
+    if (adv.some(function (x) { return x.doc_type !== 'retainer'; })) {   // billed before 02-Nov-2026 — normal invoices already
+      el.innerHTML = stepHead('final') + '<span class="pay-hint">Billed the old way (separate invoices) — no final invoice needed.</span>';
+      return;
+    }
+    if (p && p.status !== 'void') {
+      var done = p.status === 'paid', lines = [];
+      try { lines = JSON.parse(p.lines_json || '[]'); } catch (e) { /* none */ }
+      el.innerHTML = stepHead('final', '<span class="badge ' + (done ? 'b-green">Settled ✓' : 'b-amber">Advances not applied') + '</span>') +
+        '<div class="pay-row"><span class="mono">' + esc(p.invoice_number || '') + '</span>' +
+          '<span class="pay-total">' + money(p.total) + '</span>' +
+          '<span class="pay-hint">' + money(p.amount) + ' + ' + PAY_GST + '% GST</span></div>' +
+        (lines.length ? '<div class="pay-lines">' + lines.map(function (l) { return '<span>' + esc(l.label) + ' <b>' + money(l.amount) + '</b></span>'; }).join('') + '</div>' : '') +
+        '<div class="pay-hint">made by ' + esc(p.created_by || '') + ', ' + esc(fmtWhen(p.created_at)) + ' · ' + esc(p.description || '') + '</div>' +
+        (checkError ? '<div class="pay-hint">Could not check Zoho just now: ' + esc(checkError) + '</div>' : '') +
+        '<div class="pay-row">' +
+          (p.invoice_url ? '<a class="case-act" target="_blank" rel="noopener" href="' + esc(p.invoice_url) + '">Open invoice</a>' : '') +
+          (!done ? '<button class="case-act" data-refresh>↻ Refresh</button>' +
+                   (canActReq() ? '<button class="case-act primary" data-final>Apply advances</button>' : '') : '') +
+        '</div>';
+    } else {
+      var l = payState.logistics, rp = payState.repair;
+      var ready = l && l.status === 'paid' && !(rp && rp.status === 'pending');
+      var why = !(l && l.status === 'paid') ? 'Available once Step 1 is paid.'
+        : (rp && rp.status === 'pending') ? 'Step 2 link is still unpaid — wait for it, or cancel it if there is no repair cost.'
+        : 'Make it when the case closes. It lists every charge and uses up the advances' + (rp && rp.status === 'paid' ? ' (' + esc(l.invoice_number) + ' + ' + esc(rp.invoice_number) + ').' : ' (' + esc(l.invoice_number) + ').');
+      el.innerHTML = stepHead('final') + '<div class="pay-row"><span class="pay-hint">' + why + '</span>' +
+        (ready && canActReq() ? '<button class="case-act primary" data-final>Create final invoice</button>' : '') + '</div>';
+    }
+    var f = el.querySelector('[data-refresh]'); if (f) f.addEventListener('click', function () { loadPayment(r, true); });
+    var b = el.querySelector('[data-final]');
+    if (b) b.addEventListener('click', async function () {
+      if (!p && !confirm('Create the final tax invoice for ' + r.claim_id + '? It uses the next SRV number and adjusts the advances paid.' +
+        (!(payState.repair && payState.repair.status === 'paid') ? '\n\nNo Step 2 (repair) payment — the invoice will have pickup & delivery only.' : ''))) return;
+      var old = b.textContent; b.disabled = true; b.textContent = p ? 'Applying…' : 'Creating…';
+      try {
+        var res = await post('ccPaymentFinal', { claim_id: r.claim_id });
+        if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
+        if (res.applyError) alert(res.applyError);
+        loadPayment(r, false);
+      } catch (e) { alert("Couldn't make the final invoice: " + e.message); b.disabled = false; b.textContent = old; }
     });
   }
 
@@ -4138,13 +4193,13 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
 
   async function createPayment(r, btn, payload, label) {
     var tot = payload.lines.reduce(function (t, l) { return t + l.amount; }, 0);
-    if (!confirm('Create a Zoho invoice for ' + money(withGst(tot)) + ' (incl. GST) for ' + label + ' on ' + r.claim_id + '?')) return;
+    if (!confirm('Create a Zoho advance for ' + money(withGst(tot)) + ' (incl. GST) for ' + label + ' on ' + r.claim_id + '?')) return;
     var old = btn.textContent; btn.disabled = true; btn.textContent = 'Creating…';
     try {
       var res = await post('ccPaymentCreate', Object.assign({ claim_id: r.claim_id }, payload));
       if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
       await loadRequests(); renderTiles(); renderRequests(); openRequest(r.claim_id);
-    } catch (e) { alert("Couldn't create the invoice: " + e.message); btn.disabled = false; btn.textContent = old; }
+    } catch (e) { alert("Couldn't create the advance: " + e.message); btn.disabled = false; btn.textContent = old; }
   }
 
   // ── Step 1 form: quote from pincode + package size, consent, send ──
@@ -4244,7 +4299,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         '<label>Customer pays</label><div><span class="pay-total" id="rp-tot">—</span> <span class="pay-hint">incl. ' + PAY_GST + '% GST</span></div>' +
       '</div>' +
       '<div class="pay-hint" id="rp-from">Checking Zoho Books connection…</div>' +
-      '<div class="pay-row"><button class="case-act primary" id="rp-send" disabled>Create invoice &amp; link</button>' +
+      '<div class="pay-row"><button class="case-act primary" id="rp-send" disabled>Create advance &amp; link</button>' +
         '<button class="case-act" id="rp-cancel">Cancel</button></div>';
     var parts = document.getElementById('rp-parts'), send = document.getElementById('rp-send'), ready = false;
     function lines() {

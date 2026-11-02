@@ -719,7 +719,7 @@ const ACTION_TIERS = {
   ccInvoiceRequest: 'manager_up', // Customer Care: ask the customer to upload the invoice again (makes the link)
   ccClaimsList: 'viewer_read', ccClaimGet: 'viewer_read', ccClaimFiles: 'viewer_read', // Customer Care: New requests
   ccClaimAction: 'manager_up',
-  ccPaymentInfo: 'manager_up', ccPaymentCreate: 'manager_up', ccPaymentVoid: 'manager_up', ccPaymentGet: 'viewer_read', // Repair payments (Zoho Books)
+  ccPaymentInfo: 'manager_up', ccPaymentCreate: 'manager_up', ccPaymentVoid: 'manager_up', ccPaymentGet: 'viewer_read', ccPaymentFinal: 'manager_up', // Repair payments (Zoho Books)
   ccLogisticsQuote: 'manager_up', // Out-of-warranty pickup + delivery quote (Delhivery + Ekart rates, Amazon dimensions)
   // Shikhar's Care Desk server — checked by the X-Care-Key header (env.CARE_KEY) inside the handler
   externalPickupRecord: 'public', warrantyRegistrations: 'public',
@@ -968,7 +968,7 @@ const ACTION_TIERS = {
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
 const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest',
-  'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccLogisticsQuote']);
+  'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccLogisticsQuote']);
 
 function getAuthRequirement(act) {
   return ACTION_TIERS[act] || 'manager_up'; // fail-closed default for anything unmapped
@@ -1620,7 +1620,7 @@ export default {
         }
       }
 
-      // ── Repair payments (Zoho Books invoice + Razorpay link) ──
+      // ── Repair payments (Zoho Books advances + final invoice, Razorpay link) ──
       if (request.method === 'GET' && action === 'ccPaymentInfo') {
         try { return json(await rpSetupInfo(env)); }
         catch (e) { console.error('ccPaymentInfo:', e.message); return json({ ok: false, error: e.message }, 502); }
@@ -1641,6 +1641,12 @@ export default {
         if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
         try { const r = await rpVoid(env, user, String((body || {}).claim_id || '').trim(), (body || {}).kind); return json(r, r.ok ? 200 : 400); }
         catch (e) { console.error('ccPaymentVoid:', e.message); return json({ ok: false, error: e.message }, 502); }
+      }
+      if (request.method === 'POST' && act === 'ccPaymentFinal') {
+        const user = authResult.user || (await resolveSession(request, env.DB));
+        if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
+        try { const r = await rpFinal(env, user, String((body || {}).claim_id || '').trim()); return json(r, r.ok ? 200 : 400); }
+        catch (e) { console.error('ccPaymentFinal:', e.message); return json({ ok: false, error: e.message }, 502); }
       }
       if (request.method === 'POST' && act === 'ccPaymentCreate') {
         const user = authResult.user || (await resolveSession(request, env.DB));
@@ -7276,15 +7282,90 @@ async function ensureRepairPaymentsTable(DB) {
   // Two-phase out-of-warranty billing (28-Oct-2026): 'logistics' = pickup +
   // delivery (paid before pickup is booked), 'repair' = service + spare parts
   // (after inspection). Older rows are all 'repair'.
-  for (const col of ["kind TEXT DEFAULT 'repair'", 'lines_json TEXT']) {
+  // doc_type (02-Nov-2026): 'invoice' (older rows + final invoice) or 'retainer' (advances).
+  for (const col of ["kind TEXT DEFAULT 'repair'", 'lines_json TEXT', "doc_type TEXT DEFAULT 'invoice'"]) {
     try { await DB.prepare('ALTER TABLE repair_payments ADD COLUMN ' + col).run(); } catch (e) { /* already there */ }
   }
 }
+// ── Billing documents (02-Nov-2026) ──
+// GST on a service is due when an advance is received (CGST s.13 + Rule 50),
+// so each out-of-warranty request is billed as:
+//   Step 1 'logistics' — pickup + delivery advance  → Zoho RETAINER invoice  <request ID>-A
+//   Step 2 'repair'    — service + spare parts adv. → Zoho RETAINER invoice  <request ID>-B
+//   Step 3 'final'     — ONE tax invoice with every line, both advances applied,
+//                        on our own consecutive series SRV/26-27/0001 (Rule 46(b)).
+// The accountant files only the final invoice; Zoho reports the advances.
+// Rows created before this change are ordinary invoices (doc_type 'invoice')
+// and keep working as before.
+//
+// The Maharashtra Head Office location has no auto-numbering in Zoho, so we
+// always send the number ourselves (?ignore_auto_number_generation=true).
+const RP_INV_PREFIX = 'SRV';
+const RP_DUP = /already (exists|been used)|duplicate/i;
+
+function rpFinYear(d) {
+  const ist = new Date((d || new Date()).getTime() + 330 * 60000);   // IST date
+  const y = ist.getUTCFullYear(), start = ist.getUTCMonth() >= 3 ? y : y - 1;   // FY starts 1 April
+  return String(start % 100).padStart(2, '0') + '-' + String((start + 1) % 100).padStart(2, '0');
+}
+async function ensureInvoiceSeqTable(DB) {
+  await DB.prepare('CREATE TABLE IF NOT EXISTS zb_invoice_seq (fy TEXT PRIMARY KEY, last INTEGER NOT NULL DEFAULT 0)').run();
+}
+
+// POSTs a Zoho document with our own number. numberAt(i) gives the i-th
+// candidate; if Zoho says a number is taken we try the next one.
+// Drops payment_options once if the org rejects it (the document then uses
+// the org's default online-payment settings).
+async function rpPostNumbered(env, path, body, field, numberAt) {
+  const noAuto = { ignore_auto_number_generation: 'true' };
+  for (let i = 0; i < 10; i++) {
+    body[field] = numberAt(i);
+    try { return { res: await zbCall(env, 'POST', path, body, noAuto), index: i }; }
+    catch (e) {
+      if (RP_DUP.test(e.message)) continue;
+      if (!/payment/i.test(e.message) || !body.payment_options) throw e;
+      delete body.payment_options;
+      try { return { res: await zbCall(env, 'POST', path, body, noAuto), index: i }; }
+      catch (e2) { if (RP_DUP.test(e2.message)) continue; throw e2; }
+    }
+  }
+  throw new Error('Could not find a free number after ' + body[field] + ' in Zoho Books.');
+}
+
+// Final tax invoice on the SRV series. The counter only moves after Zoho
+// accepts the invoice, so failed attempts leave no gap in the series.
+async function rpPostFinalInvoice(env, inv) {
+  await ensureInvoiceSeqTable(env.DB);
+  const fy = rpFinYear();
+  const row = await env.DB.prepare('SELECT last FROM zb_invoice_seq WHERE fy = ?').bind(fy).first();
+  const first = (row ? Number(row.last) : 0) + 1;
+  const { res, index } = await rpPostNumbered(env, '/invoices', inv, 'invoice_number',
+    i => RP_INV_PREFIX + '/' + fy + '/' + String(first + i).padStart(4, '0'));
+  await env.DB.prepare('INSERT INTO zb_invoice_seq (fy, last) VALUES (?, ?) ON CONFLICT(fy) DO UPDATE SET last = MAX(last, excluded.last)')
+    .bind(fy, first + index).run();
+  return res;
+}
+
+// Advance number: SRN-261031-01-A (Step 1) / -B (Step 2). A re-sent advance
+// after a cancelled link becomes -A2, -A3 … (max 16 characters).
+function rpAdvanceNumber(claimId, kind, attempt) {
+  const base = claimId + '-' + (kind === 'logistics' ? 'A' : 'B') + (attempt > 1 ? attempt : '');
+  return base.length <= 16 ? base : base.slice(-16);
+}
+
+// Zoho path + response key for a payment row's document.
+function rpDoc(p) {
+  return p.doc_type === 'retainer'
+    ? { path: '/retainerinvoices/', key: 'retainerinvoice' }
+    : { path: '/invoices/', key: 'invoice' };
+}
+
 const RP_KINDS = ['logistics', 'repair'];
 function rpKind(k) { return k === 'logistics' ? 'logistics' : 'repair'; }
-// SAC for the pickup + delivery invoice (courier services). Override with the
+// SAC for the pickup + delivery lines (courier services). Override with the
 // ZB_LOGISTICS_SAC Worker var if accounts want a different code.
 function rpLogisticsSac(env) { return env.ZB_LOGISTICS_SAC || '996812'; }
+const RP_STEP_NAME = { logistics: 'Pickup & delivery', repair: 'Repair', final: 'Final invoice' };
 
 // Shown when the team opens the payment panel: is Zoho connected, which
 // GSTIN we bill from, and the tax lines that will apply.
@@ -7297,9 +7378,20 @@ async function rpSetupInfo(env) {
     billFrom: home ? { name: home.name, gstin: home.gstin } : null };
 }
 
+// Everything both the advances and the final invoice need about a request.
+async function rpZohoContext(env, row) {
+  const stateCode = zbStateCode(row.state);
+  if (!stateCode) return { error: 'The request has no valid state ("' + (row.state || '') + '"), needed for GST. Fix the address first.' };
+  const [taxes, locs] = await Promise.all([zbTaxIds(env), zbLocations(env)]);
+  const home = zbPickHome(locs);
+  if (locs.length && !home) return { error: 'Could not find the Maharashtra GSTIN in Zoho Books.' };
+  const customerId = await zbContact(env, row, stateCode);
+  return { stateCode, home, customerId, taxId: stateCode === ZB_HOME_STATE ? taxes.intra : taxes.inter };
+}
+
 // POST ccPaymentCreate { claim_id, kind: 'logistics'|'repair', lines: [{label, amount}] (before GST),
 //   description, consent: 'call'|'whatsapp' (logistics only) }
-// Old callers may still send { claim_id, amount, description } → one 'repair' line.
+// Creates the ADVANCE (Zoho retainer invoice) and emails the payment link.
 async function rpCreate(env, user, b) {
   if (!zbConfigured(env)) return { ok: false, error: 'Zoho Books is not connected on the Worker. Missing secret(s): ' + zbMissing(env).join(', ') };
   await ensureServiceRequestCols(env.DB);
@@ -7324,91 +7416,182 @@ async function rpCreate(env, user, b) {
   if (row.warranty_status === 'Under warranty') return { ok: false, error: 'This request is under warranty — no payment needed.' };
   const open = await env.DB.prepare("SELECT id FROM repair_payments WHERE claim_id = ? AND COALESCE(kind, 'repair') = ? AND status IN ('pending','paid')").bind(claimId, kind).first();
   if (open) return { ok: false, error: 'A ' + (kind === 'logistics' ? 'pickup & delivery' : 'repair') + ' payment link already exists for this request. Refresh to see it.' };
-  const stateCode = zbStateCode(row.state);
-  if (!stateCode) return { ok: false, error: 'The request has no valid state ("' + (row.state || '') + '"), needed for GST. Fix the address first.' };
+  if (await rpLatest(env.DB, claimId, 'final')) return { ok: false, error: 'The final invoice is already made for this request — no new advances.' };
 
-  const [taxes, locs, itemId] = await Promise.all([zbTaxIds(env), zbLocations(env), zbRepairItem(env)]);
-  const home = zbPickHome(locs);
-  if (locs.length && !home) return { ok: false, error: 'Could not find the Maharashtra GSTIN in Zoho Books.' };
-  const customerId = await zbContact(env, row, stateCode);
-  const taxId = stateCode === ZB_HOME_STATE ? taxes.intra : taxes.inter;
-  // Logistics lines are courier services (own SAC, no item); repair lines
-  // (service + spare parts) bill under the Repair Service item / SAC.
-  const lineItems = lines.map(l => kind === 'logistics'
-    ? { name: l.label, description: l.label + ' · ' + claimId, rate: l.amount, quantity: 1, hsn_or_sac: rpLogisticsSac(env), tax_id: taxId }
-    : { ...(itemId ? { item_id: itemId } : { name: ZB_ITEM_NAME }), description: l.label + ' · ' + (row.product || '') + ' · ' + claimId,
-        rate: l.amount, quantity: 1, hsn_or_sac: ZB_SAC, tax_id: taxId });
-  const inv = {
-    customer_id: customerId, reference_number: claimId,
-    place_of_supply: stateCode, gst_treatment: 'consumer',
-    line_items: lineItems,
-    notes: (kind === 'logistics' ? 'Pickup and return delivery charges' : 'Repair charges') + ' for service request ' + claimId + '. Thank you for choosing TOMAHAWK® Tools.',
+  const z = await rpZohoContext(env, row);
+  if (z.error) return { ok: false, error: z.error };
+  // Line SAC is carried into the final invoice (lines_json keeps label + amount).
+  const ret = {
+    customer_id: z.customerId, reference_number: claimId, place_of_supply: z.stateCode,
+    line_items: lines.map((l, i) => ({ description: l.label + ' · ' + (kind === 'repair' ? (row.product || '') + ' · ' : '') + claimId,
+      item_order: i + 1, rate: l.amount, tax_id: z.taxId })),
+    notes: 'Advance for ' + (kind === 'logistics' ? 'pickup and return delivery' : 'service and spare parts') + ', service request ' + claimId +
+      '. The full tax invoice is issued when your request is closed. Thank you for choosing TOMAHAWK® Tools.',
     payment_options: { payment_gateways: [{ gateway_name: 'razorpay', configured: true }] }
   };
-  if (home) inv[home.idKey] = home.id;
-  let created;
-  try { created = await zbCall(env, 'POST', '/invoices', inv); }
-  catch (e) {
-    // Some orgs reject payment_options — the invoice still gets the org's
-    // default online-payment settings, so retry without it.
-    if (!/payment/i.test(e.message)) throw e;
-    delete inv.payment_options;
-    created = await zbCall(env, 'POST', '/invoices', inv);
-  }
-  const invoice = created.invoice;
-  try { await zbCall(env, 'POST', '/invoices/' + invoice.invoice_id + '/status/sent'); } catch (e) { /* stays draft; link may still work */ }
-  const fresh = (await zbCall(env, 'GET', '/invoices/' + invoice.invoice_id)).invoice || invoice;
+  if (z.home) ret[z.home.idKey] = z.home.id;
+  const tries = ((await env.DB.prepare("SELECT COUNT(*) AS n FROM repair_payments WHERE claim_id = ? AND COALESCE(kind, 'repair') = ?").bind(claimId, kind).first()) || {}).n || 0;
+  const { res } = await rpPostNumbered(env, '/retainerinvoices', ret, 'retainerinvoice_number', i => rpAdvanceNumber(claimId, kind, tries + 1 + i));
+  const doc = res.retainerinvoice;
+  try { await zbCall(env, 'POST', '/retainerinvoices/' + doc.retainerinvoice_id + '/status/sent'); } catch (e) { /* stays draft; link may still work */ }
+  const fresh = (await zbCall(env, 'GET', '/retainerinvoices/' + doc.retainerinvoice_id)).retainerinvoice || doc;
   const url = fresh.invoice_url || '';
+  const number = fresh.retainerinvoice_number || doc.retainerinvoice_number || ret.retainerinvoice_number;
+  const total = Number(fresh.total || doc.total || 0);
 
   const by = (user && user.username) || 'unknown';
   if (kind === 'logistics') {
     await srAddEvent(env.DB, claimId, { by, kind: 'consent',
       note: 'Customer agreed to pay pickup, delivery, service and spare-part charges (confirmed on ' + (consent === 'call' ? 'call' : 'WhatsApp') + ')' }, {});
   }
-  await env.DB.prepare(`INSERT INTO repair_payments (claim_id, kind, lines_json, zoho_invoice_id, invoice_number, amount, total, description, invoice_url, status, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
-    .bind(claimId, kind, JSON.stringify(lines), invoice.invoice_id, fresh.invoice_number || invoice.invoice_number, amount, Number(fresh.total || invoice.total || 0),
-      desc, url, by).run();
+  await env.DB.prepare(`INSERT INTO repair_payments (claim_id, kind, doc_type, lines_json, zoho_invoice_id, invoice_number, amount, total, description, invoice_url, status, created_by)
+    VALUES (?, ?, 'retainer', ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
+    .bind(claimId, kind, JSON.stringify(lines), doc.retainerinvoice_id, number, amount, total, desc, url, by).run();
 
   let emailed = false;
   if (url) {
-    const tot = '₹' + Number(fresh.total || 0).toFixed(2);
+    const tot = '₹' + total.toFixed(2);
     emailed = await srEmailCustomer(env, row, kind === 'logistics' ? 'Pickup & delivery payment' : 'Repair payment', kind === 'logistics' ? [
       'As agreed, please pay the pickup and return delivery charges for your product. Total payable (incl. 18% GST): ' + tot + '.',
-      'Invoice no.: ' + (fresh.invoice_number || ''),
+      'Advance no.: ' + number,
       'Pay securely online here: ' + url,
-      'We book the pickup as soon as the payment is received. Service and spare-part charges (if any) are shared after our technician inspects the product.'
+      'We book the pickup as soon as the payment is received. Service and spare-part charges (if any) are shared after our technician inspects the product. You get one full tax invoice when your request is closed.'
     ] : [
       'Your repair cost is ready. Total payable (incl. 18% GST): ' + tot + '.',
-      'Invoice no.: ' + (fresh.invoice_number || ''),
+      'Advance no.: ' + number,
       'Pay securely online here: ' + url,
-      'We start the repair as soon as the payment is received.'
+      'We dispatch your product as soon as the payment is received. You get one full tax invoice when your request is closed.'
     ]);
   }
   await srAddEvent(env.DB, claimId, { by, kind: 'payment_link',
-    note: (kind === 'logistics' ? 'Pickup & delivery · ' : 'Repair · ') + (fresh.invoice_number || '') + ' · ₹' + Number(fresh.total || 0).toFixed(2) + ' (₹' + amount.toFixed(2) + ' + GST) · ' + desc, emailed }, {});
+    note: RP_STEP_NAME[kind] + ' advance · ' + number + ' · ₹' + total.toFixed(2) + ' (₹' + amount.toFixed(2) + ' + GST) · ' + desc, emailed }, {});
   return { ok: true, emailed, payment: await rpLatest(env.DB, claimId, kind) };
+}
+
+// POST ccPaymentFinal { claim_id } — the one tax invoice for the request.
+// Needs Step 1 paid and no unpaid advance. Lines = every advance line; the paid
+// advances are then applied so the invoice shows as paid. Safe to call again:
+// if the invoice exists but advances aren't applied yet, it only applies them.
+async function rpFinal(env, user, claimId) {
+  if (!zbConfigured(env)) return { ok: false, error: 'Zoho Books is not connected on the Worker.' };
+  await ensureRepairPaymentsTable(env.DB);
+  const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
+  if (!row) return { ok: false, error: 'No such request' };
+  const by = (user && user.username) || 'unknown';
+
+  // Bring advance statuses up to date first.
+  const adv = [];
+  for (const k of RP_KINDS) {
+    let p = await rpLatest(env.DB, claimId, k);
+    if (p && p.status === 'pending') { await rpCheckOne(env, p); p = await rpLatest(env.DB, claimId, k); }
+    if (p && p.status !== 'void') adv.push(p);
+  }
+  if (adv.some(p => p.doc_type !== 'retainer')) return { ok: false, error: 'This request was billed the old way (normal invoices) — no final invoice needed.' };
+  if (adv.some(p => p.status === 'pending')) return { ok: false, error: 'An advance link is still unpaid. Wait for the payment, or cancel that link first.' };
+  const paid = adv.filter(p => p.status === 'paid');
+  if (!paid.some(p => p.kind === 'logistics')) return { ok: false, error: 'Step 1 (pickup & delivery) must be paid before the final invoice.' };
+
+  const z = await rpZohoContext(env, row);
+  if (z.error) return { ok: false, error: z.error };
+
+  let fin = await rpLatest(env.DB, claimId, 'final');
+  if (fin && fin.status === 'void') fin = null;
+  if (!fin) {
+    const lines = [];
+    for (const p of paid) {
+      let ls = [];
+      try { ls = JSON.parse(p.lines_json || '[]'); } catch (e) { /* none */ }
+      for (const l of ls) lines.push({ kind: p.kind, label: l.label, amount: Number(l.amount) });
+    }
+    const amount = Math.round(lines.reduce((t, l) => t + l.amount, 0) * 100) / 100;
+    const itemId = paid.some(p => p.kind === 'repair') ? await zbRepairItem(env) : null;
+    const inv = {
+      customer_id: z.customerId, reference_number: claimId,
+      place_of_supply: z.stateCode, gst_treatment: 'consumer',
+      line_items: lines.map(l => l.kind === 'logistics'
+        ? { name: l.label, description: l.label + ' · ' + claimId, rate: l.amount, quantity: 1, hsn_or_sac: rpLogisticsSac(env), tax_id: z.taxId }
+        : { ...(itemId ? { item_id: itemId } : { name: ZB_ITEM_NAME }), description: l.label + ' · ' + (row.product || '') + ' · ' + claimId,
+            rate: l.amount, quantity: 1, hsn_or_sac: ZB_SAC, tax_id: z.taxId }),
+      notes: 'Tax invoice for service request ' + claimId + '. Advances received: ' + paid.map(p => p.invoice_number).join(', ') +
+        '. Thank you for choosing TOMAHAWK® Tools.'
+    };
+    if (z.home) inv[z.home.idKey] = z.home.id;
+    const created = (await rpPostFinalInvoice(env, inv)).invoice;
+    try { await zbCall(env, 'POST', '/invoices/' + created.invoice_id + '/status/sent'); } catch (e) { /* applying credits still works on most orgs */ }
+    await env.DB.prepare(`INSERT INTO repair_payments (claim_id, kind, doc_type, lines_json, zoho_invoice_id, invoice_number, amount, total, description, invoice_url, status, created_by)
+      VALUES (?, 'final', 'invoice', ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
+      .bind(claimId, JSON.stringify(lines.map(l => ({ label: l.label, amount: l.amount }))), created.invoice_id, created.invoice_number || inv.invoice_number,
+        amount, Number(created.total || 0), 'Final invoice · advances ' + paid.map(p => p.invoice_number).join(', '), created.invoice_url || '', by).run();
+    await srAddEvent(env.DB, claimId, { by, kind: 'final_invoice',
+      note: 'Final invoice ' + (created.invoice_number || inv.invoice_number) + ' · ₹' + Number(created.total || 0).toFixed(2) + ' (₹' + amount.toFixed(2) + ' + GST)' }, {});
+    fin = await rpLatest(env.DB, claimId, 'final');
+  }
+
+  // Apply the advances (Zoho retainer payments) to the invoice.
+  let applyError = null;
+  try { await rpApplyAdvances(env, fin, z.customerId, paid); }
+  catch (e) { applyError = e.message; console.error('rpApplyAdvances', claimId, e.message); }
+  const st = await rpCheckOne(env, fin);
+  if (st === 'paid' && fin.status !== 'paid' && row.email) {
+    const f2 = await rpLatest(env.DB, claimId, 'final');
+    if (f2 && f2.invoice_url) await srEmailCustomer(env, row, 'Your tax invoice', [
+      'Your request is complete. Here is your tax invoice ' + f2.invoice_number + ' for ₹' + Number(f2.total || 0).toFixed(2) +
+        ' (incl. 18% GST). The advances you paid are adjusted in full — nothing more to pay.',
+      'View / download: ' + f2.invoice_url
+    ]);
+  }
+  return { ok: true, ...(applyError ? { applyError: 'Invoice made, but applying the advances failed: ' + applyError + '. Click "Apply advances" to retry, or apply them in Zoho Books.' } : {}),
+    payment: await rpLatest(env.DB, claimId, 'final') };
+}
+
+// Matches each paid advance to an unused retainer payment of the same
+// customer (same amount first) and applies it to the final invoice.
+async function rpApplyAdvances(env, fin, customerId, paid) {
+  let inv = (await zbCall(env, 'GET', '/invoices/' + fin.zoho_invoice_id)).invoice || {};
+  let due = Number(inv.balance || 0);
+  if (!(due > 0)) return;
+  const unused = ((await zbCall(env, 'GET', '/contacts/' + customerId + '/receivables/unusedretainerpayments')).unused_credits_receivable || [])
+    .map(u => ({ id: u.payment_id, left: Number(u.unused_amount || u.amount || 0) })).filter(u => u.left > 0);
+  const apply = [];
+  for (const p of paid) {
+    if (!(due > 0)) break;
+    const want = Number(p.total || 0);
+    const hit = unused.find(u => Math.abs(u.left - want) < 0.01) || unused.find(u => u.left >= want - 0.01) || unused[0];
+    if (!hit) break;
+    const amt = Math.round(Math.min(hit.left, want || hit.left, due) * 100) / 100;
+    if (!(amt > 0)) continue;
+    apply.push({ payment_id: hit.id, amount_applied: amt });
+    hit.left -= amt; due -= amt;
+    if (hit.left < 0.01) unused.splice(unused.indexOf(hit), 1);
+  }
+  if (!apply.length) throw new Error('no unused advance payments found for this customer in Zoho');
+  await zbCall(env, 'POST', '/invoices/' + fin.zoho_invoice_id + '/credits', { invoice_payments: apply, apply_creditnotes: [] });
 }
 
 // Latest payment row for a request — of one kind, or of any kind when kind is omitted.
 async function rpLatest(DB, claimId, kind) {
+  if (kind === 'final') return await DB.prepare("SELECT * FROM repair_payments WHERE claim_id = ? AND kind = 'final' ORDER BY id DESC LIMIT 1").bind(claimId).first();
   if (kind) return await DB.prepare("SELECT * FROM repair_payments WHERE claim_id = ? AND COALESCE(kind, 'repair') = ? ORDER BY id DESC LIMIT 1").bind(claimId, rpKind(kind)).first();
-  return await DB.prepare('SELECT * FROM repair_payments WHERE claim_id = ? ORDER BY id DESC LIMIT 1').bind(claimId).first();
+  return await DB.prepare("SELECT * FROM repair_payments WHERE claim_id = ? AND COALESCE(kind, 'repair') <> 'final' ORDER BY id DESC LIMIT 1").bind(claimId).first();
 }
 
-// Re-read one payment's invoice from Zoho; mark paid / void.
+// Re-read one payment's document from Zoho; mark paid / void.
 async function rpCheckOne(env, p) {
-  const inv = (await zbCall(env, 'GET', '/invoices/' + p.zoho_invoice_id)).invoice || {};
+  const d = rpDoc(p);
+  const inv = (await zbCall(env, 'GET', d.path + p.zoho_invoice_id))[d.key] || {};
   const st = String(inv.status || '').toLowerCase();
   let next = p.status;
   if (st === 'paid') next = 'paid';
   else if (st === 'void') next = 'void';
-  await env.DB.prepare("UPDATE repair_payments SET status = ?, checked_at = datetime('now'), invoice_url = COALESCE(NULLIF(?, ''), invoice_url)" +
+  await env.DB.prepare("UPDATE repair_payments SET status = ?, checked_at = datetime('now'), invoice_url = COALESCE(NULLIF(?, ''), invoice_url), total = COALESCE(?, total)" +
     (next === 'paid' && p.status !== 'paid' ? ", paid_at = datetime('now')" : '') + ' WHERE id = ?')
-    .bind(next, inv.invoice_url || '', p.id).run();
+    .bind(next, inv.invoice_url || '', inv.total != null ? Number(inv.total) : null, p.id).run();
+  const name = RP_STEP_NAME[p.kind || 'repair'] || 'Repair';
   if (next !== p.status && next === 'paid') {
-    await srAddEvent(env.DB, p.claim_id, { by: 'system', kind: 'payment_received',
-      note: (p.kind === 'logistics' ? 'Pickup & delivery · ' : 'Repair · ') + (p.invoice_number || '') + ' · ₹' + Number(inv.total || p.total || 0).toFixed(2) + ' paid' }, {});
+    await srAddEvent(env.DB, p.claim_id, { by: 'system', kind: p.kind === 'final' ? 'final_invoice' : 'payment_received',
+      note: p.kind === 'final'
+        ? 'Final invoice ' + (p.invoice_number || '') + ' settled with the advances'
+        : name + ' · ' + (p.invoice_number || '') + ' · ₹' + Number(inv.total || p.total || 0).toFixed(2) + ' paid' }, {});
   }
   if (next !== p.status && next === 'void') {
     await srAddEvent(env.DB, p.claim_id, { by: 'system', kind: 'payment_void', note: (p.invoice_number || '') + ' voided in Zoho' }, {});
@@ -7416,37 +7599,39 @@ async function rpCheckOne(env, p) {
   return next;
 }
 
-// POST ccPaymentVoid { claim_id } — cancel an unpaid link: voids the Zoho
-// invoice (so the link stops working) and frees the request for a new one.
+// POST ccPaymentVoid { claim_id, kind } — cancel an unpaid advance link: voids
+// it in Zoho (so the link stops working) and frees the step for a new one.
+// The final invoice is never voided from here — do that in Zoho Books.
 async function rpVoid(env, user, claimId, kind) {
   if (!zbConfigured(env)) return { ok: false, error: 'Zoho Books is not connected on the Worker.' };
   await ensureRepairPaymentsTable(env.DB);
   const p = kind
     ? await env.DB.prepare("SELECT * FROM repair_payments WHERE claim_id = ? AND COALESCE(kind, 'repair') = ? AND status = 'pending' ORDER BY id DESC LIMIT 1").bind(claimId, rpKind(kind)).first()
-    : await env.DB.prepare("SELECT * FROM repair_payments WHERE claim_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1").bind(claimId).first();
+    : await env.DB.prepare("SELECT * FROM repair_payments WHERE claim_id = ? AND COALESCE(kind, 'repair') <> 'final' AND status = 'pending' ORDER BY id DESC LIMIT 1").bind(claimId).first();
   if (!p) return { ok: false, error: 'No unpaid payment link on this request.' };
-  // Paid in the meantime? Never void a paid invoice from here.
-  if ((await rpCheckOne(env, p)) !== 'pending') return { ok: false, error: 'This invoice is no longer unpaid — click Refresh.' };
-  await zbCall(env, 'POST', '/invoices/' + p.zoho_invoice_id + '/status/void');
+  // Paid in the meantime? Never void a paid document from here.
+  if ((await rpCheckOne(env, p)) !== 'pending') return { ok: false, error: 'This advance is no longer unpaid — click Refresh.' };
+  await zbCall(env, 'POST', rpDoc(p).path + p.zoho_invoice_id + '/status/void');
   await env.DB.prepare("UPDATE repair_payments SET status = 'void', checked_at = datetime('now') WHERE id = ?").bind(p.id).run();
   await srAddEvent(env.DB, claimId, { by: (user && user.username) || 'unknown', kind: 'payment_void',
-    note: (p.invoice_number || '') + ' cancelled (invoice voided in Zoho)' }, {});
+    note: (p.invoice_number || '') + ' cancelled (voided in Zoho)' }, {});
   return { ok: true };
 }
 
 // GET ccPaymentGet&claim_id=… (&refresh=1 re-checks Zoho first)
-// Returns { payment (latest of any kind — older callers), payments: { logistics, repair } }.
+// Returns { payment (latest advance — older callers), payments: { logistics, repair, final } }.
 async function rpGet(env, claimId, refresh) {
   await ensureRepairPaymentsTable(env.DB);
   let checkError = null;
+  const kinds = [...RP_KINDS, 'final'];
   if (refresh && zbConfigured(env)) {
-    for (const k of RP_KINDS) {
+    for (const k of kinds) {
       const p = await rpLatest(env.DB, claimId, k);
       if (p && p.status === 'pending') { try { await rpCheckOne(env, p); } catch (e) { checkError = e.message; } }
     }
   }
   const payments = {};
-  for (const k of RP_KINDS) payments[k] = (await rpLatest(env.DB, claimId, k)) || null;
+  for (const k of kinds) payments[k] = (await rpLatest(env.DB, claimId, k)) || null;
   return { ok: true, payment: (await rpLatest(env.DB, claimId)) || null, payments, ...(checkError ? { checkError } : {}) };
 }
 
