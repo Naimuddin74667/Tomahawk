@@ -7109,10 +7109,15 @@ async function srVerify(env, user, b) {
     under ? 'Your product is under warranty until ' + until + '. Our team will now review your request.'
           : 'Your product is outside the 6-month warranty (it ended on ' + until + '), so the repair is chargeable. We will share the cost with you before doing anything.'
   ]);
+  // WhatsApp "request_verified" — best effort, never blocks the verify
+  let wa = { sent: false };
+  try { wa = await srSendWhatsAppVerified(env, fresh, row.claim_id); } catch (e) { wa = { sent: false, error: e.message }; }
   await srAddEvent(env.DB, newId, { by: (user && user.username) || 'unknown', kind: 'verified', emailed,
     note: row.claim_id + ' → ' + newId + ' · order ' + orderId + ' · bought ' + orderDate + ' (' + source + ') · ' + warrantyStatus +
-      ' · product ' + (confSku || ('Other: ' + confOther)) }, {});
-  return { ok: true, claim_id: newId, prev_claim_id: row.claim_id, warranty_status: warrantyStatus, emailed };
+      ' · product ' + (confSku || ('Other: ' + confOther)) +
+      ' · WhatsApp: ' + (wa.sent ? 'sent' : (wa.skipped || wa.error || 'not sent')) }, {});
+  return { ok: true, claim_id: newId, prev_claim_id: row.claim_id, warranty_status: warrantyStatus, emailed, whatsapp: wa.sent,
+    whatsapp_note: wa.sent ? '' : (wa.skipped || wa.error || '') };
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -8477,6 +8482,83 @@ async function srSendWhatsAppInvoice(env, row, token) {
   } catch (e) {
     await srWaLog(env, row.claim_id, false, 'invoice ' + step, (e.message + ' | ' + JSON.stringify(trace)).split(token).join('<token>'));
     return { sent: false, error: step + ': ' + e.message.split(token).join('<token>') };
+  }
+}
+
+// ── WhatsApp "Request verified" (02-Nov-2026) ──
+// Sent when the team verifies an NV request (NV-… → WRN-/SRN-…). Same Zoho
+// Desk route as invoice_reupload. Template "request_verified":
+//   header  "Request Verified: ${Contacts.Request ID}"      → the old NV ID
+//   body    ${Contacts.First Name}, ${Contacts.Product}, ${Contacts.New Request ID}
+//   button  static "Track your Request" → tomahawk.tools/pages/track-request
+// Follows SR_WA_MODE (test = SR_WA_TEST_PHONES only). Best effort: never
+// blocks the verify; the result goes into the request history.
+const SR_WA_VERIFIED_TEMPLATE = 'request_verified';
+
+async function srSendWhatsAppVerified(env, row, oldId) {
+  const phone = String(row.phone || '').replace(/\D/g, '').slice(-10);
+  if (!/^[6-9]\d{9}$/.test(phone)) return { sent: false, skipped: 'no valid mobile' };
+  const mode = String(env.SR_WA_MODE || 'test').toLowerCase();
+  if (mode === 'off') return { sent: false, skipped: 'WhatsApp off' };
+  if (mode !== 'live' && SR_WA_TEST_PHONES.indexOf(phone) === -1) return { sent: false, skipped: 'test mode — only test numbers get WhatsApp' };
+  let step = 'setup';
+  const trace = {};
+  try {
+    const cfg = await zdWaSetup(env);
+    const orgId = cfg.orgId;
+    const templateId = await zdTemplateIdByName(env, cfg, SR_WA_VERIFIED_TEMPLATE);
+    step = 'contact';
+    const contact = await zdFindOrCreateContact(env, orgId, { phone, name: row.name, email: row.email });
+    step = 'fields';
+    const full = await zdCall(env, 'GET', '/contacts/' + contact.id, { orgId });
+    const cf = (full.json && full.json.cf) || {};
+    const keys = Object.keys(cf);
+    const kNew = keys.find(k => /new.?request.?id/i.test(k));
+    const kId = keys.find(k => /request.?id/i.test(k) && k !== kNew), kProd = keys.find(k => /product/i.test(k));
+    trace.cfKeys = keys;
+    if (!kId || !kProd || !kNew) throw new Error('contact fields Request ID / Product / New Request ID not all found (cf keys: ' + keys.join(', ') + ')');
+    const product = String(row.confirmed_sku || row.product || 'your Tomahawk product').slice(0, 120);
+    const first = String(row.name || '').trim().split(/\s+/)[0] || 'there';
+    const patch = { cf: { [kId]: oldId, [kProd]: product, [kNew]: row.claim_id } };
+    if (!String((full.json && full.json.firstName) || '').trim() && first !== 'there') patch.firstName = first;
+    const upd = await zdCall(env, 'PATCH', '/contacts/' + contact.id, { orgId, body: patch });
+    if (!upd.ok) throw new Error('contact update ' + upd.status + ': ' + JSON.stringify(upd.json).slice(0, 300));
+    step = 'apply';
+    const ap = await zdCall(env, 'POST', '/im/cannedMessages/' + templateId + '/apply', { orgId, query: { contactId: String(contact.id), language: 'en' } });
+    if (!ap.ok) throw new Error('apply ' + ap.status + ': ' + JSON.stringify(ap.json).slice(0, 300));
+    const fill = s => String(s || '')
+      .replace(/\$\{Contacts\.First Name\}/gi, first)
+      .replace(/\$\{Contacts\.New Request ID\}/gi, row.claim_id)
+      .replace(/\$\{Contacts\.Request ID\}/gi, oldId)
+      .replace(/\$\{Contacts\.Product\}/gi, product);
+    const tr = ((ap.json && ap.json.translations) || []).find(x => x.language === 'en') || ((ap.json && ap.json.translations) || [])[0] || {};
+    const items = tr.templateItems || {};
+    const message = fill(ap.json.message || ap.json.displayMessage || '');
+    const headerMessage = fill((items.header && items.header.message) || '');
+    if (!message || /\$\{/.test(message)) throw new Error('apply returned no usable message text');
+    const btn = ((items.buttons || []).find(x => /URL/i.test(x.type || '')) || {});
+    const staticUrl = fill(btn.action || '') || 'https://tomahawk.tools/pages/track-request';
+    step = 'send';
+    const id = String(templateId);
+    let sent = null;
+    trace.sendTries = [];
+    // Static button: try without urlMessage first, then with the fixed URL.
+    for (const v of [{ tag: 'num-id', numeric: true }, { tag: 'num-id+url', numeric: true, url: staticUrl }, { tag: 'str-id', numeric: false }]) {
+      const body = { receiverId: '+91' + phone, receiverType: 'PHONENUMBER', cannedMessageId: id, language: 'en', message };
+      if (v.url) body.urlMessage = v.url;
+      if (headerMessage) body.headerMessage = headerMessage;
+      const raw = JSON.stringify(body);
+      const rawBody = v.numeric ? raw.replace('"cannedMessageId":"' + id + '"', '"cannedMessageId":' + id) : raw;
+      sent = await zdCall(env, 'POST', '/im/channels/' + cfg.channelId + '/initiateSession', { orgId, rawBody });
+      trace.sendTries.push({ tag: v.tag, status: sent.status, reply: JSON.stringify(sent.json).slice(0, 300) });
+      if (sent.ok) { trace.winner = v.tag; break; }
+    }
+    if (!sent.ok) throw new Error('initiateSession ' + sent.status + ': ' + JSON.stringify(sent.json).slice(0, 300));
+    await srWaLog(env, row.claim_id, true, 'verified sent', JSON.stringify({ trace }));
+    return { sent: true };
+  } catch (e) {
+    await srWaLog(env, row.claim_id, false, 'verified ' + step, e.message + ' | ' + JSON.stringify(trace));
+    return { sent: false, error: step + ': ' + e.message };
   }
 }
 
