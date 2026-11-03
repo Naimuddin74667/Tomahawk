@@ -2933,13 +2933,20 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
           st.city = pr.city || ''; st.state = pr.state || '';
           try {
             var est = await api(ckey(name) + 'EstimateCharge&' + qs);
-            if (est && est.ok && est.estimated && est.totalAmount != null) st.cost = '₹' + est.totalAmount;
+            if (est && est.ok && est.estimated && est.totalAmount != null) { st.cost = '₹' + est.totalAmount; st.amt = Number(est.totalAmount); }
           } catch (e) {}
         }
       } catch (e) { st.text = 'Couldn\u2019t check'; }
       if (sb.refused[name]) { st.ok = false; st.text = 'Refused this PIN'; }
       sb.sv[name] = st;
     }));
+    // Book Pickup: pre-select the cheapest serviceable courier, unless the
+    // user has already clicked a chip themselves (03-Nov-2026).
+    if (sb.mode === 'pickup' && !sb.manual) {
+      var best = COURIERS.filter(function (x) { return sb.sv[x] && sb.sv[x].ok && isFinite(sb.sv[x].amt); })
+        .sort(function (x, y) { return sb.sv[x].amt - sb.sv[y].amt; })[0];
+      if (best) sb.o.courier = best;
+    }
   }
 
   // City/State shown under the address — from the selected courier's PIN
@@ -2984,7 +2991,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     panel.hidden = false;
 
     panel.querySelectorAll('.sb-chip').forEach(function (ch) {
-      ch.addEventListener('click', function () { o.courier = ch.dataset.courier; sb.note = ''; readInputs(); renderSendBack(); });
+      ch.addEventListener('click', function () { o.courier = ch.dataset.courier; sb.manual = true; sb.note = ''; readInputs(); renderSendBack(); });
     });
     // Product / value change → refresh package from listing data and re-check estimates.
     var t = null;
