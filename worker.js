@@ -1649,7 +1649,7 @@ export default {
       if (request.method === 'POST' && act === 'ccTestZohoCleanup') {
         const b2 = body || {};
         if (!b2.dry_run && b2.confirm !== 'DELETE-TEST') return json({ ok: false, error: 'send confirm: "DELETE-TEST" (or dry_run: true)' }, 400);
-        try { return json(await rpTestCleanup(env, !!b2.dry_run, !!b2.include_old)); }
+        try { return json(await rpTestCleanup(env, !!b2.dry_run, !!b2.include_old, !!b2.skip_payments)); }
         catch (e) { console.error('ccTestZohoCleanup:', e.message); return json({ ok: false, error: e.message }, 502); }
       }
       if (request.method === 'POST' && act === 'ccPaymentVoid') {
@@ -7772,7 +7772,7 @@ async function rpCheckOne(env, p) {
 // invoices → delete advance payments → delete the advances. Then clears the
 // D1 payment rows and resets the SRV counter. Money refunds happen in Razorpay.
 const RP_TEST_CLAIMS = ['SRN-261102-01', 'SRN-261103-01'];
-async function rpTestCleanup(env, dryRun, includeOld) {
+async function rpTestCleanup(env, dryRun, includeOld, skipPayments) {
   const claims = RP_TEST_CLAIMS.concat(includeOld ? ['WRN-261016-01'] : []);
   const rows = (await env.DB.prepare('SELECT * FROM repair_payments WHERE claim_id IN (' + claims.map(() => '?').join(',') + ')')
     .bind(...claims).all()).results || [];
@@ -7816,7 +7816,8 @@ async function rpTestCleanup(env, dryRun, includeOld) {
   }
   for (const d of list.filter(x => x.key === 'retainerinvoice')) (d.payment_ids || []).forEach(x => delPay.add(x));
   // Deleting an advance's payment also takes it off the final invoice it was applied to.
-  for (const pid of delPay) await step('delete payment ' + pid, () => zbCall(env, 'DELETE', '/customerpayments/' + pid));
+  // skip_payments: the payments were deleted by hand in Zoho (our API token can't delete them).
+  if (!skipPayments) for (const pid of delPay) await step('delete payment ' + pid, () => zbCall(env, 'DELETE', '/customerpayments/' + pid));
   // Final invoices first (they now have nothing applied), then the advances.
   for (const d of list) {
     await step('delete ' + d.number, async () => {
