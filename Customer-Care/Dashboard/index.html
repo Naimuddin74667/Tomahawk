@@ -493,6 +493,8 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .rq-wty.ok { color: var(--green); background: rgba(34,197,94,.12); border: 1px solid rgba(34,197,94,.45); }
 .rq-wty.out { color: var(--red); background: rgba(248,113,113,.12); border: 1px solid rgba(248,113,113,.45); }
 @media (max-width: 700px) { .rq-order { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.rq-order5 { grid-template-columns: 1fr 1.2fr 1fr 1.3fr 1.4fr; }
+@media (max-width: 700px) { .rq-order5 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .rq-thumb img, .rq-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; border: 0; border-radius: 0; }
 .rq-thumb.is-vid::after { content: '\25B6'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   font-size: 28px; color: #fff; background: rgba(0,0,0,.35); text-shadow: 0 1px 4px rgba(0,0,0,.6); }
@@ -4134,7 +4136,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       '</div><div class="rq-card"><div class="cm-k">Photos &amp; video <span id="req-files-n"></span></div>' +
         '<div class="req-files" id="req-files"><span class="muted">Loading…</span></div></div></div>' +
       // R3 — order details (verified SRN/WRN only; NV shows them in the Verify box)
-      (!nv ? orderDetailsHtml(r, oidWarn) : '') +
+      (!nv ? reqOrderDetailsHtml(r, oidWarn) : '') +
       // R3 — verify (NV only)
       (nv && canActReq() && ['closed', 'not_covered'].indexOf(r.status) === -1 ? verifyBoxHtml(r) : '') +
       (showPay ? payBlockHtml() : '') +
@@ -4188,21 +4190,29 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
 
   // Order details box for verified requests: platform, order ID, purchase date,
   // ordered SKUs, warranty (big badge so Under / Out of warranty is obvious) and pickup case.
-  function orderDetailsHtml(r, oidWarn) {
+  // Request popup "Order details" — one compact row (03-Nov-2026).
+  // Renamed from orderDetailsHtml: the duplicate name overrode the case popup's
+  // orderDetailsHtml(c, d) and caused the "[object Object]" there.
+  function reqOrderDetailsHtml(r, oidWarn) {
     var under = r.warranty_status === 'Under warranty';
     var cell = function (k, v) { return '<div><div class="cm-k">' + k + '</div><div>' + v + '</div></div>'; };
+    var conf = r.confirmed_sku || (r.confirmed_product ? 'Other — ' + r.confirmed_product : '');
+    var ordered = String(r.order_skus || '').trim();
+    // Product: the confirmed one; the ordered item(s) only when they differ
+    var prod = conf || ordered;
+    var prodHtml = prod ? '<span class="mono">' + esc(prod) + '</span>' +
+      (conf && ordered && ordered.toUpperCase().indexOf(String(r.confirmed_sku || '').toUpperCase()) === -1
+        ? '<div class="pay-hint">ordered: ' + esc(ordered) + '</div>' : '') : '—';
     return '<div class="cm-sec"><div class="cm-sec-title">Order details</div></div>' +
-      '<div class="rq-card rq-order">' +
-        cell('Bought on', esc(r.platform || '\u2014')) +
-        cell('Order ID', '<span class="mono">' + esc(r.order_id || '\u2014') + '</span>' +
+      '<div class="rq-card rq-order rq-order5">' +
+        cell('Bought on', esc(r.platform || '—')) +
+        cell('Order ID', '<span class="mono">' + esc(r.order_id || '—') + '</span>' +
           (oidWarn ? '<div class="rq-warn">&#9888; ' + esc(oidWarn) + '</div>' : '')) +
-        cell('Purchase date', esc(r.order_date || '\u2014')) +
-        cell('Warranty', '<span class="rq-wty ' + (under ? 'ok' : 'out') + '">' + (under ? '&#10003; Under warranty' : '&#10007; Out of warranty') + '</span>' +
-          (r.warranty_until ? '<div class="pay-hint" style="margin-top:4px">' + (under ? 'valid till ' : 'ended ') + esc(r.warranty_until) + '</div>' : '')) +
-        (r.order_skus ? '<div class="span-all">' + '<div class="cm-k">Ordered item(s)</div><div class="mono">' + esc(r.order_skus) + '</div></div>' : '') +
-        ((r.confirmed_sku || r.confirmed_product) ? '<div class="span-all"><div class="cm-k">Confirmed product</div><div><b class="mono">' +
-          esc(r.confirmed_sku || ('Other — ' + r.confirmed_product)) + '</b></div></div>' : '') +
-        (r.case_id ? '<div class="span-all"><div class="cm-k">Pickup case</div><div><b class="mono">' + esc(r.case_id) + '</b> \u00b7 ' + esc(reqCaseStatus(r)) +
+        cell('Purchase date', esc(r.order_date ? fmtDay(r.order_date) : '—')) +
+        cell('Warranty', '<span class="rq-wty ' + (under ? 'ok' : 'out') + '">' + (under ? '&#10003; Under' : '&#10007; Out') + '</span>' +
+          (r.warranty_until ? ' <span class="pay-hint">' + (under ? 'till ' : 'ended ') + esc(fmtDay(r.warranty_until)) + '</span>' : '')) +
+        cell('Product', prodHtml) +
+        (r.case_id ? '<div class="span-all"><div class="cm-k">Pickup case</div><div><b class="mono">' + esc(r.case_id) + '</b> · ' + esc(reqCaseStatus(r)) +
           (reqCase(r) ? ' <button class="co-edit" id="rq-open-case">Open case &#8594;</button>' : '') + '</div></div>' : '') +
       '</div>';
   }
