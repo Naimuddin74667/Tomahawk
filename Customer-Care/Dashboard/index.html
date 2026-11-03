@@ -4223,19 +4223,14 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     out.text = s.replace(/\s*\[[^\]]*\]\s*/g, ' ').replace(/\s+/g, ' ').trim();
     (s.match(/\[[^\]]*\]/g) || []).forEach(function (tag) {
       var x = tag.slice(1, -1).trim();
+      // Only notes that add something not already on screen (03-Nov-2026):
+      // product type = Product line, invoice = photo tag, agreed charges = History,
+      // not found online = the NV status. The purchase date stays (one chip).
       if (/^NOT FOUND ONLINE/i.test(x)) {
-        out.chips.push('Not found online');
-        x.replace(/^NOT FOUND ONLINE\s*[-–:]?\s*/i, '').split(/\s*,\s*/).forEach(function (part) {
-          var m = /^purchase date\s+(\d{4}-\d{2}-\d{2})/i.exec(part);
-          if (m) { out.date = m[1]; out.chips.push('Purchase date ' + new Date(m[1] + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })); return; }
-          if (/^product type\s+/i.test(part)) { out.chips.push('Product type: ' + part.replace(/^product type\s+/i, '')); return; }
-          if (/invoice/i.test(part)) { out.chips.push('Invoice attached'); return; }
-          if (part) out.chips.push(part);
-        });
-      } else if (/^AGREED CHARGES/i.test(x)) out.chips.push('Agreed to charges');
-      else if (/^MISSING PART/i.test(x)) out.chips.push('Missing part: ' + x.replace(/^MISSING PART\s*[:\-]?\s*/i, ''));
+        var m = /purchase date\s+(\d{4}-\d{2}-\d{2})/i.exec(x);
+        if (m) { out.date = m[1]; out.chips.push('Bought ' + new Date(m[1] + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) + ' (per customer)'); }
+      } else if (/^MISSING PART/i.test(x)) out.chips.push('Missing part: ' + x.replace(/^MISSING PART\s*[:\-]?\s*/i, ''));
       else if (/hindi/i.test(x)) out.chips.push('Form in Hindi');
-      else if (x) out.chips.push(x);
     });
     return out;
   }
