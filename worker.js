@@ -5941,7 +5941,10 @@ function maskAcct(a) { a = String(a || ''); return a.length > 4 ? 'X'.repeat(a.l
 // Delhivery call per batch) and stores a simplified stage per order.
 // Skips orders already in a final stage, and orders tracked in the last
 // 10 minutes unless force=true.
-const DELHIVERY_FINAL_STAGES = ['Delivered', 'RTO', 'Cancelled', 'Lost'];
+// Final = tracking stops. Forward 'RTO' is NOT final (03-Nov-2026): it keeps
+// being tracked until the courier reports it back with us → 'RTO Delivered'.
+// A reverse-pickup RTO (returned to the customer) stays final.
+const DELHIVERY_FINAL_STAGES = ['Delivered', 'RTO Delivered', 'Cancelled', 'Lost'];
 
 async function refreshDelhiveryStages(env, force) {
   if (!env.DELHIVERY_API_TOKEN) return;
@@ -5949,7 +5952,8 @@ async function refreshDelhiveryStages(env, force) {
     SELECT waybill, direction FROM delhivery_orders
     WHERE delhivery_ok = 1 AND waybill IS NOT NULL AND waybill != ''
       AND COALESCE(courier, 'Delhivery') = 'Delhivery'
-      AND (track_stage IS NULL OR track_stage NOT IN ('Delivered','RTO','Cancelled','Lost')
+      AND (track_stage IS NULL
+           OR (track_stage NOT IN ('Delivered','RTO Delivered','Cancelled','Lost') AND NOT (track_stage = 'RTO' AND direction = 'reverse'))
            -- backfill: delivered forward legs from before delivered_at existed
            OR (track_stage = 'Delivered' AND delivered_at IS NULL AND COALESCE(direction, 'forward') = 'forward'))
       ${force ? '' : "AND (tracked_at IS NULL OR tracked_at < datetime('now', '-10 minutes'))"}
@@ -6033,7 +6037,8 @@ function deriveDelhiveryStage(s, direction) {
   if (direction === 'reverse') return { stage: deriveReverseStage(status, type, instr, scans), rawStatus: raw, reattempts };
 
   let stage;
-  if (type === 'DL' && !/rto|return/.test(status)) stage = 'Delivered';
+  if (type === 'DL' && /rto|return/.test(status)) stage = 'RTO Delivered';   // returned parcel delivered back to us
+  else if (type === 'DL') stage = 'Delivered';
   else if (type === 'RT' || /rto|returned/.test(status)) stage = 'RTO';
   else if (type === 'CN' || /cancel/.test(status)) stage = 'Cancelled';
   else if (/lost/.test(status)) stage = 'Lost';
@@ -6210,7 +6215,8 @@ function deriveEkartStage(tr, direction) {
     else stage = 'Created'; // Order Placed / Pickup Pending / Scheduled / Not Picked
     return { stage, rawStatus: raw, reattempts };
   }
-  if (/^rto|rto /.test(s)) stage = 'RTO';
+  if (/^rto/.test(s) && /deliver/.test(s) && !/undeliver/.test(s)) stage = 'RTO Delivered';   // "RTO Delivered" = back with us
+  else if (/^rto|rto /.test(s)) stage = 'RTO';
   else if (/cancel/.test(s)) stage = 'Cancelled';
   else if (/lost|damaged/.test(s)) stage = 'Lost';
   else if (s === 'delivered') stage = 'Delivered';
@@ -6294,7 +6300,8 @@ async function refreshEkartStages(env, force) {
   const rows = await env.DB.prepare(`
     SELECT waybill, direction FROM delhivery_orders
     WHERE delhivery_ok = 1 AND waybill IS NOT NULL AND waybill != '' AND courier = 'Ekart'
-      AND (track_stage IS NULL OR track_stage NOT IN ('Delivered','RTO','Cancelled','Lost')
+      AND (track_stage IS NULL
+           OR (track_stage NOT IN ('Delivered','RTO Delivered','Cancelled','Lost') AND NOT (track_stage = 'RTO' AND direction = 'reverse'))
            -- backfill: delivered forward legs from before delivered_at existed
            OR (track_stage = 'Delivered' AND delivered_at IS NULL AND COALESCE(direction, 'forward') = 'forward'))
       ${force ? '' : "AND (tracked_at IS NULL OR tracked_at < datetime('now', '-10 minutes'))"}

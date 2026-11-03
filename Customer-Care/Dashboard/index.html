@@ -1808,7 +1808,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     'In Transit': 'In Transit', 'At Last Mile': 'At Bhiwandi Hub', 'Out For Delivery': 'Out For Delivery',
     'Delivered': 'Delivered to us', 'Awaiting Dispatch': 'Awaiting Customer Dispatch' };
   var DISPATCH_LABEL = { 'Created': 'Booked', 'RTD': 'RTD', 'In Transit': 'In Transit',
-    'At Last Mile': 'Last Mile Hub', 'Out For Delivery': 'Out For Delivery', 'Delivered': 'Delivered' };
+    'At Last Mile': 'Last Mile Hub', 'Out For Delivery': 'Out For Delivery', 'Delivered': 'Delivered',
+    'RTO': 'RTO — returning to us', 'RTO Delivered': 'Delivered back to us' };
 
   // ── One status per case — drives the badge, tiles and filters.
   // Three paths:  Repair/Replace = Pickup → In-house → Dispatch
@@ -1848,6 +1849,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   }
   function dispatchStatus(fs) {
     if (fs === 'Delivered') return { label: 'Delivered', tone: 'closed' }; // Delivered = case closed (grey)
+    // Send-back returned and delivered back to our warehouse (03-Nov-2026) → Needs attention.
+    // What to do next (re-ship / call customer / refund) is to be built later.
+    if (fs === 'RTO Delivered') return { label: 'Delivered back to us', tone: 'bad-out', attn: 'rtoback' };
     if (fs === 'RTO' || fs === 'Lost') return { label: fs, tone: 'bad-out' };
     return { label: DISPATCH_LABEL[fs] || fs, tone: 'out' };
   }
@@ -1931,16 +1935,18 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     { label: 'Delivered to us', hint: 'Check the parcel and confirm receipt', c: 'var(--green)' },
     { label: 'Arriving', hint: 'On the way to our Bhiwandi warehouse', c: 'var(--accent)' },
     { label: 'Call customer', hint: 'Delivery attempt failed — call once to understand the issue', c: 'var(--text)' },
+    { label: 'Returned to us (RTO)', hint: 'Send-back came back to our warehouse — decide the next step', c: 'var(--red)' },
     { label: 'Escalation needed', hint: 'Raise a ticket on the courier portal', c: 'var(--red)' }
   ];
-  // Ranks: 0 Delivered to us · 1/2 Arriving (today / next day) · 3 Call customer · 4 Escalation
-  function attnGroup(c) { var r = attnRank(c); return r === 0 ? 0 : r <= 2 ? 1 : r === 3 ? 2 : 3; }
+  // Ranks: 0 Delivered to us · 1/2 Arriving (today / next day) · 3 Call customer · 4 Returned to us (RTO) · 5 Escalation
+  function attnGroup(c) { var r = attnRank(c); return r === 0 ? 0 : r <= 2 ? 1 : r === 3 ? 2 : r === 4 ? 3 : 4; }
   function attnRank(c) {
     if (c.st.attn === 'verify') return 0;
+    if (c.st.attn === 'rtoback') return 4;
     if (c.call) return 3;                   // a call case is not escalated yet; the courier ticket comes after if needed
-    if (c.esc && !c.esc.raised) return 4;   // e.g. "at Bhiwandi Hub" for 3 days = escalation, not arriving
+    if (c.esc && !c.esc.raised) return 5;   // e.g. "at Bhiwandi Hub" for 3 days = escalation, not arriving
     if (c.st.attn === 'arriving') return c.st.label === 'Out For Delivery' ? 1 : 2;
-    return 4;
+    return 5;
   }
   function tileTest(key) { for (var i = 0; i < TILES.length; i++) if (TILES[i].key === key) return TILES[i].test; return function () { return true; }; } // unknown key → all cases
 
@@ -2005,7 +2011,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var st = legStage(o), info = scanInfo(o) || {}, rev = o.direction === 'reverse';
     var hub = info.hub, hubH = info.hub_since ? hrsSince(info.hub_since) : 0;
     var lastH = info.last ? hrsSince(info.last.t) : 0;
-    if (st === 'Delivered' || st === 'Cancelled' || st === 'Failed') return null;
+    if (st === 'Delivered' || st === 'RTO Delivered' || st === 'Cancelled' || st === 'Failed') return null;   // back with us = nothing to escalate
     if (st === 'Lost') return { code: 'LOST', short: 'Marked lost by courier',
       facts: ['Shipment is marked LOST / damaged.'], ask: 'Please confirm status and process lost-shipment claim.' };
     if (st === 'RTO') return { code: 'RTO', short: rev ? 'Pickup returned (RTO)' : 'RTO — returning to us',
@@ -3578,7 +3584,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     }
     if (cur === 5) notes[5] = 'Book send back';
     if (cur === 6) {
-      if (fs === 'RTO' || fs === 'Lost') { notes[6] = 'Delivery ' + fs + ' · contact customer'; warn = true; }
+      if (fs === 'RTO Delivered') { notes[6] = 'Returned to us (RTO) · decide next step'; warn = true; }
+      else if (fs === 'RTO' || fs === 'Lost') { notes[6] = (fs === 'RTO' ? 'RTO · returning to us' : 'Lost by courier'); warn = true; }
       else notes[6] = DISPATCH_LABEL[fs] || fs || 'Booked';
     }
     // Other endings
@@ -3604,7 +3611,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   }
   function stepsMini(m) {
     var at = m.cur >= 7 ? 6 : m.cur, s = m.steps[at];
-    var label = m.outcome ? m.outcome.label : m.cur >= 7 ? 'Delivered' : STEP_DEFS[at][0];
+    var label = m.outcome ? m.outcome.label : m.cur >= 7 ? 'Delivered' : (s && s.state === 'warn' && s.note) ? s.note : STEP_DEFS[at][0];
     return '<div class="stp-mini" title="' + esc(s ? s.note : '') + '"><span class="stp-bar">' + m.steps.map(function (x) {
       return '<i class="' + ({ done: 'd', cur: 'c', warn: 'x' }[x.state] || '') + '"></i>'; }).join('') + '</span>' +
       '<span>' + (m.outcome ? '' : 'Step ' + Math.min(m.cur + 1, 7) + '/7 · ') + esc(label) + '</span></div>';
