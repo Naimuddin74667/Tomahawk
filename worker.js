@@ -7365,6 +7365,8 @@ function rpDoc(p) {
     : { path: '/invoices/', key: 'invoice' };
 }
 
+// Amount + 18% GST, to the paisa (matches Zoho's per-line tax on the final invoice).
+function rpWithGst(v) { return Math.round(Number(v) * (100 + ZB_GST_RATE)) / 100; }
 const RP_KINDS = ['logistics', 'repair'];
 function rpKind(k) { return k === 'logistics' ? 'logistics' : 'repair'; }
 // SAC for the pickup + delivery lines (courier services). Override with the
@@ -7428,8 +7430,12 @@ async function rpCreate(env, user, b) {
   // Line SAC is carried into the final invoice (lines_json keeps label + amount).
   const ret = {
     customer_id: z.customerId, reference_number: claimId, place_of_supply: z.stateCode,
-    line_items: lines.map((l, i) => ({ description: l.label + ' · ' + (kind === 'repair' ? (row.product || '') + ' · ' : '') + claimId,
-      item_order: i + 1, rate: l.amount, tax_id: z.taxId })),
+    // Zoho India rejects tax on retainer invoices ("Tax cannot be applied on
+    // retainer invoice"), so each advance line carries the GST-inclusive amount.
+    // The customer pays the same total; GST is charged on the final invoice,
+    // where the advance is adjusted.
+    line_items: lines.map((l, i) => ({ description: l.label + ' (incl. ' + ZB_GST_RATE + '% GST) · ' + (kind === 'repair' ? (row.product || '') + ' · ' : '') + claimId,
+      item_order: i + 1, rate: rpWithGst(l.amount) })),
     notes: 'Advance for ' + (kind === 'logistics' ? 'pickup and return delivery' : 'service and spare parts') + ', service request ' + claimId +
       '. The full tax invoice is issued when your request is closed. Thank you for choosing TOMAHAWK® Tools.',
     payment_options: { payment_gateways: [{ gateway_name: 'razorpay', configured: true }] }
