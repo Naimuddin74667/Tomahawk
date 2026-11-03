@@ -976,6 +976,18 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .stp-bar { display: inline-flex; gap: 2px; }
 .stp-bar i { width: 10px; height: 5px; border-radius: 1px; background: var(--todo); transform: skewX(-18deg); }
 .stp-bar i.d { background: var(--coal); } .stp-bar i.c { background: var(--hero); } .stp-bar i.x { background: var(--red); }
+/* Payments summary (folded view) */
+.cm-sec:has(.pay-toggle) { display: flex; align-items: center; justify-content: space-between; }
+.pay-toggle { background: none; border: 0; font-size: 12px; font-weight: 700; cursor: pointer; padding: 0; }
+.pay-sum { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--cr-shadow); padding: 4px 14px; margin-bottom: 10px; }
+.pay-sum-row { display: grid; grid-template-columns: 1fr 110px 180px; gap: 12px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+.pay-sum-row:last-child { border-bottom: 0; }
+.pay-sum-tot { border-top: 1px solid var(--border); margin-top: -1px; }
+.pay-sum-tot .pay-sum-n, .pay-sum-tot .pay-total { font-weight: 800; }
+.pay-sum-n { font-weight: 700; }
+.pay-sum-row .pay-total { font-size: 14.5px; font-weight: 800; text-align: right; }
+.pay-sum-row > span:last-child { font-size: 12.5px; font-weight: 600; text-align: right; }
+#pay-details[hidden] { display: none; }
 /* Hub cards: yellow is the only accent (cards had their own colours) */
 .cc-card { --card-color: var(--hero-deep) !important; --card-color-dim: var(--hero-soft) !important; --card-color-border: var(--hero) !important; }
 .linkish:hover, .log-refresh#refresh-btn:hover, .log-refresh#req-refresh:hover, .sub-back:hover { color: var(--hero-deep); }
@@ -3483,10 +3495,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       '</div>' +
       // Out-of-warranty: the same Payments block as the request popup, so Step 2
       // and the final invoice can be handled from the open case (03-Nov-2026).
-      (casePaysShown(r) ? '<div class="cm-sec"><div class="cm-sec-title">Payments</div></div>' +
-        '<div class="pay-box pay-step" id="pay-logistics"><span class="pay-hint">Loading…</span></div>' +
-        '<div class="pay-box pay-step" id="pay-repair"><span class="pay-hint">Loading…</span></div>' +
-        '<div class="pay-box pay-step" id="pay-final"><span class="pay-hint">Loading…</span></div>' : '');
+      (casePaysShown(r) ? payBlockHtml() : '');
   }
   function casePaysShown(r) { return !!r && !/^NV-/.test(r.claim_id || '') && r.warranty_status !== 'Under warranty'; }
 
@@ -4073,10 +4082,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       (!nv ? orderDetailsHtml(r, oidWarn) : '') +
       // R3 — verify (NV only)
       (nv && canActReq() && ['closed', 'not_covered'].indexOf(r.status) === -1 ? verifyBoxHtml(r) : '') +
-      (showPay ? '<div class="cm-sec"><div class="cm-sec-title">Payments</div></div>' +
-        '<div class="pay-box pay-step" id="pay-logistics"><span class="pay-hint">Loading…</span></div>' +
-        '<div class="pay-box pay-step" id="pay-repair"><span class="pay-hint">Loading…</span></div>' +
-        '<div class="pay-box pay-step" id="pay-final"><span class="pay-hint">Loading…</span></div>' : '') +
+      (showPay ? payBlockHtml() : '') +
       (hist ? '<div class="cm-sec"><div class="cm-sec-title">History</div></div>' + hist : '') +
       '<div id="req-compose" style="margin-top:16px" hidden></div>' +
       (acts ? '<div class="cm-acts" id="req-acts">' + acts + '</div>' : '');
@@ -4374,6 +4380,52 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // The Payments block shows in the request popup AND in the case popup
   // (03-Nov-2026). payView says which one is open, payClaim for which request.
   var payView = null, payClaim = null;
+  // Payments block (03-Nov-2026): a short summary (pickup & delivery · service &
+  // spare parts — amount + paid date), full step cards under "Show details".
+  // Folded by default when nothing needs doing; opens by itself when a link is
+  // pending or a step still has to be sent, so action buttons are never hidden.
+  var payDetailsOpen = null;   // null = automatic; true/false once the user clicks
+  function payBlockHtml() {
+    payDetailsOpen = null;
+    return '<div class="cm-sec"><div class="cm-sec-title">Payments</div>' +
+        '<button type="button" class="linkish pay-toggle" id="pay-toggle" hidden>Show details</button></div>' +
+      '<div class="pay-sum" id="pay-sum"><span class="pay-hint">Loading…</span></div>' +
+      '<div id="pay-details">' +
+        '<div class="pay-box pay-step" id="pay-logistics"><span class="pay-hint">Loading…</span></div>' +
+        '<div class="pay-box pay-step" id="pay-repair"><span class="pay-hint">Loading…</span></div>' +
+        '<div class="pay-box pay-step" id="pay-final"><span class="pay-hint">Loading…</span></div>' +
+      '</div>';
+  }
+  function paySumLine(name, p) {
+    var state = !p || p.status === 'void' ? '<span class="pay-hint">Not sent yet</span>'
+      : p.status === 'paid' ? '<span class="bt-green">Paid on ' + esc(shortWhen(p.paid_at || p.checked_at)) + '</span>'
+      : p.status === 'skipped' ? '<span class="pay-hint">Not repaired — no charge</span>'
+      : '<span class="bt-amber">Payment pending</span>';
+    return '<div class="pay-sum-row"><span class="pay-sum-n">' + name + '</span>' +
+      '<span class="pay-total">' + (p && p.status !== 'void' && p.status !== 'skipped' ? money(p.total) : '—') + '</span>' + state + '</div>';
+  }
+  function renderPaySummary() {
+    var sum = document.getElementById('pay-sum'), det = document.getElementById('pay-details'), tg = document.getElementById('pay-toggle');
+    if (!sum || !det || !tg) return;
+    var l = payState.logistics, rp = payState.repair, f = payState.final;
+    var old = [l, rp].some(function (x) { return x && x.status !== 'void' && x.status !== 'skipped' && x.doc_type !== 'retainer'; });
+    // Total settled = everything the customer has actually paid (advances A + B)
+    var paidTot = [l, rp].reduce(function (s, x) { return s + (x && x.status === 'paid' ? Number(x.total || 0) : 0); }, 0);
+    var allIn = [l, rp].every(function (x) { return x && (x.status === 'paid' || x.status === 'skipped'); });
+    sum.innerHTML = paySumLine('Pickup &amp; delivery charges', l) + paySumLine('Service &amp; spare parts', rp) +
+      '<div class="pay-sum-row pay-sum-tot"><span class="pay-sum-n">Total settled</span><span class="pay-total">' + money(paidTot) + '</span>' +
+      (f && f.status === 'paid' ? '<span class="bt-green">Invoice ' + esc(f.invoice_number || '') + ' ✓</span>'
+        : allIn ? '<span class="pay-hint">Final invoice not made yet</span>'
+        : '<span class="pay-hint">' + (paidTot > 0 ? 'More payment due' : 'Nothing paid yet') + '</span>') + '</div>';
+    // Nothing to do = every step paid / skipped / settled (or not reached yet)
+    var settled = function (x) { return x && (x.status === 'paid' || x.status === 'skipped'); };
+    var idle = settled(l) && settled(rp) && (old || (f && f.status === 'paid'));
+    var open = payDetailsOpen === null ? !idle : payDetailsOpen;
+    det.hidden = !open;
+    tg.hidden = false;
+    tg.textContent = open ? 'Hide details' : 'Show details';
+    tg.onclick = function () { payDetailsOpen = det.hidden; renderPaySummary(); };
+  }
   function payOpen(r) {
     var m = document.getElementById('case-modal');
     return !!m && !m.hidden && payClaim === r.claim_id &&
@@ -4404,6 +4456,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       renderPayStep(r, 'logistics', payState.logistics, res.checkError);
       renderPayStep(r, 'repair', payState.repair, res.checkError);
       renderFinal(r, payState.final, res.checkError);
+      renderPaySummary();
       if (stepsCtx && stepsCtx.r && stepsCtx.r.claim_id === r.claim_id) { stepsCtx.pay = payState; drawSteps(); }
       // Legacy: requests billed before two-step billing (single repair payment, already paid) stay unlocked
       setApproveLock((payState.logistics && payState.logistics.status === 'paid') ||
