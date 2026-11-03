@@ -4749,10 +4749,15 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var rows = '';
     if (has(l)) rows += paySumLine('Pickup &amp; delivery charges', l);
     if (has(rp)) rows += paySumLine('Spare Parts &amp; Service Charge', rp);
+    // Final invoice — appears only once Send back has created it
+    if (has(f)) rows += '<div class="pay-sum-row"><span class="pay-sum-n">Final invoice</span>' +
+      '<span class="pay-total">' + money(f.total) + '</span>' +
+      (f.status === 'paid' ? '<span class="bt-green">' + esc(f.invoice_number || '') + ' ✓</span>'
+        : '<span class="bt-amber">' + esc(f.invoice_number || '') + ' · advances not applied</span>') + '</div>';
     var paidTot = [l, rp].reduce(function (s, x) { return s + (x && x.status === 'paid' ? Number(x.total || 0) : 0); }, 0);
     if (paidTot > 0 && (has(rp) || stage >= 4)) rows +=
       '<div class="pay-sum-row pay-sum-tot"><span class="pay-sum-n">Total settled</span><span class="pay-total">' + money(paidTot) + '</span>' +
-      (f && f.status === 'paid' ? '<span class="bt-green">Invoice ' + esc(f.invoice_number || '') + ' ✓</span>'
+      (f && f.status === 'paid' ? '<span class="bt-green">Settled</span>'
         : settled(l) && settled(rp) ? '<span class="pay-hint">Final invoice made at send back</span>' : '<span class="pay-hint">More payment due</span>') + '</div>';
     // A card that is showing already tells its own state — no duplicate summary line
     sum.innerHTML = rows;
