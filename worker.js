@@ -7599,12 +7599,38 @@ async function rpSkipRepair(env, user, claimId, reason, undo) {
 
 // Matches each paid advance to an unused retainer payment of the same
 // customer (same amount first) and applies it to the final invoice.
+// Every { payment_id, unused amount > 0 } found anywhere in a Zoho reply.
+function rpFindPayments(obj) {
+  const out = [], seen = new Set();
+  const walk = o => {
+    if (!o || typeof o !== 'object') return;
+    if (Array.isArray(o)) { o.forEach(walk); return; }
+    if (o.payment_id && !seen.has(String(o.payment_id))) {
+      const left = Number(o.unused_amount != null ? o.unused_amount : (o.balance != null ? o.balance : 0));
+      if (left > 0) { seen.add(String(o.payment_id)); out.push({ id: String(o.payment_id), left }); }
+    }
+    Object.values(o).forEach(walk);
+  };
+  walk(obj);
+  return out;
+}
 async function rpApplyAdvances(env, fin, customerId, paid) {
   let inv = (await zbCall(env, 'GET', '/invoices/' + fin.zoho_invoice_id)).invoice || {};
   let due = Number(inv.balance || 0);
   if (!(due > 0)) return;
-  const unused = ((await zbCall(env, 'GET', '/contacts/' + customerId + '/receivables/unusedretainerpayments')).unused_credits_receivable || [])
-    .map(u => ({ id: u.payment_id, left: Number(u.unused_amount || u.amount || 0) })).filter(u => u.left > 0);
+  // Zoho's reply shape for unused retainer payments isn't what its docs show
+  // (unused_credits_receivable was not an array, 03-Nov-2026), so collect every
+  // object with a payment_id anywhere in the reply. Fallback: the customer's
+  // payments list (unused_amount > 0).
+  const raw = await zbCall(env, 'GET', '/contacts/' + customerId + '/receivables/unusedretainerpayments');
+  let unused = rpFindPayments(raw);
+  let raw2 = null;
+  if (!unused.length) {
+    raw2 = await zbCall(env, 'GET', '/customerpayments', null, { customer_id: customerId });
+    unused = rpFindPayments(raw2);
+  }
+  if (!unused.length) throw new Error('no unused advance payments found for this customer in Zoho · reply: ' +
+    JSON.stringify(raw).slice(0, 400) + (raw2 ? ' · payments: ' + JSON.stringify(raw2).slice(0, 300) : ''));
   const apply = [];
   for (const p of paid) {
     if (!(due > 0)) break;
