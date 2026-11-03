@@ -646,6 +646,41 @@ table, .tile-n, .pay-total, .money { font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
+<!-- ══ BUSY OVERLAY (03-Nov-2026) ══════════════════════════════════════
+  While a click waits on the Worker: spinner + softly blurred, 20%-dimmed page.
+  Counts every Worker fetch; shows after 200 ms (no flicker on fast calls).
+  Quiet (no overlay): background auto-refresh, the 15-s change check and the
+  first page load (it has the skeleton) — wrap those in ccQuiet(fn).
+══════════════════════════════════════════════════════════════════════ -->
+<style>
+#cc-busy { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center;
+  background: rgba(24,24,24,.2); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+  opacity: 0; pointer-events: none; transition: opacity .15s; }
+#cc-busy.on { opacity: 1; pointer-events: all; cursor: progress; }
+#cc-busy .ring { width: 46px; height: 46px; border-radius: 50%; border: 4px solid rgba(247,166,0,.25); border-top-color: #F7A600;
+  animation: cc-spin .8s linear infinite; box-shadow: 0 2px 12px rgba(0,0,0,.15); background: var(--surface, #fff); }
+@keyframes cc-spin { to { transform: rotate(360deg); } }
+</style>
+<div id="cc-busy" aria-hidden="true"><div class="ring"></div></div>
+<script>
+(function () {
+  var el = document.getElementById('cc-busy'), n = 0, timer = null, quiet = 0;
+  var SKIP = /[?&]action=(ccVersion|validateSession)\b/;
+  window.ccQuiet = function (fn) { quiet++; var p; try { p = fn(); } catch (e) { quiet--; throw e; }
+    return Promise.resolve(p).finally(function () { quiet--; }); };
+  function up() { if (++n === 1) timer = setTimeout(function () { el.classList.add('on'); }, 200); }
+  function down() { if (--n <= 0) { n = 0; clearTimeout(timer); el.classList.remove('on'); } }
+  var orig = window.fetch.bind(window);
+  window.fetch = function (url, opts) {
+    var u = String((url && url.url) || url || '');
+    var track = !quiet && /workers\.dev/.test(u) && !SKIP.test(u);
+    if (!track) return orig(url, opts);
+    up();
+    return orig(url, opts).finally(down);
+  };
+})();
+</script>
+
 
 <div class="auth-gate" id="auth-gate">
   <div class="auth-card">
