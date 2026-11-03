@@ -941,6 +941,41 @@ table, .tile-n, .pay-total, .money { font-variant-numeric: tabular-nums; }
 
 /* ── Links: ink text + yellow underline (no blue links) ── */
 .linkish, .log-refresh#refresh-btn, .log-refresh#req-refresh, .sub-back { color: var(--text); text-decoration: underline; text-decoration-color: var(--hero); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+
+/* ── 7-step tracker (03-Nov-2026) ── */
+:root { --todo: #2A2A27; --todo-ink: #7A7A72; }
+html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
+.stp { margin: 0 0 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--cr-shadow); padding: 14px 14px 12px; }
+.stp-head { display: flex; justify-content: flex-end; margin: -4px 0 8px; }
+.stp-out { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+.stp-ok { background: var(--ok-soft); color: var(--green); } .stp-warn { background: var(--warn-soft); color: var(--warn); } .stp-gray { background: var(--surface2); color: var(--text2); }
+.stp-flow { display: grid; grid-template-columns: repeat(7, minmax(92px, 1fr)); gap: 4px; overflow-x: auto; }
+.stp-chev { height: 50px; display: flex; align-items: center; justify-content: center; gap: 7px; position: relative; padding-left: 12px;
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%, 14px 50%); }
+.stp-st:first-child .stp-chev { clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%); border-radius: 10px 0 0 10px; padding-left: 0; }
+.stp-st:last-child .stp-chev { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 14px 50%); border-radius: 0 10px 10px 0; }
+.stp-n { font-weight: 800; font-size: 12px; opacity: .75; font-variant-numeric: tabular-nums; }
+.stp-ico { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.stp-done .stp-chev { background: var(--coal); color: var(--on-coal); }
+.stp-cur .stp-chev { background: var(--hero); color: #181818; }
+.stp-todo .stp-chev, .stp-skip .stp-chev { background: var(--todo); color: var(--todo-ink); }
+.stp-skip { opacity: .45; }
+.stp-warn .stp-chev { background: var(--red); color: #fff; }
+.stp-tick { position: absolute; top: 5px; right: 20px; width: 15px; height: 15px; border-radius: 50%; background: var(--green); color: #fff; font-size: 9px; display: flex; align-items: center; justify-content: center; }
+.stp-st:last-child .stp-tick { right: 7px; }
+.stp-lbl { text-align: center; margin-top: 8px; padding: 0 3px; }
+.stp-lbl b { display: block; font-size: 12.5px; font-weight: 700; color: var(--text); }
+.stp-todo .stp-lbl b, .stp-skip .stp-lbl b { color: var(--text2); }
+.stp-lbl span { display: block; font-size: 11.5px; line-height: 1.35; color: var(--text2); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.stp-done .stp-lbl span { color: var(--green); }
+.stp-cur .stp-lbl span { color: var(--warn); font-weight: 700; }
+.stp-warn .stp-lbl span { color: var(--red); font-weight: 700; }
+/* list rows: 7 slanted segments + step name */
+.stp-mini span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.stp-mini { max-width: 100%; overflow: hidden; display: flex; align-items: center; gap: 7px; margin-top: 5px; font-family: var(--font-body); font-size: 11.5px; font-weight: 600; color: var(--text2); white-space: nowrap; }
+.stp-bar { display: inline-flex; gap: 2px; }
+.stp-bar i { width: 10px; height: 5px; border-radius: 1px; background: var(--todo); transform: skewX(-18deg); }
+.stp-bar i.d { background: var(--coal); } .stp-bar i.c { background: var(--hero); } .stp-bar i.x { background: var(--red); }
 /* Hub cards: yellow is the only accent (cards had their own colours) */
 .cc-card { --card-color: var(--hero-deep) !important; --card-color-dim: var(--hero-soft) !important; --card-color-border: var(--hero) !important; }
 .linkish:hover, .log-refresh#refresh-btn:hover, .log-refresh#req-refresh:hover, .sub-back:hover { color: var(--hero-deep); }
@@ -2469,7 +2504,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       // (AWB/courier = the leg moving now; full details in the case popup).
       var lg = liveLeg(c) || c.forward || c.reverse;
       tr.innerHTML =
-        '<td class="mono" title="' + esc(caseLegIds(c)) + '">' + esc(c.caseNo) + '</td>' +
+        '<td class="mono" title="' + esc(caseLegIds(c)) + '">' + esc(c.caseNo) + stepsMini(computeSteps(c, caseRequest(c), null)) + '</td>' +
         '<td>' + esc(c.type) + '</td>' +
         '<td class="name-cell" title="' + esc(c.city || '') + '">' + esc(c.customer || '—') + '</td>' +
         '<td class="prod-cell" title="' + esc(c.product || '') + '">' + esc(c.product || '—') + '</td>' +
@@ -2575,7 +2610,11 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       return btn('link', r.refund_link_sent_at ? 'Send bank details link again' : 'Send bank details link');
     }
     if (r.job_type === 'Refund') return btn('startrefund', 'Start refund');
-    return btn('sendback', 'Send back &#8594;') + '<button class="case-act" data-act="startrefund">Refund instead</button>';
+    // Step 5 → Step 6 (03-Nov-2026): Send back opens only after "Repair done".
+    if (!r.repair_done_at) return btn('repairdone', '&#10003; ' + (/^Replace/.test(r.job_type || '') ? 'Replacement ready' : 'Repair done')) +
+      '<button class="case-act" data-act="startrefund">Refund instead</button>';
+    return btn('sendback', 'Send back &#8594;') + '<button class="case-act" data-act="repairundo">Reopen repair</button>' +
+      '<button class="case-act" data-act="startrefund">Refund instead</button>';
   }
 
   // Refund approval is limited to admins + Shikhar (worker enforces it too).
@@ -2664,6 +2703,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   }
 
   async function startSendBack(c, btn) {
+    if (c.reverse && !c.reverse.repair_done_at) { alert('Mark "Repair done" first (Step 5).'); return; }
     var lock;
     try { lock = await sendBackPayCheck(c); } catch (e) { lock = { ok: true }; }   // payment check down → don't block the warehouse
     if (!lock.ok) { alert(lock.msg); return; }
@@ -3241,7 +3281,26 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     } catch (e) { alert("Couldn't update: " + e.message); btn.disabled = false; }
   }
 
+  // Step 5 done / reopened (Repair done). Paid repairs: Payments Step 2 must be
+  // paid or "Not repaired" first — checked here and again by the Worker.
+  async function repairDoneAction(c, btn, undo) {
+    if (!undo) {
+      var lock;
+      try { lock = await sendBackPayCheck(c); } catch (e) { lock = { ok: true }; }
+      if (!lock.ok) { alert(lock.msg); return; }
+    }
+    if (!confirm(c.caseNo + ': ' + (undo ? 'Reopen Step 5 (Inspection & Repair)? Send back locks again.' : 'Repair finished and ready to send back? This completes Step 5 and unlocks Send back.'))) return;
+    btn.disabled = true;
+    try {
+      var res = await post('delhiveryRepairDone', { order_id: c.reverse.order_id, undo: !!undo });
+      if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
+      await reopenCase(c.id);
+    } catch (e) { alert("Couldn't update: " + e.message); btn.disabled = false; }
+  }
+
   async function caseAction(c, btn) {
+    if (btn.dataset.act === 'repairdone') return repairDoneAction(c, btn, false);
+    if (btn.dataset.act === 'repairundo') return repairDoneAction(c, btn, true);
     if (btn.dataset.act === 'sendback') return startSendBack(c, btn);
     if (btn.dataset.act === 'startrefund') return refundStartPanel(c);
     if (btn.dataset.act === 'link') return refundLinkPanel(c, btn);
@@ -3431,6 +3490,118 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   }
   function casePaysShown(r) { return !!r && !/^NV-/.test(r.claim_id || '') && r.warranty_status !== 'Under warranty'; }
 
+  // ══ 7-STEP TRACKER (03-Nov-2026) ═══════════════════════════════════════
+  // Every request / case is one of 7 steps; a step completes only after the
+  // one before it. Shown as chevrons in the popups and as a small bar in the
+  // lists. The customer Track page will show the same steps (own wording).
+  //   1 Request Verified · 2 Pickup Scheduled · 3 Picked Up · 4 Received ·
+  //   5 Inspection & Repair · 6 Dispatched · 7 Delivered
+  // Other endings: Not covered / Closed (request), Refund (replaces 6–7).
+  var STEP_DEFS = [
+    ['Request Verified', '<path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>'],
+    ['Pickup Scheduled', '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M9 15l2 2 4-4"/>'],
+    ['Picked Up', '<path d="M21 7H10v10h11zM10 10H6l-3 3v4h7"/><circle cx="7" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/>'],
+    ['Received', '<path d="M3 10l9-6 9 6v10H3z"/><path d="M8 20v-6h8v6"/><path d="M10.5 16.5l1.5 1.5 2.5-2.5"/>'],
+    ['Inspection & Repair', '<path d="M14.5 6.5a4 4 0 0 0-5.3 5.3L4 17l3 3 5.2-5.2a4 4 0 0 0 5.3-5.3l-2.6 2.6-2.4-.6-.6-2.4z"/>'],
+    ['Dispatched', '<path d="M3 7h11v10H3zM14 10h4l3 3v4h-7"/><circle cx="7" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/>'],
+    ['Delivered', '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/><path d="M15 16l1.4 1.4 2.6-2.6"/>']
+  ];
+  var PICKED_STAGES = ['Picked', 'In Transit', 'At Last Mile', 'Out For Delivery', 'Delivered'];
+  function shortWhen(t) { var s = fmtWhen(t); return s ? s.replace(/,.*$/, '') : ''; }
+  function rupees(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 }); }
+
+  // c = case (or null), r = request (or null), pay = { logistics, repair, final } when known.
+  // → { steps: [{ state: done|cur|todo|warn|skip, note }], cur: index, outcome: {label, tone} | null }
+  function computeSteps(c, r, pay) {
+    var rv = c && c.reverse, fw = c && c.forward;
+    var rvOk = !!(rv && rv.delhivery_ok && !rv.cancelled_at);
+    var fwOk = !!(fw && fw.delhivery_ok && !fw.cancelled_at && legStage(fw) !== 'Cancelled');
+    var rs = rvOk ? legStage(rv) : '', fs = fwOk ? legStage(fw) : '';
+    var oow = !!r && r.warranty_status !== 'Under warranty' && !isNV(r);
+    var paid = function (k) { return pay && pay[k] && pay[k].status === 'paid'; };
+    var done = [
+      !r || !isNV(r),
+      rvOk,
+      rvOk && (!!rv.received_at || PICKED_STAGES.indexOf(rs) !== -1),
+      rvOk && !!rv.received_at,
+      rvOk && !!rv.repair_done_at,
+      fwOk,
+      fwOk && fs === 'Delivered'
+    ];
+    for (var i = 6; i > 0; i--) if (done[i]) done[i - 1] = true;   // older cases: a later step proves the earlier ones
+    var notes = [];
+    // Done notes
+    var verEv = null;
+    if (r) { try { verEv = (JSON.parse(r.events_json || '[]') || []).filter(function (e) { return e.kind === 'verified'; }).pop(); } catch (e) {} }
+    notes[0] = !r ? 'Manual case' : verEv ? shortWhen(verEv.at) + ' · ' + (verEv.by || '') : shortWhen(r.created_at) + ' · auto';
+    notes[1] = rvOk ? shortWhen(rv.created_at) + ' · ' + courierName(rv) + (paid('logistics') ? ' · ' + rupees(pay.logistics.total) + ' paid' : '') : '';
+    notes[2] = rvOk ? (rv.received_at || rs === 'Delivered' || PICKED_STAGES.indexOf(rs) === -1 ? 'Collected' : (PICKUP_LABEL[rs] || rs)) : '';
+    notes[3] = rvOk && rv.received_at ? shortWhen(rv.received_at) + (rv.received_by ? ' · ' + rv.received_by : '') : '';
+    notes[4] = rvOk && rv.repair_done_at ? shortWhen(rv.repair_done_at) + (rv.repair_done_by ? ' · ' + rv.repair_done_by : '') +
+      (pay && pay.repair && pay.repair.status === 'skipped' ? ' · Not repaired' : paid('repair') ? ' · ' + rupees(pay.repair.total) + ' paid' : '') : '';
+    notes[5] = fwOk ? shortWhen(fw.created_at) + ' · ' + courierName(fw) : '';
+    notes[6] = fwOk && fs === 'Delivered' ? shortWhen(fw.delivered_at || fw.tracked_at) : '';
+    var cur = done.indexOf(false), outcome = null, warn = false;
+    // Current step: what's pending
+    if (cur === 0) notes[0] = r && r.status === 'waiting_customer' ? 'Waiting for customer' : 'Verify the order';
+    if (cur === 1) {
+      if (pay && oow && pay.logistics && pay.logistics.status === 'pending') notes[1] = 'Waiting for pickup payment · ' + rupees(pay.logistics.total);
+      else if (pay && oow && !paid('logistics')) notes[1] = 'Send pickup & delivery link';
+      else notes[1] = 'Approve & book pickup';
+      if (rv && rv.delhivery_ok === 0) { notes[1] = 'Booking failed · book again'; warn = true; }
+    }
+    if (cur === 2) {
+      if (rs === 'RTO' || rs === 'Lost' || rs === 'Cancelled') { notes[2] = 'Pickup ' + rs + ' · re-book'; warn = true; }
+      else notes[2] = PICKUP_LABEL[rs] || rs || 'Booked';
+    }
+    if (cur === 3) notes[3] = rs === 'Delivered' ? 'Delivered to us · confirm receipt' : (PICKUP_LABEL[rs] || rs || 'On the way');
+    if (cur === 4) {
+      var rp = pay && pay.repair;
+      if (oow && pay) notes[4] = rp && rp.status === 'pending' ? 'Waiting for repair payment · ' + rupees(rp.total)
+        : rp && (rp.status === 'paid' || rp.status === 'skipped') ? (rp.status === 'skipped' ? 'Not repaired' : 'Repair paid') + ' · mark Repair done'
+        : 'Inspect · send repair quote or Not repaired';
+      else notes[4] = oow ? 'Inspection · repair payment' : 'Inspect & repair · mark Repair done';
+    }
+    if (cur === 5) notes[5] = 'Book send back';
+    if (cur === 6) {
+      if (fs === 'RTO' || fs === 'Lost') { notes[6] = 'Delivery ' + fs + ' · contact customer'; warn = true; }
+      else notes[6] = DISPATCH_LABEL[fs] || fs || 'Booked';
+    }
+    // Other endings
+    if (rv && (rv.refunded_at || rv.resolution === 'refund')) outcome = rv.refunded_at ? { label: 'Refund processed', tone: 'ok' } : { label: 'Refund in progress', tone: 'warn' };
+    else if (r && !rvOk && (r.status === 'not_covered' || r.status === 'closed')) outcome = { label: r.status === 'not_covered' ? 'Not covered' : 'Closed', tone: 'gray' };
+    var steps = done.map(function (d, i) {
+      var st = d ? 'done' : i === cur ? (warn ? 'warn' : 'cur') : 'todo';
+      if (outcome && !d) st = 'skip';
+      return { state: st, note: notes[i] || '' };
+    });
+    return { steps: steps, cur: cur === -1 ? 7 : cur, outcome: outcome };
+  }
+
+  function stepsHtml(m) {
+    var head = m.outcome ? '<span class="stp-out stp-' + m.outcome.tone + '">' + esc(m.outcome.label) + '</span>'
+      : m.cur >= 7 ? '<span class="stp-out stp-ok">Completed</span>' : '';
+    return '<div class="stp">' + (head ? '<div class="stp-head">' + head + '</div>' : '') + '<div class="stp-flow">' +
+      m.steps.map(function (s, i) {
+        return '<div class="stp-st stp-' + s.state + '"><div class="stp-chev"><span class="stp-n">0' + (i + 1) + '</span>' +
+          '<svg class="stp-ico" viewBox="0 0 24 24">' + STEP_DEFS[i][1] + '</svg>' + (s.state === 'done' ? '<span class="stp-tick">&#10003;</span>' : '') + '</div>' +
+          '<div class="stp-lbl"><b>' + esc(STEP_DEFS[i][0]) + '</b><span>' + esc(s.note) + '</span></div></div>';
+      }).join('') + '</div></div>';
+  }
+  function stepsMini(m) {
+    var at = m.cur >= 7 ? 6 : m.cur, s = m.steps[at];
+    var label = m.outcome ? m.outcome.label : m.cur >= 7 ? 'Delivered' : STEP_DEFS[at][0];
+    return '<div class="stp-mini" title="' + esc(s ? s.note : '') + '"><span class="stp-bar">' + m.steps.map(function (x) {
+      return '<i class="' + ({ done: 'd', cur: 'c', warn: 'x' }[x.state] || '') + '"></i>'; }).join('') + '</span>' +
+      '<span>' + (m.outcome ? '' : 'Step ' + Math.min(m.cur + 1, 7) + '/7 · ') + esc(label) + '</span></div>';
+  }
+  // Popups: draw now, redraw once payments are loaded.
+  var stepsCtx = null;
+  function drawSteps() {
+    var el = document.getElementById('cc-steps'); if (!el || !stepsCtx) return;
+    el.innerHTML = stepsHtml(computeSteps(stepsCtx.c, stepsCtx.r, stepsCtx.pay));
+  }
+
   var openCaseId = null;
   function openCase(c) {
     openCaseId = c.id;
@@ -3473,7 +3644,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     tkBtn += escBtn;
     var acts = labelBtn + actionsHtml(c) + tkBtn + (trackBtns ? '<span style="margin-left:auto;display:flex;gap:8px">' + trackBtns + '</span>' : '');
     var box = document.getElementById('case-body-modal');
-    box.innerHTML = summary + caseRequestHtml(c) + customerOrderHtml(c) +
+    stepsCtx = { c: c, r: caseRequest(c), pay: null };
+    box.innerHTML = '<div id="cc-steps"></div>' + summary + caseRequestHtml(c) + customerOrderHtml(c) +
       legs.map(function (l, i) { return legHtml(l[0], l[1], i); }).join('') +
       refundInfoHtml(c) +
       '<div id="cm-confirm" style="margin-top:18px" hidden></div>' +
@@ -3498,6 +3670,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var eb = document.getElementById('cm-esc');
     if (eb) eb.addEventListener('click', function () { closeCase(); openEsc(c, ce); });
     modal.hidden = false;
+    drawSteps();
     var cr = caseRequest(c);
     if (casePaysShown(cr)) { payView = 'case'; payClaim = cr.claim_id; loadPayment(cr, false); } else { payView = null; payClaim = null; }
     fillRefundBank(c);   // refund details: load masked bank details, if submitted
@@ -3820,7 +3993,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var st = REQ_STATUS[r.status || 'new'] || [r.status, 'b-gray'];
       var cs = reqCaseStatus(r);
       return '<tr class="case-row' + ((r.status || 'new') === 'new' ? ' attn' : '') + '" data-id="' + esc(r.claim_id) + '">' +
-        '<td class="mono">' + esc(r.claim_id) + '<div class="sub">' + esc(fmtWhen(r.created_at)) + (r.prev_claim_id ? ' · was ' + esc(r.prev_claim_id) : '') + '</div></td>' +
+        '<td class="mono">' + esc(r.claim_id) + '<div class="sub">' + esc(fmtWhen(r.created_at)) + (r.prev_claim_id ? ' · was ' + esc(r.prev_claim_id) : '') + '</div>' + stepsMini(computeSteps(reqCase(r), r, null)) + '</td>' +
         '<td>' + esc(r.name) + '</td>' +
         '<td>' + esc(r.platform || '\u2014') + '</td>' +
         '<td class="mono">' + esc(r.order_id || '\u2014') + '</td>' +
@@ -3874,7 +4047,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     // Repair payment only once the order is verified and it's not under warranty
     var showPay = !nv && r.warranty_status !== 'Under warranty';
     var oidWarn = orderIdWarning(r.order_id, r.platform, r.phone);
-    box.innerHTML =
+    stepsCtx = { c: reqCase(r), r: r, pay: null };
+    box.innerHTML = '<div id="cc-steps"></div>' +
       // R1 — who: name · phone · city; email + address tucked away until pickup time
       // Line 1: Name · City   Line 2: Mobile · Email (2-column grid so labels line up)
       '<div class="rq-contact">' +
@@ -3913,6 +4087,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (roc) roc.addEventListener('click', function () { var c = reqCase(r); if (c) openCase(c); });
     modal.hidden = false;
     if (isNV(r)) wireVerify(r);
+    drawSteps();
     if (showPay) loadPayment(r, false);
     api('ccClaimFiles&claim_id=' + encodeURIComponent(r.claim_id)).then(function (res) {
       var el = document.getElementById('req-files'); if (!el || openReqId !== r.claim_id) return;
@@ -4229,6 +4404,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       renderPayStep(r, 'logistics', payState.logistics, res.checkError);
       renderPayStep(r, 'repair', payState.repair, res.checkError);
       renderFinal(r, payState.final, res.checkError);
+      if (stepsCtx && stepsCtx.r && stepsCtx.r.claim_id === r.claim_id) { stepsCtx.pay = payState; drawSteps(); }
       // Legacy: requests billed before two-step billing (single repair payment, already paid) stay unlocked
       setApproveLock((payState.logistics && payState.logistics.status === 'paid') ||
         (!payState.logistics && payState.repair && payState.repair.status === 'paid'));
