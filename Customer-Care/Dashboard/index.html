@@ -990,7 +990,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .pay-sum-n { font-weight: 700; }
 .pay-sum-row .pay-total { font-size: 14.5px; font-weight: 800; text-align: right; }
 .pay-sum-row > span:last-child { font-size: 12.5px; font-weight: 600; text-align: right; }
-#pay-details[hidden] { display: none; }
+#pay-details[hidden], #hist-all[hidden], #hist-short[hidden] { display: none; }
 /* Hub cards: yellow is the only accent (cards had their own colours) */
 .cc-card { --card-color: var(--hero-deep) !important; --card-color-dim: var(--hero-soft) !important; --card-color-border: var(--hero) !important; }
 .linkish:hover, .log-refresh#refresh-btn:hover, .log-refresh#req-refresh:hover, .sub-back:hover { color: var(--hero-deep); }
@@ -3544,7 +3544,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var notes = [];
     // Done notes
     var verEv = null;
-    if (r) { try { verEv = (JSON.parse(r.events_json || '[]') || []).filter(function (e) { return e.kind === 'verified'; }).pop(); } catch (e) {} }
+    // The Worker sends history as r.events (array); events_json only in older data
+    if (r) { try { verEv = (r.events || JSON.parse(r.events_json || '[]') || []).filter(function (e) { return e.kind === 'verified'; }).pop(); } catch (e) {} }
     notes[0] = !r ? 'Manual case' : verEv ? shortWhen(verEv.at) + ' · ' + (verEv.by || '') : shortWhen(r.created_at) + ' · auto';
     // Step 2 = when booked (+ amount paid); the courier goes with Step 3 so each note stays on one line.
     notes[1] = rvOk ? shortWhen(rv.created_at) + ' · booked' : '';
@@ -4035,11 +4036,19 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var f = function (k, v, cls) { return '<div' + (cls ? ' class="' + cls + '"' : '') + '><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
     var addr = [r.address, r.city, r.state, r.pincode].filter(Boolean).join(', ');
     var w = r.warranty_status + (r.warranty_until ? ' (until ' + r.warranty_until + ')' : '');
-    var hist = (r.events || []).map(function (e) {
+    // History (folded 03-Nov-2026): latest important entry + "Show all (n)".
+    // Routine system lines (email / WhatsApp sent) only appear when expanded.
+    var evHtml = function (e) {
       return '<div class="req-ev"><span class="muted">' + esc(fmtWhen(e.at)) + '</span> <b>' + esc(REQ_ACT_LABEL[e.kind] || e.kind) + '</b>' +
         (e.by ? ' · ' + esc(e.by) : '') + (e.emailed ? ' · <span class="bt-green">emailed</span>' : '') +
         (e.note ? '<div class="req-note">' + esc(e.note) + '</div>' : '') + '</div>';
-    }).join('');
+    };
+    var evs = r.events || [];
+    var routine = function (e) { return e.by === 'system' && e.kind === 'note' && /sent to customer|email sent|whatsapp/i.test(e.note || ''); };
+    var important = evs.filter(function (e) { return !routine(e); });
+    var latest = (important.length ? important : evs).slice(-1);
+    var hist = evs.length ? '<div id="hist-short">' + latest.map(evHtml).join('') + '</div>' +
+      '<div id="hist-all" hidden>' + evs.slice().reverse().map(evHtml).join('') + '</div>' : '';
     var acts = '';
     if (canActReq()) {
       var fin = r.status === 'closed' || r.status === 'not_covered';
@@ -4087,7 +4096,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       // R3 — verify (NV only)
       (nv && canActReq() && ['closed', 'not_covered'].indexOf(r.status) === -1 ? verifyBoxHtml(r) : '') +
       (showPay ? payBlockHtml() : '') +
-      (hist ? '<div class="cm-sec"><div class="cm-sec-title">History</div></div>' + hist : '') +
+      (hist ? '<div class="cm-sec"><div class="cm-sec-title">History</div>' +
+        (evs.length > 1 ? '<button type="button" class="linkish pay-toggle" id="hist-toggle">Show all (' + evs.length + ')</button>' : '') + '</div>' + hist : '') +
       '<div id="req-compose" style="margin-top:16px" hidden></div>' +
       (acts ? '<div class="cm-acts" id="req-acts">' + acts + '</div>' : '');
     box.querySelectorAll('#req-acts [data-k]').forEach(function (b) {
@@ -4097,6 +4107,12 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (roc) roc.addEventListener('click', function () { var c = reqCase(r); if (c) openCase(c); });
     modal.hidden = false;
     if (isNV(r)) wireVerify(r);
+    var ht = document.getElementById('hist-toggle');
+    if (ht) ht.addEventListener('click', function () {
+      var all = document.getElementById('hist-all'), short = document.getElementById('hist-short');
+      var open = all.hidden; all.hidden = !open; short.hidden = open;
+      ht.textContent = open ? 'Show less' : 'Show all (' + evs.length + ')';
+    });
     drawSteps();
     if (showPay) loadPayment(r, false);
     api('ccClaimFiles&claim_id=' + encodeURIComponent(r.claim_id)).then(function (res) {
