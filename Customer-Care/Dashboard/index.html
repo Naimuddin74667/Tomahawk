@@ -4853,22 +4853,18 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         '<label for="lq-del">Delivery charge (before GST)</label><input class="sb-input" id="lq-del" type="number" min="0" step="1" value="' + sug.delivery + '">' +
         '<label>Customer pays</label><div><span class="pay-total" id="lq-tot">—</span> <span class="pay-hint">incl. ' + PAY_GST + '% GST' +
           (q && q.suggested ? ' · prefilled = higher courier + \u20b9' + q.bufferRs + ' buffer' : '') + '</span></div>' +
-        '<label>Customer agreed on</label><div class="lq-consent">' +
-          '<label><input type="radio" name="lq-consent" value="call"> Call</label>' +
-          '<label><input type="radio" name="lq-consent" value="whatsapp"> WhatsApp</label>' +
-          '<span class="pay-hint">to pay pickup, delivery, service &amp; spare-part charges</span></div>' +
       '</div>' +
       '<div class="pay-hint" id="lq-from">Checking Zoho Books connection…</div>' +
-      '<div class="pay-row"><button class="case-act primary" id="lq-send" disabled>Create invoice &amp; link</button>' +
+      '<div class="pay-row"><button class="case-act primary" id="lq-send" disabled>Create advance &amp; link</button>' +
         '<button class="case-act" id="lq-cancel">Cancel</button></div>';
 
     var pick = document.getElementById('lq-pick'), del = document.getElementById('lq-del'), send = document.getElementById('lq-send'), ready = false;
-    function consent() { var c = el.querySelector('input[name="lq-consent"]:checked'); return c ? c.value : ''; }
+    // Consent choice removed (03-Nov-2026): the customer agrees on the website form (in History)
+    function consent() { return 'website'; }
     function upd() {
       var t = (parseFloat(pick.value) || 0) + (parseFloat(del.value) || 0);
       document.getElementById('lq-tot').textContent = t > 0 ? money(withGst(t)) : '—';
-      send.disabled = !ready || !(t > 0) || !consent();
-      send.title = !consent() ? 'Tick how the customer agreed first' : '';
+      send.disabled = !ready || !(t > 0);
     }
     pick.addEventListener('input', upd); del.addEventListener('input', upd);
     el.querySelectorAll('input[name="lq-consent"]').forEach(function (x) { x.addEventListener('change', upd); });
@@ -4886,7 +4882,6 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var lines = [{ label: 'Pickup charge', amount: parseFloat(pick.value) || 0 }, { label: 'Return delivery charge', amount: parseFloat(del.value) || 0 }]
         .filter(function (l) { return l.amount > 0; });
       if (!lines.length) { alert('Enter the pickup and delivery charges.'); return; }
-      if (!consent()) { alert('Tick how the customer agreed to the charges (Call or WhatsApp).'); return; }
       createPayment(r, send, { kind: 'logistics', lines: lines, consent: consent(),
         description: 'Pickup & return delivery' + (q && q.size ? ' · ' + Math.round(q.size.chargeable / 100) / 10 + ' kg · ' + q.pincode : '') }, 'pickup & delivery');
     });

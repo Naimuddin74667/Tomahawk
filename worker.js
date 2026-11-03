@@ -7478,9 +7478,9 @@ async function rpCreate(env, user, b) {
   if (!lines.length || !(amount > 0) || amount > 200000) return { ok: false, error: kind === 'logistics' ? 'Enter the pickup and delivery charges (before GST).' : 'Enter the repair cost (before GST).' };
   if (lines.some(l => !l.label)) return { ok: false, error: 'Every charge line needs a name.' };
   if (!desc) return { ok: false, error: 'Describe the repair work in a few words.' };
-  const consent = String(b.consent || '').toLowerCase();
-  if (kind === 'logistics' && !['call', 'whatsapp'].includes(consent))
-    return { ok: false, error: 'Confirm the customer agreed to the charges (on call or WhatsApp) before sending the link.' };
+  // Consent: 'call' | 'whatsapp' from older dashboards; now 'website' (03-Nov-2026) —
+  // the customer agrees to the charges on the website form (logged in History).
+  const consent = ['call', 'whatsapp', 'website'].includes(String(b.consent || '').toLowerCase()) ? String(b.consent).toLowerCase() : 'website';
   const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
   if (!row) return { ok: false, error: 'No such request' };
   if (row.warranty_status === 'Under warranty') return { ok: false, error: 'This request is under warranty — no payment needed.' };
@@ -7515,7 +7515,7 @@ async function rpCreate(env, user, b) {
   const total = Number(fresh.total || doc.total || 0);
 
   const by = (user && user.username) || 'unknown';
-  if (kind === 'logistics') {
+  if (kind === 'logistics' && consent !== 'website') {   // website consent is already in History from the form
     await srAddEvent(env.DB, claimId, { by, kind: 'consent',
       note: 'Customer agreed to pay pickup, delivery, service and spare-part charges (confirmed on ' + (consent === 'call' ? 'call' : 'WhatsApp') + ')' }, {});
   }
