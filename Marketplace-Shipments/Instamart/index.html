@@ -2143,7 +2143,9 @@ function cnSetQty(i, el) {
 function cnLines() {
   return _cn.items.map(function (it, i) {
     var q = _cn.qty[i]; if (!q) return null;
-    var taxable = r2(it.unit * q), rate = it.gst_rate / 100;
+    // Scale from the invoice line's exact taxable (not the rounded per-pc
+    // rate) so crediting the full qty reproduces the invoice/PO to the paisa.
+    var taxable = (it.taxable && it.qty) ? r2(it.taxable * q / it.qty) : r2(it.unit * q), rate = it.gst_rate / 100;
     var cgst = _cn.intra ? r2(taxable * rate / 2) : 0, igst = _cn.intra ? 0 : r2(taxable * rate);
     return { item_code: it.item_code, description: it.description, model: it.model, hsn: it.hsn, qty: q, unit: it.unit, gst_rate: it.gst_rate, taxable: taxable, cgst: cgst, sgst: cgst, igst: igst, total: r2(taxable + 2 * cgst + igst) };
   }).filter(Boolean);
