@@ -992,7 +992,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .pay-sum-n { font-weight: 700; }
 .pay-sum-row .pay-total { font-size: 14.5px; font-weight: 800; text-align: right; }
 .pay-sum-row > span:last-child { font-size: 12.5px; font-weight: 600; text-align: right; }
-#pay-details[hidden], #hist-all[hidden], #hist-short[hidden] { display: none; }
+#pay-details[hidden], #hist-all[hidden], #hist-short[hidden], .pay-step[hidden], #pay-sum[hidden] { display: none; }
 /* Hub cards: yellow is the only accent (cards had their own colours) */
 .cc-card { --card-color: var(--hero-deep) !important; --card-color-dim: var(--hero-soft) !important; --card-color-border: var(--hero) !important; }
 .linkish:hover, .log-refresh#refresh-btn:hover, .log-refresh#req-refresh:hover, .sub-back:hover { color: var(--hero-deep); }
@@ -4503,28 +4503,48 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     return '<div class="pay-sum-row"><span class="pay-sum-n">' + name + '</span>' +
       '<span class="pay-total">' + (p && p.status !== 'void' && p.status !== 'skipped' ? money(p.total) : '—') + '</span>' + state + '</div>';
   }
+  // Stage-aware Payments (03-Nov-2026): only what the current tracker step
+  // needs. Steps 1–2: just the Pickup & delivery card. Step 5: + Service &
+  // spare parts. Step 6+: + Final invoice (only while it needs action).
+  // Done items move to the summary lines. "Show details" shows everything.
   function renderPaySummary() {
-    var sum = document.getElementById('pay-sum'), det = document.getElementById('pay-details'), tg = document.getElementById('pay-toggle');
-    if (!sum || !det || !tg) return;
+    var sum = document.getElementById('pay-sum'), tg = document.getElementById('pay-toggle');
+    var cards = { logistics: document.getElementById('pay-logistics'), repair: document.getElementById('pay-repair'), final: document.getElementById('pay-final') };
+    if (!sum || !tg || !cards.logistics) return;
     var l = payState.logistics, rp = payState.repair, f = payState.final;
-    var old = [l, rp].some(function (x) { return x && x.status !== 'void' && x.status !== 'skipped' && x.doc_type !== 'retainer'; });
-    // Total settled = everything the customer has actually paid (advances A + B)
+    var has = function (x) { return !!x && x.status !== 'void'; };
+    var settled = function (x) { return !!x && (x.status === 'paid' || x.status === 'skipped'); };
+    var stage = stepsCtx ? computeSteps(stepsCtx.c, stepsCtx.r, payState).cur : 0;   // 0-based tracker step
+    var old = [l, rp].some(function (x) { return has(x) && x.status !== 'skipped' && x.doc_type !== 'retainer'; });
+    // Cards that need the team right now
+    var need = {
+      logistics: !settled(l),
+      repair: (stage >= 4 || has(rp)) && !settled(rp),
+      final: !old && settled(l) && (stage >= 5 || has(f)) && !(f && f.status === 'paid') && (settled(rp) || stage >= 5)
+    };
+    var all = payDetailsOpen === true;
+    var hidden = 0;
+    Object.keys(cards).forEach(function (k) {
+      var show = all || need[k];
+      cards[k].hidden = !show; if (!show) hidden++;
+    });
+    // Summary: one line per item that exists, + Total once something is paid
+    var rows = '';
+    if (has(l)) rows += paySumLine('Pickup &amp; delivery charges', l);
+    if (has(rp)) rows += paySumLine('Service &amp; spare parts', rp);
     var paidTot = [l, rp].reduce(function (s, x) { return s + (x && x.status === 'paid' ? Number(x.total || 0) : 0); }, 0);
-    var allIn = [l, rp].every(function (x) { return x && (x.status === 'paid' || x.status === 'skipped'); });
-    sum.innerHTML = paySumLine('Pickup &amp; delivery charges', l) + paySumLine('Service &amp; spare parts', rp) +
+    if (paidTot > 0 && (has(rp) || stage >= 4)) rows +=
       '<div class="pay-sum-row pay-sum-tot"><span class="pay-sum-n">Total settled</span><span class="pay-total">' + money(paidTot) + '</span>' +
       (f && f.status === 'paid' ? '<span class="bt-green">Invoice ' + esc(f.invoice_number || '') + ' ✓</span>'
-        : allIn ? '<span class="pay-hint">Final invoice not made yet</span>'
-        : '<span class="pay-hint">' + (paidTot > 0 ? 'More payment due' : 'Nothing paid yet') + '</span>') + '</div>';
-    // Nothing to do = every step paid / skipped / settled (or not reached yet)
-    var settled = function (x) { return x && (x.status === 'paid' || x.status === 'skipped'); };
-    var idle = settled(l) && settled(rp) && (old || (f && f.status === 'paid'));
-    var open = payDetailsOpen === null ? !idle : payDetailsOpen;
-    det.hidden = !open;
-    tg.hidden = false;
-    tg.textContent = open ? 'Hide details' : 'Show details';
-    tg.onclick = function () { payDetailsOpen = det.hidden; renderPaySummary(); };
+        : settled(l) && settled(rp) ? '<span class="pay-hint">Final invoice not made yet</span>' : '<span class="pay-hint">More payment due</span>') + '</div>';
+    // A card that is showing already tells its own state — no duplicate summary line
+    sum.innerHTML = rows;
+    sum.hidden = !rows || (!all && need.logistics && !has(rp));
+    tg.hidden = !hidden && !all;
+    tg.textContent = all ? 'Hide details' : 'Show details';
+    tg.onclick = function () { payDetailsOpen = !all; renderPaySummary(); };
   }
+
   function payOpen(r) {
     var m = document.getElementById('case-modal');
     return !!m && !m.hidden && payClaim === r.claim_id &&
@@ -4600,8 +4620,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       return;
     }
     if (!p || p.status === 'void') {
-      var hint = kind === 'repair' && !(payState.logistics && payState.logistics.status === 'paid')
-        ? ' Usually after Step 1 is paid and the product has reached us.' : '';
+      var hint = '';
       el.innerHTML = stepHead(kind) +
         '<div class="pay-row"><span class="pay-hint">' + (p ? esc(p.invoice_number || '') + ' was voided. ' : '') + 'No payment link yet.' + hint + '</span>' +
         (canActReq() && !fin && !payState.final ? '<button class="case-act primary" data-new="' + kind + '">' + PAY_STEP[kind].btn + '</button>' : '') +
