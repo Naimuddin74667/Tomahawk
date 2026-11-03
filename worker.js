@@ -7175,7 +7175,10 @@ async function srVerify(env, user, b) {
   await srAddEvent(env.DB, newId, { by: (user && user.username) || 'unknown', kind: 'verified', emailed,
     note: row.claim_id + ' → ' + newId + ' · order ' + orderId + ' · bought ' + orderDate + ' (' + source + ') · ' + warrantyStatus +
       ' · product ' + (confSku || ('Other: ' + confOther)) +
-      ' · WhatsApp: ' + (wa.sent ? 'sent' : (wa.skipped || wa.error || 'not sent')) }, {});
+      ' · WhatsApp: ' + (wa.sent ? 'sent' : (wa.skipped || wa.error || 'not sent')) },
+    // Verified = the customer's part is done → back to "To review" (was left on
+    // "Waiting for customer" after an invoice re-upload request, 03-Nov-2026)
+    row.status === 'waiting_customer' ? { status: 'new' } : {});
   return { ok: true, claim_id: newId, prev_claim_id: row.claim_id, warranty_status: warrantyStatus, emailed, whatsapp: wa.sent,
     whatsapp_note: wa.sent ? '' : (wa.skipped || wa.error || '') };
 }
