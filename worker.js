@@ -7815,13 +7815,17 @@ async function rpTestCleanup(env, dryRun, includeOld) {
     (d.payment_ids || []).forEach(x => delPay.add(x));
   }
   for (const d of list.filter(x => x.key === 'retainerinvoice')) (d.payment_ids || []).forEach(x => delPay.add(x));
+  // Deleting an advance's payment also takes it off the final invoice it was applied to.
   for (const pid of delPay) await step('delete payment ' + pid, () => zbCall(env, 'DELETE', '/customerpayments/' + pid));
+  // Final invoices first (they now have nothing applied), then the advances.
   for (const d of list) {
     await step('delete ' + d.number, async () => {
       try { await zbCall(env, 'DELETE', d.path + d.id); }
       catch (e) { await zbCall(env, 'POST', d.path + d.id + '/status/void'); await zbCall(env, 'DELETE', d.path + d.id); }
     });
   }
+  // Keep the D1 rows (they hold the Zoho IDs) if anything failed, so a re-run can finish the job.
+  if (log.some(x => x[0] === '✗')) return { ok: false, log, note: 'Some steps failed — D1 rows kept; fix and run again.' };
   await env.DB.prepare('DELETE FROM repair_payments WHERE claim_id IN (' + claims.map(() => '?').join(',') + ')').bind(...claims).run();
   await ensureInvoiceSeqTable(env.DB);
   await env.DB.prepare('UPDATE zb_invoice_seq SET last = 0 WHERE fy = ?').bind(rpFinYear()).run();
