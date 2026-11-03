@@ -300,6 +300,8 @@ body.cc-fit #req-panel .case-table.req-full { height: 100% !important; }
 .tools input { width: 260px; max-width: 100%; }
 .tools input:focus, .tools select:focus { border-color: var(--accent); }
 .log-refresh { font-size: 11px; color: var(--text2); cursor: pointer; white-space: nowrap; }
+.log-refresh.cc-upd { cursor: default; opacity: .7; margin-right: 10px; }
+.log-refresh.cc-upd:hover { color: var(--text2); }
 .log-refresh:hover { color: var(--accent); }
 .table-wrap { overflow-x: auto; }
 /* Fit-to-screen layout — same template as Blinkit / Flipkart / Amazon:
@@ -890,7 +892,7 @@ html .site-header [hidden] { display: none !important; }
       <div class="panel-title">New requests</div>
       <div class="tools">
         <input type="search" id="req-q" placeholder="Search request ID, customer, phone, order, product…">
-        <span class="log-refresh" id="req-refresh">&#8635; Refresh</span>
+        <span class="log-refresh cc-upd" title="Updates by itself while this tab is open"></span><span class="log-refresh" id="req-refresh">&#8635; Refresh</span>
       </div>
     </div>
     <div class="req-chips" id="req-chips"></div>
@@ -922,7 +924,7 @@ html .site-header [hidden] { display: none !important; }
         </select>
         <select id="f-courier"><option value="">All couriers</option></select>
         <select id="f-status"><option value="">All statuses</option></select>
-        <span class="log-refresh" id="refresh-btn">&#8635; Refresh</span>
+        <span class="log-refresh cc-upd" title="Updates by itself while this tab is open"></span><span class="log-refresh" id="refresh-btn">&#8635; Refresh</span>
       </div>
     </div>
     <div class="table-wrap">
@@ -2533,7 +2535,25 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     return null;
   }
 
+  // Out-of-warranty (Zoho advances): Send back only once Step 2 is paid or
+  // marked "Not repaired". Returns the payments, or null when no lock applies.
+  async function sendBackPayCheck(c) {
+    var claim = c.reverse && c.reverse.claim_id;
+    if (!claim) return { ok: true };
+    var res = await api('ccPaymentGet&claim_id=' + encodeURIComponent(claim) + '&refresh=1');
+    var ps = (res && res.ok && res.payments) || {};
+    var l = ps.logistics, rp = ps.repair;
+    if (!l || l.doc_type !== 'retainer' || l.status === 'void') return { ok: true };   // in warranty / older billing — no lock
+    if (rp && (rp.status === 'paid' || rp.status === 'skipped')) return { ok: true, claim: claim };
+    return { ok: false, msg: rp && rp.status === 'pending'
+      ? 'Step 2 (service & spare parts) is not paid yet. Send back unlocks once the customer pays.'
+      : 'Send the Step 2 repair quote first — or mark it "Not repaired" in Payments if there is no service charge.' };
+  }
+
   async function startSendBack(c, btn) {
+    var lock;
+    try { lock = await sendBackPayCheck(c); } catch (e) { lock = { ok: true }; }   // payment check down → don't block the warehouse
+    if (!lock.ok) { alert(lock.msg); return; }
     var o = sendBackOrder(c.reverse);
     if (!o.name || !o.phone || !o.add || !/^\d{6}$/.test(o.pin)) {
       alert('The pickup is missing the name, number, address or PIN — use Create Parcel Pickup to send it back.');
@@ -2721,6 +2741,19 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
           return;
         }
         throw new Error(msg);
+      }
+      // Out-of-warranty: the dispatch makes the final tax invoice (advances adjusted).
+      var claimForFinal = c.reverse && c.reverse.claim_id;
+      if (claimForFinal) {
+        try {
+          var chk = await api('ccPaymentGet&claim_id=' + encodeURIComponent(claimForFinal));
+          var lp = chk && chk.ok && chk.payments && chk.payments.logistics;
+          if (lp && lp.doc_type === 'retainer' && lp.status === 'paid' && !chk.payments.final) {
+            var fr = await post('ccPaymentFinal', { claim_id: claimForFinal });
+            if (!fr || !fr.ok) alert('Send back booked, but the final invoice was not made: ' + ((fr && fr.error) || 'failed') + '\nUse "Create final invoice" under Payments.');
+            else if (fr.applyError) alert(fr.applyError);
+          }
+        } catch (e) { alert('Send back booked, but the final invoice was not made: ' + e.message + '\nUse "Create final invoice" under Payments.'); }
       }
       // Reload and reopen this case — it now shows the green Booked badge
       // and the Download label button.
@@ -3275,8 +3308,15 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       f('Problem', r.issue_type) + f('Warranty', r.warranty_status + (r.warranty_until ? ' (till ' + r.warranty_until + ')' : '')) +
       f('Received', fmtWhen(r.created_at)) + f('Files', (r.file_count || 0) + ' file(s)') +
       (r.description ? '<div class="span-all"><div class="cm-k">Customer says</div><div>' + esc(r.description) + '</div></div>' : '') +
-      '</div>';
+      '</div>' +
+      // Out-of-warranty: the same Payments block as the request popup, so Step 2
+      // and the final invoice can be handled from the open case (03-Nov-2026).
+      (casePaysShown(r) ? '<div class="cm-sec"><div class="cm-sec-title">Payments</div></div>' +
+        '<div class="pay-box pay-step" id="pay-logistics"><span class="pay-hint">Loading…</span></div>' +
+        '<div class="pay-box pay-step" id="pay-repair"><span class="pay-hint">Loading…</span></div>' +
+        '<div class="pay-box pay-step" id="pay-final"><span class="pay-hint">Loading…</span></div>' : '');
   }
+  function casePaysShown(r) { return !!r && !/^NV-/.test(r.claim_id || '') && r.warranty_status !== 'Under warranty'; }
 
   var openCaseId = null;
   function openCase(c) {
@@ -3345,6 +3385,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var eb = document.getElementById('cm-esc');
     if (eb) eb.addEventListener('click', function () { closeCase(); openEsc(c, ce); });
     modal.hidden = false;
+    var cr = caseRequest(c);
+    if (casePaysShown(cr)) { payView = 'case'; payClaim = cr.claim_id; loadPayment(cr, false); } else { payView = null; payClaim = null; }
     fillRefundBank(c);   // refund details: load masked bank details, if submitted
     wireCustomerOrder(c);  // Order ID: edit + load order details
   }
@@ -3687,7 +3729,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   function openRequest(id) {
     var r = requests.filter(function (x) { return x.claim_id === id; })[0];
     if (!r) return;
-    openCaseId = null; openReqId = id;
+    openCaseId = null; openReqId = id; payView = 'req'; payClaim = id;
     var st = REQ_STATUS[r.status || 'new'] || [r.status, 'b-gray'];
     document.getElementById('case-title').textContent = r.claim_id;
     document.getElementById('case-sub').innerHTML = 'Received ' + esc(fmtWhen(r.created_at)) + ageText(r.created_at) + ' &nbsp; <span class="badge ' + st[1] + '">' + esc(st[0]) + '</span>';
@@ -4041,6 +4083,25 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     final:     { n: 3, title: 'Final invoice', when: 'one tax invoice when the case closes · advances adjusted' }
   };
   var payState = {};   // latest payments for the open request: { logistics, repair, final }
+  // The Payments block shows in the request popup AND in the case popup
+  // (03-Nov-2026). payView says which one is open, payClaim for which request.
+  var payView = null, payClaim = null;
+  function payOpen(r) {
+    var m = document.getElementById('case-modal');
+    return !!m && !m.hidden && payClaim === r.claim_id &&
+      (payView === 'req' ? openReqId === r.claim_id : openCaseId !== null);
+  }
+  // After a payment action: redraw whichever popup is open.
+  async function payAfterChange(r) {
+    if (payView === 'case' && openCaseId !== null) {
+      var id = openCaseId;
+      await load(false);
+      var fresh = cases.filter(function (x) { return x.id === id; })[0];
+      if (fresh) openCase(fresh); else closeCase();
+      return;
+    }
+    await loadRequests(); renderTiles(); renderRequests(); openRequest(r.claim_id);
+  }
 
   function loadPayment(r, refresh) {
     ['logistics', 'repair', 'final'].forEach(function (k) {
@@ -4048,7 +4109,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       if (el && refresh) el.innerHTML = stepHead(k) + '<span class="pay-hint">Checking Zoho…</span>';
     });
     api('ccPaymentGet&claim_id=' + encodeURIComponent(r.claim_id) + (refresh ? '&refresh=1' : '')).then(function (res) {
-      if (openReqId !== r.claim_id) return;
+      if (!payOpen(r)) return;
       if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
       // Older Worker (before two-step billing) returns only `payment` → treat it as the repair step
       payState = res.payments || { logistics: null, repair: res.payment || null };
@@ -4081,14 +4142,44 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   function renderPayStep(r, kind, p, checkError) {
     var el = document.getElementById('pay-' + kind); if (!el) return;
     var fin = r.status === 'closed' || r.status === 'not_covered';
+    if (kind === 'repair' && p && p.status === 'skipped') {   // "Not repaired" — no Step 2 link
+      el.innerHTML = stepHead(kind, '<span class="badge b-gray">Not repaired</span>') +
+        '<div class="pay-row"><span class="pay-hint">No service charge — Step 2 skipped' + (p.description && p.description !== 'Not repaired' ? ' · ' + esc(p.description) : '') +
+          ' · by ' + esc(p.created_by || '') + ', ' + esc(fmtWhen(p.created_at)) + '. Send back is unlocked.</span>' +
+        (canActReq() && !payState.final ? '<button class="case-act" data-undo>Undo</button>' : '') + '</div>';
+      var u = el.querySelector('[data-undo]');
+      if (u) u.addEventListener('click', async function () {
+        u.disabled = true;
+        try {
+          var res = await post('ccPaymentSkipRepair', { claim_id: r.claim_id, undo: true });
+          if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
+          await payAfterChange(r);
+        } catch (e) { alert("Couldn't undo: " + e.message); u.disabled = false; }
+      });
+      return;
+    }
     if (!p || p.status === 'void') {
       var hint = kind === 'repair' && !(payState.logistics && payState.logistics.status === 'paid')
         ? ' Usually after Step 1 is paid and the product has reached us.' : '';
       el.innerHTML = stepHead(kind) +
         '<div class="pay-row"><span class="pay-hint">' + (p ? esc(p.invoice_number || '') + ' was voided. ' : '') + 'No payment link yet.' + hint + '</span>' +
-        (canActReq() && !fin && !payState.final ? '<button class="case-act primary" data-new="' + kind + '">' + PAY_STEP[kind].btn + '</button>' : '') + '</div>';
+        (canActReq() && !fin && !payState.final ? '<button class="case-act primary" data-new="' + kind + '">' + PAY_STEP[kind].btn + '</button>' : '') +
+        // "Not repaired" once Step 1 is paid: no service charge / customer declined → skip Step 2
+        (kind === 'repair' && canActReq() && !fin && !payState.final && payState.logistics && payState.logistics.status === 'paid'
+          ? '<button class="case-act" data-skip>Not repaired</button>' : '') + '</div>';
       var b = el.querySelector('[data-new]');
       if (b) b.addEventListener('click', function () { kind === 'logistics' ? logisticsForm(r) : repairForm(r); });
+      var sk = el.querySelector('[data-skip]');
+      if (sk) sk.addEventListener('click', async function () {
+        var why = prompt('Not repaired — Step 2 payment will be skipped and Send back unlocked.\nReason (optional), e.g. "No fault found" or "Customer declined":', '');
+        if (why === null) return;
+        sk.disabled = true;
+        try {
+          var res = await post('ccPaymentSkipRepair', { claim_id: r.claim_id, reason: why });
+          if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
+          await payAfterChange(r);
+        } catch (e) { alert("Couldn't save: " + e.message); sk.disabled = false; }
+      });
       return;
     }
     var paid = p.status === 'paid', lines = [];
@@ -4126,7 +4217,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       try {
         var res = await post('ccPaymentVoid', { claim_id: r.claim_id, kind: kind });
         if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
-        await loadRequests(); renderTiles(); renderRequests(); openRequest(r.claim_id);
+        await payAfterChange(r);
       } catch (e) { alert("Couldn't cancel: " + e.message); v.disabled = false; v.textContent = 'Cancel link'; }
     });
   }
@@ -4135,7 +4226,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // when the case closes (after Step 2 is paid, or skipped if no repair cost).
   function renderFinal(r, p, checkError) {
     var el = document.getElementById('pay-final'); if (!el) return;
-    var adv = [payState.logistics, payState.repair].filter(function (x) { return x && x.status !== 'void'; });
+    var adv = [payState.logistics, payState.repair].filter(function (x) { return x && x.status !== 'void' && x.status !== 'skipped'; });
     if (adv.some(function (x) { return x.doc_type !== 'retainer'; })) {   // billed before 02-Nov-2026 — normal invoices already
       el.innerHTML = stepHead('final') + '<span class="pay-hint">Billed the old way (separate invoices) — no final invoice needed.</span>';
       return;
@@ -4160,7 +4251,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var ready = l && l.status === 'paid' && !(rp && rp.status === 'pending');
       var why = !(l && l.status === 'paid') ? 'Available once Step 1 is paid.'
         : (rp && rp.status === 'pending') ? 'Step 2 link is still unpaid — wait for it, or cancel it if there is no repair cost.'
-        : 'Make it when the case closes. It lists every charge and uses up the advances' + (rp && rp.status === 'paid' ? ' (' + esc(l.invoice_number) + ' + ' + esc(rp.invoice_number) + ').' : ' (' + esc(l.invoice_number) + ').');
+        : 'Made automatically when the send-back is booked (or click here). It lists every charge and uses up the advances' + (rp && rp.status === 'paid' ? ' (' + esc(l.invoice_number) + ' + ' + esc(rp.invoice_number) + ').' : ' (' + esc(l.invoice_number) + ').');
       el.innerHTML = stepHead('final') + '<div class="pay-row"><span class="pay-hint">' + why + '</span>' +
         (ready && canActReq() ? '<button class="case-act primary" data-final>Create final invoice</button>' : '') + '</div>';
     }
@@ -4198,7 +4289,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     try {
       var res = await post('ccPaymentCreate', Object.assign({ claim_id: r.claim_id }, payload));
       if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
-      await loadRequests(); renderTiles(); renderRequests(); openRequest(r.claim_id);
+      await payAfterChange(r);
     } catch (e) { alert("Couldn't create the advance: " + e.message); btn.disabled = false; btn.textContent = old; }
   }
 
@@ -4209,7 +4300,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var qs = 'ccLogisticsQuote&claim_id=' + encodeURIComponent(r.claim_id);
     if (ov) Object.keys(ov).forEach(function (k) { if (ov[k]) qs += '&' + k + '=' + encodeURIComponent(ov[k]); });
     api(qs).then(function (q) {
-      if (openReqId !== r.claim_id) return;
+      if (!payOpen(r)) return;
       if (!q || !q.ok) throw new Error((q && q.error) || 'failed');
       drawLogisticsForm(r, q);
     }).catch(function (e) {
@@ -4383,7 +4474,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   document.getElementById('req-pager-prev').addEventListener('click', function () { reqPage--; renderRequests(); });
   document.getElementById('req-pager-next').addEventListener('click', function () { reqPage++; renderRequests(); });
   document.getElementById('req-q').addEventListener('input', function () { reqPage = 1; renderRequests(); });
-  document.getElementById('req-refresh').addEventListener('click', function () { loadRequests().then(function () { renderTiles(); renderRequests(); }); });
+  document.getElementById('req-refresh').addEventListener('click', function () { load(false).then(ccMarkFresh); });
 
   async function load(force) {
     try {
@@ -4408,8 +4499,49 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   document.getElementById('q').addEventListener('input', function () { page = 1; renderTable(); });
   document.getElementById('f-kind').addEventListener('change', function () { page = 1; renderTable(); });
   ['f-courier', 'f-status'].forEach(function (id) { document.getElementById(id).addEventListener('change', function () { page = 1; renderTable(); }); });
-  document.getElementById('refresh-btn').addEventListener('click', function () { load(true); });
-  load(false);
+  document.getElementById('refresh-btn').addEventListener('click', function () { load(true).then(ccMarkFresh); });
+  load(false).then(ccMarkFresh);
+
+  // ── Auto-refresh (03-Nov-2026) ──
+  // While this tab is on screen: every 15 s ask the Worker "anything changed?"
+  // (ccVersion — one tiny DB read). Reload the lists only when the number moved,
+  // or once a minute anyway so "days open" / "x min ago" stay current.
+  // Never runs in a background tab, and never while a popup is open or someone
+  // is typing in a form — it catches up as soon as that's done.
+  var CC_CHECK_MS = 15000, CC_FULL_MS = 60000;
+  var ccVer = null, ccLastFull = Date.now(), ccBusy = false;
+  function ccMarkFresh() { ccLastFull = Date.now(); ccShowAge(); }
+  function ccShowAge() {
+    var s = Math.round((Date.now() - ccLastFull) / 1000);
+    var txt = 'Updated ' + (s < 5 ? 'just now' : s < 60 ? s + 's ago' : Math.floor(s / 60) + ' min ago');
+    document.querySelectorAll('.cc-upd').forEach(function (el) { el.textContent = txt; });
+  }
+  function ccUserBusy() {
+    if (['case-modal', 'esc-modal'].some(function (id) { var m = document.getElementById(id); return m && !m.hidden; })) return true;
+    if (document.querySelector('.rq-lb:not([hidden])')) return true;          // photo viewer
+    var a = document.activeElement;                                          // typing in a form (search boxes are fine)
+    return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && ['q', 'req-q'].indexOf(a.id) === -1);
+  }
+  async function ccTick() {
+    ccShowAge();
+    if (document.hidden || ccBusy || ccUserBusy()) return;
+    ccBusy = true;
+    try {
+      var res = await api('ccVersion');
+      var v = res && res.ok ? res.v : null;
+      var changed = v !== null && ccVer !== null && v !== ccVer;
+      if (v !== null) ccVer = v;
+      if (changed || Date.now() - ccLastFull >= CC_FULL_MS) { await load(false); ccMarkFresh(); }
+    } catch (e) { /* offline for a moment — try again next tick */ }
+    ccBusy = false;
+  }
+  setInterval(ccTick, CC_CHECK_MS);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) ccTick(); });   // back on the tab → check now
+  ['case-modal', 'esc-modal'].forEach(function (id) {   // popup just closed → catch up now
+    var m = document.getElementById(id); if (!m) return;
+    new MutationObserver(function () { if (m.hidden) setTimeout(ccTick, 300); }).observe(m, { attributes: true, attributeFilter: ['hidden'] });
+  });
+  setInterval(ccShowAge, 5000);
 })();
 </script>
 

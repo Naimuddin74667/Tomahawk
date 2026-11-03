@@ -719,7 +719,8 @@ const ACTION_TIERS = {
   ccInvoiceRequest: 'manager_up', // Customer Care: ask the customer to upload the invoice again (makes the link)
   ccClaimsList: 'viewer_read', ccClaimGet: 'viewer_read', ccClaimFiles: 'viewer_read', // Customer Care: New requests
   ccClaimAction: 'manager_up',
-  ccPaymentInfo: 'manager_up', ccPaymentCreate: 'manager_up', ccPaymentVoid: 'manager_up', ccPaymentGet: 'viewer_read', ccPaymentFinal: 'manager_up', // Repair payments (Zoho Books)
+  ccPaymentInfo: 'manager_up', ccPaymentCreate: 'manager_up', ccPaymentVoid: 'manager_up', ccPaymentGet: 'viewer_read', ccPaymentFinal: 'manager_up', ccPaymentSkipRepair: 'manager_up',
+  ccVersion: 'viewer_read', // Customer Care Dashboard: tiny "anything changed?" check (every 15 s) // Repair payments (Zoho Books)
   ccLogisticsQuote: 'manager_up', // Out-of-warranty pickup + delivery quote (Delhivery + Ekart rates, Amazon dimensions)
   // Shikhar's Care Desk server — checked by the X-Care-Key header (env.CARE_KEY) inside the handler
   externalPickupRecord: 'public', warrantyRegistrations: 'public',
@@ -968,7 +969,7 @@ const ACTION_TIERS = {
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
 const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest',
-  'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccLogisticsQuote']);
+  'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccLogisticsQuote', 'ccVersion']);
 
 function getAuthRequirement(act) {
   return ACTION_TIERS[act] || 'manager_up'; // fail-closed default for anything unmapped
@@ -1620,6 +1621,12 @@ export default {
         }
       }
 
+      // ── Customer Care Dashboard change counter (one row read) ──
+      if (request.method === 'GET' && action === 'ccVersion') {
+        try { return json({ ok: true, v: await ccVersion(env.DB) }); }
+        catch (e) { console.error('ccVersion:', e.message); return json({ ok: false, error: e.message }, 500); }
+      }
+
       // ── Repair payments (Zoho Books advances + final invoice, Razorpay link) ──
       if (request.method === 'GET' && action === 'ccPaymentInfo') {
         try { return json(await rpSetupInfo(env)); }
@@ -1641,6 +1648,12 @@ export default {
         if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
         try { const r = await rpVoid(env, user, String((body || {}).claim_id || '').trim(), (body || {}).kind); return json(r, r.ok ? 200 : 400); }
         catch (e) { console.error('ccPaymentVoid:', e.message); return json({ ok: false, error: e.message }, 502); }
+      }
+      if (request.method === 'POST' && act === 'ccPaymentSkipRepair') {
+        const user = authResult.user || (await resolveSession(request, env.DB));
+        if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
+        try { const r = await rpSkipRepair(env, user, String((body || {}).claim_id || '').trim(), String((body || {}).reason || ''), !!(body || {}).undo); return json(r, r.ok ? 200 : 400); }
+        catch (e) { console.error('ccPaymentSkipRepair:', e.message); return json({ ok: false, error: e.message }, 500); }
       }
       if (request.method === 'POST' && act === 'ccPaymentFinal') {
         const user = authResult.user || (await resolveSession(request, env.DB));
@@ -7421,7 +7434,8 @@ async function rpCreate(env, user, b) {
   const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
   if (!row) return { ok: false, error: 'No such request' };
   if (row.warranty_status === 'Under warranty') return { ok: false, error: 'This request is under warranty — no payment needed.' };
-  const open = await env.DB.prepare("SELECT id FROM repair_payments WHERE claim_id = ? AND COALESCE(kind, 'repair') = ? AND status IN ('pending','paid')").bind(claimId, kind).first();
+  const open = await env.DB.prepare("SELECT status FROM repair_payments WHERE claim_id = ? AND COALESCE(kind, 'repair') = ? AND status IN ('pending','paid','skipped')").bind(claimId, kind).first();
+  if (open && open.status === 'skipped') return { ok: false, error: 'Step 2 is marked "Not repaired". Undo that first.' };
   if (open) return { ok: false, error: 'A ' + (kind === 'logistics' ? 'pickup & delivery' : 'repair') + ' payment link already exists for this request. Refresh to see it.' };
   if (await rpLatest(env.DB, claimId, 'final')) return { ok: false, error: 'The final invoice is already made for this request — no new advances.' };
 
@@ -7497,7 +7511,7 @@ async function rpFinal(env, user, claimId) {
     if (p && p.status === 'pending') { await rpCheckOne(env, p); p = await rpLatest(env.DB, claimId, k); }
     if (p && p.status !== 'void') adv.push(p);
   }
-  if (adv.some(p => p.doc_type !== 'retainer')) return { ok: false, error: 'This request was billed the old way (normal invoices) — no final invoice needed.' };
+  if (adv.some(p => p.status !== 'skipped' && p.doc_type !== 'retainer')) return { ok: false, error: 'This request was billed the old way (normal invoices) — no final invoice needed.' };
   if (adv.some(p => p.status === 'pending')) return { ok: false, error: 'An advance link is still unpaid. Wait for the payment, or cancel that link first.' };
   const paid = adv.filter(p => p.status === 'paid');
   if (!paid.some(p => p.kind === 'logistics')) return { ok: false, error: 'Step 1 (pickup & delivery) must be paid before the final invoice.' };
@@ -7553,6 +7567,34 @@ async function rpFinal(env, user, claimId) {
   }
   return { ok: true, ...(applyError ? { applyError: 'Invoice made, but applying the advances failed: ' + applyError + '. Click "Apply advances" to retry, or apply them in Zoho Books.' } : {}),
     payment: await rpLatest(env.DB, claimId, 'final') };
+}
+
+// POST ccPaymentSkipRepair { claim_id, reason, undo } — "Not repaired" (03-Nov-2026):
+// after inspection there is no service charge, or the customer declined the
+// repair. Step 2 is skipped (no link), dispatch unlocks, and the final invoice
+// carries pickup & delivery only. Stored as a repair_payments row with
+// status 'skipped' (doc_type 'none'); Undo voids it while no final invoice exists.
+async function rpSkipRepair(env, user, claimId, reason, undo) {
+  await ensureRepairPaymentsTable(env.DB);
+  const row = await env.DB.prepare('SELECT claim_id FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
+  if (!row) return { ok: false, error: 'No such request' };
+  const by = (user && user.username) || 'unknown';
+  const cur = await rpLatest(env.DB, claimId, 'repair');
+  if (await rpLatest(env.DB, claimId, 'final')) return { ok: false, error: 'The final invoice is already made — change it in Zoho Books instead.' };
+  if (undo) {
+    if (!cur || cur.status !== 'skipped') return { ok: false, error: 'Step 2 is not marked "Not repaired".' };
+    await env.DB.prepare("UPDATE repair_payments SET status = 'void', checked_at = datetime('now') WHERE id = ?").bind(cur.id).run();
+    await srAddEvent(env.DB, claimId, { by, kind: 'note', note: '"Not repaired" undone — Step 2 open again' }, {});
+    return { ok: true };
+  }
+  if (cur && cur.status === 'pending') return { ok: false, error: 'A Step 2 payment link is open — cancel it first.' };
+  if (cur && cur.status === 'paid') return { ok: false, error: 'Step 2 is already paid.' };
+  if (cur && cur.status === 'skipped') return { ok: true };
+  const why = String(reason || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  await env.DB.prepare(`INSERT INTO repair_payments (claim_id, kind, doc_type, lines_json, amount, total, description, status, created_by)
+    VALUES (?, 'repair', 'none', '[]', 0, 0, ?, 'skipped', ?)`).bind(claimId, why || 'Not repaired', by).run();
+  await srAddEvent(env.DB, claimId, { by, kind: 'note', note: 'Not repaired — Step 2 payment skipped' + (why ? ' · ' + why : '') }, {});
+  return { ok: true };
 }
 
 // Matches each paid advance to an unused retainer payment of the same
@@ -7989,6 +8031,34 @@ async function srMilestoneEmails(env) {
       await env.DB.prepare("UPDATE warranty_claims SET status = 'closed' WHERE claim_id = ?").bind(row.claim_id).run();
   }
   return { checked: rows.length, sent };
+}
+
+// ══ CUSTOMER CARE CHANGE COUNTER (03-Nov-2026) ═══════════════════════
+// The Dashboard asks "anything changed?" every 15 s (ccVersion = one row read)
+// and only reloads its lists when the number moved. SQLite triggers bump the
+// counter on ANY insert/update/delete of requests, shipments or payments —
+// team actions, courier tracking, payment checks, even edits made directly
+// in D1 — so no code path can forget to bump it.
+let CC_TRIGGERS_READY = false;
+const CC_WATCHED_TABLES = ['warranty_claims', 'delhivery_orders', 'repair_payments'];
+async function ensureCcChangeCounter(DB) {
+  if (CC_TRIGGERS_READY) return;
+  await DB.prepare('CREATE TABLE IF NOT EXISTS cc_changes (k TEXT PRIMARY KEY, v INTEGER NOT NULL DEFAULT 0)').run();
+  await DB.prepare("INSERT OR IGNORE INTO cc_changes (k, v) VALUES ('cc', 0)").run();
+  for (const tbl of CC_WATCHED_TABLES) {
+    for (const ev of ['INSERT', 'UPDATE', 'DELETE']) {
+      try {
+        await DB.prepare(`CREATE TRIGGER IF NOT EXISTS cc_bump_${tbl}_${ev.toLowerCase()} AFTER ${ev} ON ${tbl}
+          BEGIN UPDATE cc_changes SET v = v + 1 WHERE k = 'cc'; END`).run();
+      } catch (e) { console.error('cc trigger ' + tbl + ' ' + ev + ':', e.message); /* table not created yet — retried next isolate */ }
+    }
+  }
+  CC_TRIGGERS_READY = true;
+}
+async function ccVersion(DB) {
+  await ensureCcChangeCounter(DB);
+  const row = await DB.prepare("SELECT v FROM cc_changes WHERE k = 'cc'").first();
+  return row ? Number(row.v) : 0;
 }
 
 async function ensureWarrantyClaimsTable(DB) {
