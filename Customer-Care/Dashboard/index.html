@@ -4111,8 +4111,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var routine = function (e) { return e.by === 'system' && e.kind === 'note' && /sent to customer|email sent|whatsapp/i.test(e.note || ''); };
     var important = evs.filter(function (e) { return !routine(e); });
     var latest = (important.length ? important : evs).slice(-1);
-    var hist = evs.length ? '<div id="hist-short">' + latest.map(evHtml).join('') + '</div>' +
-      '<div id="hist-all" hidden>' + evs.slice().reverse().map(evHtml).join('') + '</div>' : '';
+    // Shown only on click (03-Nov-2026)
+    var hist = evs.length ? '<div id="hist-all" hidden>' + evs.slice().reverse().map(evHtml).join('') + '</div>' : '';
     var acts = '';
     if (canActReq()) {
       var fin = r.status === 'closed' || r.status === 'not_covered';
@@ -4161,7 +4161,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       (nv && canActReq() && ['closed', 'not_covered'].indexOf(r.status) === -1 ? verifyBoxHtml(r) : '') +
       (showPay ? payBlockHtml() : '') +
       (hist ? '<div class="cm-sec"><div class="cm-sec-title">History</div>' +
-        (evs.length > 1 ? '<button type="button" class="linkish pay-toggle" id="hist-toggle">Show all (' + evs.length + ')</button>' : '') + '</div>' + hist : '') +
+        '<button type="button" class="linkish pay-toggle" id="hist-toggle">Show (' + evs.length + ')</button></div>' + hist : '') +
       '<div id="req-compose" style="margin-top:16px" hidden></div>' +
       (acts ? '<div class="cm-acts" id="req-acts">' + acts + '</div>' : '');
     box.querySelectorAll('#req-acts [data-k]').forEach(function (b) {
@@ -4173,9 +4173,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (isNV(r)) wireVerify(r);
     var ht = document.getElementById('hist-toggle');
     if (ht) ht.addEventListener('click', function () {
-      var all = document.getElementById('hist-all'), short = document.getElementById('hist-short');
-      var open = all.hidden; all.hidden = !open; short.hidden = open;
-      ht.textContent = open ? 'Show less' : 'Show all (' + evs.length + ')';
+      var all = document.getElementById('hist-all');
+      var open = all.hidden; all.hidden = !open;
+      ht.textContent = open ? 'Hide' : 'Show (' + evs.length + ')';
     });
     drawSteps();
     if (showPay) loadPayment(r, false);
