@@ -976,6 +976,9 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .stp-bar { display: inline-flex; gap: 2px; }
 .stp-bar i { width: 10px; height: 5px; border-radius: 1px; background: var(--todo); transform: skewX(-18deg); }
 .stp-bar i.d { background: var(--coal); } .stp-bar i.c { background: var(--hero); } .stp-bar i.x { background: var(--red); }
+/* Website-form notes under "Customer says" */
+.rq-notes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.rq-note { font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: var(--surface2); color: var(--text2); border: 1px solid var(--border); font-style: normal; }
 /* Payments summary (folded view) */
 .cm-sec:has(.pay-toggle) { display: flex; align-items: center; justify-content: space-between; }
 .pay-toggle { background: none; border: 0; font-size: 12px; font-weight: 700; cursor: pointer; padding: 0; }
@@ -3491,7 +3494,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     return head + '<div class="cm-summary">' +
       f('Problem', r.issue_type) + f('Warranty', r.warranty_status + (r.warranty_until ? ' (till ' + r.warranty_until + ')' : '')) +
       f('Received', fmtWhen(r.created_at)) + f('Files', (r.file_count || 0) + ' file(s)') +
-      (r.description ? '<div class="span-all"><div class="cm-k">Customer says</div><div>' + esc(r.description) + '</div></div>' : '') +
+      (r.description ? '<div class="span-all"><div class="cm-k">Customer says</div><div>' + descHtml(r.description, '') + '</div></div>' : '') +
       '</div>' +
       // Out-of-warranty: the same Payments block as the request popup, so Step 2
       // and the final invoice can be handled from the open case (03-Nov-2026).
@@ -4075,7 +4078,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         '<div class="rq-rows">' +
           '<span class="rq-lbl">Product :</span><span class="rq-prod">' + esc(r.product || '\u2014') + (r.order_skus ? ' <span class="muted">[' + esc(r.order_skus) + ']</span>' : '') + '</span>' +
           '<span class="rq-lbl">Problem :</span><span><span class="rq-chip">' + esc(r.issue_type || '\u2014') + '</span></span>' +
-          (r.description ? '<span class="rq-lbl">Customer says :</span><span class="rq-quote">\u201c' + esc(r.description) + '\u201d</span>' : '') +
+          (r.description ? '<span class="rq-lbl">Customer says :</span><span>' + descHtml(r.description, 'rq-quote') + '</span>' : '') +
         '</div>' +
       '</div><div class="rq-card"><div class="cm-k">Photos &amp; video <span id="req-files-n"></span></div>' +
         '<div class="req-files" id="req-files"><span class="muted">Loading…</span></div></div></div>' +
@@ -4210,6 +4213,38 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (platform === 'Amazon' && !/^\d{3}-\d{7}-\d{7}$/.test(o)) return 'Amazon order IDs look like 402-1234567-1234567';
     return '';
   }
+  // The website form adds its own notes to the customer's text in [brackets]
+  // (03-Nov-2026 seen: NOT FOUND ONLINE …, AGREED CHARGES …, MISSING PART …,
+  // form in Hindi). Split them out: "Customer says" shows only the customer's
+  // words; the notes become small chips; the purchase date pre-fills Verify.
+  function splitDesc(d) {
+    var out = { text: '', chips: [], date: '' };
+    var s = String(d || '');
+    out.text = s.replace(/\s*\[[^\]]*\]\s*/g, ' ').replace(/\s+/g, ' ').trim();
+    (s.match(/\[[^\]]*\]/g) || []).forEach(function (tag) {
+      var x = tag.slice(1, -1).trim();
+      if (/^NOT FOUND ONLINE/i.test(x)) {
+        out.chips.push('Not found online');
+        x.replace(/^NOT FOUND ONLINE\s*[-–:]?\s*/i, '').split(/\s*,\s*/).forEach(function (part) {
+          var m = /^purchase date\s+(\d{4}-\d{2}-\d{2})/i.exec(part);
+          if (m) { out.date = m[1]; out.chips.push('Purchase date ' + new Date(m[1] + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })); return; }
+          if (/^product type\s+/i.test(part)) { out.chips.push('Product type: ' + part.replace(/^product type\s+/i, '')); return; }
+          if (/invoice/i.test(part)) { out.chips.push('Invoice attached'); return; }
+          if (part) out.chips.push(part);
+        });
+      } else if (/^AGREED CHARGES/i.test(x)) out.chips.push('Agreed to charges');
+      else if (/^MISSING PART/i.test(x)) out.chips.push('Missing part: ' + x.replace(/^MISSING PART\s*[:\-]?\s*/i, ''));
+      else if (/hindi/i.test(x)) out.chips.push('Form in Hindi');
+      else if (x) out.chips.push(x);
+    });
+    return out;
+  }
+  function descHtml(d, quoteCls) {
+    var p = splitDesc(d);
+    return (p.text ? '<span class="' + quoteCls + '">\u201c' + esc(p.text) + '\u201d</span>' : '<span class="muted">(no message)</span>') +
+      (p.chips.length ? '<div class="rq-notes">' + p.chips.map(function (c) { return '<span class="rq-note">' + esc(c) + '</span>'; }).join('') + '</div>' : '');
+  }
+
   var VERIFY_PLATFORMS = ['Amazon', 'Flipkart', 'Website (Shopify)', 'Moglix', 'Other'];
   function verifyBoxHtml(r) {
     return '<div class="cm-sec"><div class="cm-sec-title">Verify order</div></div>' +
@@ -4218,8 +4253,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
           '<div class="rq-warn" id="vf-warn"></div></div>' +
         '<label for="vf-plat">Bought on</label><select class="sb-input" id="vf-plat">' +
           VERIFY_PLATFORMS.map(function (p) { return '<option' + (p === r.platform ? ' selected' : '') + '>' + esc(p) + '</option>'; }).join('') + '</select>' +
-        '<label for="vf-date">Purchase date</label><div><input class="sb-input" id="vf-date" type="date" style="max-width:180px"> ' +
-          '<span class="pay-hint">only if the order is not in our records (from the invoice)</span></div>' +
+        '<label for="vf-date">Purchase date</label><div><input class="sb-input" id="vf-date" type="date" style="max-width:180px" value="' + esc(splitDesc(r.description).date) + '"> ' +
+          '<span class="pay-hint">' + (splitDesc(r.description).date ? 'filled from the customer\u2019s form \u2014 check it against the invoice' : 'only if the order is not in our records (from the invoice)') + '</span></div>' +
         // Product the claim is for — always confirmed here (UC SKU, or typed as Other)
         '<label for="vf-prod">Product</label><div><input class="sb-input" id="vf-prod" list="vf-skus" autocomplete="off" placeholder="Search UC SKU — or type the product name" value="' +
           esc(r.confirmed_sku || r.confirmed_product || '') + '"><datalist id="vf-skus"></datalist>' +
