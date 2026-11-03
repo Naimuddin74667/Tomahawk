@@ -719,7 +719,6 @@ const ACTION_TIERS = {
   ccInvoiceRequest: 'manager_up', // Customer Care: ask the customer to upload the invoice again (makes the link)
   ccClaimsList: 'viewer_read', ccClaimGet: 'viewer_read', ccClaimFiles: 'viewer_read', // Customer Care: New requests
   ccClaimAction: 'manager_up',
-  ccTestZohoCleanup: 'admin_only',
   ccPaymentInfo: 'manager_up', ccPaymentCreate: 'manager_up', ccPaymentVoid: 'manager_up', ccPaymentGet: 'viewer_read', ccPaymentFinal: 'manager_up', ccPaymentSkipRepair: 'manager_up',
   ccVersion: 'viewer_read', // Customer Care Dashboard: tiny "anything changed?" check (every 15 s) // Repair payments (Zoho Books)
   ccLogisticsQuote: 'manager_up', // Out-of-warranty pickup + delivery quote (Delhivery + Ekart rates, Amazon dimensions)
@@ -1644,13 +1643,6 @@ export default {
           return json(await lqQuote(env, String(q('claim_id') || '').trim(),
             { weight: q('weight'), length: q('length'), width: q('width'), height: q('height') }));
         } catch (e) { console.error('ccLogisticsQuote:', e.message); return json({ ok: false, error: e.message }, 502); }
-      }
-      // One-off (03-Nov-2026): delete the test documents from Zoho Books. dry_run lists only.
-      if (request.method === 'POST' && act === 'ccTestZohoCleanup') {
-        const b2 = body || {};
-        if (!b2.dry_run && b2.confirm !== 'DELETE-TEST') return json({ ok: false, error: 'send confirm: "DELETE-TEST" (or dry_run: true)' }, 400);
-        try { return json(await rpTestCleanup(env, !!b2.dry_run, !!b2.include_old, !!b2.skip_payments)); }
-        catch (e) { console.error('ccTestZohoCleanup:', e.message); return json({ ok: false, error: e.message }, 502); }
       }
       if (request.method === 'POST' && act === 'ccPaymentVoid') {
         const user = authResult.user || (await resolveSession(request, env.DB));
@@ -7762,76 +7754,6 @@ async function rpCheckOne(env, p) {
     await srAddEvent(env.DB, p.claim_id, { by: 'system', kind: 'payment_void', note: (p.invoice_number || '') + ' voided in Zoho' }, {});
   }
   return next;
-}
-
-// ── Test cleanup (03-Nov-2026) ─────────────────────────────────────────────
-// Deletes every Zoho document made while testing the service-request flow:
-// SRV/ final invoices + the -A/-B advances of the test requests (and, with
-// include_old, the 22-Oct test invoice of WRN-261016-01). Order: unapply the
-// advances from the final invoices → delete their payments → delete the
-// invoices → delete advance payments → delete the advances. Then clears the
-// D1 payment rows and resets the SRV counter. Money refunds happen in Razorpay.
-const RP_TEST_CLAIMS = ['SRN-261102-01', 'SRN-261103-01'];
-async function rpTestCleanup(env, dryRun, includeOld, skipPayments) {
-  const claims = RP_TEST_CLAIMS.concat(includeOld ? ['WRN-261016-01'] : []);
-  const rows = (await env.DB.prepare('SELECT * FROM repair_payments WHERE claim_id IN (' + claims.map(() => '?').join(',') + ')')
-    .bind(...claims).all()).results || [];
-  const docs = new Map();   // key path+id → { path, key, id, number }
-  const add = (path, key, id, number) => { if (id) docs.set(path + id, { path, key, id: String(id), number: number || '' }); };
-  rows.forEach(r => { const d = rpDoc(r); add(d.path, d.key, r.zoho_invoice_id, r.invoice_number); });
-  // Docs whose D1 rows were deleted earlier: look them up by the test customers.
-  const customers = new Set();
-  for (const d of docs.values()) {
-    try { const j = await zbCall(env, 'GET', d.path + d.id); const c = (j[d.key] || {}).customer_id; if (c) customers.add(String(c)); } catch (e) {}
-  }
-  const isTest = n => /^SRV\//.test(n) || RP_TEST_CLAIMS.some(c => n.indexOf(c) === 0);
-  for (const c of customers) {
-    try { ((await zbCall(env, 'GET', '/invoices', null, { customer_id: c })).invoices || [])
-      .forEach(i => { if (isTest(i.invoice_number || '')) add('/invoices/', 'invoice', i.invoice_id, i.invoice_number); }); } catch (e) {}
-    try { ((await zbCall(env, 'GET', '/retainerinvoices', null, { customer_id: c })).retainerinvoices || [])
-      .forEach(i => { if (isTest(i.retainerinvoice_number || '')) add('/retainerinvoices/', 'retainerinvoice', i.retainerinvoice_id, i.retainerinvoice_number); }); } catch (e) {}
-  }
-  const list = [...docs.values()].sort((x, y) => (x.path === '/invoices/' ? 0 : 1) - (y.path === '/invoices/' ? 0 : 1));
-  // Read each doc: status, total, payments on it
-  for (const d of list) {
-    try {
-      const doc = (await zbCall(env, 'GET', d.path + d.id))[d.key] || {};
-      d.number = doc.invoice_number || doc.retainerinvoice_number || d.number;
-      d.status = doc.status; d.total = doc.total; d.customer = doc.customer_name;
-      d.applied = (doc.payments || []).filter(x => x.invoice_payment_id).map(x => ({ ipid: String(x.invoice_payment_id), pid: String(x.payment_id || ''), amount: x.amount }));
-      const pids = new Set(d.applied.map(x => x.pid).filter(Boolean));
-      const walk = o => { if (!o || typeof o !== 'object') return; if (Array.isArray(o)) return o.forEach(walk);
-        if (o.payment_id) pids.add(String(o.payment_id)); Object.values(o).forEach(walk); };
-      walk(doc.payments || []);
-      d.payment_ids = [...pids];
-    } catch (e) { d.error = e.message; }
-  }
-  if (dryRun) return { ok: true, dry_run: true, documents: list.map(d => ({ type: d.key, number: d.number, status: d.status, total: d.total,
-    customer: d.customer, payments: d.payment_ids, error: d.error })), d1_rows: rows.length };
-  const log = [], delPay = new Set();
-  const step = async (what, fn) => { try { await fn(); log.push('✓ ' + what); } catch (e) { log.push('✗ ' + what + ' — ' + e.message); } };
-  for (const d of list.filter(x => x.key === 'invoice')) {
-    for (const a of d.applied || []) await step('unapply ' + a.amount + ' from ' + d.number, () => zbCall(env, 'DELETE', '/invoices/' + d.id + '/payments/' + a.ipid));
-    (d.payment_ids || []).forEach(x => delPay.add(x));
-  }
-  for (const d of list.filter(x => x.key === 'retainerinvoice')) (d.payment_ids || []).forEach(x => delPay.add(x));
-  // Deleting an advance's payment also takes it off the final invoice it was applied to.
-  // skip_payments: the payments were deleted by hand in Zoho (our API token can't delete them).
-  if (!skipPayments) for (const pid of delPay) await step('delete payment ' + pid, () => zbCall(env, 'DELETE', '/customerpayments/' + pid));
-  // Final invoices first (they now have nothing applied), then the advances.
-  for (const d of list) {
-    await step('delete ' + d.number, async () => {
-      try { await zbCall(env, 'DELETE', d.path + d.id); }
-      catch (e) { await zbCall(env, 'POST', d.path + d.id + '/status/void'); await zbCall(env, 'DELETE', d.path + d.id); }
-    });
-  }
-  // Keep the D1 rows (they hold the Zoho IDs) if anything failed, so a re-run can finish the job.
-  if (log.some(x => x[0] === '✗')) return { ok: false, log, note: 'Some steps failed — D1 rows kept; fix and run again.' };
-  await env.DB.prepare('DELETE FROM repair_payments WHERE claim_id IN (' + claims.map(() => '?').join(',') + ')').bind(...claims).run();
-  await ensureInvoiceSeqTable(env.DB);
-  await env.DB.prepare('UPDATE zb_invoice_seq SET last = 0 WHERE fy = ?').bind(rpFinYear()).run();
-  log.push('✓ D1: payment rows cleared, SRV ' + rpFinYear() + ' counter reset to 0');
-  return { ok: !log.some(x => x[0] === '✗'), log };
 }
 
 // POST ccPaymentVoid { claim_id, kind } — cancel an unpaid advance link: voids
