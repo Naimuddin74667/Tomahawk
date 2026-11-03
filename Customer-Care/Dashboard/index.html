@@ -3543,8 +3543,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var verEv = null;
     if (r) { try { verEv = (JSON.parse(r.events_json || '[]') || []).filter(function (e) { return e.kind === 'verified'; }).pop(); } catch (e) {} }
     notes[0] = !r ? 'Manual case' : verEv ? shortWhen(verEv.at) + ' · ' + (verEv.by || '') : shortWhen(r.created_at) + ' · auto';
-    notes[1] = rvOk ? shortWhen(rv.created_at) + ' · ' + courierName(rv) + (paid('logistics') ? ' · ' + rupees(pay.logistics.total) + ' paid' : '') : '';
-    notes[2] = rvOk ? (rv.received_at || rs === 'Delivered' || PICKED_STAGES.indexOf(rs) === -1 ? 'Collected' : (PICKUP_LABEL[rs] || rs)) : '';
+    // Step 2 = when booked (+ amount paid); the courier goes with Step 3 so each note stays on one line.
+    notes[1] = rvOk ? shortWhen(rv.created_at) + ' · booked' : '';
+    notes[2] = rvOk ? courierName(rv) + ' · ' + (rv.received_at || rs === 'Delivered' || PICKED_STAGES.indexOf(rs) === -1 ? 'Collected' : (PICKUP_LABEL[rs] || rs)) : '';
     notes[3] = rvOk && rv.received_at ? shortWhen(rv.received_at) + (rv.received_by ? ' · ' + rv.received_by : '') : '';
     notes[4] = rvOk && rv.repair_done_at ? shortWhen(rv.repair_done_at) + (rv.repair_done_by ? ' · ' + rv.repair_done_by : '') +
       (pay && pay.repair && pay.repair.status === 'skipped' ? ' · Not repaired' : paid('repair') ? ' · ' + rupees(pay.repair.total) + ' paid' : '') : '';
@@ -3561,7 +3562,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     }
     if (cur === 2) {
       if (rs === 'RTO' || rs === 'Lost' || rs === 'Cancelled') { notes[2] = 'Pickup ' + rs + ' · re-book'; warn = true; }
-      else notes[2] = PICKUP_LABEL[rs] || rs || 'Booked';
+      else notes[2] = courierName(rv) + ' · ' + (PICKUP_LABEL[rs] || rs || 'Booked');
     }
     if (cur === 3) notes[3] = rs === 'Delivered' ? 'Delivered to us · confirm receipt' : (PICKUP_LABEL[rs] || rs || 'On the way');
     if (cur === 4) {
