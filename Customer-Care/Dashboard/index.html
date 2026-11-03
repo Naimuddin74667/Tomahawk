@@ -1015,6 +1015,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .pb-line { flex: 1; height: 2px; margin: 0 4px; background: var(--todo); border-radius: 2px; }
 .pb-dot.pb-done { background: var(--green); color: #fff; } .pb-line.pb-done { background: var(--green); }
 .pb-dot.pb-cur { background: var(--hero); color: #181818; } .pb-line.pb-cur { background: var(--hero); }
+.pb-line.pb-half { background: linear-gradient(90deg, var(--green) 50%, var(--todo) 50%); }
 #pay-bar[hidden] { display: none; }
 .pay-locked { opacity: .5; }
 .pay-locked button { pointer-events: none; }
@@ -2824,18 +2825,107 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     renderSendBack();
   }
 
+  // ── Book Pickup from a request (03-Nov-2026) — same confirm panel as Send back,
+  // in "pickup" mode: reverse pickup from the customer to our warehouse.
+  function pickupOrder(r) {
+    var sku = r.confirmed_sku || String(r.order_skus || '').split(',')[0].replace(/\s+x\d+$/, '').trim() || r.confirmed_product || r.product || '';
+    return {
+      name: r.name || '', phone: String(r.phone || '').replace(/\D/g, '').slice(-10),
+      add: r.address || '', pin: String(r.pincode || ''), city: r.city || '', state: r.state || '',
+      products_desc: 'Repair - ' + sku, job_type: 'Repair', remark: (r.claim_id + ' · ' + (r.issue_type || '')).slice(0, 300),
+      direction: 'reverse', payment_mode: 'Pickup', quantity: '1', total_amount: '', hsn_code: '8467',
+      weight: 2000, length: 30, width: 20, height: 15,          // replaced from the listing below when known
+      courier: 'Ekart', market_order_id: r.order_id || undefined, _sku: sku, _claim: r.claim_id
+    };
+  }
+  function applySkuInfo(o) {
+    var info = lookupSku(o._sku); if (!info) return;
+    // Same rules as Create Parcel Pickup: listing price × qty, weight = 50% of listing weight.
+    if (info.price) o.total_amount = String(+(info.price * (parseInt(o.quantity, 10) || 1)).toFixed(2));
+    if (info.weight) o.weight = Math.ceil(Number(info.weight) * 0.5);
+    if (info.length && info.width && info.height) { o.length = Math.ceil(info.length); o.width = Math.ceil(info.width); o.height = Math.ceil(info.height); }
+  }
+  async function startPickup(r, btn) {
+    var o = pickupOrder(r);
+    if (!o.name || !o.phone || !o.add || !/^\d{6}$/.test(o.pin)) { alert('The request is missing the name, number, address or PIN — fix it first.'); return; }
+    btn.disabled = true; btn.textContent = 'Checking…';
+    sb = { mode: 'pickup', r: r, o: o, btn: btn, sv: {}, refused: {}, note: '' };
+    await loadSkuSources();
+    applySkuInfo(o);
+    if (!o.total_amount) o.total_amount = '1000';
+    await checkCouriers();
+    if (!sb.sv[o.courier] || !sb.sv[o.courier].ok) {
+      var alt = COURIERS.filter(function (x) { return x !== o.courier && sb.sv[x] && sb.sv[x].ok; })[0];
+      if (alt) { sb.note = o.courier + " can't pick up from " + o.pin + ' — using ' + alt + '.'; o.courier = alt; }
+    }
+    btn.style.display = 'none';
+    renderSendBack();
+    var panel = document.getElementById('cm-confirm'); if (panel) panel.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  async function bookPickup(yesBtn) {
+    var o = sb.o, r = sb.r;
+    if (!o._sku) { alert('Enter the product being picked up.'); return; }
+    yesBtn.disabled = true; yesBtn.textContent = 'Booking…';
+    try {
+      // RWRN-… / RSRN-… from the request ID; older formats fall back to the RPR serial
+      var idRes = await api('delhiveryNextOrderId&claim=' + encodeURIComponent(o._claim) + '&dir=reverse');
+      if (!(idRes && idRes.ok && idRes.orderId)) idRes = await api('delhiveryNextOrderId&prefix=RPR');
+      if (!idRes || !idRes.ok || !idRes.orderId) throw new Error("Couldn't get the next Order ID — try again.");
+      var order = Object.assign({}, o, { order: idRes.orderId });
+      delete order._sku; delete order._claim;
+      var cs = sb.sv[order.courier] || {};
+      if (cs.city) order.city = cs.city;
+      if (cs.state) order.state = cs.state;
+      var res, attempts = 0;
+      while (true) {                 // same duplicate-ID retry as Create Parcel Pickup
+        res = await post(order.courier === 'Ekart' ? 'ekartCreateOrder' : 'delhiveryCreateOrder', { order: order });
+        if (res.ok) break;
+        var pkg = res.response && res.response.packages && res.response.packages[0];
+        var remarks = [res.error].concat(pkg && pkg.remarks ? [].concat(pkg.remarks) : []);
+        if (!remarks.some(function (x) { return /duplicate|already exists/i.test(String(x || '')); }) || ++attempts >= 5) break;
+        var cm = /^([RF][A-Z]{2,4}-\d{6}-\d+)(?:-(\d+))?$/.exec(order.order), m = /^([A-Z]+-\d{6})(\d+)$/.exec(order.order);
+        if (cm) order.order = cm[1] + '-' + (parseInt(cm[2] || '1', 10) + 1);
+        else if (m) order.order = m[1] + String(parseInt(m[2], 10) + 1).padStart(2, '0');
+        else break;
+      }
+      if (!res.ok) {
+        var p = res.response && res.response.packages && res.response.packages[0];
+        var msg = res.error || (p && [].concat(p.remarks || []).join(', ')) || 'booking failed';
+        if (/serviceable|not service|pincode/i.test(msg)) {
+          sb.refused[order.courier] = true; sb.sv[order.courier] = { ok: false, text: 'Refused this PIN' };
+          var alt = COURIERS.filter(function (x) { return sb.sv[x] && sb.sv[x].ok; })[0];
+          sb.note = order.courier + ' refused PIN ' + o.pin + (alt ? ' — switched to ' + alt + '.' : '.');
+          if (alt) o.courier = alt;
+          renderSendBack(); return;
+        }
+        throw new Error(msg);
+      }
+      // Booked → mark the request approved with this pickup as its case
+      var a = await post('ccClaimAction', { claim_id: r.claim_id, kind: 'approve', case_id: order.order });
+      if (!a || !a.ok) alert('Pickup ' + order.order + ' booked, but the request was not marked approved: ' + ((a && a.error) || 'error'));
+      sb = null;
+      await load(false);
+      var c = cases.filter(function (x) { return x.reverse && x.reverse.order_id === order.order; })[0];
+      if (c) openCase(c); else openRequest(r.claim_id);
+    } catch (e) {
+      alert("Couldn't book the pickup: " + e.message);
+      yesBtn.disabled = false; yesBtn.textContent = 'Book pickup';
+    }
+  }
+
   // Serviceability + estimate for both couriers (in parallel).
   async function checkCouriers() {
-    var o = sb.o;
-    var qs = new URLSearchParams({ pin: o.pin, weight: o.weight || '500', payment_mode: 'Prepaid',
+    var o = sb.o, rev = o.direction === 'reverse';
+    var qs = new URLSearchParams({ pin: o.pin, weight: o.weight || '500', payment_mode: rev ? 'Pickup' : 'Prepaid',
       length: o.length || '5', width: o.width || '5', height: o.height || '5',
-      invoice_amount: o.total_amount || '0', direction: 'forward' }).toString();
+      invoice_amount: o.total_amount || '0', direction: rev ? 'reverse' : 'forward' }).toString();
     await Promise.all(COURIERS.map(async function (name) {
       var st = { ok: false, text: 'Checking…', cost: '' };
       try {
         var pr = await api(ckey(name) + 'CheckPincode&pin=' + o.pin);
         if (!pr || !pr.ok) st.text = 'Couldn\u2019t check';
-        else if (!pr.serviceable || pr.prepaid === false) st.text = 'Not serviceable';
+        else if (!pr.serviceable || (rev ? pr.pickupAvailable === false : pr.prepaid === false)) st.text = rev ? 'No pickup here' : 'Not serviceable';
         else {
           st.ok = true; st.text = 'Serviceable';
           // Each courier wants city/state in its own format (Delhivery
@@ -2867,17 +2957,18 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       return '<button type="button" class="sb-chip' + (o.courier === name ? ' on' : '') + (st.ok ? '' : ' off') + '" data-courier="' + name + '"' + (st.ok ? '' : ' disabled') + '>' +
         '<b>' + name + '</b><span>' + (st.ok ? '&#10003; ' : '&#10007; ') + esc(st.text) + (st.cost ? ' · ' + esc(st.cost) : '') + '</span></button>';
     }).join('');
+    var pk = sb.mode === 'pickup';
     panel.innerHTML =
-      '<div class="cm-sec-title" style="margin-bottom:8px">Confirm send back</div>' +
+      '<div class="cm-sec-title" style="margin-bottom:8px">' + (pk ? 'Confirm pickup' : 'Confirm send back') + '</div>' +
       '<div class="cm-summary">' +
-        '<div><div class="cm-k">Deliver to</div><div>' + esc(o.name) + '</div></div>' +
+        '<div><div class="cm-k">' + (pk ? 'Pick up from' : 'Deliver to') + '</div><div>' + esc(o.name) + '</div></div>' +
         '<div><div class="cm-k">Contact Number</div><div>' + esc(o.phone) + '</div></div>' +
-        '<div><div class="cm-k">Payment</div><div>Prepaid</div></div>' +
+        '<div><div class="cm-k">' + (pk ? 'Deliver to' : 'Payment') + '</div><div>' + (pk ? 'Our Bhiwandi warehouse' : 'Prepaid') + '</div></div>' +
         '<div class="span2"><div class="cm-k">Address (edit if the customer gave a corrected one)</div>' +
           '<input class="sb-input" id="sb-address" value="' + esc(o.add) + '" autocomplete="off">' +
           '<div class="cm-muted">' + esc(cityState()) + '</div></div>' +
         '<div><div class="cm-k">PIN</div><input class="sb-input" id="sb-pin" inputmode="numeric" maxlength="6" value="' + esc(o.pin) + '"></div>' +
-        '<div class="span2"><div class="cm-k">Product (change if sending a different item)</div>' +
+        '<div class="span2"><div class="cm-k">' + (pk ? 'Product being picked up' : 'Product (change if sending a different item)') + '</div>' +
           '<input class="sb-input" id="sb-product" list="sb-skus" value="' + esc(o._sku) + '" autocomplete="off">' +
           '<datalist id="sb-skus">' + (skuList || []).map(function (x) { return '<option value="' + esc(x) + '">'; }).join('') + '</datalist></div>' +
         '<div><div class="cm-k">Value (₹)</div><input class="sb-input" id="sb-value" type="number" min="1" value="' + esc(o.total_amount) + '"></div>' +
@@ -2885,10 +2976,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       '<div class="cm-k" style="margin:12px 0 6px">Courier partner &amp; serviceability for ' + esc(o.pin) + '</div>' +
       '<div class="sb-chips">' + chips + '</div>' +
       '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
-        '<button class="case-act primary" id="sb-yes"' + (anyOk ? '' : ' disabled') + '>Book send back</button>' +
+        '<button class="case-act primary" id="sb-yes"' + (anyOk ? '' : ' disabled') + '>' + (pk ? 'Book pickup' : 'Book send back') + '</button>' +
         '<button class="case-act" id="sb-no">Cancel</button>' +
         '<span class="cm-muted" style="margin-left:auto">' + (sb.note ? '<b style="color:var(--accent)">' + esc(sb.note) + '</b> ' : '') +
-          (anyOk ? 'Nothing is booked until you confirm.' : 'Neither courier delivers here — send it another way.') + '</span>' +
+          (anyOk ? 'Nothing is booked until you confirm.' : pk ? 'Neither courier picks up here — use Self-ship in Create Parcel Pickup.' : 'Neither courier delivers here — send it another way.') + '</span>' +
       '</div>';
     panel.hidden = false;
 
@@ -2931,10 +3022,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     });
     document.getElementById('sb-no').addEventListener('click', function () {
       panel.hidden = true; panel.innerHTML = '';
-      sb.btn.style.display = ''; sb.btn.disabled = false; sb.btn.innerHTML = 'Send back &#8594;';
+      sb.btn.style.display = ''; sb.btn.disabled = false; sb.btn.innerHTML = sb.mode === 'pickup' ? 'Book Pickup' : 'Send back &#8594;';
       sb = null;
     });
-    document.getElementById('sb-yes').addEventListener('click', function () { readInputs(); bookSendBack(this); });
+    document.getElementById('sb-yes').addEventListener('click', function () { readInputs(); sb.mode === 'pickup' ? bookPickup(this) : bookSendBack(this); });
   }
 
   function readInputs() {
@@ -4141,8 +4232,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       // Out of warranty: pickup can be booked only once pickup + delivery is paid
       // (unlocked by renderPayments once Step 1 shows Paid).
       var oow = r.warranty_status !== 'Under warranty';
-      acts = (!r.case_id && !fin && !isNV(r) ? '<a class="case-act primary' + (oow ? ' locked' : '') + '" id="req-approve" target="_blank" href="../Create-Pickup/?claim=' + encodeURIComponent(r.claim_id) + '">' +
-                (oow ? '&#128274; Book pickup after payment' : '&#10003; Approve &amp; book pickup') + '</a>' : '') +
+      // Book Pickup (03-Nov-2026): books the reverse pickup right here (confirm panel),
+      // no more jumping to Create Parcel Pickup.
+      acts = (!r.case_id && !fin && !isNV(r) ? '<button type="button" class="case-act primary' + (oow ? ' locked' : '') + '" id="req-approve">' +
+                (oow ? '&#128274; Book pickup after payment' : 'Book Pickup') + '</button>' : '') +
         // Customer emails are off for the first go-live, so only status actions
         // are offered (Ask for info / Tip / Repair quote come back with the emails).
         (!fin ? '<button class="case-act" data-k="resolve">Resolved</button>' +
@@ -4185,10 +4278,13 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       (hist ? '<div class="cm-sec"><div class="cm-sec-title">History</div>' +
         '<button type="button" class="linkish pay-toggle" id="hist-toggle">Show (' + evs.length + ')</button></div>' + hist : '') +
       '<div id="req-compose" style="margin-top:16px" hidden></div>' +
+      '<div id="cm-confirm" style="margin-top:18px" hidden></div>' +
       (acts ? '<div class="cm-acts" id="req-acts">' + acts + '</div>' : '');
     box.querySelectorAll('#req-acts [data-k]').forEach(function (b) {
       b.addEventListener('click', function () { b.dataset.k === 'reopen' ? sendReq(r, 'reopen', '', b) : compose(r, b.dataset.k); });
     });
+    var rap = document.getElementById('req-approve');
+    if (rap) rap.addEventListener('click', function () { if (!rap.classList.contains('locked')) startPickup(r, rap); });
     var roc = document.getElementById('rq-open-case');
     if (roc) roc.addEventListener('click', function () { var c = reqCase(r); if (c) openCase(c); });
     modal.hidden = false;
@@ -4594,8 +4690,12 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var bar = document.getElementById('pay-bar');
     if (bar) {
       // Slim bar: ①───②───✓ (03-Nov-2026); hover shows the step + its state
+      // Line into step n: full green when n is done, half green when only the step before is done
+      var prevSt = '';
       var seg = function (n, name, st, txt) {
-        return (n > 1 ? '<span class="pb-line pb-' + st + '"></span>' : '') +
+        var ln = st === 'done' ? 'done' : prevSt === 'done' ? 'half' : 'todo';
+        prevSt = st;
+        return (n > 1 ? '<span class="pb-line pb-' + ln + '"></span>' : '') +
           '<span class="pb-dot pb-' + st + '" title="' + name + ' · ' + txt + '">' + (n === 3 ? '&#10003;' : n) + '</span>'; };
       var s1 = settled(l) ? ['done', 'Paid'] : has(l) ? ['cur', 'Payment pending'] : ['cur', 'Send link'];
       var s2 = rp && rp.status === 'skipped' ? ['done', 'Not repaired'] : settled(rp) ? ['done', 'Paid'] : has(rp) ? ['cur', 'Payment pending'] : lock.repair ? ['todo', 'Locked'] : ['cur', 'Send quote'];
@@ -4665,7 +4765,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   function setApproveLock(paid) {
     var a = document.getElementById('req-approve'); if (!a) return;
     a.classList.toggle('locked', !paid);
-    a.innerHTML = paid ? '&#10003; Approve &amp; book pickup' : '&#128274; Book pickup after payment';
+    a.innerHTML = paid ? 'Book Pickup' : '&#128274; Book pickup after payment';
     a.title = paid ? '' : 'Pickup & delivery must be paid first (Step 1)';
   }
 
