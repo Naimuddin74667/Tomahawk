@@ -986,6 +986,28 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .stp-bar { display: inline-flex; gap: 2px; }
 .stp-bar i { width: 10px; height: 5px; border-radius: 1px; background: var(--todo); transform: skewX(-18deg); }
 .stp-bar i.d { background: var(--coal); } .stp-bar i.c { background: var(--hero); } .stp-bar i.x { background: var(--red); }
+/* Pickup & delivery quote form (03-Nov-2026 layout) */
+.lq-pkg { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 13px; margin: 4px 0 8px; }
+.lq-k { font-size: 12px; font-weight: 700; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; }
+.lq-chip { font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); }
+.lq-pkg .linkish { margin-left: auto; font-size: 12px; font-weight: 700; background: none; border: 0; cursor: pointer; padding: 0; }
+.lq-size { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 10px; }
+.lq-size .sb-input { width: 72px; }
+.lq-size[hidden] { display: none; }
+.lq-rates { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 12px; }
+.lq-rate { display: grid; grid-template-columns: 1fr 1.1fr 1.1fr 0.9fr 46px; gap: 10px; align-items: center; padding: 7px 12px; font-size: 12.5px; color: var(--text2); }
+.lq-rate + .lq-rate { border-top: 1px solid var(--border); }
+.lq-rate b { color: var(--text); font-weight: 700; } .lq-rate .lq-rt { text-align: right; }
+.lq-rate.best { background: var(--hero-soft); }
+.lq-used { font-size: 11px; font-weight: 800; color: var(--hero-deep); text-transform: uppercase; letter-spacing: .04em; text-align: right; }
+.lq-charges { display: grid; grid-template-columns: 1fr 1fr 1.2fr; gap: 12px; align-items: end; }
+.lq-f { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--text2); }
+.lq-pay { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; padding-bottom: 2px; }
+.lq-pay span { font-size: 12px; font-weight: 600; color: var(--text2); }
+.lq-pay .pay-total { font-size: 24px; font-weight: 800; line-height: 1.1; }
+.lq-pay small { font-size: 11.5px; color: var(--text2); }
+.lq-foot { margin: 8px 0 4px; }
+@media (max-width: 700px) { .lq-charges { grid-template-columns: 1fr 1fr; } .lq-pay { grid-column: 1 / -1; align-items: flex-start; } }
 /* Payments: 3-step bar + locked cards */
 .pay-bar { display: flex; align-items: center; max-width: 260px; margin: 0 0 10px 2px; }
 .pb-dot { width: 22px; height: 22px; flex: 0 0 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
@@ -4827,34 +4849,34 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var sz = q && q.size, sug = (q && q.suggested) || { pickup: '', delivery: '' };
     var srcTxt = !sz ? '' : sz.source === 'amazon' ? 'Amazon ' + esc(sz.asin || '') : sz.source === 'team' ? 'entered by team' : 'default size — Amazon has no size for this product';
     var kg = function (g) { return (Math.round(g / 100) / 10) + ' kg'; };
+    // Layout (03-Nov-2026): 1 package line (+ Edit size row) · 2 compact courier rates ·
+    // 3 charges side by side with "Customer pays" big on the right.
+    var chip = !sz ? '' : sz.suspect ? '<span class="lq-chip">&#9888; Amazon size looks too small</span>'
+      : sz.source === 'default' ? '<span class="lq-chip">&#9888; Default size — check the box</span>' : '';
     el.innerHTML = stepHead('logistics') +
-      (sz ? '<div class="pay-hint">Package <b>' + Math.round(sz.length) + '×' + Math.round(sz.width) + '×' + Math.round(sz.height) + ' cm · ' + kg(sz.weight) + '</b> (' + srcTxt + ')' +
-          ' → chargeable <b>' + kg(sz.chargeable) + '</b> to/from ' + esc(q.pincode) + ' ' + esc(q.city || '') +
-          ' <button type="button" class="linkish" id="lq-edit">Edit size</button></div>' +
-        (sz.suspect ? '<div class="rq-warn">&#9888; Amazon size looks too small for this tool — check and edit the size.</div>' : '') +
-        (sz.source === 'default' ? '<div class="rq-warn">&#9888; Using a default size — edit it to the real box size for an accurate quote.</div>' : '') +
-        '<div class="pay-form" id="lq-size" hidden>' +
-          '<label>Box size (cm)</label><div class="lq-dims">' +
-            '<input class="sb-input" id="lq-l" type="number" min="1" value="' + Math.round(sz.length) + '"> × ' +
-            '<input class="sb-input" id="lq-w" type="number" min="1" value="' + Math.round(sz.width) + '"> × ' +
-            '<input class="sb-input" id="lq-h" type="number" min="1" value="' + Math.round(sz.height) + '"></div>' +
-          '<label>Weight (kg)</label><div class="lq-dims"><input class="sb-input" id="lq-kg" type="number" min="0.1" step="0.1" value="' + (Math.round(sz.weight / 100) / 10) + '"> ' +
-            '<button type="button" class="case-act" id="lq-recalc">Recalculate</button></div>' +
-        '</div>' +
-        '<table class="lq-table"><thead><tr><th>Courier</th><th>Pickup</th><th>Delivery</th><th>Total</th></tr></thead><tbody>' +
-          q.couriers.map(function (c) {
+      (sz ? '<div class="lq-pkg"><span class="lq-k">Package</span><b>' + Math.round(sz.length) + '×' + Math.round(sz.width) + '×' + Math.round(sz.height) + ' cm · ' + kg(sz.weight) + '</b>' +
+          '<span class="pay-hint">→ chargeable <b>' + kg(sz.chargeable) + '</b> · ' + esc(q.city || '') + ' ' + esc(q.pincode) + '</span>' + chip +
+          '<button type="button" class="linkish" id="lq-edit">Edit size</button></div>' +
+        '<div class="lq-size" id="lq-size" hidden>' +
+          '<input class="sb-input" id="lq-l" type="number" min="1" value="' + Math.round(sz.length) + '" title="Length (cm)"> × ' +
+          '<input class="sb-input" id="lq-w" type="number" min="1" value="' + Math.round(sz.width) + '" title="Width (cm)"> × ' +
+          '<input class="sb-input" id="lq-h" type="number" min="1" value="' + Math.round(sz.height) + '" title="Height (cm)"> <span class="pay-hint">cm</span>' +
+          '<input class="sb-input" id="lq-kg" type="number" min="0.1" step="0.1" value="' + (Math.round(sz.weight / 100) / 10) + '" title="Weight (kg)"> <span class="pay-hint">kg</span>' +
+          '<button type="button" class="case-act" id="lq-recalc">Recalculate</button></div>' +
+        '<div class="lq-rates">' + q.couriers.map(function (c) {
             var best = c.courier === q.best;
-            return '<tr' + (best ? ' class="best"' : '') + '><td>' + esc(c.courier) + (best ? ' ✓ used (higher)' : '') + '</td>' +
-              '<td>' + (c.pickup != null ? money(c.pickup) : '—') + '</td><td>' + (c.delivery != null ? money(c.delivery) : '—') + '</td>' +
-              '<td>' + (c.total != null ? '<b>' + money(c.total) + '</b>' : '<span class="muted" title="' + esc(c.error || '') + '">unavailable</span>') + '</td></tr>';
-          }).join('') + '</tbody></table>' : '') +
-      '<div class="pay-form">' +
-        '<label for="lq-pick">Pickup charge (before GST)</label><input class="sb-input" id="lq-pick" type="number" min="0" step="1" value="' + sug.pickup + '">' +
-        '<label for="lq-del">Delivery charge (before GST)</label><input class="sb-input" id="lq-del" type="number" min="0" step="1" value="' + sug.delivery + '">' +
-        '<label>Customer pays</label><div><span class="pay-total" id="lq-tot">—</span> <span class="pay-hint">incl. ' + PAY_GST + '% GST' +
-          (q && q.suggested ? ' · prefilled = higher courier + \u20b9' + q.bufferRs + ' buffer' : '') + '</span></div>' +
+            return '<div class="lq-rate' + (best ? ' best' : '') + '"><b>' + esc(c.courier) + '</b>' +
+              '<span>Pickup ' + (c.pickup != null ? money(c.pickup) : '—') + '</span><span>Delivery ' + (c.delivery != null ? money(c.delivery) : '—') + '</span>' +
+              (c.total != null ? '<b class="lq-rt">' + money(c.total) + '</b>' : '<span class="muted" title="' + esc(c.error || '') + '">unavailable</span>') +
+              (best ? '<span class="lq-used">used</span>' : '<span></span>') + '</div>';
+          }).join('') + '</div>' : '') +
+      '<div class="lq-charges">' +
+        '<label class="lq-f"><span>Pickup charge</span><input class="sb-input" id="lq-pick" type="number" min="0" step="1" value="' + sug.pickup + '"></label>' +
+        '<label class="lq-f"><span>Delivery charge</span><input class="sb-input" id="lq-del" type="number" min="0" step="1" value="' + sug.delivery + '"></label>' +
+        '<div class="lq-pay"><span>Customer pays</span><b class="pay-total" id="lq-tot">—</b><small>incl. ' + PAY_GST + '% GST</small></div>' +
       '</div>' +
-      '<div class="pay-hint" id="lq-from">Checking Zoho Books connection…</div>' +
+      '<div class="pay-hint lq-foot">Charges are before GST' + (q && q.suggested ? ' · prefilled = higher courier + ₹' + q.bufferRs + ' buffer' : '') +
+        ' · <span id="lq-from">Checking Zoho Books…</span></div>' +
       '<div class="pay-row"><button class="case-act primary" id="lq-send" disabled>Create advance &amp; link</button>' +
         '<button class="case-act" id="lq-cancel">Cancel</button></div>';
 
@@ -4870,7 +4892,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     el.querySelectorAll('input[name="lq-consent"]').forEach(function (x) { x.addEventListener('change', upd); });
     document.getElementById('lq-cancel').addEventListener('click', function () { loadPayment(r, false); });
     var ed = document.getElementById('lq-edit');
-    if (ed) ed.addEventListener('click', function () { document.getElementById('lq-size').hidden = false; ed.hidden = true; });
+    if (ed) ed.addEventListener('click', function () { var s = document.getElementById('lq-size'); s.hidden = !s.hidden; ed.textContent = s.hidden ? 'Edit size' : 'Close'; });
     var rc = document.getElementById('lq-recalc');
     if (rc) rc.addEventListener('click', function () {
       logisticsForm(r, { length: document.getElementById('lq-l').value, width: document.getElementById('lq-w').value,
