@@ -984,6 +984,23 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .stp-bar { display: inline-flex; gap: 2px; }
 .stp-bar i { width: 10px; height: 5px; border-radius: 1px; background: var(--todo); transform: skewX(-18deg); }
 .stp-bar i.d { background: var(--coal); } .stp-bar i.c { background: var(--hero); } .stp-bar i.x { background: var(--red); }
+/* Payments: 3-step bar + locked cards */
+.pay-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-bottom: 10px; }
+.pb-seg { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center; padding: 8px 18px 8px 12px; background: var(--todo);
+  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 50%, calc(100% - 12px) 100%, 0 100%, 12px 50%); }
+.pb-seg:first-child { clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 50%, calc(100% - 12px) 100%, 0 100%); border-radius: 10px 0 0 10px; }
+.pb-seg:last-child { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 12px 50%); border-radius: 0 10px 10px 0; padding-left: 22px; }
+.pb-seg:not(:first-child) { padding-left: 22px; }
+.pb-seg i { grid-row: span 2; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-style: normal; font-size: 11px; font-weight: 800; background: rgba(0,0,0,.12); }
+.pb-seg b { font-size: 12.5px; font-weight: 700; } .pb-seg span { font-size: 11.5px; font-weight: 600; opacity: .8; }
+.pb-done { background: var(--coal); color: var(--on-coal); } .pb-done i { background: var(--green); color: #fff; }
+.pb-cur { background: var(--hero); color: #181818; }
+.pb-todo { color: var(--todo-ink); }
+#pay-bar[hidden] { display: none; }
+.pay-locked { opacity: .5; }
+.pay-locked button { pointer-events: none; }
+.pay-locked .pay-row .pay-hint { display: none; }
+.pay-lock-note { font-size: 12px; font-weight: 600; color: var(--text2); margin-top: 6px; }
 /* Website-form notes under "Customer says" */
 .rq-notes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .rq-note { font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: var(--surface2); color: var(--text2); border: 1px solid var(--border); font-style: normal; }
@@ -4499,6 +4516,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     payDetailsOpen = null;
     return '<div class="cm-sec"><div class="cm-sec-title">Payments</div>' +
         '<button type="button" class="linkish pay-toggle" id="pay-toggle" hidden>Show details</button></div>' +
+      '<div class="pay-bar" id="pay-bar"></div>' +
       '<div class="pay-sum" id="pay-sum"><span class="pay-hint">Loading…</span></div>' +
       '<div id="pay-details">' +
         '<div class="pay-box pay-step" id="pay-logistics"><span class="pay-hint">Loading…</span></div>' +
@@ -4534,11 +4552,34 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       final: !old && settled(l) && (stage >= 5 || has(f)) && !(f && f.status === 'paid') && (settled(rp) || stage >= 5)
     };
     var all = payDetailsOpen === true;
+    // Locked = not reachable yet (shown greyed in the full view, buttons off)
+    var lock = {
+      logistics: '',
+      repair: settled(rp) || has(rp) ? '' : !settled(l) ? 'Unlocks after Step 1 is paid' : stage < 4 ? 'Unlocks once the product is received and inspected' : '',
+      final: (f && has(f)) || old ? '' : !(settled(l) && settled(rp)) ? 'Unlocks after Steps 1 and 2 (or Not repaired)' : ''
+    };
     var hidden = 0;
     Object.keys(cards).forEach(function (k) {
       var show = all || need[k];
       cards[k].hidden = !show; if (!show) hidden++;
+      cards[k].classList.toggle('pay-locked', !!lock[k]);
+      var note = cards[k].querySelector('.pay-lock-note');
+      if (lock[k]) {
+        if (!note) { note = document.createElement('div'); note.className = 'pay-lock-note'; cards[k].appendChild(note); }
+        note.textContent = '🔒 ' + lock[k];
+        cards[k].querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+      } else if (note) note.remove();
     });
+    // 3-step payment bar
+    var bar = document.getElementById('pay-bar');
+    if (bar) {
+      var seg = function (n, name, st, txt) { return '<div class="pb-seg pb-' + st + '"><i>' + n + '</i><b>' + name + '</b><span>' + txt + '</span></div>'; };
+      var s1 = settled(l) ? ['done', 'Paid'] : has(l) ? ['cur', 'Payment pending'] : ['cur', 'Send link'];
+      var s2 = rp && rp.status === 'skipped' ? ['done', 'Not repaired'] : settled(rp) ? ['done', 'Paid'] : has(rp) ? ['cur', 'Payment pending'] : lock.repair ? ['todo', 'Locked'] : ['cur', 'Send quote'];
+      var s3 = f && f.status === 'paid' ? ['done', 'Settled'] : has(f) ? ['cur', 'Apply advances'] : lock.final ? ['todo', 'Locked'] : ['cur', 'At dispatch'];
+      bar.innerHTML = old ? '' : seg(1, 'Pickup &amp; delivery', s1[0], s1[1]) + seg(2, 'Service &amp; parts', s2[0], s2[1]) + seg(3, 'Final invoice', s3[0], s3[1]);
+      bar.hidden = old;
+    }
     // Summary: one line per item that exists, + Total once something is paid
     var rows = '';
     if (has(l)) rows += paySumLine('Pickup &amp; delivery charges', l);
