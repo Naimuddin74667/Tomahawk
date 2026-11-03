@@ -1049,18 +1049,44 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   first page load (it has the skeleton) — wrap those in ccQuiet(fn).
 ══════════════════════════════════════════════════════════════════════ -->
 <style>
-#cc-busy { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center;
+#cc-busy { position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center;
   background: rgba(24,24,24,.2); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
   opacity: 0; pointer-events: none; transition: opacity .15s; }
 #cc-busy.on { opacity: 1; pointer-events: all; cursor: progress; }
 #cc-busy .ring { width: 46px; height: 46px; border-radius: 50%; border: 4px solid rgba(247,166,0,.25); border-top-color: #F7A600;
   animation: cc-spin .8s linear infinite; box-shadow: 0 2px 12px rgba(0,0,0,.15); background: var(--surface, #fff); }
 @keyframes cc-spin { to { transform: rotate(360deg); } }
+#cc-busy .msg { padding: 7px 14px; border-radius: 999px; font-size: 13px; font-weight: 600; color: var(--text, #1a1a1a);
+  background: var(--surface, #fff); box-shadow: 0 2px 12px rgba(0,0,0,.15); }
+#cc-busy .msg:empty { display: none; }
 </style>
-<div id="cc-busy" aria-hidden="true"><div class="ring"></div></div>
+<div id="cc-busy" aria-hidden="true"><div class="ring"></div><div class="msg" id="cc-busy-msg" role="status"></div></div>
 <script>
 (function () {
-  var el = document.getElementById('cc-busy'), n = 0, timer = null, quiet = 0;
+  var el = document.getElementById('cc-busy'), msgEl = document.getElementById('cc-busy-msg'), n = 0, timer = null, quiet = 0;
+  // Text under the spinner — what the Worker call is doing. Newest call in
+  // flight wins; when it finishes the next-newest one's text shows.
+  var live = [];
+  function busyText(action, body) {
+    var o = (body && body.order) || {}, cour = /^ekart/.test(action) ? 'Ekart' : 'Delhivery';
+    if (/CreateOrder$/.test(action)) return (o.direction === 'reverse' ? 'Booking pickup with ' : 'Booking send back with ') + cour + '…';
+    if (/CheckPincode$/.test(action)) return 'Checking courier serviceability…';
+    if (/EstimateCharge$/.test(action)) return 'Getting courier rates…';
+    if (/Track$/.test(action)) return 'Fetching tracking…';
+    if (action === 'ccClaimAction') return body && body.kind === 'approve' ? 'Marking the request approved…' : 'Updating the request…';
+    var M = {
+      ccClaimsList: 'Loading requests…', delhiveryListOrders: 'Loading cases…', ccClaimFiles: 'Loading attachments…',
+      ccPaymentGet: 'Loading payments…', ccPaymentInfo: 'Loading payments…', delhiveryNextOrderId: 'Getting the order ID…',
+      ccClaimVerify: 'Verifying the request…', ccPaymentCreate: 'Creating the payment link…', ccPaymentVoid: 'Cancelling the payment link…',
+      ccPaymentFinal: 'Creating the final invoice…', ccPaymentSkipRepair: 'Skipping the repair payment…',
+      delhiveryRepairDone: 'Updating repair status…', ucsku: 'Looking up the product…', delhiveryAmzProductInfo: 'Looking up the product…',
+      ccOrderLookup: 'Looking up the order…', ccInvoiceRequest: 'Fetching the invoice…', refundGetBank: 'Loading bank details…',
+      refundCreateLink: 'Creating the refund link…', delhiveryStartRefund: 'Starting the refund…', delhiveryApproveRefund: 'Approving the refund…',
+      delhiveryMarkRefunded: 'Marking refunded…'
+    };
+    return M[action] || 'Saving…';
+  }
+  function showMsg() { msgEl.textContent = live.length ? live[live.length - 1].t : ''; }
   var SKIP = /[?&]action=(ccVersion|validateSession)\b/;
   window.ccQuiet = function (fn) { quiet++; var p; try { p = fn(); } catch (e) { quiet--; throw e; }
     return Promise.resolve(p).finally(function () { quiet--; }); };
@@ -1071,8 +1097,11 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     var u = String((url && url.url) || url || '');
     var track = !quiet && /workers\.dev/.test(u) && !SKIP.test(u);
     if (!track) return orig(url, opts);
+    var act = (/[?&]action=([A-Za-z]+)/.exec(u) || [])[1] || '', body = null;
+    try { body = opts && opts.body ? JSON.parse(opts.body) : null; } catch (e) {}
+    var item = { t: busyText(act, body) }; live.push(item); showMsg();
     up();
-    return orig(url, opts).finally(down);
+    return orig(url, opts).finally(function () { live.splice(live.indexOf(item), 1); showMsg(); down(); });
   };
 })();
 </script>
