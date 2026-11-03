@@ -4702,7 +4702,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var need = {
       logistics: !settled(l),
       repair: (stage >= 4 || has(rp)) && !settled(rp),
-      final: !old && settled(l) && (stage >= 5 || has(f)) && !(f && f.status === 'paid') && (settled(rp) || stage >= 5)
+      // Final invoice is made automatically when Send back is booked — its card
+      // only shows if that left something to fix (made but advances not applied).
+      final: !old && has(f) && f.status !== 'paid'
     };
     var all = payDetailsOpen === true;
     // Locked = not reachable yet (shown greyed in the full view, buttons off)
@@ -4749,7 +4751,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (paidTot > 0 && (has(rp) || stage >= 4)) rows +=
       '<div class="pay-sum-row pay-sum-tot"><span class="pay-sum-n">Total settled</span><span class="pay-total">' + money(paidTot) + '</span>' +
       (f && f.status === 'paid' ? '<span class="bt-green">Invoice ' + esc(f.invoice_number || '') + ' ✓</span>'
-        : settled(l) && settled(rp) ? '<span class="pay-hint">Final invoice not made yet</span>' : '<span class="pay-hint">More payment due</span>') + '</div>';
+        : settled(l) && settled(rp) ? '<span class="pay-hint">Final invoice made at send back</span>' : '<span class="pay-hint">More payment due</span>') + '</div>';
     // A card that is showing already tells its own state — no duplicate summary line
     sum.innerHTML = rows;
     sum.hidden = !rows || (!all && need.logistics && !has(rp));
