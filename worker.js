@@ -7529,14 +7529,11 @@ async function rpFinal(env, user, claimId) {
       for (const l of ls) lines.push({ kind: p.kind, label: l.label, amount: Number(l.amount) });
     }
     const amount = Math.round(lines.reduce((t, l) => t + l.amount, 0) * 100) / 100;
-    const itemId = paid.some(p => p.kind === 'repair') ? await zbRepairItem(env) : null;
     const inv = {
       customer_id: z.customerId, reference_number: claimId,
       place_of_supply: z.stateCode, gst_treatment: 'consumer',
-      line_items: lines.map(l => l.kind === 'logistics'
-        ? { name: l.label, description: l.label + ' · ' + claimId, rate: l.amount, quantity: 1, hsn_or_sac: rpLogisticsSac(env), tax_id: z.taxId }
-        : { ...(itemId ? { item_id: itemId } : { name: ZB_ITEM_NAME }), description: l.label + ' · ' + (row.product || '') + ' · ' + claimId,
-            rate: l.amount, quantity: 1, hsn_or_sac: ZB_SAC, tax_id: z.taxId }),
+      line_items: rpFinalLines(lines, row, claimId, env).map(l => ({ name: l.name, description: l.description,
+        rate: l.amount, quantity: 1, hsn_or_sac: l.sac, tax_id: z.taxId })),
       notes: 'Tax invoice for service request ' + claimId + '. Advances received: ' + paid.map(p => p.invoice_number).join(', ') +
         '. Thank you for choosing TOMAHAWK® Tools.'
     };
@@ -7595,6 +7592,37 @@ async function rpSkipRepair(env, user, claimId, reason, undo) {
     VALUES (?, 'repair', 'none', '[]', 0, 0, ?, 'skipped', ?)`).bind(claimId, why || 'Not repaired', by).run();
   await srAddEvent(env.DB, claimId, { by, kind: 'note', note: 'Not repaired — Step 2 payment skipped' + (why ? ' · ' + why : '') }, {});
   return { ok: true };
+}
+
+// Final invoice layout (03-Nov-2026) — at most four lines, in this order:
+//   1. Pickup Charges             (SAC 996812)
+//   2. Delivery Charges           (SAC 996812)
+//   3. Repair & Processing Fee    (SAC 998717)
+//   4. Spare Parts Charges        (SAC 998717) — one line, parts listed in the description
+// Any charge that doesn't match these goes on its own line after them.
+function rpFinalLines(lines, row, claimId, env) {
+  const ref = (row.product ? row.product + ' · ' : '') + claimId;
+  const groups = { pickup: [], delivery: [], repair: [], parts: [] }, other = [];
+  for (const l of lines) {
+    const lbl = String(l.label || '');
+    if (l.kind === 'logistics' && /pick/i.test(lbl)) groups.pickup.push(l);
+    else if (l.kind === 'logistics' && /deliver/i.test(lbl)) groups.delivery.push(l);
+    else if (l.kind === 'repair' && /^spare part/i.test(lbl)) groups.parts.push(l);
+    else if (l.kind === 'repair' && /service|repair|processing/i.test(lbl)) groups.repair.push(l);
+    else other.push(l);
+  }
+  const sum = ls => Math.round(ls.reduce((t, l) => t + Number(l.amount || 0), 0) * 100) / 100;
+  const inr = v => '₹' + Number(v).toFixed(2);
+  const out = [];
+  if (groups.pickup.length) out.push({ name: 'Pickup Charges', description: 'Pickup from customer · ' + claimId, amount: sum(groups.pickup), sac: rpLogisticsSac(env) });
+  if (groups.delivery.length) out.push({ name: 'Delivery Charges', description: 'Return delivery to customer · ' + claimId, amount: sum(groups.delivery), sac: rpLogisticsSac(env) });
+  if (groups.repair.length) out.push({ name: 'Repair & Processing Fee', description: ref, amount: sum(groups.repair), sac: ZB_SAC });
+  if (groups.parts.length) out.push({ name: 'Spare Parts Charges',
+    description: groups.parts.map(l => String(l.label).replace(/^spare part:\s*/i, '') + ' ' + inr(l.amount)).join(', ') + ' · ' + ref,
+    amount: sum(groups.parts), sac: ZB_SAC });
+  for (const l of other) out.push({ name: String(l.label).slice(0, 100), description: ref, amount: Number(l.amount),
+    sac: l.kind === 'logistics' ? rpLogisticsSac(env) : ZB_SAC });
+  return out.filter(l => l.amount > 0);
 }
 
 // Matches each paid advance to an unused retainer payment of the same
