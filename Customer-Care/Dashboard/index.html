@@ -985,17 +985,12 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .stp-bar i { width: 10px; height: 5px; border-radius: 1px; background: var(--todo); transform: skewX(-18deg); }
 .stp-bar i.d { background: var(--coal); } .stp-bar i.c { background: var(--hero); } .stp-bar i.x { background: var(--red); }
 /* Payments: 3-step bar + locked cards */
-.pay-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-bottom: 10px; }
-.pb-seg { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center; padding: 8px 18px 8px 12px; background: var(--todo);
-  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 50%, calc(100% - 12px) 100%, 0 100%, 12px 50%); }
-.pb-seg:first-child { clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 50%, calc(100% - 12px) 100%, 0 100%); border-radius: 10px 0 0 10px; }
-.pb-seg:last-child { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 12px 50%); border-radius: 0 10px 10px 0; padding-left: 22px; }
-.pb-seg:not(:first-child) { padding-left: 22px; }
-.pb-seg i { grid-row: span 2; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-style: normal; font-size: 11px; font-weight: 800; background: rgba(0,0,0,.12); }
-.pb-seg b { font-size: 12.5px; font-weight: 700; } .pb-seg span { font-size: 11.5px; font-weight: 600; opacity: .8; }
-.pb-done { background: var(--coal); color: var(--on-coal); } .pb-done i { background: var(--green); color: #fff; }
-.pb-cur { background: var(--hero); color: #181818; }
-.pb-todo { color: var(--todo-ink); }
+.pay-bar { display: flex; align-items: center; max-width: 260px; margin: 0 0 10px 2px; }
+.pb-dot { width: 22px; height: 22px; flex: 0 0 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800; background: var(--todo); color: var(--todo-ink); cursor: default; }
+.pb-line { flex: 1; height: 2px; margin: 0 4px; background: var(--todo); border-radius: 2px; }
+.pb-dot.pb-done { background: var(--green); color: #fff; } .pb-line.pb-done { background: var(--green); }
+.pb-dot.pb-cur { background: var(--hero); color: #181818; } .pb-line.pb-cur { background: var(--hero); }
 #pay-bar[hidden] { display: none; }
 .pay-locked { opacity: .5; }
 .pay-locked button { pointer-events: none; }
@@ -4500,7 +4495,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   //            advances are applied to it. This is what the accountant files.
   var PAY_STEP = {
     logistics: { n: 1, title: 'Pickup & delivery', when: 'advance · paid before pickup is booked', btn: '&#8377; Get quote &amp; send link' },
-    repair:    { n: 2, title: 'Service & spare parts', when: 'advance · sent after the technician inspects the product', btn: '&#8377; Send repair quote' },
+    repair:    { n: 2, title: 'Spare Parts & Service Charge', when: 'advance · sent after the technician inspects the product', btn: '&#8377; Send repair quote' },
     final:     { n: 3, title: 'Final invoice', when: 'one tax invoice when the case closes · advances adjusted' }
   };
   var payState = {};   // latest payments for the open request: { logistics, repair, final }
@@ -4573,17 +4568,20 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     // 3-step payment bar
     var bar = document.getElementById('pay-bar');
     if (bar) {
-      var seg = function (n, name, st, txt) { return '<div class="pb-seg pb-' + st + '"><i>' + n + '</i><b>' + name + '</b><span>' + txt + '</span></div>'; };
+      // Slim bar: ①───②───✓ (03-Nov-2026); hover shows the step + its state
+      var seg = function (n, name, st, txt) {
+        return (n > 1 ? '<span class="pb-line pb-' + st + '"></span>' : '') +
+          '<span class="pb-dot pb-' + st + '" title="' + name + ' · ' + txt + '">' + (n === 3 ? '&#10003;' : n) + '</span>'; };
       var s1 = settled(l) ? ['done', 'Paid'] : has(l) ? ['cur', 'Payment pending'] : ['cur', 'Send link'];
       var s2 = rp && rp.status === 'skipped' ? ['done', 'Not repaired'] : settled(rp) ? ['done', 'Paid'] : has(rp) ? ['cur', 'Payment pending'] : lock.repair ? ['todo', 'Locked'] : ['cur', 'Send quote'];
       var s3 = f && f.status === 'paid' ? ['done', 'Settled'] : has(f) ? ['cur', 'Apply advances'] : lock.final ? ['todo', 'Locked'] : ['cur', 'At dispatch'];
-      bar.innerHTML = old ? '' : seg(1, 'Pickup &amp; delivery', s1[0], s1[1]) + seg(2, 'Service &amp; parts', s2[0], s2[1]) + seg(3, 'Final invoice', s3[0], s3[1]);
+      bar.innerHTML = old ? '' : seg(1, 'Pickup &amp; delivery', s1[0], s1[1]) + seg(2, 'Spare Parts &amp; Service Charge', s2[0], s2[1]) + seg(3, 'Final invoice', s3[0], s3[1]);
       bar.hidden = old;
     }
     // Summary: one line per item that exists, + Total once something is paid
     var rows = '';
     if (has(l)) rows += paySumLine('Pickup &amp; delivery charges', l);
-    if (has(rp)) rows += paySumLine('Service &amp; spare parts', rp);
+    if (has(rp)) rows += paySumLine('Spare Parts &amp; Service Charge', rp);
     var paidTot = [l, rp].reduce(function (s, x) { return s + (x && x.status === 'paid' ? Number(x.total || 0) : 0); }, 0);
     if (paidTot > 0 && (has(rp) || stage >= 4)) rows +=
       '<div class="pay-sum-row pay-sum-tot"><span class="pay-sum-n">Total settled</span><span class="pay-total">' + money(paidTot) + '</span>' +
