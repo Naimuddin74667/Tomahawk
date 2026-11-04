@@ -9088,7 +9088,9 @@ async function srSendWhatsAppFollowup(env, row, tpl, fields, ref, by) {
     const token = vals['Payment Token'] || vals['Upload Token'] || vals['Feedback Token'];
     const urlFull = fill(btn.action || '');
     const tries = token
-      ? [{ tag: 'num-id+url', numeric: true, url: urlFull || token }, { tag: 'num-id+token', numeric: true, url: token }, { tag: 'str-id+url', numeric: false, url: urlFull || token }]
+      ? [{ tag: 'num-id+url', numeric: true, url: urlFull || token }, { tag: 'num-id+token', numeric: true, url: token }, { tag: 'str-id+url', numeric: false, url: urlFull || token },
+         // template still has a static button (e.g. before an edit is approved) → send without urlMessage
+         { tag: 'num-id', numeric: true }]
       : [{ tag: 'num-id', numeric: true }, { tag: 'num-id+url', numeric: true, url: urlFull }, { tag: 'str-id', numeric: false }];
     step = 'send';
     const id = String(templateId);
