@@ -1080,7 +1080,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       ccClaimVerify: 'Verifying the request…', ccPaymentCreate: 'Creating the payment link…', ccPaymentVoid: 'Cancelling the payment link…',
       ccPaymentFinal: 'Creating the final invoice…', ccPaymentSkipRepair: 'Skipping the repair payment…',
       delhiveryRepairDone: 'Updating repair status…', ucsku: 'Looking up the product…', delhiveryAmzProductInfo: 'Looking up the product…',
-      ccOrderLookup: 'Looking up the order…', ccInvoiceRequest: 'Fetching the invoice…', refundGetBank: 'Loading bank details…',
+      ccOrderLookup: 'Looking up the order…', ccInvoiceRequest: 'Fetching the invoice…', ccMediaRequest: 'Sending the upload link…', refundGetBank: 'Loading bank details…',
       refundCreateLink: 'Creating the refund link…', delhiveryStartRefund: 'Starting the refund…', delhiveryApproveRefund: 'Approving the refund…',
       delhiveryMarkRefunded: 'Marking refunded…'
     };
@@ -4149,7 +4149,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   var REQ_CUSTOMER_EMAILS = false;
   var REQ_ACT_LABEL = { ask_info: 'Ask for info / video', tip: 'Send a tip', quote: 'Repair quote', not_covered: 'Not covered', resolve: 'Resolved', note: 'Internal note',
     payment_link: 'Payment link sent', payment_received: 'Payment received', payment_void: 'Invoice voided', verified: 'Order verified', consent: 'Customer agreed to charges',
-    invoice_request: 'Asked for invoice again', invoice_uploaded: 'Customer uploaded invoice' };
+    invoice_request: 'Asked for invoice again', invoice_uploaded: 'Customer uploaded invoice',
+    media_request: 'Asked for photos / video again', media_uploaded: 'Customer uploaded photos / video', whatsapp: 'WhatsApp' };
   function canActReq() { return window.TM_ROLE === 'admin' || window.TM_ROLE === 'manager'; }
   function isNV(r) { return /^NV-/.test(r.claim_id || ''); }
   // "New requests" tile = to review (SRN + WRN) + still to verify
@@ -4280,6 +4281,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
                 (oow ? '&#128274; Book pickup after payment' : 'Book Pickup') + '</button>' : '') +
         // Customer emails are off for the first go-live, so only status actions
         // are offered (Ask for info / Tip / Repair quote come back with the emails).
+        // Ask for photos / video again (04-Nov-2026) — WhatsApp media_reupload with an upload link
+        (!fin && !r.case_id ? '<button class="case-act" id="req-media">&#128247; Ask for photos/video</button>' : '') +
         (!fin ? '<button class="case-act" data-k="resolve">Resolved</button>' +
                 '<button class="case-act danger" data-k="not_covered">Not covered</button>'
               : '<button class="case-act" data-k="reopen">Reopen</button>') +
@@ -4320,11 +4323,13 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       (hist ? '<div class="cm-sec"><div class="cm-sec-title">History</div>' +
         '<button type="button" class="linkish pay-toggle" id="hist-toggle">Show (' + evs.length + ')</button></div>' + hist : '') +
       '<div id="req-compose" style="margin-top:16px" hidden></div>' +
+      '<div id="req-media-box" style="margin-top:16px" hidden></div>' +
       '<div id="cm-confirm" style="margin-top:18px" hidden></div>' +
       (acts ? '<div class="cm-acts" id="req-acts">' + acts + '</div>' : '');
     box.querySelectorAll('#req-acts [data-k]').forEach(function (b) {
       b.addEventListener('click', function () { b.dataset.k === 'reopen' ? sendReq(r, 'reopen', '', b) : compose(r, b.dataset.k); });
     });
+    wireMediaAsk(r);
     var rap = document.getElementById('req-approve');
     if (rap) rap.addEventListener('click', function () { if (!rap.classList.contains('locked')) startPickup(r, rap); });
     var roc = document.getElementById('rq-open-case');
@@ -4593,6 +4598,45 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         if (!x || !x.ok) throw new Error((x && x.error) || 'failed');
         await loadRequests(); renderTiles(); renderRequests(); openRequest(x.claim_id);
       } catch (e) { alert("Couldn't convert: " + e.message); go.disabled = false; go.textContent = 'Confirm & convert'; }
+    });
+  }
+
+  // ── Ask for photos / video again (04-Nov-2026) ──
+  // Sends WhatsApp "media_reupload" with a single-use upload link (7 days);
+  // the request waits for the customer and comes back to review when they upload.
+  function wireMediaAsk(r) {
+    var btn = document.getElementById('req-media'), box = document.getElementById('req-media-box');
+    if (!btn || !box) return;
+    btn.addEventListener('click', function () {
+      box.hidden = false;
+      box.innerHTML = '<div class="cm-sec-title" style="margin-bottom:8px">Ask for photos / video again</div>' +
+        '<div class="cm-k" style="margin-bottom:6px">What was wrong with the upload (kept in History for the team)</div>' +
+        '<textarea class="sb-input" id="rm-msg" rows="2" style="width:100%;resize:vertical" placeholder="e.g. Photo is blurry, the problem is not visible"></textarea>' +
+        '<div class="pay-row" style="margin-top:8px"><button class="case-act primary" id="rm-send">Send upload link</button>' +
+        '<button class="case-act" id="rm-cancel">Cancel</button></div>';
+      document.getElementById('rm-cancel').addEventListener('click', function () { box.hidden = true; });
+      document.getElementById('rm-send').addEventListener('click', async function () {
+        var send = this, msg = document.getElementById('rm-msg').value.trim();
+        if (!msg) { alert('Write what was wrong with the photos / video.'); return; }
+        send.disabled = true; send.textContent = 'Sending…';
+        try {
+          var x = await post('ccMediaRequest', { claim_id: r.claim_id, message: msg });
+          if (!x || !x.ok) throw new Error((x && x.error) || 'failed');
+          box.innerHTML = '<div class="pay-hint" style="margin-bottom:6px">' +
+            (x.whatsapp ? '<div><span style="color:var(--green)">&#10003; WhatsApp sent</span></div>'
+              : '<div><span style="color:var(--accent)">&#9888; WhatsApp not sent</span> <span class="muted">(' + esc(x.whatsapp_note || '') + ')</span> — copy the link below and send it.</div>') +
+            '<div style="margin-top:4px">Request is now <b>Waiting for customer</b>; it comes back to review when they upload.</div></div>' +
+            '<div style="display:flex;gap:8px"><input class="sb-input" id="rm-link" readonly value="' + esc(x.link) + '" style="flex:1">' +
+            '<button class="case-act primary" id="rm-copy">Copy link</button></div>';
+          document.getElementById('rm-copy').addEventListener('click', function () {
+            var b = this, inp = document.getElementById('rm-link');
+            var done = function () { b.textContent = '✓ Copied'; setTimeout(function () { b.textContent = 'Copy link'; }, 1500); };
+            if (navigator.clipboard) navigator.clipboard.writeText(inp.value).then(done, function () { inp.select(); });
+            else { inp.select(); document.execCommand('copy'); done(); }
+          });
+          loadRequests().then(function () { renderTiles(); renderRequests(); });
+        } catch (e) { alert("Couldn't send: " + e.message); send.disabled = false; send.textContent = 'Send upload link'; }
+      });
     });
   }
 

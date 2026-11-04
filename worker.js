@@ -727,6 +727,7 @@ const ACTION_TIERS = {
   requestTrack: 'public', // public 'track your request' page — request ID/order ID + mobile, steps only, rate-limited
   orderTrack: 'public', // public 'Track my order' (Shopify) — order no. + mobile, status/items/courier only, rate-limited
   invoiceUploadInfo: 'public', invoiceUploadSubmit: 'public', // customer re-uploads the invoice — single-use link token, rate-limited
+  ccMediaRequest: 'manager_up',   // Customer Care: ask for photos / video again (WhatsApp + upload link)
   ccInvoiceRequest: 'manager_up', // Customer Care: ask the customer to upload the invoice again (makes the link)
   ccClaimsList: 'viewer_read', ccClaimGet: 'viewer_read', ccClaimFiles: 'viewer_read', // Customer Care: New requests
   ccClaimAction: 'manager_up',
@@ -980,7 +981,7 @@ const ACTION_TIERS = {
 
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
-const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest',
+const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest',
   'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccLogisticsQuote', 'ccVersion']);
 
 function getAuthRequirement(act) {
@@ -1612,6 +1613,33 @@ export default {
         if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
         const r = await srInvoiceRequest(env, user, body || {});
         return json(r, r.ok ? 200 : 400);
+      }
+      // ── Photos / video re-upload (04-Nov-2026) — see srMediaRequest / srMediaUpload ──
+      if (request.method === 'POST' && act === 'ccMediaRequest') {
+        const user = authResult.user || (await resolveSession(request, env.DB));
+        if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
+        const r = await srMediaRequest(env, user, body || {});
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (request.method === 'GET' && action === 'mediaUploadInfo') {
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        if (!(await warrantyRateOk(env.DB, 'medinfo:' + ip, 30))) return json({ ok: false, error: 'Too many tries — please try again in an hour.' }, 429);
+        const r = await srMediaRowForToken(env.DB, url.searchParams.get('t') || '');
+        if (r.error) return json({ ok: false, error: r.error });
+        return json({ ok: true, claim_id: r.row.claim_id, product: r.row.confirmed_sku || r.row.product || '',
+          first_name: String(r.row.name || '').trim().split(/\s+/)[0] || '',
+          max_photos: MED_MAX_PHOTOS, max_videos: MED_MAX_VIDEOS, max_photo_mb: 10, max_video_mb: 25 });
+      }
+      if (request.method === 'POST' && act === 'mediaUploadSubmit') {
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        if (!(await warrantyRateOk(env.DB, 'medup:' + ip, 10))) return json({ ok: false, error: 'Too many tries — please try again in an hour.' }, 429);
+        try {
+          const r = await srMediaUpload(env, body || {});
+          return json(r, r.ok ? 200 : 400);
+        } catch (e) {
+          console.error('media upload failed:', e.message);
+          return json({ ok: false, error: 'Something went wrong — please try again.' }, 500);
+        }
       }
       if (request.method === 'GET' && action === 'invoiceUploadInfo') {
         const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
@@ -6832,7 +6860,8 @@ async function ensureServiceRequestCols(DB) {
                      // confirmed_sku = a UC SKU, or confirmed_product = free text ("Other").
                      'confirmed_sku TEXT', 'confirmed_product TEXT',
                      // Invoice re-upload link (29-Oct-2026): SHA-256 of the single-use token + expiry
-                     'inv_token_hash TEXT', 'inv_token_expires TEXT', 'inv_request_note TEXT']) {
+                     'inv_token_hash TEXT', 'inv_token_expires TEXT', 'inv_request_note TEXT',
+                     'med_token_hash TEXT', 'med_token_expires TEXT', 'med_request_note TEXT', 'med_prev_status TEXT']) {
     try { await DB.prepare('ALTER TABLE warranty_claims ADD COLUMN ' + col).run(); } catch (e) { /* exists */ }
   }
 }
@@ -7016,6 +7045,77 @@ async function srInvoiceRequest(env, user, b) {
       (wa.sent ? '' : ' (WhatsApp: ' + (wa.skipped || wa.error || 'not sent') + ')') },
     { status: 'waiting_customer' });
   return { ok: true, link, emailed, whatsapp: wa.sent, whatsapp_note: wa.sent ? '' : (wa.skipped || wa.error || '') };
+}
+
+// ── Photos / video re-upload (04-Nov-2026) ──
+// Team: "Ask for photos/video" on a request → single-use link (7 days) sent by
+// WhatsApp template media_reupload (button …/upload-media?t=${Contacts.Upload Token}).
+// Customer uploads on tomahawk.tools/pages/upload-media (SK) via
+// mediaUploadInfo / mediaUploadSubmit; files are added to the request tagged
+// "media" and the request goes back to the status it had before.
+// Own token columns (med_*), so it never clashes with the invoice re-upload link.
+const CC_UPLOAD_MEDIA_URL = 'https://tomahawk.tools/pages/upload-media';
+const MED_MAX_PHOTOS = 5, MED_MAX_VIDEOS = 1;
+const MED_MAX_PHOTO_B64 = 14 * 1024 * 1024, MED_MAX_VIDEO_B64 = 34 * 1024 * 1024;   // ~10 MB / ~25 MB
+
+async function srMediaRequest(env, user, b) {
+  await ensureServiceRequestCols(env.DB);
+  const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(String(b.claim_id || '').trim()).first();
+  if (!row) return { ok: false, error: 'No such request' };
+  if (['closed', 'not_covered'].includes(row.status)) return { ok: false, error: 'This request is closed' };
+  const note = String(b.message || '').replace(/\s+\n/g, '\n').trim().slice(0, 600);
+  if (!note) return { ok: false, error: 'Write what was wrong with the photos / video first' };
+  const token = randomToken();
+  const link = CC_UPLOAD_MEDIA_URL + '?t=' + token;
+  const prev = row.status === 'waiting_customer' ? (row.med_prev_status || 'new') : (row.status || 'new');
+  await env.DB.prepare("UPDATE warranty_claims SET med_token_hash = ?, med_token_expires = datetime('now', '+7 days'), med_request_note = ?, med_prev_status = ? WHERE claim_id = ?")
+    .bind(await sha256Hex(token), note, prev, row.claim_id).run();
+  const by = (user && user.username) || 'unknown';
+  let wa = { sent: false };
+  try { wa = await srSendWhatsAppFollowup(env, row, 'media_reupload', { 'Upload Token': token }, (await sha256Hex(token)).slice(0, 12), by); }
+  catch (e) { wa = { sent: false, error: e.message }; }
+  await srAddEvent(env.DB, row.claim_id, { by, kind: 'media_request',
+    note: note + ' · link sent by ' + (wa.sent ? 'WhatsApp' : 'nothing yet — copy the link (' + (wa.skipped || wa.error || 'not sent') + ')') },
+    { status: 'waiting_customer' });
+  return { ok: true, link, whatsapp: !!wa.sent, whatsapp_note: wa.sent ? '' : (wa.skipped || wa.error || '') };
+}
+
+async function srMediaRowForToken(DB, token) {
+  await ensureServiceRequestCols(DB);
+  if (!token || token.length < 20) return { error: 'This link is not valid.' };
+  const row = await DB.prepare('SELECT * FROM warranty_claims WHERE med_token_hash = ? LIMIT 1').bind(await sha256Hex(token)).first();
+  if (!row) return { error: 'This link is not valid or has already been used.' };
+  if (['closed', 'not_covered'].includes(row.status)) return { error: 'This request is already closed.' };
+  if (!row.med_token_expires || new Date(String(row.med_token_expires).replace(' ', 'T') + 'Z') < new Date())
+    return { error: 'This link has expired. Please WhatsApp us at ' + SR_HELP_WHATSAPP + ' for a new one.' };
+  return { row };
+}
+
+// body: { t, files: [{ name, type, data (base64) }] } — up to 5 photos + 1 video
+async function srMediaUpload(env, b) {
+  const t = await srMediaRowForToken(env.DB, String(b.t || ''));
+  if (t.error) return { ok: false, error: t.error };
+  const row = t.row;
+  const all = (Array.isArray(b.files) ? b.files : []).map((x, i) => ({
+    mime: String(x.type || ''), base64: String(x.data || ''), filename: String(x.name || ('file' + (i + 1))).slice(0, 80)
+  })).filter(x => x.base64);
+  const photos = all.filter(x => /^image\//.test(x.mime)).slice(0, MED_MAX_PHOTOS);
+  const videos = all.filter(x => /^video\//.test(x.mime)).slice(0, MED_MAX_VIDEOS);
+  const files = photos.concat(videos);
+  if (!files.length) return { ok: false, error: 'Please add at least one photo or video.' };
+  if (photos.some(x => x.base64.length > MED_MAX_PHOTO_B64)) return { ok: false, error: 'A photo is too large — please keep each photo under 10 MB.' };
+  if (videos.some(x => x.base64.length > MED_MAX_VIDEO_B64)) return { ok: false, error: 'The video is too large — please keep it under 25 MB (a short clip is enough).' };
+  const saved = await srUploadFiles(env, row.claim_id, files, { prefix: 'med' + Date.now() + '_', kind: 'media' });
+  if (!saved.length) return { ok: false, error: 'Upload failed — please try again.' };
+  let prev = [];
+  try { prev = JSON.parse(row.files_json || '[]'); } catch (e) { prev = []; }
+  await env.DB.prepare("UPDATE warranty_claims SET files_json = ?, file_count = COALESCE(file_count, 0) + ?, med_token_hash = NULL, med_token_expires = NULL WHERE claim_id = ?")
+    .bind(JSON.stringify(prev.concat(saved)), saved.length, row.claim_id).run();
+  // Back to where it was before we asked (usually "new" = To review)
+  const back = row.status === 'waiting_customer' ? (row.med_prev_status || 'new') : row.status;
+  await srAddEvent(env.DB, row.claim_id, { by: 'customer', kind: 'media_uploaded',
+    note: photos.length + ' photo(s)' + (videos.length ? ' + ' + videos.length + ' video' : '') + ' uploaded' }, { status: back });
+  return { ok: true, claim_id: row.claim_id, count: saved.length };
 }
 
 // Row for a live invoice-upload token, or { error }.
@@ -8784,7 +8884,7 @@ async function srSendWhatsAppVerified(env, row, oldId) {
 const SR_WA_FOLLOWUP_FROM = '2026-11-04 04:30:00';   // UTC — cron never back-fills older cases
 const SR_WA_FOLLOWUP_NAMES = {
   payment_pickup: 'Pickup payment link', product_received: 'Product received',
-  payment_repair: 'Repair payment link', request_delivered: 'Delivered'
+  payment_repair: 'Repair payment link', request_delivered: 'Delivered', media_reupload: 'Photos/video upload link'
 };
 async function srWaEnsureSent(DB) {
   await DB.prepare('CREATE TABLE IF NOT EXISTS sr_wa_sent (claim_id TEXT, tpl TEXT, ref TEXT, at TEXT DEFAULT (datetime(\'now\')), result TEXT, PRIMARY KEY (claim_id, tpl, ref))').run();
@@ -8854,7 +8954,7 @@ async function srSendWhatsAppFollowup(env, row, tpl, fields, ref, by) {
     if (!message || /\$\{/.test(message)) throw new Error('apply returned no usable message text');
     // Button: dynamic (Pay Now → …CInvoiceID=<token>) or static (Track / Feedback)
     const btn = ((items.buttons || []).find(x => /URL/i.test(x.type || '')) || {});
-    const token = vals['Payment Token'];
+    const token = vals['Payment Token'] || vals['Upload Token'];
     const urlFull = fill(btn.action || '');
     const tries = token
       ? [{ tag: 'num-id+url', numeric: true, url: urlFull || token }, { tag: 'num-id+token', numeric: true, url: token }, { tag: 'str-id+url', numeric: false, url: urlFull || token }]
