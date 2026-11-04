@@ -727,6 +727,7 @@ const ACTION_TIERS = {
   requestTrack: 'public', // public 'track your request' page — request ID/order ID + mobile, steps only, rate-limited
   orderTrack: 'public', // public 'Track my order' (Shopify) — order no. + mobile, status/items/courier only, rate-limited
   invoiceUploadInfo: 'public', invoiceUploadSubmit: 'public', // customer re-uploads the invoice — single-use link token, rate-limited
+  ccAnalyticsData: 'viewer_read',  // Customer Care Analysis page (04-Nov-2026)
   ccCloseRequest: 'manager_up',   // Customer Care: close a request with a reason (+ WhatsApp request_closed)
   ccMediaRequest: 'manager_up',   // Customer Care: ask for photos / video again (WhatsApp + upload link)
   ccInvoiceRequest: 'manager_up', // Customer Care: ask the customer to upload the invoice again (makes the link)
@@ -982,7 +983,7 @@ const ACTION_TIERS = {
 
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
-const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest',
+const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
   'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccLogisticsQuote', 'ccVersion']);
 
 function getAuthRequirement(act) {
@@ -1614,6 +1615,21 @@ export default {
         if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
         const r = await srInvoiceRequest(env, user, body || {});
         return json(r, r.ok ? 200 : 400);
+      }
+      // ── Customer Care Analysis (04-Nov-2026): raw rows since ?from=YYYY-MM-DD; the page does the maths ──
+      if (request.method === 'GET' && action === 'ccAnalyticsData') {
+        try {
+          await ensureServiceRequestCols(env.DB); await ensureDelhiveryTable(env.DB);
+          const from = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('from') || '') ? url.searchParams.get('from') : '2020-01-01';
+          const claims = (await env.DB.prepare(`SELECT claim_id, prev_claim_id, created_at, status, platform, warranty_status,
+              COALESCE(NULLIF(confirmed_sku, ''), NULLIF(confirmed_product, ''), product) AS product, issue_type, case_id, close_reason, closed_at, fb_rating, fb_recommend
+            FROM warranty_claims WHERE created_at >= ? OR closed_at >= ? ORDER BY created_at`).bind(from, from).all()).results || [];
+          const orders = (await env.DB.prepare(`SELECT order_id, claim_id, courier, direction, job_type, created_at, track_stage, received_at, delivered_at,
+              repair_done_at, cancelled_at, reattempts, esc_raised_at, linked_order_id, self_courier,
+              CAST(json_extract(scan_info, '$.picked') AS INTEGER) AS picked_ms
+            FROM delhivery_orders WHERE delhivery_ok = 1 AND (created_at >= ? OR delivered_at >= ?) ORDER BY created_at`).bind(from, from).all()).results || [];
+          return json({ ok: true, from, claims, orders, now: new Date().toISOString() });
+        } catch (e) { console.error('ccAnalyticsData:', e.message); return json({ ok: false, error: e.message }, 500); }
       }
       // ── Customer feedback page (04-Nov-2026) — see srFeedbackRowForToken / srFeedbackSubmit ──
       if (request.method === 'GET' && action === 'feedbackInfo') {
