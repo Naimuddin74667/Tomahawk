@@ -527,6 +527,10 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .cm-muted { font-size: 10.5px; color: var(--text2); margin-top: 1px; }
 .sb-input { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px 9px; font: inherit; font-size: 12px; margin-top: 2px; }
 .sb-input:focus { outline: none; border-color: var(--accent); }
+.sb-pkg { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sb-pkg .sb-input { width: 80px; margin-top: 0; }
+.pkg-src { font-size: 11px; font-weight: 600; color: var(--text2); text-transform: none; letter-spacing: 0; margin-left: 4px; }
+.cm-k .lq-chip { margin-left: 4px; text-transform: none; letter-spacing: 0; }
 .sb-chips { display: flex; gap: 10px; flex-wrap: wrap; }
 .sb-chip { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 200px; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; font: inherit; font-size: 12px; text-align: left; }
 .sb-chip span { font-size: 11px; color: var(--green); }
@@ -2801,7 +2805,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       length: sh.shipment_length || undefined, width: sh.shipment_width || undefined, height: sh.shipment_height || undefined,
       courier: r.courier === 'Ekart' ? 'Ekart' : 'Delhivery',
       market_order_id: r.market_order_id || undefined,   // send-back keeps the customer's order ID
-      _prefix: t.prefix, _sku: sku
+      _prefix: t.prefix, _sku: sku,
+      _pkgSrc: (sh.weight && sh.shipment_length) ? 'pickup' : ''
     };
   }
   var COURIERS = ['Delhivery', 'Ekart'];
@@ -2866,7 +2871,19 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     }
     btn.disabled = true; btn.textContent = 'Checking…';
     sb = { c: c, o: o, btn: btn, sv: {}, refused: {}, note: '' };
-    await Promise.all([loadSkuSources(), checkCouriers()]);
+    await loadSkuSources();
+    if (!o._pkgSrc) {             // pickup had no stored size → listing, else defaults
+      var info = lookupSku(o._sku);
+      if (info && info.weight && info.length && info.width && info.height) {
+        o.weight = Math.ceil(Number(info.weight) * 0.5);
+        o.length = Math.ceil(info.length); o.width = Math.ceil(info.width); o.height = Math.ceil(info.height);
+        o._pkgSrc = 'listing';
+      } else {
+        o.weight = o.weight || 2000; o.length = o.length || 30; o.width = o.width || 20; o.height = o.height || 15;
+        o._pkgSrc = 'default';
+      }
+    }
+    await checkCouriers();
     // Start on the pickup's courier if it can deliver, else the other.
     if (!sb.sv[o.courier] || !sb.sv[o.courier].ok) {
       var alt = COURIERS.filter(function (x) { return x !== o.courier && sb.sv[x] && sb.sv[x].ok; })[0];
@@ -2886,7 +2903,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       products_desc: 'Repair - ' + sku, job_type: 'Repair', remark: (r.claim_id + ' · ' + (r.issue_type || '')).slice(0, 300),
       direction: 'reverse', payment_mode: 'Pickup', quantity: '1', total_amount: '', hsn_code: '8467',
       weight: 2000, length: 30, width: 20, height: 15,          // replaced from the listing below when known
-      courier: 'Ekart', market_order_id: r.order_id || undefined, _sku: sku, _claim: r.claim_id
+      courier: 'Ekart', market_order_id: r.order_id || undefined, _sku: sku, _claim: r.claim_id, _pkgSrc: 'default'
     };
   }
   function applySkuInfo(o) {
@@ -2895,6 +2912,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (info.price) o.total_amount = String(+(info.price * (parseInt(o.quantity, 10) || 1)).toFixed(2));
     if (info.weight) o.weight = Math.ceil(Number(info.weight) * 0.5);
     if (info.length && info.width && info.height) { o.length = Math.ceil(info.length); o.width = Math.ceil(info.width); o.height = Math.ceil(info.height); }
+    if (info.weight || (info.length && info.width && info.height)) o._pkgSrc = 'listing';
   }
   async function startPickup(r, btn) {
     var o = pickupOrder(r);
@@ -3030,6 +3048,14 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
           '<input class="sb-input" id="sb-product" list="sb-skus" value="' + esc(o._sku) + '" autocomplete="off">' +
           '<datalist id="sb-skus">' + (skuList || []).map(function (x) { return '<option value="' + esc(x) + '">'; }).join('') + '</datalist></div>' +
         '<div><div class="cm-k">Value (₹)</div><input class="sb-input" id="sb-value" type="number" min="1" value="' + esc(o.total_amount) + '"></div>' +
+        // Package (04-Nov-2026): exactly what gets booked — check before confirming.
+        '<div class="span3"><div class="cm-k">Package — L × W × H (cm) · Weight (kg) ' + pkgTag(o._pkgSrc) + '</div>' +
+          '<div class="sb-pkg">' +
+            '<input class="sb-input" id="sb-l" type="number" min="1" value="' + esc(o.length) + '" title="Length (cm)"> × ' +
+            '<input class="sb-input" id="sb-w" type="number" min="1" value="' + esc(o.width) + '" title="Width (cm)"> × ' +
+            '<input class="sb-input" id="sb-h" type="number" min="1" value="' + esc(o.height) + '" title="Height (cm)"> <span class="pay-hint">cm</span>' +
+            '<input class="sb-input" id="sb-kg" type="number" min="0.1" step="0.1" value="' + (Math.round((Number(o.weight) || 0) / 100) / 10) + '" title="Weight (kg)"> <span class="pay-hint">kg</span>' +
+          '</div></div>' +
       '</div>' +
       '<div class="cm-k" style="margin:12px 0 6px">Courier partner &amp; serviceability for ' + esc(o.pin) + '</div>' +
       '<div class="sb-chips">' + chips + '</div>' +
@@ -3059,6 +3085,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
             if (info.price) o.total_amount = String(+(info.price * (parseInt(o.quantity, 10) || 1)).toFixed(2));
             if (info.weight) o.weight = Math.ceil(Number(info.weight) * 0.5);
             if (info.length && info.width && info.height) { o.length = Math.ceil(info.length); o.width = Math.ceil(info.width); o.height = Math.ceil(info.height); }
+            if (info.weight || (info.length && info.width && info.height)) o._pkgSrc = 'listing';
           }
         }
         await checkCouriers();
@@ -3071,6 +3098,12 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     }
     document.getElementById('sb-product').addEventListener('change', changed);
     document.getElementById('sb-value').addEventListener('change', changed);
+    ['sb-l', 'sb-w', 'sb-h', 'sb-kg'].forEach(function (id) {
+      document.getElementById(id).addEventListener('change', function (e) {
+        if (!(parseFloat(e.target.value) > 0)) { alert('Enter a size / weight above 0.'); renderSendBack(); return; }
+        o._pkgSrc = 'edited'; changed(e);
+      });
+    });
     document.getElementById('sb-pin').addEventListener('change', function (e) {
       var v = e.target.value.replace(/\D/g, '');
       if (!/^\d{6}$/.test(v)) { alert('Enter a valid 6-digit PIN.'); e.target.value = o.pin; return; }
@@ -3086,12 +3119,27 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     document.getElementById('sb-yes').addEventListener('click', function () { readInputs(); sb.mode === 'pickup' ? bookPickup(this) : bookSendBack(this); });
   }
 
+  // Where the package numbers came from — shown next to the Package label.
+  function pkgTag(src) {
+    if (src === 'default') return '<span class="lq-chip">&#9888; Default size — check before booking</span>';
+    if (src === 'listing') return '<span class="pkg-src">from listing (½ weight)</span>';
+    if (src === 'pickup') return '<span class="pkg-src">same as pickup</span>';
+    if (src === 'edited') return '<span class="pkg-src">edited</span>';
+    return '';
+  }
+
   function readInputs() {
     var p = document.getElementById('sb-product'), v = document.getElementById('sb-value');
     if (p) sb.o._sku = p.value.trim() || sb.o._sku;
     if (v && v.value) sb.o.total_amount = v.value;
     var ad = document.getElementById('sb-address');
     if (ad && ad.value.trim()) sb.o.add = ad.value.trim();
+    ['l:length', 'w:width', 'h:height'].forEach(function (x) {
+      var f = x.split(':'), e = document.getElementById('sb-' + f[0]), n = e && Math.ceil(parseFloat(e.value));
+      if (n > 0) sb.o[f[1]] = n;
+    });
+    var kgEl = document.getElementById('sb-kg'), g = kgEl && Math.round(parseFloat(kgEl.value) * 1000);
+    if (g > 0) sb.o.weight = g;
     sb.o.products_desc = sb.o.job_type + ' - ' + sb.o._sku;
   }
 
