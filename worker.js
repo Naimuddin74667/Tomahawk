@@ -140,6 +140,14 @@ async function computeOosList(env) {
 // Low-stock list: 0 < E3 < Rec. Qty and G4 > 0 — same rule as the app's
 // "Low Stock in E3" card. Rec. Qty = SKU override (sa_recqty_overrides),
 // else the Settings default (sa_settings.default_rec_qty), else 10.
+// Rec. Qty can be in pcs or boxes (rec_unit / default_rec_unit). Box values
+// are converted with UC Pieces Per Carton; if that's missing, 5 pcs is used.
+const SA_BOX_FALLBACK_PCS = 5;
+function saRecLimitPcs(qty, unit, piecesPerCarton) {
+  if (unit !== 'box') return qty;
+  const ppc = Number(piecesPerCarton);
+  return ppc > 0 ? qty * ppc : SA_BOX_FALLBACK_PCS;
+}
 async function computeLowList(env) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured on Worker');
   const res = await fetch(env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/rpc/stock_alert_inventory', {
@@ -153,16 +161,19 @@ async function computeLowList(env) {
   const archivedSet = new Set((archived.results || []).map(r => r.sku_code));
   let overrides = {};
   try {
-    const o = await env.DB.prepare('SELECT sku_code, rec_qty FROM sa_recqty_overrides').all();
-    (o.results || []).forEach(r => { if (r.rec_qty !== null && r.rec_qty !== '') overrides[r.sku_code] = Number(r.rec_qty); });
+    const o = await env.DB.prepare('SELECT * FROM sa_recqty_overrides').all();
+    (o.results || []).forEach(r => { if (r.rec_qty !== null && r.rec_qty !== '') overrides[r.sku_code] = { qty: Number(r.rec_qty), unit: r.rec_unit === 'box' ? 'box' : 'pcs' }; });
   } catch (e) { overrides = {}; /* table not created yet */ }
   const defRaw = await saGetSetting(env.DB, 'default_rec_qty');
-  const def = (defRaw !== null && defRaw !== '' && !isNaN(Number(defRaw))) ? Number(defRaw) : 10;
+  const defSet = defRaw !== null && defRaw !== '' && !isNaN(Number(defRaw));
+  const def = defSet ? Number(defRaw) : 10;
+  const defUnit = defSet && (await saGetSetting(env.DB, 'default_rec_unit')) === 'box' ? 'box' : 'pcs';
   return (data.rows || [])
     .filter(r => r.enabled !== false && !archivedSet.has(r.skuCode))
     .filter(r => {
       const e3 = Number(r.E3_stock), g4 = Number(r.G4_stock);
-      const limit = overrides.hasOwnProperty(r.skuCode) && !isNaN(overrides[r.skuCode]) ? overrides[r.skuCode] : def;
+      const o = overrides.hasOwnProperty(r.skuCode) && !isNaN(overrides[r.skuCode].qty) ? overrides[r.skuCode] : { qty: def, unit: defUnit };
+      const limit = saRecLimitPcs(o.qty, o.unit, r.piecesPerCarton);
       return e3 > 0 && e3 < limit && g4 > 0;
     })
     .map(r => ({ sku: r.skuCode, g4: Number(r.G4_stock), e3: Number(r.E3_stock) }))
@@ -2366,7 +2377,7 @@ export default {
         if (action === 'sa_getRecQtyOverrides') {
           await ensureSaTables(env.DB);
           const rows = await env.DB.prepare(
-            'SELECT sku_code, rec_qty, updated_at FROM sa_recqty_overrides ORDER BY sku_code ASC'
+            'SELECT * FROM sa_recqty_overrides ORDER BY sku_code ASC'
           ).all();
           return json({ ok: true, rows: rows.results || [] });
         }
@@ -2458,7 +2469,7 @@ export default {
             ),
             env.DB.prepare('SELECT sku_code, name, qty_per_box, confirmed, updated_at FROM sa_qty_overrides ORDER BY sku_code ASC').all(),
             env.DB.prepare('SELECT sku_code, archived_at FROM sa_archived_skus ORDER BY archived_at DESC').all(),
-            env.DB.prepare('SELECT sku_code, rec_qty, updated_at FROM sa_recqty_overrides ORDER BY sku_code ASC').all(),
+            env.DB.prepare('SELECT * FROM sa_recqty_overrides ORDER BY sku_code ASC').all(),
             env.DB.prepare('SELECT key, value FROM sa_settings').all(),
             env.DB.prepare('SELECT sku_code, total_box, updated_at FROM sa_g4_box_counts ORDER BY sku_code ASC').all()
           ]);
@@ -4323,15 +4334,16 @@ export default {
         // ── STOCK ALERT — save one manual Rec. Qty override ───
         if (act === 'sa_saveRecQtyOverride') {
           await ensureSaTables(env.DB);
-          const { skuCode, recQty } = body;
+          const { skuCode, recQty, recUnit } = body;
           if (!skuCode) return json({ ok: false, error: 'skuCode required' }, 400);
           await env.DB.prepare(`
-            INSERT INTO sa_recqty_overrides (sku_code, rec_qty, updated_at)
-            VALUES (?, ?, datetime('now'))
+            INSERT INTO sa_recqty_overrides (sku_code, rec_qty, rec_unit, updated_at)
+            VALUES (?, ?, ?, datetime('now'))
             ON CONFLICT(sku_code) DO UPDATE SET
               rec_qty = excluded.rec_qty,
+              rec_unit = excluded.rec_unit,
               updated_at = excluded.updated_at
-          `).bind(skuCode, recQty || 0).run();
+          `).bind(skuCode, recQty || 0, recUnit === 'box' ? 'box' : 'pcs').run();
           return json({ ok: true });
         }
 
@@ -10747,6 +10759,8 @@ async function ensureSaTables(DB) {
   // column existed — CREATE TABLE IF NOT EXISTS above won't add it to an
   // already-existing sa_qty_overrides table, so ALTER it in separately.
   try { await DB.prepare(`ALTER TABLE sa_qty_overrides ADD COLUMN confirmed INTEGER DEFAULT 0`).run(); } catch(e) { /* column already exists — safe to ignore */ }
+  // Rec. Qty unit: 'pcs' (default, all older rows) or 'box' (× UC Pieces Per Carton)
+  try { await DB.prepare(`ALTER TABLE sa_recqty_overrides ADD COLUMN rec_unit TEXT DEFAULT 'pcs'`).run(); } catch(e) { /* column already exists — safe to ignore */ }
 }
 
 // ══════════════════════════════════════════════════════════════════

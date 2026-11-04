@@ -441,6 +441,13 @@ table.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .recqty-save-btn { color: var(--c-green); }
 .recqty-cancel-btn { color: var(--text-muted); }
 .recqty-save-btn:hover, .recqty-cancel-btn:hover { background: var(--bg-hover); }
+.recqty-sub { display: block; font-size: 10.5px; color: var(--text-muted); font-weight: 500; font-style: normal; }
+.recqty-warn { color: var(--accent); cursor: help; margin-left: 2px; }
+.recqty-unit {
+  background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 4px; font-size: 12px; font-family: inherit;
+}
+.settings-row select.modal-input { flex: 0 0 auto; width: auto; margin-bottom: 0; cursor: pointer; }
 .recqty-saving { color: var(--text-secondary); font-size: 11px; font-style: italic; }
 .recqty-error { color: #f87171; font-size: 11px; cursor: help; }
 
@@ -1057,9 +1064,10 @@ html .site-header [hidden] { display: none !important; }
         <div class="settings-grid">
             <div class="settings-card">
               <div class="settings-section-title">Default Rec. Qty</div>
-              <div class="settings-section-hint">Used for every SKU without its own value. Leave blank to show "NA".</div>
+              <div class="settings-section-hint">Used for every SKU without its own value. Leave blank to show "NA". Box = qty × UC Qty/Box (5 pcs if Qty/Box missing).</div>
               <div class="settings-row">
                 <input type="number" min="0" class="modal-input" id="default-recqty-input" placeholder="20">
+                <select class="modal-input" id="default-recqty-unit"><option value="pcs">Pcs</option><option value="box">Box</option></select>
                 <button class="btn-primary" id="save-default-recqty-btn" style="flex:0 0 auto;">Save</button>
               </div>
               <div class="settings-section-hint" id="default-recqty-status" style="margin:8px 0 0;"></div>
@@ -1071,6 +1079,7 @@ html .site-header [hidden] { display: none !important; }
               <div class="settings-row">
                 <input type="text" class="modal-input" id="new-recqty-sku-input" placeholder="SKU code" style="flex:1.4;">
                 <input type="number" min="0" class="modal-input" id="new-recqty-qty-input" placeholder="Qty" style="flex:0.8;">
+                <select class="modal-input" id="new-recqty-unit"><option value="pcs">Pcs</option><option value="box">Box</option></select>
                 <button class="btn-primary" id="add-recqty-override-btn" style="flex:0 0 auto;">Add</button>
               </div>
               <div class="settings-override-list" id="recqty-override-list" style="margin-top:10px;background:var(--bg-surface);"></div>
@@ -1274,6 +1283,8 @@ html .site-header [hidden] { display: none !important; }
   var visibleRows = [];      // idleRows after search/category/brand/toggle filters
   var archivedSkus = {};     // { skuCode: true } — manually archived SKUs, from D1 (sa_archived_skus)
   var recQtyOverrides = {};  // { skuCode: number } — manually saved Rec. Qty, from D1 (sa_recqty_overrides)
+  var recQtyUnits = {};      // { skuCode: 'pcs' | 'box' } — unit of each override (D1: rec_unit)
+  var REC_BOX_FALLBACK_PCS = 5; // Box Rec. Qty but no Qty/Box in UC → use 5 pcs
   var appSettings = {};      // { default_rec_qty: '20', ... } — from D1 (sa_settings)
   var bundleComponentMap = {}; // { childSku: [parentSku, ...] } — components of at least one channel-linked bundle (see computeBundleComponents)
   var inventoryBySku = {};   // { skuCode: row } — quick lookup into allRows, used by Bundle SKU view's Stock column
@@ -1303,6 +1314,8 @@ html .site-header [hidden] { display: none !important; }
   var settingsModalOverlay = document.getElementById('settings-modal-overlay');
   var settingsCloseBtn = document.getElementById('settings-close-btn');
   var defaultRecQtyInput = document.getElementById('default-recqty-input');
+  var defaultRecQtyUnit = document.getElementById('default-recqty-unit');
+  var newRecQtyUnit = document.getElementById('new-recqty-unit');
   var saveDefaultRecQtyBtn = document.getElementById('save-default-recqty-btn');
   var defaultRecQtyStatus = document.getElementById('default-recqty-status');
   var newRecQtySkuInput = document.getElementById('new-recqty-sku-input');
@@ -1351,12 +1364,15 @@ html .site-header [hidden] { display: none !important; }
         });
 
         recQtyOverrides = {};
+        recQtyUnits = {};
         (data.recQty || []).forEach(function (row) {
           recQtyOverrides[row.sku_code] = row.rec_qty;
+          recQtyUnits[row.sku_code] = row.rec_unit === 'box' ? 'box' : 'pcs';
         });
 
         appSettings = data.settings || {};
         defaultRecQtyInput.value = (appSettings.default_rec_qty != null && appSettings.default_rec_qty !== '') ? appSettings.default_rec_qty : '';
+        defaultRecQtyUnit.value = appSettings.default_rec_unit === 'box' ? 'box' : 'pcs';
         renderRecQtySettingsList();
 
         // Bundle SKU data — live from the Supabase mirror. If this fetch
@@ -1504,7 +1520,7 @@ html .site-header [hidden] { display: none !important; }
       baseRows = allRows.filter(function (r) {
         var e3 = Number(r.E3_stock) || 0;
         var g4 = Number(r.G4_stock) || 0;
-        return e3 > 0 && e3 < lowStockLimit(r.skuCode) && g4 > 0;
+        return e3 > 0 && e3 < lowStockLimit(r) && g4 > 0;
       });
     } else if (currentView === 'idealstock') {
       // E3 has stock (live to sell) but no channel listing exists anywhere —
@@ -1572,7 +1588,7 @@ html .site-header [hidden] { display: none !important; }
     allRows.forEach(function (r) {
       var e3 = Number(r.E3_stock) || 0;
       var g4 = Number(r.G4_stock) || 0;
-      if (e3 > 0 && e3 < lowStockLimit(r.skuCode) && g4 > 0) lowStockCount++;
+      if (e3 > 0 && e3 < lowStockLimit(r) && g4 > 0) lowStockCount++;
     });
 
     // "Ideal Stock" — E3 has stock (live to sell) but the SKU isn't linked
@@ -1624,35 +1640,73 @@ html .site-header [hidden] { display: none !important; }
       (loose ? '<span class="loose-hint">+' + loose + ' pcs</span>' : '') + '</td>';
   }
 
-  // Low Stock threshold for one SKU = its Rec. Qty (SKU override first,
-  // then the Settings default). A SKU is "low" when 0 < E3 < this number.
-  // Falls back to 10 only if no Rec. Qty is set anywhere.
-  function lowStockLimit(sku) {
-    var v = recQtyOverrides.hasOwnProperty(sku) ? recQtyOverrides[sku] : null;
-    if (v === null || v === undefined || v === '') v = appSettings.default_rec_qty;
-    var n = Number(v);
-    return (v === null || v === undefined || v === '' || isNaN(n)) ? 10 : n;
+  // Rec. Qty for one SKU as { qty, unit, src } — SKU override first, then
+  // the Settings default. src = 'sku' | 'default' | null (nothing set).
+  function getRecQty(sku) {
+    if (recQtyOverrides.hasOwnProperty(sku) && recQtyOverrides[sku] !== null && recQtyOverrides[sku] !== '') {
+      return { qty: Number(recQtyOverrides[sku]), unit: recQtyUnits[sku] === 'box' ? 'box' : 'pcs', src: 'sku' };
+    }
+    var def = appSettings.default_rec_qty;
+    if (def !== null && def !== undefined && def !== '' && !isNaN(Number(def))) {
+      return { qty: Number(def), unit: appSettings.default_rec_unit === 'box' ? 'box' : 'pcs', src: 'default' };
+    }
+    return { qty: null, unit: 'pcs', src: null };
+  }
+
+  // Rec. Qty in pieces. Box values = boxes × UC Qty/Box; if the SKU has no
+  // Qty/Box in UC yet, fall back to REC_BOX_FALLBACK_PCS (5) pieces.
+  function recQtyInPcs(rec, r) {
+    if (rec.unit !== 'box') return rec.qty;
+    var q = r ? getQtyPerBoxValue(r) : 0;
+    return q ? rec.qty * q : REC_BOX_FALLBACK_PCS;
+  }
+
+  // Low Stock threshold for one SKU row, in pieces. A SKU is "low" when
+  // 0 < E3 < this number. Falls back to 10 only if no Rec. Qty is set anywhere.
+  // (Worker's computeLowList uses the same rule for WhatsApp alerts.)
+  function lowStockLimit(r) {
+    var rec = getRecQty(r.skuCode);
+    return rec.src ? recQtyInPcs(rec, r) : 10;
+  }
+
+  function findRow(sku) {
+    for (var i = 0; i < allRows.length; i++) if (allRows[i].skuCode === sku) return allRows[i];
+    return null;
+  }
+
+  // "2 box" + "= 20 pcs" line (or ⚠ when Qty/Box is missing in UC)
+  function recQtyLabelHtml(rec, r) {
+    if (rec.unit !== 'box') return escapeHtml(rec.qty);
+    var html = escapeHtml(rec.qty) + ' box';
+    if (r && getQtyPerBoxValue(r)) {
+      html += '<span class="recqty-sub">= ' + recQtyInPcs(rec, r) + ' pcs</span>';
+    } else {
+      html += '<span class="recqty-warn" title="Qty/Box not in UC — enter Pieces Per Carton for this SKU in Unicommerce. Using ' +
+        REC_BOX_FALLBACK_PCS + ' pcs until then.">&#9888;</span>' +
+        '<span class="recqty-sub">using ' + REC_BOX_FALLBACK_PCS + ' pcs</span>';
+    }
+    return html;
   }
 
   // ---- REC. QTY CELL ------------------------------------------------------
   // Priority 1: SKU-specific manual override (D1: sa_recqty_overrides)
-  // Priority 2: app-wide default (D1: sa_settings.default_rec_qty), set from
-  //             the Settings modal — shown in muted/italic style
+  // Priority 2: app-wide default (D1: sa_settings.default_rec_qty + default_rec_unit),
+  //             set from the Settings modal — shown in muted/italic style
   // Priority 3: nothing set at all — "NA", still editable via ✎
   function renderRecQtyCell(r) {
     var sku = r.skuCode;
+    var rec = getRecQty(sku);
 
-    if (recQtyOverrides.hasOwnProperty(sku) && recQtyOverrides[sku] !== null && recQtyOverrides[sku] !== '') {
+    if (rec.src === 'sku') {
       return '<td class="num recqty-cell" title="Manually saved override — click ✎ to edit">' +
-        '<span class="recqty-value">' + escapeHtml(recQtyOverrides[sku]) + '</span>' +
+        '<span class="recqty-value">' + recQtyLabelHtml(rec, r) + '</span>' +
         '<button type="button" class="recqty-edit-btn" data-sku="' + escapeHtml(sku) + '" title="Edit">✎</button>' +
         '</td>';
     }
 
-    var def = appSettings.default_rec_qty;
-    if (def !== null && def !== undefined && def !== '') {
+    if (rec.src === 'default') {
       return '<td class="num recqty-cell" title="Default from Settings — click ✎ to set a value just for this SKU">' +
-        '<span class="recqty-value recqty-default-value">' + escapeHtml(def) + '</span>' +
+        '<span class="recqty-value recqty-default-value">' + recQtyLabelHtml(rec, r) + '</span>' +
         '<button type="button" class="recqty-edit-btn" data-sku="' + escapeHtml(sku) + '" title="Set SKU-specific value">✎</button>' +
         '</td>';
     }
@@ -1662,13 +1716,26 @@ html .site-header [hidden] { display: none !important; }
       '</td>';
   }
 
+  // Box Rec. Qty saved for a SKU with no Qty/Box in UC → ask the team to enter it.
+  function warnIfNoQtyBox(sku, unit) {
+    if (unit !== 'box') return;
+    var r = findRow(sku);
+    if (r && getQtyPerBoxValue(r)) return;
+    var msg = sku + ': no Qty/Box in UC — please enter Pieces Per Carton in Unicommerce. Using ' + REC_BOX_FALLBACK_PCS + ' pcs until then.';
+    if (typeof toast === 'function') toast(msg, 'err'); else alert(msg);
+  }
+
   // Turns a Rec. qty cell into an inline edit row (input + save/cancel)
   function enterRecQtyEditMode(cell, sku) {
-    var current = recQtyOverrides.hasOwnProperty(sku) ? recQtyOverrides[sku] : '';
-    if (current === '' && appSettings.default_rec_qty) current = appSettings.default_rec_qty;
+    var rec = getRecQty(sku);
+    var current = rec.src ? rec.qty : '';
     cell.innerHTML =
       '<div class="recqty-edit-row">' +
         '<input type="number" min="0" class="recqty-input" value="' + escapeHtml(current) + '">' +
+        '<select class="recqty-unit" title="Pieces or boxes">' +
+          '<option value="pcs"' + (rec.unit !== 'box' ? ' selected' : '') + '>Pcs</option>' +
+          '<option value="box"' + (rec.unit === 'box' ? ' selected' : '') + '>Box</option>' +
+        '</select>' +
         '<button type="button" class="recqty-save-btn" data-sku="' + escapeHtml(sku) + '" title="Save">✓</button>' +
         '<button type="button" class="recqty-cancel-btn" title="Cancel">✕</button>' +
       '</div>';
@@ -1679,6 +1746,7 @@ html .site-header [hidden] { display: none !important; }
 
   function saveRecQtyOverride(sku, cell) {
     var input = cell.querySelector('.recqty-input');
+    var unit = cell.querySelector('.recqty-unit').value === 'box' ? 'box' : 'pcs';
     var val = parseInt(input.value, 10);
     if (!(val >= 0)) {
       input.classList.add('qty-error');
@@ -1690,12 +1758,14 @@ html .site-header [hidden] { display: none !important; }
     fetch(WORKER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'sa_saveRecQtyOverride', skuCode: sku, recQty: val })
+      body: JSON.stringify({ action: 'sa_saveRecQtyOverride', skuCode: sku, recQty: val, recUnit: unit })
     })
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (!data || data.ok === false) throw new Error((data && data.error) || 'Save failed');
         recQtyOverrides[sku] = val;
+        recQtyUnits[sku] = unit;
+        warnIfNoQtyBox(sku, unit);
         applyFilters(); // Rec. Qty drives the Low Stock list + count
         renderRecQtySettingsList(); // keep the Settings modal list in sync if it's open
       })
@@ -1714,6 +1784,7 @@ html .site-header [hidden] { display: none !important; }
       .then(function (data) {
         if (!data || data.ok === false) throw new Error((data && data.error) || 'Delete failed');
         delete recQtyOverrides[sku];
+        delete recQtyUnits[sku];
         applyFilters(); // Rec. Qty drives the Low Stock list + count
         renderRecQtySettingsList();
         if (onDone) onDone(null);
@@ -1916,6 +1987,15 @@ html .site-header [hidden] { display: none !important; }
   });
 
   // ---- SETTINGS MODAL — Rec. Qty ----------------------------------------
+  // "2 box (= 20 pcs)" / "2 box (⚠ no Qty/Box — 5 pcs)" / "10"
+  function settingsRecLabel(sku) {
+    var rec = getRecQty(sku);
+    if (rec.unit !== 'box') return escapeHtml(rec.qty);
+    var r = findRow(sku);
+    return escapeHtml(rec.qty) + ' box ' + (r && getQtyPerBoxValue(r)
+      ? '(= ' + recQtyInPcs(rec, r) + ' pcs)'
+      : '(&#9888; no Qty/Box in UC — ' + REC_BOX_FALLBACK_PCS + ' pcs)');
+  }
   function renderRecQtySettingsList() {
     var skus = Object.keys(recQtyOverrides).sort();
     if (!skus.length) {
@@ -1925,7 +2005,7 @@ html .site-header [hidden] { display: none !important; }
     recQtyOverrideList.innerHTML = skus.map(function (sku) {
       return '<div class="settings-override-row">' +
         '<span><span class="settings-override-sku">' + escapeHtml(sku) + '</span>' +
-        '<span class="settings-override-qty">' + escapeHtml(recQtyOverrides[sku]) + '</span></span>' +
+        '<span class="settings-override-qty">' + settingsRecLabel(sku) + '</span></span>' +
         '<button type="button" class="settings-override-remove" data-sku="' + escapeHtml(sku) + '" title="Remove">✕</button>' +
         '</div>';
     }).join('');
@@ -1949,6 +2029,7 @@ html .site-header [hidden] { display: none !important; }
       return;
     }
     defaultRecQtyInput.style.borderColor = '';
+    var defUnit = defaultRecQtyUnit.value === 'box' ? 'box' : 'pcs';
     defaultRecQtyStatus.textContent = 'Saving…';
     fetch(WORKER_URL, {
       method: 'POST',
@@ -1958,8 +2039,19 @@ html .site-header [hidden] { display: none !important; }
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (!data || data.ok === false) throw new Error((data && data.error) || 'Save failed');
+        // Save the unit too (Pcs / Box)
+        return fetch(WORKER_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'sa_saveSettings', key: 'default_rec_unit', value: defUnit })
+        }).then(function (r) { return r.json(); });
+      })
+      .then(function (data) {
+        if (!data || data.ok === false) throw new Error((data && data.error) || 'Save failed');
         appSettings.default_rec_qty = raw;
-        defaultRecQtyStatus.textContent = raw === '' ? 'Cleared — SKUs without an override will show NA.' : 'Saved.';
+        appSettings.default_rec_unit = defUnit;
+        defaultRecQtyStatus.textContent = raw === '' ? 'Cleared — SKUs without an override will show NA.' :
+          (defUnit === 'box' ? 'Saved — ' + raw + ' box per SKU (× its Qty/Box; ' + REC_BOX_FALLBACK_PCS + ' pcs where Qty/Box is missing in UC).' : 'Saved.');
         applyFilters(); // Rec. Qty drives the Low Stock list + count
       })
       .catch(function (err) {
@@ -1975,16 +2067,19 @@ html .site-header [hidden] { display: none !important; }
     if (!(qty >= 0)) { newRecQtyQtyInput.style.borderColor = '#f87171'; newRecQtyQtyInput.focus(); return; }
     newRecQtySkuInput.style.borderColor = '';
     newRecQtyQtyInput.style.borderColor = '';
+    var unit = newRecQtyUnit.value === 'box' ? 'box' : 'pcs';
 
     fetch(WORKER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'sa_saveRecQtyOverride', skuCode: sku, recQty: qty })
+      body: JSON.stringify({ action: 'sa_saveRecQtyOverride', skuCode: sku, recQty: qty, recUnit: unit })
     })
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (!data || data.ok === false) throw new Error((data && data.error) || 'Save failed');
         recQtyOverrides[sku] = qty;
+        recQtyUnits[sku] = unit;
+        warnIfNoQtyBox(sku, unit);
         newRecQtySkuInput.value = '';
         newRecQtyQtyInput.value = '';
         renderRecQtySettingsList();
@@ -2267,7 +2362,7 @@ html .site-header [hidden] { display: none !important; }
     var def = document.getElementById('default-recqty-input').value;
     var n = document.querySelectorAll('#recqty-override-list .settings-override-row').length;
     document.getElementById('recqty-folder-sum').textContent =
-      'Default ' + (def || 'NA') + ' · ' + n + ' override' + (n === 1 ? '' : 's');
+      'Default ' + (def ? def + (document.getElementById('default-recqty-unit').value === 'box' ? ' box' : '') : 'NA') + ' · ' + n + ' override' + (n === 1 ? '' : 's');
     var label = document.getElementById('wa-info-label').textContent;
     var m = label.match(/(\d+) SKU/);
     var rec = document.getElementById('wa-recipients-label').textContent.match(/\((\d+) of/);
