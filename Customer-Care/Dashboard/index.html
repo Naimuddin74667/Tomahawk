@@ -852,6 +852,23 @@ html .site-header [hidden] { display: none !important; }
   Fills use --hero (#F7A600); in light, --accent is the darker --hero-deep so
   yellow TEXT stays readable on white.
 ══════════════════════════════════════════════════════════════════════ -->
+<style>
+/* New requests header on one line: title | slim cards | search (04-Nov-2026) */
+.req-head { flex-wrap: nowrap; gap: 14px; }
+.req-head .panel-title { white-space: nowrap; padding-right: 14px; border-right: 1px solid var(--border); }
+body .req-head .req-chips { flex: 1; min-width: 0; display: flex; flex-wrap: nowrap; gap: 8px; margin: 0; }
+.req-head .tools { flex-shrink: 0; }
+.req-card { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: transparent; font: inherit; cursor: pointer; text-align: left; }
+.req-card b { font-size: 17px; font-weight: 800; line-height: 1.15; color: var(--hero); }
+.req-card span { font-size: 11.5px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.req-card:hover { border-color: var(--hero); }
+.req-card.on { border-color: var(--hero); background: var(--hero-soft); }
+.req-card.on span { color: var(--text); font-weight: 600; }
+.req-card-done { flex: 0 0 96px; margin-left: 8px; background: var(--surface2, rgba(0,0,0,.03)); }
+.req-card-done b { color: var(--text2); }
+@media (max-width: 1100px) { .req-head { flex-wrap: wrap; } .req-head .req-chips { order: 3; flex-basis: 100%; } }
+</style>
 <style id="control-room">
 @font-face { font-family: 'Manrope'; src: url('/Tomahawk/assets/fonts/Manrope-var.woff2') format('woff2'); font-weight: 200 800; font-display: swap; }
 
@@ -1160,14 +1177,15 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 
   <!-- New requests: service requests from the website, to review and act on -->
   <div class="panel" id="req-panel" style="display:none">
-    <div class="panel-head-row">
+    <!-- One line (04-Nov-2026): title | slim filter cards | search + refresh -->
+    <div class="panel-head-row req-head">
       <div class="panel-title">New requests</div>
+      <div class="req-chips" id="req-chips"></div>
       <div class="tools">
         <input type="search" id="req-q" placeholder="Search request ID, customer, phone, order, product…">
         <span class="log-refresh cc-upd" title="Updates by itself while this tab is open"></span><span class="log-refresh" id="req-refresh">&#8635; Refresh</span>
       </div>
     </div>
-    <div class="req-chips" id="req-chips"></div>
     <div class="table-wrap">
       <table class="case-table">
         <thead><tr><th>Request</th><th>Customer</th><th>Platform</th><th>Order ID</th><th>Product</th><th>Problem</th><th>Status</th><th>Files</th></tr></thead>
@@ -4185,12 +4203,14 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
 
   function renderRequests() {
     var chips = document.getElementById('req-chips');
-    chips.innerHTML = REQ_FILTERS.map(function (f) {
-      return '<button class="req-chip' + (reqFilter === f.key ? ' on' : '') + '" data-k="' + f.key + '">' +
-        esc(f.label) + ' <b>' + requests.filter(f.test).length + '</b></button>';
+    // Slim cards (04-Nov-2026): the 4 working filters, then Closed (greyed). No "All" card —
+    // clicking the selected card again shows everything.
+    chips.innerHTML = REQ_FILTERS.filter(function (f) { return f.key !== 'all'; }).map(function (f) {
+      return '<button class="req-card' + (reqFilter === f.key ? ' on' : '') + (f.key === 'done' ? ' req-card-done' : '') + '" data-k="' + f.key + '">' +
+        '<b>' + requests.filter(f.test).length + '</b><span>' + esc(f.label) + '</span></button>';
     }).join('');
-    chips.querySelectorAll('.req-chip').forEach(function (b) {
-      b.addEventListener('click', function () { reqFilter = b.dataset.k; reqPage = 1; renderRequests(); });
+    chips.querySelectorAll('.req-card').forEach(function (b) {
+      b.addEventListener('click', function () { reqFilter = reqFilter === b.dataset.k ? 'all' : b.dataset.k; reqPage = 1; renderRequests(); });
     });
     var q = document.getElementById('req-q').value.trim().toLowerCase();
     var test = reqTest(reqFilter);
