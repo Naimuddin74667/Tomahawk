@@ -1615,6 +1615,22 @@ export default {
         const r = await srInvoiceRequest(env, user, body || {});
         return json(r, r.ok ? 200 : 400);
       }
+      // ── Customer feedback page (04-Nov-2026) — see srFeedbackRowForToken / srFeedbackSubmit ──
+      if (request.method === 'GET' && action === 'feedbackInfo') {
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        if (!(await warrantyRateOk(env.DB, 'fbinfo:' + ip, 30))) return json({ ok: false, error: 'Too many tries — please try again in an hour.' }, 429);
+        const r = await srFeedbackRowForToken(env.DB, url.searchParams.get('t') || '');
+        if (r.error) return json({ ok: false, error: r.error });
+        return json({ ok: true, claim_id: r.row.claim_id, product: r.row.confirmed_sku || r.row.product || '',
+          first_name: String(r.row.name || '').trim().split(/\s+/)[0] || '', closed_reason: r.row.close_reason || '',
+          already_given: !!r.row.fb_at });
+      }
+      if (request.method === 'POST' && act === 'feedbackSubmit') {
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        if (!(await warrantyRateOk(env.DB, 'fbup:' + ip, 10))) return json({ ok: false, error: 'Too many tries — please try again in an hour.' }, 429);
+        try { const r = await srFeedbackSubmit(env, body || {}); return json(r, r.ok ? 200 : 400); }
+        catch (e) { console.error('feedback submit failed:', e.message); return json({ ok: false, error: 'Something went wrong — please try again.' }, 500); }
+      }
       // ── Close a request with a reason (04-Nov-2026) — see srCloseRequest ──
       if (request.method === 'POST' && act === 'ccCloseRequest') {
         const user = authResult.user || (await resolveSession(request, env.DB));
@@ -6870,7 +6886,8 @@ async function ensureServiceRequestCols(DB) {
                      // Invoice re-upload link (29-Oct-2026): SHA-256 of the single-use token + expiry
                      'inv_token_hash TEXT', 'inv_token_expires TEXT', 'inv_request_note TEXT',
                      'med_token_hash TEXT', 'med_token_expires TEXT', 'med_request_note TEXT', 'med_prev_status TEXT',
-                     'close_reason TEXT', 'closed_at TEXT']) {
+                     'close_reason TEXT', 'closed_at TEXT',
+                     'fb_token_hash TEXT', 'fb_token_expires TEXT', 'fb_rating INTEGER', 'fb_comment TEXT', 'fb_recommend INTEGER', 'fb_at TEXT']) {
     try { await DB.prepare('ALTER TABLE warranty_claims ADD COLUMN ' + col).run(); } catch (e) { /* exists */ }
   }
 }
@@ -7056,6 +7073,45 @@ async function srInvoiceRequest(env, user, b) {
   return { ok: true, link, emailed, whatsapp: wa.sent, whatsapp_note: wa.sent ? '' : (wa.skipped || wa.error || '') };
 }
 
+// ── Customer feedback (04-Nov-2026) ──
+// One feedback link per request: …/pages/feedback?t=<token> (SK's page), sent
+// in request_delivered (dynamic button, ${Contacts.Feedback Token}) and
+// request_closed (body, ${Contacts.Feedback Link}). Valid 30 days; a new send
+// makes a new token. One answer per request; it shows in the request History.
+const CC_FEEDBACK_URL = 'https://tomahawk.tools/pages/feedback';
+async function srFeedbackToken(env, row) {
+  await ensureServiceRequestCols(env.DB);
+  const token = randomToken();
+  await env.DB.prepare("UPDATE warranty_claims SET fb_token_hash = ?, fb_token_expires = datetime('now', '+30 days') WHERE claim_id = ?")
+    .bind(await sha256Hex(token), row.claim_id).run();
+  return token;
+}
+async function srFeedbackRowForToken(DB, token) {
+  await ensureServiceRequestCols(DB);
+  if (!token || token.length < 20) return { error: 'This link is not valid.' };
+  const row = await DB.prepare('SELECT * FROM warranty_claims WHERE fb_token_hash = ? LIMIT 1').bind(await sha256Hex(token)).first();
+  if (!row) return { error: 'This link is not valid.' };
+  if (!row.fb_token_expires || new Date(String(row.fb_token_expires).replace(' ', 'T') + 'Z') < new Date())
+    return { error: 'This feedback link has expired. Thank you for thinking of us!' };
+  return { row };
+}
+async function srFeedbackSubmit(env, b) {
+  const t = await srFeedbackRowForToken(env.DB, String(b.t || ''));
+  if (t.error) return { ok: false, error: t.error };
+  const row = t.row;
+  if (row.fb_at) return { ok: false, error: "We've already received your feedback for " + row.claim_id + '. Thank you!' };
+  const rating = parseInt(b.rating, 10);
+  if (!(rating >= 1 && rating <= 5)) return { ok: false, error: 'Please choose a rating from 1 to 5 stars.' };
+  const comment = String(b.comment || '').trim().slice(0, 1000);
+  const rec = b.recommend === true ? 1 : b.recommend === false ? 0 : null;
+  await env.DB.prepare("UPDATE warranty_claims SET fb_rating = ?, fb_comment = ?, fb_recommend = ?, fb_at = datetime('now') WHERE claim_id = ?")
+    .bind(rating, comment || null, rec, row.claim_id).run();
+  await srAddEvent(env.DB, row.claim_id, { by: 'customer', kind: 'feedback',
+    note: '★'.repeat(rating) + '☆'.repeat(5 - rating) + ' (' + rating + '/5)' +
+      (rec === null ? '' : rec ? ' · would recommend' : ' · would not recommend') + (comment ? ' · "' + comment + '"' : '') }, {});
+  return { ok: true, claim_id: row.claim_id };
+}
+
 // ── Close request (04-Nov-2026) ──
 // One "Close request" button with a reason (replaces Resolved / Not covered).
 // Blocks while a pickup is live (cancel it, or send the product back first);
@@ -7115,7 +7171,8 @@ async function srCloseRequest(env, user, b) {
   // 4) WhatsApp request_closed (best effort)
   let wa = { sent: false, skipped: 'not ticked' };
   if (b.whatsapp !== false) {
-    try { wa = await srSendWhatsAppFollowup(env, row, 'request_closed', { 'Close Reason': custText }, new Date().toISOString().slice(0, 16), by); }
+    try { wa = await srSendWhatsAppFollowup(env, row, 'request_closed',
+      { 'Close Reason': custText, 'Feedback Link': CC_FEEDBACK_URL + '?t=' + (await srFeedbackToken(env, row)) }, new Date().toISOString().slice(0, 16), by); }
     catch (e) { wa = { sent: false, error: e.message }; }
   }
   return { ok: true, status, whatsapp: !!wa.sent, whatsapp_note: wa.sent ? '' : (wa.skipped || wa.error || ''), voided, paid_total: paidTot };
@@ -9028,7 +9085,7 @@ async function srSendWhatsAppFollowup(env, row, tpl, fields, ref, by) {
     if (!message || /\$\{/.test(message)) throw new Error('apply returned no usable message text');
     // Button: dynamic (Pay Now → …CInvoiceID=<token>) or static (Track / Feedback)
     const btn = ((items.buttons || []).find(x => /URL/i.test(x.type || '')) || {});
-    const token = vals['Payment Token'] || vals['Upload Token'];
+    const token = vals['Payment Token'] || vals['Upload Token'] || vals['Feedback Token'];
     const urlFull = fill(btn.action || '');
     const tries = token
       ? [{ tag: 'num-id+url', numeric: true, url: urlFull || token }, { tag: 'num-id+token', numeric: true, url: token }, { tag: 'str-id+url', numeric: false, url: urlFull || token }]
@@ -9080,7 +9137,7 @@ async function srWaMilestones(env, onlyClaimId) {
       if ((await srSendWhatsAppFollowup(env, row, 'product_received', {}, '')).sent) sent++;
     const fd = fwd && fwd.track_stage === 'Delivered' ? (fwd.delivered_at || '') : '';
     if (fd && fd >= SR_WA_FOLLOWUP_FROM && !have.includes('request_delivered'))
-      if ((await srSendWhatsAppFollowup(env, row, 'request_delivered', {}, '')).sent) sent++;
+      if ((await srSendWhatsAppFollowup(env, row, 'request_delivered', { 'Feedback Token': await srFeedbackToken(env, row) }, '')).sent) sent++;
   }
   return { checked: rows.length, sent };
 }
