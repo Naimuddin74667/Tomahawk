@@ -727,6 +727,7 @@ const ACTION_TIERS = {
   requestTrack: 'public', // public 'track your request' page — request ID/order ID + mobile, steps only, rate-limited
   orderTrack: 'public', // public 'Track my order' (Shopify) — order no. + mobile, status/items/courier only, rate-limited
   invoiceUploadInfo: 'public', invoiceUploadSubmit: 'public', // customer re-uploads the invoice — single-use link token, rate-limited
+  ccCloseRequest: 'manager_up',   // Customer Care: close a request with a reason (+ WhatsApp request_closed)
   ccMediaRequest: 'manager_up',   // Customer Care: ask for photos / video again (WhatsApp + upload link)
   ccInvoiceRequest: 'manager_up', // Customer Care: ask the customer to upload the invoice again (makes the link)
   ccClaimsList: 'viewer_read', ccClaimGet: 'viewer_read', ccClaimFiles: 'viewer_read', // Customer Care: New requests
@@ -981,7 +982,7 @@ const ACTION_TIERS = {
 
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
-const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest',
+const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest',
   'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccLogisticsQuote', 'ccVersion']);
 
 function getAuthRequirement(act) {
@@ -1613,6 +1614,13 @@ export default {
         if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
         const r = await srInvoiceRequest(env, user, body || {});
         return json(r, r.ok ? 200 : 400);
+      }
+      // ── Close a request with a reason (04-Nov-2026) — see srCloseRequest ──
+      if (request.method === 'POST' && act === 'ccCloseRequest') {
+        const user = authResult.user || (await resolveSession(request, env.DB));
+        if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
+        try { const r = await srCloseRequest(env, user, body || {}); return json(r, r.ok || r.needs_confirm ? 200 : 400); }
+        catch (e) { console.error('ccCloseRequest:', e.message); return json({ ok: false, error: e.message }, 502); }
       }
       // ── Photos / video re-upload (04-Nov-2026) — see srMediaRequest / srMediaUpload ──
       if (request.method === 'POST' && act === 'ccMediaRequest') {
@@ -6861,7 +6869,8 @@ async function ensureServiceRequestCols(DB) {
                      'confirmed_sku TEXT', 'confirmed_product TEXT',
                      // Invoice re-upload link (29-Oct-2026): SHA-256 of the single-use token + expiry
                      'inv_token_hash TEXT', 'inv_token_expires TEXT', 'inv_request_note TEXT',
-                     'med_token_hash TEXT', 'med_token_expires TEXT', 'med_request_note TEXT', 'med_prev_status TEXT']) {
+                     'med_token_hash TEXT', 'med_token_expires TEXT', 'med_request_note TEXT', 'med_prev_status TEXT',
+                     'close_reason TEXT', 'closed_at TEXT']) {
     try { await DB.prepare('ALTER TABLE warranty_claims ADD COLUMN ' + col).run(); } catch (e) { /* exists */ }
   }
 }
@@ -7045,6 +7054,71 @@ async function srInvoiceRequest(env, user, b) {
       (wa.sent ? '' : ' (WhatsApp: ' + (wa.skipped || wa.error || 'not sent') + ')') },
     { status: 'waiting_customer' });
   return { ok: true, link, emailed, whatsapp: wa.sent, whatsapp_note: wa.sent ? '' : (wa.skipped || wa.error || '') };
+}
+
+// ── Close request (04-Nov-2026) ──
+// One "Close request" button with a reason (replaces Resolved / Not covered).
+// Blocks while a pickup is live (cancel it, or send the product back first);
+// asks to confirm when an advance was paid (refund it in Razorpay); cancels
+// any unpaid payment link. WhatsApp request_closed with a customer-friendly
+// reason (${Contacts.Close Reason}), unless the team unticks it.
+const SR_CLOSE_REASONS = {
+  not_responding: { label: 'Customer not responding',            text: "We couldn't reach you for a few days" },
+  declined:       { label: "Customer doesn't want the service",   text: "As per your confirmation, you don't wish to proceed with the service" },
+  solved:         { label: 'Solved without pickup',               text: 'Your issue was resolved with our support' },
+  duplicate:      { label: 'Duplicate request',                   text: "You have another request open for the same product; we'll continue there" },
+  not_covered:    { label: 'Not covered',                         text: 'This issue is not covered under our warranty / service' },
+  other:          { label: 'Other',                               text: '' }
+};
+async function srCloseRequest(env, user, b) {
+  await ensureServiceRequestCols(env.DB);
+  const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(String(b.claim_id || '').trim()).first();
+  if (!row) return { ok: false, error: 'No such request' };
+  if (['closed', 'not_covered'].includes(row.status)) return { ok: false, error: 'This request is already closed' };
+  const key = String(b.reason || '');
+  const rs = SR_CLOSE_REASONS[key];
+  if (!rs) return { ok: false, error: 'Pick a reason' };
+  const other = String(b.other || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  if (key === 'other' && !other) return { ok: false, error: 'Type the reason' };
+  const custText = key === 'other' ? other : rs.text;
+  // 1) A live pickup / product still with us → can't close yet
+  if (row.case_id) {
+    const { rev, fwd } = await srCaseLegs(env.DB, row.case_id);
+    const revLive = rev && !rev.cancelled_at && rev.track_stage !== 'Cancelled';
+    const fwdDone = fwd && fwd.track_stage === 'Delivered';
+    if (revLive && !fwdDone)
+      return { ok: false, error: rev.received_at
+        ? 'The product is with us (' + row.case_id + ') — send it back to the customer first, then close.'
+        : 'Pickup ' + row.case_id + ' is booked — cancel the pickup first, then close.' };
+  }
+  // 2) Money: paid advances need a refund → confirm; unpaid links get cancelled
+  await ensureRepairPaymentsTable(env.DB);
+  const pays = (await env.DB.prepare("SELECT * FROM repair_payments WHERE claim_id = ? AND COALESCE(kind, 'repair') <> 'final'").bind(row.claim_id).all()).results || [];
+  const paid = pays.filter(p => p.status === 'paid');
+  const paidTot = paid.reduce((t, p) => t + Number(p.total || 0), 0);
+  if (paid.length && !b.confirm_refund)
+    return { ok: false, needs_confirm: true, paid_total: paidTot, paid: paid.map(p => p.invoice_number),
+      error: '₹' + paidTot.toFixed(2) + ' was paid on this request (' + paid.map(p => p.invoice_number).join(', ') + '). Refund it in Razorpay.' };
+  const by = (user && user.username) || 'unknown';
+  const voided = [];
+  for (const p of pays.filter(x => x.status === 'pending')) {
+    try { const v = await rpVoid(env, user, row.claim_id, p.kind || 'repair'); if (v && v.ok) voided.push(p.invoice_number); } catch (e) {}
+  }
+  // 3) Close
+  const status = key === 'not_covered' ? 'not_covered' : 'closed';
+  await env.DB.prepare("UPDATE warranty_claims SET close_reason = ?, closed_at = datetime('now'), med_token_hash = NULL, inv_token_hash = NULL WHERE claim_id = ?")
+    .bind(rs.label + (key === 'other' ? ': ' + other : ''), row.claim_id).run();
+  await srAddEvent(env.DB, row.claim_id, { by, kind: 'closed',
+    note: 'Closed · ' + rs.label + (key === 'other' ? ': ' + other : '') + (b.note ? ' · ' + String(b.note).slice(0, 300) : '') +
+      (paid.length ? ' · ₹' + paidTot.toFixed(2) + ' paid — refund in Razorpay' : '') +
+      (voided.length ? ' · cancelled unpaid link ' + voided.join(', ') : '') }, { status });
+  // 4) WhatsApp request_closed (best effort)
+  let wa = { sent: false, skipped: 'not ticked' };
+  if (b.whatsapp !== false) {
+    try { wa = await srSendWhatsAppFollowup(env, row, 'request_closed', { 'Close Reason': custText }, new Date().toISOString().slice(0, 16), by); }
+    catch (e) { wa = { sent: false, error: e.message }; }
+  }
+  return { ok: true, status, whatsapp: !!wa.sent, whatsapp_note: wa.sent ? '' : (wa.skipped || wa.error || ''), voided, paid_total: paidTot };
 }
 
 // ── Photos / video re-upload (04-Nov-2026) ──
@@ -8884,7 +8958,7 @@ async function srSendWhatsAppVerified(env, row, oldId) {
 const SR_WA_FOLLOWUP_FROM = '2026-11-04 04:30:00';   // UTC — cron never back-fills older cases
 const SR_WA_FOLLOWUP_NAMES = {
   payment_pickup: 'Pickup payment link', product_received: 'Product received',
-  payment_repair: 'Repair payment link', request_delivered: 'Delivered', media_reupload: 'Photos/video upload link'
+  payment_repair: 'Repair payment link', request_delivered: 'Delivered', media_reupload: 'Photos/video upload link', request_closed: 'Request closed'
 };
 async function srWaEnsureSent(DB) {
   await DB.prepare('CREATE TABLE IF NOT EXISTS sr_wa_sent (claim_id TEXT, tpl TEXT, ref TEXT, at TEXT DEFAULT (datetime(\'now\')), result TEXT, PRIMARY KEY (claim_id, tpl, ref))').run();

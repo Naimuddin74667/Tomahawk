@@ -1080,7 +1080,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       ccClaimVerify: 'Verifying the request…', ccPaymentCreate: 'Creating the payment link…', ccPaymentVoid: 'Cancelling the payment link…',
       ccPaymentFinal: 'Creating the final invoice…', ccPaymentSkipRepair: 'Skipping the repair payment…',
       delhiveryRepairDone: 'Updating repair status…', ucsku: 'Looking up the product…', delhiveryAmzProductInfo: 'Looking up the product…',
-      ccOrderLookup: 'Looking up the order…', ccInvoiceRequest: 'Fetching the invoice…', ccMediaRequest: 'Sending the upload link…', refundGetBank: 'Loading bank details…',
+      ccOrderLookup: 'Looking up the order…', ccInvoiceRequest: 'Fetching the invoice…', ccMediaRequest: 'Sending the upload link…', ccCloseRequest: 'Closing the request…', refundGetBank: 'Loading bank details…',
       refundCreateLink: 'Creating the refund link…', delhiveryStartRefund: 'Starting the refund…', delhiveryApproveRefund: 'Approving the refund…',
       delhiveryMarkRefunded: 'Marking refunded…'
     };
@@ -4150,7 +4150,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   var REQ_ACT_LABEL = { ask_info: 'Ask for info / video', tip: 'Send a tip', quote: 'Repair quote', not_covered: 'Not covered', resolve: 'Resolved', note: 'Internal note',
     payment_link: 'Payment link sent', payment_received: 'Payment received', payment_void: 'Invoice voided', verified: 'Order verified', consent: 'Customer agreed to charges',
     invoice_request: 'Asked for invoice again', invoice_uploaded: 'Customer uploaded invoice',
-    media_request: 'Asked for photos / video again', media_uploaded: 'Customer uploaded photos / video', whatsapp: 'WhatsApp' };
+    media_request: 'Asked for photos / video again', media_uploaded: 'Customer uploaded photos / video', whatsapp: 'WhatsApp', closed: 'Closed' };
   function canActReq() { return window.TM_ROLE === 'admin' || window.TM_ROLE === 'manager'; }
   function isNV(r) { return /^NV-/.test(r.claim_id || ''); }
   // "New requests" tile = to review (SRN + WRN) + still to verify
@@ -4283,8 +4283,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         // are offered (Ask for info / Tip / Repair quote come back with the emails).
         // Ask for photos / video again (04-Nov-2026) — WhatsApp media_reupload with an upload link
         (!fin && !r.case_id ? '<button class="case-act" id="req-media">&#128247; Ask for photos/video</button>' : '') +
-        (!fin ? '<button class="case-act" data-k="resolve">Resolved</button>' +
-                '<button class="case-act danger" data-k="not_covered">Not covered</button>'
+        // Close request with a reason (04-Nov-2026) — replaces Resolved / Not covered
+        (!fin ? '<button class="case-act danger" id="req-close">Close request</button>'
               : '<button class="case-act" data-k="reopen">Reopen</button>') +
         '<button class="case-act" data-k="note">Internal note</button>';
     }
@@ -4324,12 +4324,14 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         '<button type="button" class="linkish pay-toggle" id="hist-toggle">Show (' + evs.length + ')</button></div>' + hist : '') +
       '<div id="req-compose" style="margin-top:16px" hidden></div>' +
       '<div id="req-media-box" style="margin-top:16px" hidden></div>' +
+      '<div id="req-close-box" style="margin-top:16px" hidden></div>' +
       '<div id="cm-confirm" style="margin-top:18px" hidden></div>' +
       (acts ? '<div class="cm-acts" id="req-acts">' + acts + '</div>' : '');
     box.querySelectorAll('#req-acts [data-k]').forEach(function (b) {
       b.addEventListener('click', function () { b.dataset.k === 'reopen' ? sendReq(r, 'reopen', '', b) : compose(r, b.dataset.k); });
     });
     wireMediaAsk(r);
+    wireClose(r);
     var rap = document.getElementById('req-approve');
     if (rap) rap.addEventListener('click', function () { if (!rap.classList.contains('locked')) startPickup(r, rap); });
     var roc = document.getElementById('rq-open-case');
@@ -4598,6 +4600,74 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         if (!x || !x.ok) throw new Error((x && x.error) || 'failed');
         await loadRequests(); renderTiles(); renderRequests(); openRequest(x.claim_id);
       } catch (e) { alert("Couldn't convert: " + e.message); go.disabled = false; go.textContent = 'Confirm & convert'; }
+    });
+  }
+
+  // ── Close request (04-Nov-2026) ──
+  // Reason → worker ccCloseRequest. Blocked while a pickup is live; asks to
+  // confirm when an advance was paid (refund in Razorpay). Customer gets
+  // WhatsApp request_closed with a friendly reason unless unticked.
+  var CLOSE_REASONS = [
+    ['not_responding', 'Customer not responding', "We couldn't reach you for a few days"],
+    ['declined', "Customer doesn't want the service", "As per your confirmation, you don't wish to proceed with the service"],
+    ['solved', 'Solved without pickup', 'Your issue was resolved with our support'],
+    ['duplicate', 'Duplicate request', "You have another request open for the same product; we'll continue there"],
+    ['not_covered', 'Not covered', 'This issue is not covered under our warranty / service'],
+    ['other', 'Other', '']
+  ];
+  function wireClose(r) {
+    var btn = document.getElementById('req-close'), box = document.getElementById('req-close-box');
+    if (!btn || !box) return;
+    btn.addEventListener('click', function () {
+      box.hidden = false;
+      box.innerHTML = '<div class="cm-sec-title" style="margin-bottom:8px">Close request</div>' +
+        '<div class="cm-k" style="margin-bottom:6px">Reason</div>' +
+        '<div class="sb-chips" id="cl-reasons">' + CLOSE_REASONS.map(function (x) {
+          return '<button type="button" class="sb-chip" data-r="' + x[0] + '"><b>' + esc(x[1]) + '</b></button>'; }).join('') + '</div>' +
+        '<input class="sb-input" id="cl-other" placeholder="Type the reason (the customer sees this)" maxlength="200" style="width:100%;margin-top:8px" hidden>' +
+        '<div class="pay-hint" id="cl-cust" style="margin-top:8px"></div>' +
+        '<label class="pay-hint" style="display:flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" id="cl-wa" checked> Send WhatsApp to the customer</label>' +
+        '<div class="rq-warn" id="cl-warn" style="margin-top:8px"></div>' +
+        '<div class="pay-row" style="margin-top:8px"><button class="case-act danger" id="cl-go" disabled>Close request</button>' +
+        '<button class="case-act" id="cl-cancel">Cancel</button></div>';
+      var pick = null, confirmRefund = false;
+      var other = document.getElementById('cl-other'), cust = document.getElementById('cl-cust'), wa = document.getElementById('cl-wa'),
+          go = document.getElementById('cl-go'), warn = document.getElementById('cl-warn');
+      var show = function () {
+        var x = CLOSE_REASONS.filter(function (y) { return y[0] === pick; })[0];
+        var txt = pick === 'other' ? other.value.trim() : (x ? x[2] : '');
+        cust.innerHTML = txt ? 'Customer sees: <i>“' + esc(txt) + '”</i>' : '';
+        go.disabled = !pick || (pick === 'other' && !txt);
+      };
+      box.querySelectorAll('#cl-reasons [data-r]').forEach(function (c) {
+        c.addEventListener('click', function () {
+          pick = c.dataset.r; confirmRefund = false; warn.textContent = '';
+          box.querySelectorAll('#cl-reasons [data-r]').forEach(function (o) { o.classList.toggle('on', o === c); });
+          other.hidden = pick !== 'other';
+          wa.checked = pick !== 'duplicate';
+          go.textContent = 'Close request';
+          show();
+        });
+      });
+      other.addEventListener('input', show);
+      document.getElementById('cl-cancel').addEventListener('click', function () { box.hidden = true; });
+      go.addEventListener('click', async function () {
+        go.disabled = true; var was = go.textContent; go.textContent = 'Closing…';
+        try {
+          var x = await post('ccCloseRequest', { claim_id: r.claim_id, reason: pick, other: other.value.trim(), whatsapp: wa.checked, confirm_refund: confirmRefund });
+          if (x && x.needs_confirm) {
+            warn.innerHTML = '&#9888; ' + esc(x.error) + '<br>Close anyway? The refund is not done automatically.';
+            confirmRefund = true; go.disabled = false; go.textContent = 'Close anyway'; return;
+          }
+          if (!x || !x.ok) throw new Error((x && x.error) || 'failed');
+          box.innerHTML = '<div class="pay-hint">&#10003; Request closed.' +
+            (wa.checked ? (x.whatsapp ? ' WhatsApp sent.' : ' WhatsApp not sent (' + esc(x.whatsapp_note || '') + ').') : '') +
+            (x.voided && x.voided.length ? ' Cancelled unpaid link ' + esc(x.voided.join(', ')) + '.' : '') +
+            (x.paid_total ? ' <b>Refund ' + money(x.paid_total) + ' in Razorpay.</b>' : '') + '</div>';
+          await loadRequests(); renderTiles(); renderRequests();
+          openRequest(r.claim_id);
+        } catch (e) { alert("Couldn't close: " + e.message); go.disabled = false; go.textContent = was; }
+      });
     });
   }
 
