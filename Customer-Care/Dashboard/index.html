@@ -4685,12 +4685,13 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // confirm when an advance was paid (refund in Razorpay). Customer gets
   // WhatsApp request_closed with a friendly reason unless unticked.
   var CLOSE_REASONS = [
-    ['not_responding', 'Customer not responding', "We couldn't reach you for a few days"],
-    ['declined', "Customer doesn't want the service", "As per your confirmation, you don't wish to proceed with the service"],
-    ['solved', 'Solved without pickup', 'Your issue was resolved with our support'],
-    ['duplicate', 'Duplicate request', "You have another request open for the same product; we'll continue there"],
-    ['not_covered', 'Not covered', 'This issue is not covered under our warranty / service'],
-    ['other', 'Other', '']
+    // [key, label, customer text, emoji shown in the dropdown]
+    ['not_responding', 'Customer not responding', "We couldn't reach you for a few days", '📵'],
+    ['declined', "Customer doesn't want the service", "As per your confirmation, you don't wish to proceed with the service", '🙅'],
+    ['solved', 'Solved without pickup', 'Your issue was resolved with our support', '✅'],
+    ['duplicate', 'Duplicate request', "You have another request open for the same product; we'll continue there", '📑'],
+    ['not_covered', 'Not covered', 'This issue is not covered under our warranty / service', '🚫'],
+    ['other', 'Other', '', '✏️']
   ];
   function wireClose(r) {
     var btn = document.getElementById('req-close'), box = document.getElementById('req-close-box');
@@ -4699,8 +4700,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       box.hidden = false;
       box.innerHTML = '<div class="cm-sec-title" style="margin-bottom:8px">Close request</div>' +
         '<div class="cm-k" style="margin-bottom:6px">Reason</div>' +
-        '<div class="sb-chips" id="cl-reasons">' + CLOSE_REASONS.map(function (x) {
-          return '<button type="button" class="sb-chip" data-r="' + x[0] + '"><b>' + esc(x[1]) + '</b></button>'; }).join('') + '</div>' +
+        '<select class="sb-input" id="cl-reason" style="max-width:360px"><option value="">— Pick a reason —</option>' + CLOSE_REASONS.map(function (x) {
+          return '<option value="' + x[0] + '">' + x[3] + '  ' + esc(x[1]) + '</option>'; }).join('') + '</select>' +
         '<input class="sb-input" id="cl-other" placeholder="Type the reason (the customer sees this)" maxlength="200" style="width:100%;margin-top:8px" hidden>' +
         '<div class="pay-hint" id="cl-cust" style="margin-top:8px"></div>' +
         '<label class="pay-hint" style="display:flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" id="cl-wa" checked> Send WhatsApp to the customer</label>' +
@@ -4716,15 +4717,13 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         cust.innerHTML = txt ? 'Customer sees: <i>“' + esc(txt) + '”</i>' : '';
         go.disabled = !pick || (pick === 'other' && !txt);
       };
-      box.querySelectorAll('#cl-reasons [data-r]').forEach(function (c) {
-        c.addEventListener('click', function () {
-          pick = c.dataset.r; confirmRefund = false; warn.textContent = '';
-          box.querySelectorAll('#cl-reasons [data-r]').forEach(function (o) { o.classList.toggle('on', o === c); });
-          other.hidden = pick !== 'other';
-          wa.checked = pick !== 'duplicate';
-          go.textContent = 'Close request';
-          show();
-        });
+      document.getElementById('cl-reason').addEventListener('change', function (e) {
+        pick = e.target.value || null; confirmRefund = false; warn.textContent = '';
+        other.hidden = pick !== 'other';
+        wa.checked = pick !== 'duplicate';
+        go.textContent = 'Close request';
+        show();
+        if (pick === 'other') other.focus();
       });
       other.addEventListener('input', show);
       document.getElementById('cl-cancel').addEventListener('click', function () { box.hidden = true; });
