@@ -4462,6 +4462,11 @@ export default {
             "UPDATE delhivery_orders SET received_at = COALESCE(received_at, datetime('now')), in_process_at = COALESCE(in_process_at, datetime('now')), received_by = COALESCE(received_by, ?) WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1"
           ).bind(String(rcvUser.username || 'unknown'), oid).run();
           if (!r.meta || !r.meta.changes) return json({ ok: false, error: 'No booked reverse pickup with that Order ID' }, 404);
+          // WhatsApp product_received for a service request (best effort, cron retries)
+          try {
+            const cr = await env.DB.prepare('SELECT claim_id FROM warranty_claims WHERE case_id = ?').bind(oid).first();
+            if (cr) await srWaMilestones(env, cr.claim_id);
+          } catch (e) { console.error('product_received WhatsApp:', e.message); }
           return json({ ok: true });
         }
 
@@ -5006,6 +5011,8 @@ export default {
     ctx.waitUntil(srMilestoneEmails(env).catch(err => console.error('service request milestones:', err.message)));
     // Service requests — retry failed WhatsApp "Request received" sends. */15 ticks.
     ctx.waitUntil(srWaProcessQueue(env).catch(err => console.error('wa queue:', err.message)));
+    // Service requests — WhatsApp "Product received" / "Delivered" follow-ups. */15 ticks.
+    ctx.waitUntil(srWaMilestones(env).catch(err => console.error('wa milestones:', err.message)));
     // Repair payments — mark requests Paid once Zoho shows the invoice paid. */15 ticks.
     ctx.waitUntil(rpCronCheck(env).catch(err => console.error('repair payments:', err.message)));
     // Order-data retention (Supabase mirror) — once a day, on the tick
@@ -7540,7 +7547,16 @@ async function rpCreate(env, user, b) {
   }
   await srAddEvent(env.DB, claimId, { by, kind: 'payment_link',
     note: RP_STEP_NAME[kind] + ' advance · ' + number + ' · ₹' + total.toFixed(2) + ' (₹' + amount.toFixed(2) + ' + GST) · ' + desc, emailed }, {});
-  return { ok: true, emailed, payment: await rpLatest(env.DB, claimId, kind) };
+  // WhatsApp payment_pickup / payment_repair with the Pay Now link (best effort)
+  let wa = { sent: false };
+  const tok = rpPayToken(url);
+  if (tok) {
+    const f = { 'Payment Amount': total.toFixed(2), 'Payment Token': tok };
+    if (kind !== 'logistics') f['Repair Details'] = desc || 'Service & spare parts';
+    try { wa = await srSendWhatsAppFollowup(env, row, kind === 'logistics' ? 'payment_pickup' : 'payment_repair', f, number, by); }
+    catch (e) { wa = { sent: false, error: e.message }; }
+  }
+  return { ok: true, emailed, whatsapp: !!wa.sent, payment: await rpLatest(env.DB, claimId, kind) };
 }
 
 // POST ccPaymentFinal { claim_id } — the one tax invoice for the request.
@@ -8740,6 +8756,147 @@ async function srSendWhatsAppVerified(env, row, oldId) {
     await srWaLog(env, row.claim_id, false, 'verified ' + step, e.message + ' | ' + JSON.stringify(trace));
     return { sent: false, error: step + ': ' + e.message };
   }
+}
+
+// ── WhatsApp follow-ups for a service request (04-Nov-2026) ──
+// Four approved Zoho Desk templates, same route as request_verified:
+//   payment_pickup    — Pickup & delivery advance link created   (dynamic Pay Now URL)
+//   product_received  — reverse pickup marked Received            (static Track button)
+//   payment_repair    — Spare Parts & Service Charge link created (dynamic Pay Now URL)
+//   request_delivered — send-back delivered to the customer       (static Feedback button)
+// Placeholders are Contact custom fields: Request ID, Product, Payment Amount,
+// Payment Token (the CInvoiceID part of the Zoho pay link), Repair Details.
+// Follows SR_WA_MODE (test = SR_WA_TEST_PHONES only). Best effort: never
+// blocks the team's action. Each (request, template, ref) is sent at most
+// once — tracked in D1 sr_wa_sent — and the result goes into the request history.
+const SR_WA_FOLLOWUP_FROM = '2026-11-04 04:30:00';   // UTC — cron never back-fills older cases
+const SR_WA_FOLLOWUP_NAMES = {
+  payment_pickup: 'Pickup payment link', product_received: 'Product received',
+  payment_repair: 'Repair payment link', request_delivered: 'Delivered'
+};
+async function srWaEnsureSent(DB) {
+  await DB.prepare('CREATE TABLE IF NOT EXISTS sr_wa_sent (claim_id TEXT, tpl TEXT, ref TEXT, at TEXT DEFAULT (datetime(\'now\')), result TEXT, PRIMARY KEY (claim_id, tpl, ref))').run();
+}
+// Contact custom-field API names look like cf_payment_amount — match on letters only.
+function zdCfKey(keys, label) {
+  const want = label.toLowerCase().replace(/[^a-z]/g, '');
+  return keys.find(k => k.toLowerCase().replace(/^cf_?/, '').replace(/[^a-z]/g, '') === want);
+}
+// row = warranty_claims row. fields = { 'Payment Amount': '118.00', … } on top of Request ID + Product.
+// ref = what makes this send unique (e.g. the advance number) — '' for one-per-request messages.
+async function srSendWhatsAppFollowup(env, row, tpl, fields, ref, by) {
+  await srWaEnsureSent(env.DB);
+  const claimId = row.claim_id;
+  const claim = await env.DB.prepare("INSERT OR IGNORE INTO sr_wa_sent (claim_id, tpl, ref) VALUES (?, ?, ?)").bind(claimId, tpl, ref || '').run();
+  if (!claim.meta || !claim.meta.changes) return { sent: false, skipped: 'already sent' };
+  const done = async (res) => {
+    await env.DB.prepare('UPDATE sr_wa_sent SET result = ? WHERE claim_id = ? AND tpl = ? AND ref = ?')
+      .bind(res.sent ? 'sent' : (res.skipped || res.error || 'not sent'), claimId, tpl, ref || '').run().catch(() => {});
+    await srAddEvent(env.DB, claimId, { by: by || 'system', kind: 'whatsapp',
+      note: 'WhatsApp "' + (SR_WA_FOLLOWUP_NAMES[tpl] || tpl) + '": ' + (res.sent ? 'sent' : (res.skipped || res.error || 'not sent')) }, {}).catch(() => {});
+    return res;
+  };
+  const phone = String(row.phone || '').replace(/\D/g, '').slice(-10);
+  if (!/^[6-9]\d{9}$/.test(phone)) return done({ sent: false, skipped: 'no valid mobile' });
+  const mode = String(env.SR_WA_MODE || 'test').toLowerCase();
+  if (mode === 'off') return done({ sent: false, skipped: 'WhatsApp off' });
+  if (mode !== 'live' && SR_WA_TEST_PHONES.indexOf(phone) === -1) return done({ sent: false, skipped: 'test mode — only test numbers get WhatsApp' });
+  let step = 'setup';
+  const trace = {};
+  try {
+    const cfg = await zdWaSetup(env);
+    const orgId = cfg.orgId;
+    const templateId = await zdTemplateIdByName(env, cfg, tpl);
+    step = 'contact';
+    const contact = await zdFindOrCreateContact(env, orgId, { phone, name: row.name, email: row.email });
+    step = 'fields';
+    const full = await zdCall(env, 'GET', '/contacts/' + contact.id, { orgId });
+    const keys = Object.keys((full.json && full.json.cf) || {});
+    trace.cfKeys = keys;
+    const product = String(row.confirmed_sku || row.confirmed_product || row.product || 'your Tomahawk product').slice(0, 120);
+    const first = String(row.name || '').trim().split(/\s+/)[0] || 'there';
+    const vals = Object.assign({ 'Request ID': claimId, 'Product': product }, fields || {});
+    const cf = {};
+    for (const [label, v] of Object.entries(vals)) {
+      const k = zdCfKey(keys, label);
+      if (!k) throw new Error('contact field "' + label + '" not found (cf keys: ' + keys.join(', ') + ')');
+      // WhatsApp rejects line breaks / tabs / 4+ spaces inside a placeholder
+      cf[k] = String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, 250);
+    }
+    const patch = { cf };
+    if (!String((full.json && full.json.firstName) || '').trim() && first !== 'there') patch.firstName = first;
+    const upd = await zdCall(env, 'PATCH', '/contacts/' + contact.id, { orgId, body: patch });
+    if (!upd.ok) throw new Error('contact update ' + upd.status + ': ' + JSON.stringify(upd.json).slice(0, 300));
+    step = 'apply';
+    const ap = await zdCall(env, 'POST', '/im/cannedMessages/' + templateId + '/apply', { orgId, query: { contactId: String(contact.id), language: 'en' } });
+    if (!ap.ok) throw new Error('apply ' + ap.status + ': ' + JSON.stringify(ap.json).slice(0, 300));
+    const fill = t => {
+      let out = String(t || '').replace(/\$\{Contacts\.First Name\}/gi, first);
+      for (const [label, v] of Object.entries(vals)) out = out.split('${Contacts.' + label + '}').join(String(v == null ? '' : v).replace(/\s+/g, ' ').trim());
+      return out;
+    };
+    const tr = ((ap.json && ap.json.translations) || []).find(x => x.language === 'en') || ((ap.json && ap.json.translations) || [])[0] || {};
+    const items = tr.templateItems || {};
+    const message = fill(ap.json.message || ap.json.displayMessage || '');
+    const headerMessage = fill((items.header && items.header.message) || '');
+    if (!message || /\$\{/.test(message)) throw new Error('apply returned no usable message text');
+    // Button: dynamic (Pay Now → …CInvoiceID=<token>) or static (Track / Feedback)
+    const btn = ((items.buttons || []).find(x => /URL/i.test(x.type || '')) || {});
+    const token = vals['Payment Token'];
+    const urlFull = fill(btn.action || '');
+    const tries = token
+      ? [{ tag: 'num-id+url', numeric: true, url: urlFull || token }, { tag: 'num-id+token', numeric: true, url: token }, { tag: 'str-id+url', numeric: false, url: urlFull || token }]
+      : [{ tag: 'num-id', numeric: true }, { tag: 'num-id+url', numeric: true, url: urlFull }, { tag: 'str-id', numeric: false }];
+    step = 'send';
+    const id = String(templateId);
+    let sent = null;
+    trace.sendTries = [];
+    for (const v of tries) {
+      const body = { receiverId: '+91' + phone, receiverType: 'PHONENUMBER', cannedMessageId: id, language: 'en', message };
+      if (v.url) body.urlMessage = v.url;
+      if (headerMessage) body.headerMessage = headerMessage;
+      const raw = JSON.stringify(body);
+      const rawBody = v.numeric ? raw.replace('"cannedMessageId":"' + id + '"', '"cannedMessageId":' + id) : raw;
+      sent = await zdCall(env, 'POST', '/im/channels/' + cfg.channelId + '/initiateSession', { orgId, rawBody });
+      trace.sendTries.push({ tag: v.tag, status: sent.status, reply: JSON.stringify(sent.json).slice(0, 300) });
+      if (sent.ok) { trace.winner = v.tag; break; }
+    }
+    if (!sent.ok) throw new Error('initiateSession ' + sent.status + ': ' + JSON.stringify(sent.json).slice(0, 300));
+    await srWaLog(env, claimId, true, tpl + ' sent', JSON.stringify({ trace }));
+    return done({ sent: true });
+  } catch (e) {
+    await srWaLog(env, claimId, false, tpl + ' ' + step, e.message + ' | ' + JSON.stringify(trace));
+    // Failed sends may be retried by the next action / cron tick
+    await env.DB.prepare('DELETE FROM sr_wa_sent WHERE claim_id = ? AND tpl = ? AND ref = ?').bind(claimId, tpl, ref || '').run().catch(() => {});
+    await srAddEvent(env.DB, claimId, { by: by || 'system', kind: 'whatsapp',
+      note: 'WhatsApp "' + (SR_WA_FOLLOWUP_NAMES[tpl] || tpl) + '" failed: ' + step + ': ' + e.message.slice(0, 200) }, {}).catch(() => {});
+    return { sent: false, error: step + ': ' + e.message };
+  }
+}
+// Zoho pay link → the part after CInvoiceID= (the template's dynamic button value)
+function rpPayToken(url) { const m = /[?&]CInvoiceID=([^&\s]+)/.exec(String(url || '')); return m ? m[1] : ''; }
+
+// Cron (*/15) + right after "Mark received": product_received when the reverse
+// pickup is received, request_delivered when the send-back is delivered.
+// Only cases that reached that point after SR_WA_FOLLOWUP_FROM (no back-fill).
+async function srWaMilestones(env, onlyClaimId) {
+  await ensureServiceRequestCols(env.DB);
+  await srWaEnsureSent(env.DB);
+  const rows = onlyClaimId
+    ? (await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ? AND case_id IS NOT NULL').bind(onlyClaimId).all()).results || []
+    : (await env.DB.prepare("SELECT * FROM warranty_claims WHERE case_id IS NOT NULL AND created_at > datetime('now', '-90 days') ORDER BY created_at DESC LIMIT 200").all()).results || [];
+  let sent = 0;
+  for (const row of rows) {
+    const have = ((await env.DB.prepare('SELECT tpl FROM sr_wa_sent WHERE claim_id = ?').bind(row.claim_id).all()).results || []).map(x => x.tpl);
+    if (have.includes('product_received') && have.includes('request_delivered')) continue;
+    const { rev, fwd } = await srCaseLegs(env.DB, row.case_id);
+    if (rev && rev.received_at && rev.received_at >= SR_WA_FOLLOWUP_FROM && !have.includes('product_received'))
+      if ((await srSendWhatsAppFollowup(env, row, 'product_received', {}, '')).sent) sent++;
+    const fd = fwd && fwd.track_stage === 'Delivered' ? (fwd.delivered_at || '') : '';
+    if (fd && fd >= SR_WA_FOLLOWUP_FROM && !have.includes('request_delivered'))
+      if ((await srSendWhatsAppFollowup(env, row, 'request_delivered', {}, '')).sent) sent++;
+  }
+  return { checked: rows.length, sent };
 }
 
 async function submitWarrantyClaim(env, b, ip) {
