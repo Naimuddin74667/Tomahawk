@@ -7076,7 +7076,7 @@ async function srInvoiceRequest(env, user, b) {
 // ── Customer feedback (04-Nov-2026) ──
 // One feedback link per request: …/pages/feedback?t=<token> (SK's page), sent
 // in request_delivered (dynamic button, ${Contacts.Feedback Token}) and
-// request_closed (body, ${Contacts.Feedback Link}). Valid 30 days; a new send
+// request_closed (dynamic button, ${Contacts.Feedback Token}). Valid 30 days; a new send
 // makes a new token. One answer per request; it shows in the request History.
 const CC_FEEDBACK_URL = 'https://tomahawk.tools/pages/feedback';
 async function srFeedbackToken(env, row) {
@@ -7172,7 +7172,7 @@ async function srCloseRequest(env, user, b) {
   let wa = { sent: false, skipped: 'not ticked' };
   if (b.whatsapp !== false) {
     try { wa = await srSendWhatsAppFollowup(env, row, 'request_closed',
-      { 'Close Reason': custText, 'Feedback Link': CC_FEEDBACK_URL + '?t=' + (await srFeedbackToken(env, row)) }, new Date().toISOString().slice(0, 16), by); }
+      { 'Close Reason': custText, 'Feedback Token': await srFeedbackToken(env, row) }, new Date().toISOString().slice(0, 16), by); }
     catch (e) { wa = { sent: false, error: e.message }; }
   }
   return { ok: true, status, whatsapp: !!wa.sent, whatsapp_note: wa.sent ? '' : (wa.skipped || wa.error || ''), voided, paid_total: paidTot };
