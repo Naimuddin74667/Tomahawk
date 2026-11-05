@@ -7298,7 +7298,7 @@ async function srInvoiceUpload(env, b) {
   return { ok: true, claim_id: row.claim_id, count: saved.length };
 }
 
-// No-reply email with the upload link (Resend, Gmail fallback — like "Request received").
+// No-reply email with the upload link (Resend only, like "Request received").
 async function srSendInvoiceLinkEmail(env, row, note, link) {
   const first = srFirstName(row);
   const subject = 'Please upload your invoice again · ' + row.claim_id;
@@ -7326,18 +7326,7 @@ async function srSendInvoiceLinkEmail(env, row, note, link) {
     '<div style="padding:16px 24px;background:#faf9f6;color:#888;font-size:12px;border-top:1px solid #eee">' +
       "This is an automated email, please don't reply. Need help? WhatsApp us at " + SR_HELP_WHATSAPP + '.<br>Team TOMAHAWK® Tools · Industrial Tools &amp; Hardware</div>' +
     '</div></div>';
-  if (env.RESEND_API_KEY) {
-    try {
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST', headers: { Authorization: 'Bearer ' + env.RESEND_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: env.SR_EMAIL_FROM || SR_NOREPLY_FROM, to: [row.email], subject, text, html })
-      });
-      if (res.ok) return 'no-reply';
-      console.error('Resend refused (' + res.status + ')');
-    } catch (e) { console.error('Resend failed:', e.message); }
-  }
-  await sendGmailMessage(env, { to: [row.email], subject, text });
-  return 'gmail fallback';
+  return sendNoReplyEmail(env, { to: row.email, subject, text, html });
 }
 
 // ── Verify an NV- request (27-Oct-2026) ──
@@ -8498,10 +8487,21 @@ function validEmail(e) { return /^[^@\s]+@[^@\s.]+(\.[^@\s.]+)*\.[a-z]{2,}$/i.te
 
 // ── "Request received" email to the customer (29-Oct-2026) ──
 // Sent from a no-reply address through Resend (Worker secret RESEND_API_KEY,
-// domain tomahawk.tools verified in Resend). Until the domain is verified,
-// Resend refuses the sender and we fall back to the Gmail mailbox with the
-// same no-reply wording, so customers always get it.
+// domain tomahawk.tools verified in Resend). NO Gmail fallback (05-Nov-2026):
+// customer emails must never go out from a personal mailbox. If Resend
+// refuses (domain not verified, key missing) the send throws, the caller
+// logs it, and the request itself still goes through.
 const SR_NOREPLY_FROM = 'Tomahawk Tools <no-reply@tomahawk.tools>';
+async function sendNoReplyEmail(env, { to, subject, text, html }) {
+  if (!env.RESEND_API_KEY) throw new Error('RESEND_API_KEY Worker secret missing — customer email not sent');
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + env.RESEND_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: env.SR_EMAIL_FROM || SR_NOREPLY_FROM, to: [to], subject, text, html })
+  });
+  if (!res.ok) throw new Error('Resend refused (' + res.status + '): ' + (await res.text().catch(() => '')).slice(0, 200));
+  return 'no-reply';
+}
 const SR_HELP_WHATSAPP = '+91 89289 49415';
 function fmtDateIN(iso) {
   if (!iso) return '';
@@ -8553,19 +8553,7 @@ async function srSendReceivedEmail(env, r) {
       "This is an automated email, please don't reply. Need help? WhatsApp us at " + SR_HELP_WHATSAPP + '.<br>Team TOMAHAWK® Tools · Industrial Tools &amp; Hardware</div>' +
     '</div></div>';
 
-  if (env.RESEND_API_KEY) {
-    try {
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: { Authorization: 'Bearer ' + env.RESEND_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: env.SR_EMAIL_FROM || SR_NOREPLY_FROM, to: [r.email], subject, text, html })
-      });
-      if (res.ok) return 'no-reply';
-      console.error('Resend refused (' + res.status + '): ' + (await res.text().catch(() => '')).slice(0, 200));
-    } catch (e) { console.error('Resend failed:', e.message); }
-  }
-  await sendGmailMessage(env, { to: [r.email], subject, text });   // fallback, same no-reply wording
-  return 'gmail fallback';
+  return sendNoReplyEmail(env, { to: r.email, subject, text, html });
 }
 
 // ══════════════════════════════════════════════════════════════════
