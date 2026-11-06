@@ -8345,9 +8345,10 @@ async function srTrack(env, idRaw, phoneRaw) {
 // ══════════════════════════════════════════════════════════════════
 // CANCEL MY ORDER (06-Nov-2026) — customer cancels on the Track Order page
 // ══════════════════════════════════════════════════════════════════
-// Needs Worker secrets SHOPIFY_ADMIN_TOKEN (scopes read_orders, write_orders,
-// read_fulfillments + protected customer data: phone/email) and plain var
-// SHOPIFY_STORE (tomahawk-tools.myshopify.com). Until they exist this
+// Needs Worker secrets SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET (Dev
+// Dashboard app "Tomahawk Worker": read_orders, write_orders,
+// read_fulfillments + protected customer data: phone/email) — or a legacy
+// SHOPIFY_ADMIN_TOKEN — and plain var SHOPIFY_STORE. Until they exist this
 // answers code 'not_configured' and nothing is cancelled.
 // Rules:
 //  - order number AND (mobile OR email) must match the Shopify order —
@@ -8360,12 +8361,40 @@ async function srTrack(env, idRaw, phoneRaw) {
 const ORDER_CANCEL_REASONS = ['Ordered by mistake', 'Found a better price', 'Delivery is too late', 'Changed my mind', 'Other'];
 const UC_PACKED_STATES = ['PACKED', 'READY_TO_SHIP', 'MANIFESTED', 'DISPATCHED', 'SHIPPED', 'DELIVERED'];
 
+// Dev Dashboard apps (2026+) have no permanent token: the Worker swaps
+// SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET for a ~24 h token (client
+// credentials grant) and caches it in D1 until shortly before it expires.
+// A plain SHOPIFY_ADMIN_TOKEN secret, if set, still wins.
+function shopifyStore(env) {
+  return String(env.SHOPIFY_STORE || 'tomahawk-tools.myshopify.com').replace(/^https?:\/\//, '').replace(/\/$/, '');
+}
+function shopifyConfigured(env) {
+  return !!(env.SHOPIFY_ADMIN_TOKEN || (env.SHOPIFY_CLIENT_ID && env.SHOPIFY_CLIENT_SECRET));
+}
+async function shopifyToken(env) {
+  if (env.SHOPIFY_ADMIN_TOKEN) return env.SHOPIFY_ADMIN_TOKEN;
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS shopify_token (id INTEGER PRIMARY KEY, token TEXT, expires_at INTEGER)').run();
+  const now = Math.floor(Date.now() / 1000);
+  const row = await env.DB.prepare('SELECT token, expires_at FROM shopify_token WHERE id = 1').first();
+  if (row && row.token && row.expires_at > now + 300) return row.token;
+  const r = await fetch('https://' + shopifyStore(env) + '/admin/oauth/access_token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: env.SHOPIFY_CLIENT_ID, client_secret: env.SHOPIFY_CLIENT_SECRET })
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok || !j || !j.access_token) throw new Error('Shopify token ' + r.status + ' ' + JSON.stringify(j).slice(0, 200));
+  await env.DB.prepare('INSERT OR REPLACE INTO shopify_token (id, token, expires_at) VALUES (1, ?, ?)')
+    .bind(j.access_token, now + (Number(j.expires_in) || 3600)).run();
+  return j.access_token;
+}
+
 async function shopifyGql(env, query, variables) {
-  const store = String(env.SHOPIFY_STORE || 'tomahawk-tools.myshopify.com').replace(/^https?:\/\//, '').replace(/\/$/, '');
-  const ver = env.SHOPIFY_API_VERSION || '2025-10';
+  const store = shopifyStore(env);
+  const ver = env.SHOPIFY_API_VERSION || '2026-10';
   const r = await fetch('https://' + store + '/admin/api/' + ver + '/graphql.json', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': env.SHOPIFY_ADMIN_TOKEN },
+    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': await shopifyToken(env) },
     body: JSON.stringify({ query, variables: variables || {} })
   });
   const j = await r.json().catch(() => null);
@@ -8386,7 +8415,7 @@ async function orderCancel(env, b) {
   }
   if (!reason) return { ok: false, code: 'bad_input', error: 'Please choose why you want to cancel.' };
   if (reason === 'Other' && !note) return { ok: false, code: 'bad_input', error: 'Please tell us why you want to cancel.' };
-  if (!env.SHOPIFY_ADMIN_TOKEN) {
+  if (!shopifyConfigured(env)) {
     return { ok: false, status: 503, code: 'not_configured', error: "Online cancellation isn't available yet — please chat with us on WhatsApp." };
   }
 
