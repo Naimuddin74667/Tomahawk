@@ -933,6 +933,8 @@ const ACTION_TIERS = {
   ccSetOrderId: 'manager_up', ccOrderLookup: 'viewer_read',
   // Dashboard "Raise ticket" — record (or clear) a courier escalation ticket on one leg.
   ccMarkEscalation: 'manager_up',
+  // RTO received → close the case instead of re-sending (06-Nov-2026).
+  ccCloseRto: 'manager_up',
   // Self-ship reverse case (customer sends it via Speed Post / any courier — no booking)
   // + update its tracking no. / mark it arrived at our warehouse.
   selfShipCreate: 'manager_up', selfShipUpdate: 'manager_up',
@@ -4536,17 +4538,43 @@ export default {
           const rcvUser = (await resolveSession(request, env.DB)) || {};
           if (rcvUser.role !== 'admin' && !CC_RECEIVE_USERS.includes(String(rcvUser.username || '').toLowerCase()))
             return json({ ok: false, error: 'Only Admin or Faique can mark a parcel Received' }, 403);
-          const r = await env.DB.prepare(
+          // body.rto = a forward / send-back that came back RTO (06-Nov-2026) —
+          // marks that leg received; the Dashboard then offers Send back again / Close case.
+          const r = body.rto
+            ? await env.DB.prepare(
+                "UPDATE delhivery_orders SET received_at = COALESCE(received_at, datetime('now')), received_by = COALESCE(received_by, ?) WHERE order_id = ? AND COALESCE(direction, 'forward') = 'forward' AND delhivery_ok = 1 AND track_stage IN ('RTO', 'RTO Delivered')"
+              ).bind(String(rcvUser.username || 'unknown'), oid).run()
+            : await env.DB.prepare(
             // Received = straight into In Process (no separate "Received" stage)
             // received_by records who confirmed it (kept from the first click, like received_at)
             "UPDATE delhivery_orders SET received_at = COALESCE(received_at, datetime('now')), in_process_at = COALESCE(in_process_at, datetime('now')), received_by = COALESCE(received_by, ?) WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1"
           ).bind(String(rcvUser.username || 'unknown'), oid).run();
+          if (body.rto) {
+            if (!r.meta || !r.meta.changes) return json({ ok: false, error: 'No RTO shipment with that Order ID' }, 404);
+            return json({ ok: true });
+          }
           if (!r.meta || !r.meta.changes) return json({ ok: false, error: 'No booked reverse pickup with that Order ID' }, 404);
           // WhatsApp product_received for a service request (best effort, cron retries)
           try {
             const cr = await env.DB.prepare('SELECT claim_id FROM warranty_claims WHERE case_id = ?').bind(oid).first();
             if (cr) await srWaMilestones(env, cr.claim_id);
           } catch (e) { console.error('product_received WhatsApp:', e.message); }
+          return json({ ok: true });
+        }
+
+        // ── RTO received → close the case instead of re-sending (06-Nov-2026).
+        //   Body: { order_id, reason }. Admin / manager only. Only once the RTO
+        //   parcel is marked received.
+        if (act === 'ccCloseRto') {
+          await ensureDelhiveryTable(env.DB);
+          const oid = String(body.order_id || '').trim();
+          if (!oid) return json({ ok: false, error: 'order_id required' }, 400);
+          const u = (await resolveSession(request, env.DB)) || {};
+          if (u.role !== 'admin' && u.role !== 'manager') return json({ ok: false, error: 'Only Admin or Manager can close a case' }, 403);
+          const r = await env.DB.prepare(
+            "UPDATE delhivery_orders SET rto_closed_at = COALESCE(rto_closed_at, datetime('now')), rto_closed_by = ?, rto_close_reason = ? WHERE order_id = ? AND COALESCE(direction, 'forward') = 'forward' AND delhivery_ok = 1 AND received_at IS NOT NULL AND track_stage IN ('RTO', 'RTO Delivered')"
+          ).bind(String(u.username || 'unknown'), String(body.reason || '').trim().slice(0, 200) || null, oid).run();
+          if (!r.meta || !r.meta.changes) return json({ ok: false, error: 'Mark the RTO parcel Received first' }, 400);
           return json({ ok: true });
         }
 
@@ -4820,6 +4848,7 @@ export default {
             String(o.remark || '').trim(), isReverse ? 'reverse' : 'forward'
           ).run();
           if (result.success && !isReverse && o.linked_order_id) await linkSendBack(env.DB, o.order, o.linked_order_id);
+          if (result.success && !isReverse && o.resend_of) await linkResend(env.DB, o.order, o.resend_of);
           if (result.success && o.market_order_id) await saveMarketOrderId(env.DB, o.order, o.market_order_id);
           return json({ ok: result.success, waybill: result.trackingId, response: result.response, error: result.success ? undefined : result.error }, result.success ? 200 : 502);
         }
@@ -4941,6 +4970,7 @@ export default {
             String(o.remark || '').trim(), isReverse ? 'reverse' : 'forward'
           ).run();
           if (result.success && !isReverse && o.linked_order_id) await linkSendBack(env.DB, o.order, o.linked_order_id);
+          if (result.success && !isReverse && o.resend_of) await linkResend(env.DB, o.order, o.resend_of);
           if (result.success && o.market_order_id) await saveMarketOrderId(env.DB, o.order, o.market_order_id);
 
           // Make sure a pickup request exists (today or the earliest date possible).
@@ -5831,6 +5861,14 @@ async function ensureDelhiveryPickup(env, trigger) {
   return { ok: false, error: String(lastErr || 'No pickup date accepted') };
 }
 
+// Links a re-send (after an RTO) to the shipment that came back (06-Nov-2026):
+// prev_order_id on the new row, and it keeps the same website request ID.
+async function linkResend(DB, newId, prevId) {
+  await DB.prepare("UPDATE delhivery_orders SET prev_order_id = ?, " +
+    "claim_id = COALESCE(claim_id, (SELECT p.claim_id FROM delhivery_orders p WHERE p.order_id = ? AND p.claim_id IS NOT NULL LIMIT 1)) " +
+    "WHERE order_id = ? AND COALESCE(direction, 'forward') = 'forward' AND delhivery_ok = 1").bind(String(prevId), String(prevId), newId).run();
+}
+
 // Links a send-back forward order to the reverse pickup it came from
 // (both rows get linked_order_id pointing at the other).
 async function linkSendBack(DB, forwardId, reverseId) {
@@ -5966,7 +6004,12 @@ async function ensureDelhiveryTable(DB) {
                      // claim_id — the website request (WRN-/SRN-…) this shipment belongs to.
                      // The Dashboard shows it as the case ID (29-Oct-2026). Set on approve,
                      // by Care Desk bookings, and copied to the send-back forward.
-                     'claim_id TEXT']) {
+                     'claim_id TEXT',
+                     // RTO flow (06-Nov-2026) on a forward / send-back leg:
+                     //   received_at / received_by (above) = the RTO parcel is physically back with us
+                     //   prev_order_id = this shipment re-sends an RTO'd one (2nd, 3rd attempt …)
+                     //   rto_closed_* = team closed the case after the RTO instead of re-sending
+                     'prev_order_id TEXT', 'rto_closed_at TEXT', 'rto_closed_by TEXT', 'rto_close_reason TEXT']) {
     try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN ${col}`).run(); } catch (e) { /* column already exists */ }
   }
   await backfillOrderClaimIds(DB);

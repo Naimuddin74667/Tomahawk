@@ -959,6 +959,8 @@ table, .tile-n, .pay-total, .money { font-variant-numeric: tabular-nums; }
 /* ── Pills / badges — website status colours; no blue (yellow is the only accent) ── */
 .badge, .tat-pill, .req-chip, .sb-chip, .cc-chip, .rq-chip { border-radius: 999px; }
 .badge { letter-spacing: .02em; }
+/* ↻2 — send-back re-sent after an RTO (attempt no.) */
+.att-chip { display: inline-block; margin-left: 4px; padding: 0 6px; border-radius: 999px; font-size: 10px; font-weight: 700; line-height: 16px; vertical-align: 1px; background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red); }
 .b-green, .badge.created { background: var(--ok-soft); color: var(--green); }
 .b-amber { background: var(--warn-soft); color: var(--warn); }
 .b-red, .badge.failed { background: var(--bad-soft); color: var(--red); }
@@ -1960,13 +1962,13 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var fwdLive = fs && fs !== 'Cancelled';        // a failed/cancelled send-back is ignored → back to In Process
     if (!r) {
       if (!fwdLive) return null;
-      return dispatchStatus(fs);
+      return dispatchStatus(fs, f);
     }
     if (!r.delhivery_ok) return null;
     var rs = legStage(r);
     if (rs === 'Cancelled' && !r.received_at) return null;
     if (r.refunded_at) return { label: 'Refunded', tone: 'closed' };
-    if (fwdLive) return dispatchStatus(fs);
+    if (fwdLive) return dispatchStatus(fs, f);
     if (r.resolution === 'refund') {       // refund started (Refund case or "Refund instead")
       if (!r.bank_submitted_at) return { label: 'Awaiting Bank Details', tone: 'house' };
       return r.refund_approved_at ? { label: 'Refund Approved', tone: 'house' } : { label: 'Refund Pending', tone: 'house' };
@@ -1982,14 +1984,25 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (rs === 'Out For Delivery') return { label: PICKUP_LABEL[rs], tone: 'in', attn: 'arriving', eta: 'Arriving today' };
     return { label: PICKUP_LABEL[rs] || rs, tone: 'in' };
   }
-  function dispatchStatus(fs) {
+  function dispatchStatus(fs, f) {
+    // RTO flow (06-Nov-2026): a send-back coming back to us is incoming (Upcoming).
+    //   RTO           → red "RTO — returning to us", Upcoming
+    //   RTO Delivered → Upcoming + Needs attention, "Received" button
+    //   Received      → In process + Needs attention: Send back again / Close case
+    //   Closed        → grey "Closed (RTO)"
+    if (isRtoStage(fs) && f && f.rto_closed_at) return { label: 'Closed (RTO)', tone: 'closed' };
+    if (isRtoStage(fs) && f && f.received_at) return { label: 'RTO received', tone: 'house', attn: 'rtodecide' };
     if (fs === 'Delivered') return { label: 'Delivered', tone: 'closed' }; // Delivered = case closed (grey)
-    // Send-back returned and delivered back to our warehouse (03-Nov-2026) → Needs attention.
-    // What to do next (re-ship / call customer / refund) is to be built later.
-    if (fs === 'RTO Delivered') return { label: 'Delivered back to us', tone: 'bad-out', attn: 'rtoback' };
-    if (fs === 'RTO' || fs === 'Lost') return { label: fs, tone: 'bad-out' };
+    if (fs === 'RTO Delivered') return { label: 'Delivered back to us', tone: 'bad-in', attn: 'rtoback' };
+    if (fs === 'RTO') return { label: DISPATCH_LABEL.RTO, tone: 'bad-in' };
+    if (fs === 'Lost') return { label: fs, tone: 'bad-out' };
     return { label: DISPATCH_LABEL[fs] || fs, tone: 'out' };
   }
+
+  function ordinal(n) { return n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th'); }
+  function isRtoStage(st) { return st === 'RTO' || st === 'RTO Delivered'; }
+  // Forward / send-back leg that went RTO (still live, not cancelled).
+  function isRtoLeg(f) { return !!(f && f.delhivery_ok && !f.cancelled_at && isRtoStage(legStage(f))); }
 
   // Badge = text + icon on the right.
   // Box truck facing right (cargo stripes + cab window + wheel hubs), flipped for incoming.
@@ -2009,7 +2022,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     'Booked': 'white', 'RTD': 'white', 'Received': 'white', 'Awaiting Customer Dispatch': 'white',
     'Picked': 'blue', 'In Transit': 'blue', 'At Bhiwandi Hub': 'blue', 'Last Mile Hub': 'blue',
     'Out For Pickup': 'amber', 'Out For Delivery': 'amber', 'In Process': 'amber',
-    'Awaiting Bank Details': 'white', 'Refund Pending': 'amber',
+    'Awaiting Bank Details': 'white', 'Refund Pending': 'amber', 'RTO received': 'amber',
     'Delivered to us': 'green', 'Delivered': 'green', 'Refunded': 'green'
   };
   // Small date line under a "Delivered to us" badge — courier's delivered scan on the pickup leg.
@@ -2070,14 +2083,14 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     { label: 'Delivered to us', hint: 'Check the parcel and confirm receipt', c: 'var(--green)' },
     { label: 'Arriving', hint: 'On the way to our Bhiwandi warehouse', c: 'var(--accent)' },
     { label: 'Call customer', hint: 'Delivery attempt failed — call once to understand the issue', c: 'var(--text)' },
-    { label: 'Returned to us (RTO)', hint: 'Send-back came back to our warehouse — decide the next step', c: 'var(--red)' },
+    { label: 'Returned to us (RTO)', hint: 'Send-back came back — mark Received, then Send back again or Close case', c: 'var(--red)' },
     { label: 'Escalation needed', hint: 'Raise a ticket on the courier portal', c: 'var(--red)' }
   ];
   // Ranks: 0 Delivered to us · 1/2 Arriving (today / next day) · 3 Call customer · 4 Returned to us (RTO) · 5 Escalation
   function attnGroup(c) { var r = attnRank(c); return r === 0 ? 0 : r <= 2 ? 1 : r === 3 ? 2 : r === 4 ? 3 : 4; }
   function attnRank(c) {
     if (c.st.attn === 'verify') return 0;
-    if (c.st.attn === 'rtoback') return 4;
+    if (c.st.attn === 'rtoback' || c.st.attn === 'rtodecide') return 4;
     if (c.call) return 3;                   // a call case is not escalated yet; the courier ticket comes after if needed
     if (c.esc && !c.esc.raised) return 5;   // e.g. "at Bhiwandi Hub" for 3 days = escalation, not arriving
     if (c.st.attn === 'arriving') return c.st.label === 'Out For Delivery' ? 1 : 2;
@@ -2135,7 +2148,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // The leg that is moving right now: pickup coming to us, or the send-back going out.
   function liveLeg(c) {
     if (!c.st) return null;
-    if (c.st.tone === 'in' || c.st.tone === 'bad-in') return c.reverse;
+    if (c.st.tone === 'in' || c.st.tone === 'bad-in') return isRtoLeg(c.forward) ? c.forward : c.reverse;
     if (c.st.tone === 'out' || c.st.tone === 'bad-out') return c.forward;
     return null;
   }
@@ -2147,6 +2160,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var hub = info.hub, hubH = info.hub_since ? hrsSince(info.hub_since) : 0;
     var lastH = info.last ? hrsSince(info.last.t) : 0;
     if (st === 'Delivered' || st === 'RTO Delivered' || st === 'Cancelled' || st === 'Failed') return null;   // back with us = nothing to escalate
+    if (!rev && (o.received_at || o.rto_closed_at)) return null;   // RTO parcel already back with us
     if (st === 'Lost') return { code: 'LOST', short: 'Marked lost by courier',
       facts: ['Shipment is marked LOST / damaged.'], ask: 'Please confirm status and process lost-shipment claim.' };
     if (st === 'RTO') return { code: 'RTO', short: rev ? 'Pickup returned (RTO)' : 'RTO — returning to us',
@@ -2502,11 +2516,12 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     return isNaN(d) ? null : d;
   }
   function caseTat(c) {
-    var start = parseTs((c.reverse || c.forward).created_at);
+    var start = parseTs((c.reverse || (c.prev && c.prev[0]) || c.forward).created_at);
     if (!start) return null;
     var closed = c.st.tone === 'closed', end = null;
     if (closed) {
       if (c.st.label === 'Refunded') end = parseTs(c.reverse && c.reverse.refunded_at);
+      else if (c.st.label === 'Closed (RTO)') end = parseTs(c.forward.rto_closed_at);
       else if (c.forward) end = parseTs(c.forward.delivered_at || c.forward.tracked_at);
       if (!end) return null; // closed but no close time recorded
     } else end = new Date();
@@ -2536,16 +2551,32 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   function buildCases(orders) {
     var byId = {};
     orders.forEach(function (o) { if (o.order_id) byId[o.order_id] = byId[o.order_id] || o; });
+    // Re-sends after an RTO (06-Nov-2026): a forward with prev_order_id takes
+    // over from the shipment that came back. The case keeps its first ID; the
+    // older shipments are kept as c.prev (oldest first).
+    var nextOf = {};
+    orders.forEach(function (o) {
+      if (o.direction !== 'reverse' && o.prev_order_id && o.delhivery_ok && !o.cancelled_at) nextOf[o.prev_order_id] = nextOf[o.prev_order_id] || o;
+    });
+    function latestOf(f) { for (var n = 0; f && nextOf[f.order_id] && n < 10; n++) f = nextOf[f.order_id]; return f; }
+    function prevOf(f) {
+      var out = [];
+      for (var n = 0, p = f; p && p.prev_order_id && byId[p.prev_order_id] && n < 10; n++) { p = byId[p.prev_order_id]; out.unshift(p); }
+      return out;
+    }
     var used = {}, out = [];
     orders.forEach(function (o) {
       if (o.direction !== 'reverse') return;
-      var f = o.linked_order_id ? byId[o.linked_order_id] : null;
+      var f = latestOf(o.linked_order_id ? byId[o.linked_order_id] : null);
+      var prev = f ? prevOf(f) : [];
       if (f) used[f.order_id] = true;
-      out.push({ id: o.order_id, reverse: o, forward: f, created: o.created_at });
+      prev.forEach(function (p) { used[p.order_id] = true; });
+      out.push({ id: o.order_id, reverse: o, forward: f, prev: prev, created: o.created_at });
     });
     orders.forEach(function (o) {
-      if (o.direction === 'reverse' || used[o.order_id]) return;
-      out.push({ id: o.order_id, reverse: null, forward: o, created: o.created_at });
+      if (o.direction === 'reverse' || used[o.order_id] || nextOf[o.order_id]) return;
+      var prev = prevOf(o);
+      out.push({ id: prev.length ? prev[0].order_id : o.order_id, reverse: null, forward: o, prev: prev, created: (prev[0] || o).created_at });
     });
     out.forEach(function (c) {
       c.st = caseStatus(c);
@@ -2562,7 +2593,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       // everywhere; c.id stays the lead order ID (internal key). 29-Oct-2026.
       c.claim = (c.reverse && c.reverse.claim_id) || (c.forward && c.forward.claim_id) || '';
       c.caseNo = c.claim || c.id;
-      c.search = [c.claim, c.id, c.forward && c.forward.order_id, c.reverse && c.reverse.waybill, c.forward && c.forward.waybill, c.customer, c.product, sh.phone, (c.reverse || c.forward).market_order_id].join(' ').toLowerCase();
+      c.attempt = c.prev.length + 1;   // send-back attempt no. (2+ = re-sent after an RTO)
+      c.search = [c.claim, c.id, c.forward && c.forward.order_id, c.prev.map(function (p) { return p.order_id; }).join(' '), c.reverse && c.reverse.waybill, c.forward && c.forward.waybill, c.customer, c.product, sh.phone, (c.reverse || c.forward).market_order_id].join(' ').toLowerCase();
     });
     // Failed bookings and cancelled shipments aren't shown at all.
     out = out.filter(function (c) { return !!c.st; });
@@ -2660,7 +2692,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       // (AWB/courier = the leg moving now; full details in the case popup).
       var lg = liveLeg(c) || c.forward || c.reverse;
       tr.innerHTML =
-        '<td class="mono" title="' + esc(caseLegIds(c)) + '">' + esc(c.caseNo) + stepsMini(computeSteps(c, caseRequest(c), null)) + '</td>' +
+        '<td class="mono" title="' + esc(caseLegIds(c)) + '">' + esc(c.caseNo) + (c.attempt > 1 ? ' <span class="att-chip" title="Sent again after an RTO — attempt ' + c.attempt + '">&#8635;' + c.attempt + '</span>' : '') + stepsMini(computeSteps(c, caseRequest(c), null)) + '</td>' +
         '<td>' + esc(c.type) + '</td>' +
         '<td class="name-cell" title="' + esc(c.city || '') + '">' + esc(c.customer || '—') + '</td>' +
         '<td class="prod-cell" title="' + esc(c.product || '') + '">' + esc(c.product || '—') + '</td>' +
@@ -2734,6 +2766,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
           '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>' : '') +
         f('Courier status', esc(stLabel), showRaw ? esc(raw) : '') +
         f('Booked by', esc(o.created_by || ''), esc(fmtWhen(o.created_at))) +
+        // RTO leg back with us / closed (06-Nov-2026)
+        (o.direction !== 'reverse' && o.received_at ? f('Back with us', esc(fmtWhen(o.received_at)), esc(o.received_by || '')) : '') +
+        (o.direction !== 'reverse' && o.rto_closed_at ? f('Case closed', esc(o.rto_close_reason || 'No reason given'), esc([o.rto_closed_by, fmtWhen(o.rto_closed_at)].filter(Boolean).join(' · '))) : '') +
         // Who clicked Verify received (recorded from 12-Oct-2026; older rows show only the time)
       '</div><div class="track-box" id="track-' + idx + '" hidden></div>';
   }
@@ -2754,6 +2789,12 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var r = c.reverse, f = c.forward;
     var btn = function (act, label) { return '<button class="case-act primary" data-act="' + act + '">' + label + '</button>'; };
     var fs = f && f.delhivery_ok ? legStage(f) : '';
+    // RTO came back (06-Nov-2026): Received → Send back again / Close case. Any case type.
+    if (isRtoLeg(f)) {
+      if (f.rto_closed_at) return '';
+      if (!f.received_at) return fs === 'RTO Delivered' && canReceive() ? btn('rtorecv', 'Received') : '';
+      return btn('resend', 'Send back again &#8594;') + '<button class="case-act" data-act="rtoclose">Close case</button>';
+    }
     if (!r || !r.delhivery_ok || r.refunded_at) return '';
     if (fs && fs !== 'Cancelled') return '';
     if (!r.received_at && isSelfShip(r) && legStage(r) !== 'Delivered')   // self-ship: tracking + arrival by hand
@@ -2857,6 +2898,47 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     return { ok: false, msg: rp && rp.status === 'pending'
       ? 'Step 2 (service & spare parts) is not paid yet. Send back unlocks once the customer pays.'
       : 'Send the Step 2 repair quote first — or mark it "Not repaired" in Payments if there is no service charge.' };
+  }
+
+  // Send back again after an RTO (06-Nov-2026): same customer / product /
+  // package as the shipment that came back; address, PIN, courier and size
+  // are editable in the panel. Booked as <first ID>-R<attempt>, linked to it.
+  function resendOrder(c) {
+    var f = c.forward, sh = ship(f);
+    var sku = String(sh.products_desc || '').replace(/^(Repair|Replacement|Refund|Repaired|FOC)\s*-\s*/i, '').trim();
+    var job = f.job_type || (SEND_BACK_TYPE[c.reverse && c.reverse.job_type] || SEND_BACK_TYPE.Repair).job;
+    return {
+      resend_of: f.order_id,
+      linked_order_id: c.reverse ? c.reverse.order_id : undefined,
+      name: sh.name || '', phone: String(sh.phone || '').replace(/\D/g, '').slice(-10),
+      add: sh.add || '', pin: String(sh.pin || ''), city: sh.city || '', state: sh.state || '',
+      products_desc: job + ' - ' + sku, job_type: job, remark: f.remark || '',
+      direction: 'forward', payment_mode: 'Prepaid',
+      quantity: sh.quantity || '1', total_amount: sh.total_amount || '', hsn_code: sh.hsn_code || '8467',
+      weight: sh.weight || 2000,
+      length: sh.shipment_length || 30, width: sh.shipment_width || 20, height: sh.shipment_height || 15,
+      courier: f.courier === 'Ekart' ? 'Ekart' : 'Delhivery',
+      market_order_id: f.market_order_id || (c.reverse && c.reverse.market_order_id) || undefined,
+      _sku: sku, _pkgSrc: (sh.weight && sh.shipment_length) ? 'last' : 'default',
+      _root: (c.prev && c.prev[0] || f).order_id, _attempt: (c.attempt || 1) + 1
+    };
+  }
+  async function startResend(c, btn) {
+    var o = resendOrder(c);
+    if (!o.name || !o.phone || !o.add || !/^\d{6}$/.test(o.pin)) {
+      alert('The last shipment is missing the name, number, address or PIN — use Create Parcel Pickup to send it.');
+      return;
+    }
+    btn.disabled = true; btn.textContent = 'Checking…';
+    sb = { c: c, o: o, btn: btn, sv: {}, refused: {}, note: '', mode: 'resend' };
+    await loadSkuSources();
+    await checkCouriers();
+    if (!sb.sv[o.courier] || !sb.sv[o.courier].ok) {
+      var alt = COURIERS.filter(function (x) { return x !== o.courier && sb.sv[x] && sb.sv[x].ok; })[0];
+      if (alt) { sb.note = o.courier + " can't deliver to " + o.pin + ' — using ' + alt + '.'; o.courier = alt; }
+    }
+    btn.style.display = 'none';
+    renderSendBack();
   }
 
   async function startSendBack(c, btn) {
@@ -3035,7 +3117,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     }).join('');
     var pk = sb.mode === 'pickup';
     panel.innerHTML =
-      '<div class="cm-sec-title" style="margin-bottom:8px">' + (pk ? 'Confirm pickup' : 'Confirm send back') + '</div>' +
+      '<div class="cm-sec-title" style="margin-bottom:8px">' + (pk ? 'Confirm pickup' : sb.mode === 'resend' ? 'Confirm send back again · ' + ordinal(o._attempt) + ' attempt' : 'Confirm send back') + '</div>' +
       '<div class="cm-summary">' +
         '<div><div class="cm-k">' + (pk ? 'Pick up from' : 'Deliver to') + '</div><div>' + esc(o.name) + '</div></div>' +
         '<div><div class="cm-k">Contact Number</div><div>' + esc(o.phone) + '</div></div>' +
@@ -3113,7 +3195,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     });
     document.getElementById('sb-no').addEventListener('click', function () {
       panel.hidden = true; panel.innerHTML = '';
-      sb.btn.style.display = ''; sb.btn.disabled = false; sb.btn.innerHTML = sb.mode === 'pickup' ? 'Book Pickup' : 'Send back &#8594;';
+      sb.btn.style.display = ''; sb.btn.disabled = false; sb.btn.innerHTML = sb.mode === 'pickup' ? 'Book Pickup' : sb.mode === 'resend' ? 'Send back again &#8594;' : 'Send back &#8594;';
       sb = null;
     });
     document.getElementById('sb-yes').addEventListener('click', function () { readInputs(); sb.mode === 'pickup' ? bookPickup(this) : bookSendBack(this); });
@@ -3124,6 +3206,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (src === 'default') return '<span class="lq-chip">&#9888; Default size — check before booking</span>';
     if (src === 'listing') return '<span class="pkg-src">from listing (½ weight)</span>';
     if (src === 'pickup') return '<span class="pkg-src">same as pickup</span>';
+    if (src === 'last') return '<span class="pkg-src">same as last shipment</span>';
     if (src === 'edited') return '<span class="pkg-src">edited</span>';
     return '';
   }
@@ -3149,14 +3232,15 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     yesBtn.disabled = true; yesBtn.textContent = 'Booking…';
     try {
       var rv = c.reverse;   // request case → F + request ID (FWRN-…), else FRPR/FRPL serial
-      var idRes = await api(rv && rv.claim_id
+      // Re-send after an RTO → <first shipment ID>-R<attempt> (no server call needed).
+      var idRes = o.resend_of ? { ok: true, orderId: o._root + '-R' + o._attempt } : await api(rv && rv.claim_id
         ? 'delhiveryNextOrderId&claim=' + encodeURIComponent(rv.claim_id) + '&dir=forward&from=' + encodeURIComponent(rv.order_id)
         : 'delhiveryNextOrderId&prefix=' + o._prefix);
       // Request ID in an unexpected (older) format → normal FRPR/FRPL serial.
-      if (rv && rv.claim_id && !(idRes && idRes.ok)) idRes = await api('delhiveryNextOrderId&prefix=' + o._prefix);
+      if (!o.resend_of && rv && rv.claim_id && !(idRes && idRes.ok)) idRes = await api('delhiveryNextOrderId&prefix=' + o._prefix);
       if (!idRes || !idRes.ok || !idRes.orderId) throw new Error("Couldn't get the next Order ID — try again.");
       var order = Object.assign({}, o, { order: idRes.orderId });
-      delete order._prefix; delete order._sku;
+      delete order._prefix; delete order._sku; delete order._root; delete order._attempt;
       // City/State exactly as the chosen courier's PIN lookup returned them
       // (same as Create Parcel Pickup); fall back to the pickup's values.
       var cs = sb.sv[order.courier] || {};
@@ -3169,6 +3253,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         var pkg = res.response && res.response.packages && res.response.packages[0];
         var remarks = [res.error].concat(pkg && pkg.remarks ? [].concat(pkg.remarks) : []);
         if (!remarks.some(function (x) { return /duplicate|already exists/i.test(String(x || '')); }) || ++attempts >= 5) break;
+        var rm = /^(.+-R)(\d+)$/.exec(order.order);   // re-send FRPR-08102601-R2 → -R3
+        if (rm && order.resend_of) { order.order = rm[1] + (parseInt(rm[2], 10) + 1); continue; }
         var m = /^([A-Z]+-\d{6})(\d+)$/.exec(order.order);
         var cm = /^([RF][A-Z]{2,4}-\d{6}-\d+)(?:-(\d+))?$/.exec(order.order);   // FWRN-261027-01 → -2
         if (m) order.order = m[1] + String(parseInt(m[2], 10) + 1).padStart(2, '0');
@@ -3193,7 +3279,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         throw new Error(msg);
       }
       // Out-of-warranty: the dispatch makes the final tax invoice (advances adjusted).
-      var claimForFinal = c.reverse && c.reverse.claim_id;
+      var claimForFinal = !order.resend_of && c.reverse && c.reverse.claim_id;   // re-send: invoice already made at the first send back
       if (claimForFinal) {
         try {
           var chk = await api('ccPaymentGet&claim_id=' + encodeURIComponent(claimForFinal));
@@ -3595,10 +3681,31 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     } catch (e) { alert("Couldn't update: " + e.message); btn.disabled = false; }
   }
 
+  // RTO parcel back with us → Received, or Close case (with an optional reason).
+  async function rtoAction(c, btn) {
+    var f = c.forward, body = { order_id: f.order_id }, act;
+    if (btn.dataset.act === 'rtorecv') {
+      if (!confirm(c.caseNo + ': has the RTO parcel (' + f.order_id + ') physically come back to the warehouse?')) return;
+      act = 'delhiveryMarkReceived'; body.rto = true;
+    } else {
+      var why = prompt(c.caseNo + ': close this case without sending it again?\nReason (optional), e.g. "Customer not reachable" or "Refused delivery":', '');
+      if (why === null) return;
+      act = 'ccCloseRto'; body.reason = why.trim();
+    }
+    btn.disabled = true;
+    try {
+      var res = await post(act, body);
+      if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
+      await reopenCase(c.id);
+    } catch (e) { alert("Couldn't update: " + e.message); btn.disabled = false; }
+  }
+
   async function caseAction(c, btn) {
     if (btn.dataset.act === 'repairdone') return repairDoneAction(c, btn, false);
     if (btn.dataset.act === 'repairundo') return repairDoneAction(c, btn, true);
     if (btn.dataset.act === 'sendback') return startSendBack(c, btn);
+    if (btn.dataset.act === 'resend') return startResend(c, btn);
+    if (btn.dataset.act === 'rtorecv' || btn.dataset.act === 'rtoclose') return rtoAction(c, btn);
     if (btn.dataset.act === 'startrefund') return refundStartPanel(c);
     if (btn.dataset.act === 'link') return refundLinkPanel(c, btn);
     if (btn.dataset.act === 'bank') return refundBankPanel(c, false);
@@ -3757,7 +3864,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
 
   // Courier order numbers of a case's legs, e.g. "RWRN-261027-01 · FWRN-261027-01".
   function caseLegIds(c) {
-    return [c.reverse && c.reverse.order_id, c.forward && c.forward.order_id].filter(Boolean).join(' \u00b7 ');
+    return [c.reverse && c.reverse.order_id].concat((c.prev || []).map(function (p) { return p.order_id; }), [c.forward && c.forward.order_id]).filter(Boolean).join(' \u00b7 ');
   }
   // The website request behind a case (an NV- ID verified later still matches).
   function caseRequest(c) {
@@ -3837,7 +3944,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     notes[3] = rvOk && rv.received_at ? shortWhen(rv.received_at) + (rv.received_by ? ' · ' + rv.received_by : '') : '';
     notes[4] = rvOk && rv.repair_done_at ? shortWhen(rv.repair_done_at) + (rv.repair_done_by ? ' · ' + rv.repair_done_by : '') +
       (pay && pay.repair && pay.repair.status === 'skipped' ? ' · Not repaired' : '') : '';
-    notes[5] = fwOk ? shortWhen(fw.created_at) + ' · ' + courierName(fw) : '';
+    var att = c && c.attempt > 1 ? ' · ' + ordinal(c.attempt) + ' attempt' : '';
+    notes[5] = fwOk ? shortWhen(fw.created_at) + ' · ' + courierName(fw) + att : '';
     notes[6] = fwOk && fs === 'Delivered' ? shortWhen(fw.delivered_at || fw.tracked_at) : '';
     var cur = done.indexOf(false), outcome = null, warn = false;
     // Current step: what's pending
@@ -3864,12 +3972,15 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     }
     if (cur === 5) notes[5] = 'Book send back';
     if (cur === 6) {
-      if (fs === 'RTO Delivered') { notes[6] = 'Returned to us (RTO) · decide next step'; warn = true; }
+      if (isRtoStage(fs) && fw.rto_closed_at) { notes[6] = 'Closed after RTO'; warn = true; }
+      else if (isRtoStage(fs) && fw.received_at) { notes[6] = 'RTO back with us · send again or close'; warn = true; }
+      else if (fs === 'RTO Delivered') { notes[6] = 'Returned to us (RTO) · mark Received'; warn = true; }
       else if (fs === 'RTO' || fs === 'Lost') { notes[6] = (fs === 'RTO' ? 'RTO · returning to us' : 'Lost by courier'); warn = true; }
       else notes[6] = DISPATCH_LABEL[fs] || fs || 'Booked';
     }
     // Other endings
-    if (rv && (rv.refunded_at || rv.resolution === 'refund')) outcome = rv.refunded_at ? { label: 'Refund processed', tone: 'ok' } : { label: 'Refund in progress', tone: 'warn' };
+    if (fwOk && fw.rto_closed_at && isRtoStage(fs)) outcome = { label: 'Closed after RTO', tone: 'gray' };
+    else if (rv && (rv.refunded_at || rv.resolution === 'refund')) outcome = rv.refunded_at ? { label: 'Refund processed', tone: 'ok' } : { label: 'Refund in progress', tone: 'warn' };
     else if (r && !rvOk && (r.status === 'not_covered' || r.status === 'closed')) outcome = { label: r.status === 'not_covered' ? 'Not covered' : 'Closed', tone: 'gray' };
     var steps = done.map(function (d, i) {
       var st = d ? 'done' : i === cur ? (warn ? 'warn' : 'cur') : 'todo';
@@ -3909,7 +4020,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     openCaseId = c.id;
     var legs = [];
     if (c.reverse) legs.push([c.reverse, 'Reverse pickup']);
-    if (c.forward) legs.push([c.forward, c.reverse ? 'Send-back shipment' : 'Forward shipment']);
+    var legName = c.reverse ? 'Send-back' : 'Forward shipment';
+    (c.prev || []).forEach(function (p, i) { legs.push([p, legName + ' #' + (i + 1) + ' — RTO']); });
+    if (c.forward) legs.push([c.forward, c.attempt > 1 ? legName + ' #' + c.attempt + ' (' + ordinal(c.attempt) + ' attempt)' : c.reverse ? 'Send-back shipment' : 'Forward shipment']);
     var lead = c.reverse || c.forward, sh = ship(lead);
     document.getElementById('case-title').textContent = c.caseNo;
     // Request cases: the courier order numbers sit under the request ID.
@@ -3929,7 +4042,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var trackBtns = legs.map(function (l, i) {
       var o = l[0];
       if (!o.delhivery_ok || !o.waybill || isSelfShip(o)) return '';
-      var lbl = legs.length > 1 ? (o.direction === 'reverse' ? 'Track pickup' : 'Track send-back') : 'Track now';
+      var lbl = legs.length > 1 ? (o.direction === 'reverse' ? 'Track pickup' : c.attempt > 1 ? 'Track #' + ((c.prev || []).indexOf(o) + 1 || c.attempt) : 'Track send-back') : 'Track now';
       return '<button class="track-btn" data-leg="' + i + '">' + lbl + '</button>';
     }).join('');
     // Download Label — bottom-left, whenever the forward/send-back shipment
