@@ -994,6 +994,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .stp-todo .stp-chev, .stp-skip .stp-chev { background: var(--todo); color: var(--todo-ink); }
 .stp-skip { opacity: .45; }
 .stp-warn .stp-chev { background: var(--red); color: #fff; }
+.stp-redo .stp-chev { background: linear-gradient(90deg, var(--red) 0%, var(--red) 45%, var(--coal) 100%); color: #fff; }
 .stp-tick { position: absolute; top: 5px; right: 20px; width: 15px; height: 15px; border-radius: 50%; background: var(--green); color: #fff; font-size: 9px; display: flex; align-items: center; justify-content: center; }
 .stp-st:last-child .stp-tick { right: 7px; }
 .stp-lbl { text-align: center; margin-top: 8px; padding: 0 3px; }
@@ -3944,8 +3945,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     notes[3] = rvOk && rv.received_at ? shortWhen(rv.received_at) + (rv.received_by ? ' · ' + rv.received_by : '') : '';
     notes[4] = rvOk && rv.repair_done_at ? shortWhen(rv.repair_done_at) + (rv.repair_done_by ? ' · ' + rv.repair_done_by : '') +
       (pay && pay.repair && pay.repair.status === 'skipped' ? ' · Not repaired' : '') : '';
-    var att = c && c.attempt > 1 ? ' · ' + ordinal(c.attempt) + ' attempt' : '';
-    notes[5] = fwOk ? shortWhen(fw.created_at) + ' · ' + courierName(fw) + att : '';
+    notes[5] = fwOk ? shortWhen(fw.created_at) + ' · ' + courierName(fw) : '';
     notes[6] = fwOk && fs === 'Delivered' ? shortWhen(fw.delivered_at || fw.tracked_at) : '';
     var cur = done.indexOf(false), outcome = null, warn = false;
     // Current step: what's pending
@@ -3985,7 +3985,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var steps = done.map(function (d, i) {
       var st = d ? 'done' : i === cur ? (warn ? 'warn' : 'cur') : 'todo';
       if (outcome && !d) st = 'skip';
-      return { state: st, note: notes[i] || '' };
+      // Re-sent after an RTO → Dispatched card turns red/black (06-Nov-2026)
+      var redo = i === 5 && d && c && c.attempt > 1 ? ordinal(c.attempt) + ' attempt — sent again after an RTO' : '';
+      return { state: st, note: notes[i] || '', redo: redo };
     });
     return { steps: steps, cur: cur === -1 ? 7 : cur, outcome: outcome };
   }
@@ -3995,7 +3997,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       : m.cur >= 7 ? '<span class="stp-out stp-ok">Completed</span>' : '';
     return '<div class="stp">' + (head ? '<div class="stp-head">' + head + '</div>' : '') + '<div class="stp-flow">' +
       m.steps.map(function (s, i) {
-        return '<div class="stp-st stp-' + s.state + '"><div class="stp-chev"><span class="stp-n">0' + (i + 1) + '</span>' +
+        return '<div class="stp-st stp-' + s.state + (s.redo ? ' stp-redo" title="' + esc(s.redo) : '') + '"><div class="stp-chev"><span class="stp-n">0' + (i + 1) + '</span>' +
           '<svg class="stp-ico" viewBox="0 0 24 24">' + STEP_DEFS[i][1] + '</svg>' + (s.state === 'done' ? '<span class="stp-tick">&#10003;</span>' : '') + '</div>' +
           '<div class="stp-lbl"><b>' + esc(STEP_DEFS[i][0]) + '</b><span>' + esc(s.note) + '</span></div></div>';
       }).join('') + '</div></div>';
