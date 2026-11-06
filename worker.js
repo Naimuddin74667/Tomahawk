@@ -726,6 +726,7 @@ const ACTION_TIERS = {
   warrantyClaimSubmit: 'public', // public warranty claim form — rate-limited, emails support
   requestTrack: 'public', // public 'track your request' page — request ID/order ID + mobile, steps only, rate-limited
   orderTrack: 'public', // public 'Track my order' (Shopify) — order no. + mobile, status/items/courier only, rate-limited
+  orderCancel: 'public', // public 'Cancel order' on Track Order — order no. + mobile/email must match, only before courier pickup, rate-limited
   invoiceUploadInfo: 'public', invoiceUploadSubmit: 'public', // customer re-uploads the invoice — single-use link token, rate-limited
   ccAnalyticsData: 'viewer_read',  // Customer Care Analysis page (04-Nov-2026)
   ccCloseRequest: 'manager_up',   // Customer Care: close a request with a reason (+ WhatsApp request_closed)
@@ -1567,6 +1568,23 @@ export default {
         }
         try { return json(await orderTrack(env, url.searchParams.get('order'), url.searchParams.get('phone'))); }
         catch (e) { console.error('orderTrack failed:', e.message); return json({ ok: false, error: 'Something went wrong — please try again later.' }, 500); }
+      }
+      // ── CANCEL MY ORDER (public, Shopify website orders) — 06-Nov-2026 ──
+      // POST { action:'orderCancel', order:'3144', phone? | email?, reason, note? }
+      // Cancels in Shopify (restock + refund if prepaid) only while no parcel
+      // has been handed to the courier. See orderCancel() for the rules.
+      if (request.method === 'POST' && act === 'orderCancel') {
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        if (!(await warrantyRateOk(env.DB, 'ocancel:' + ip, 10))) {
+          return json({ ok: false, code: 'rate_limited', error: 'Too many tries — please try again in an hour, or chat with us on WhatsApp.' }, 429);
+        }
+        try {
+          const r = await orderCancel(env, body || {});
+          return json(r, r.ok ? 200 : (r.status || 400));
+        } catch (e) {
+          console.error('orderCancel failed:', e.message);
+          return json({ ok: false, code: 'error', error: 'Something went wrong — please try again, or chat with us on WhatsApp.' }, 500);
+        }
       }
       if (request.method === 'GET' && action === 'requestTrack') {
         const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
@@ -8324,6 +8342,136 @@ async function srTrack(env, idRaw, phoneRaw) {
 // sync for this page) — order numbers are sequential, so the number alone is
 // never enough. Returns no name / address / price breakdown.
 // Live courier stage comes from Delhivery / Ekart tracking (best effort).
+// ══════════════════════════════════════════════════════════════════
+// CANCEL MY ORDER (06-Nov-2026) — customer cancels on the Track Order page
+// ══════════════════════════════════════════════════════════════════
+// Needs Worker secrets SHOPIFY_ADMIN_TOKEN (scopes read_orders, write_orders,
+// read_fulfillments + protected customer data: phone/email) and plain var
+// SHOPIFY_STORE (tomahawk-tools.myshopify.com). Until they exist this
+// answers code 'not_configured' and nothing is cancelled.
+// Rules:
+//  - order number AND (mobile OR email) must match the Shopify order —
+//    same "not found" answer for both, so nobody can probe order numbers
+//  - refused once any fulfillment exists (parcel handed to the courier)
+//  - cancels with restock + refund (refund is a no-op for unpaid COD)
+//  - if Unicommerce already shows the package packed / manifested, it still
+//    cancels but the team email says to hold the parcel and cancel the AWB
+//  - every attempt that reaches Shopify is logged in D1 order_cancellations
+const ORDER_CANCEL_REASONS = ['Ordered by mistake', 'Found a better price', 'Delivery is too late', 'Changed my mind', 'Other'];
+const UC_PACKED_STATES = ['PACKED', 'READY_TO_SHIP', 'MANIFESTED', 'DISPATCHED', 'SHIPPED', 'DELIVERED'];
+
+async function shopifyGql(env, query, variables) {
+  const store = String(env.SHOPIFY_STORE || 'tomahawk-tools.myshopify.com').replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const ver = env.SHOPIFY_API_VERSION || '2025-10';
+  const r = await fetch('https://' + store + '/admin/api/' + ver + '/graphql.json', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': env.SHOPIFY_ADMIN_TOKEN },
+    body: JSON.stringify({ query, variables: variables || {} })
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok || !j || (j.errors && j.errors.length)) {
+    throw new Error('Shopify ' + r.status + ' ' + JSON.stringify((j && j.errors) || j).slice(0, 300));
+  }
+  return j.data;
+}
+
+async function orderCancel(env, b) {
+  const num = String(b.order || '').replace(/\D/g, '');
+  const phone = normPhone(b.phone);
+  const email = String(b.email || '').trim().toLowerCase();
+  const reason = ORDER_CANCEL_REASONS.includes(b.reason) ? b.reason : '';
+  const note = String(b.note || '').trim().slice(0, 300);
+  if (!num || num.length > 10 || (!phone && !validEmail(email))) {
+    return { ok: false, code: 'bad_input', error: 'Enter your order number and the mobile number or email used on the order.' };
+  }
+  if (!reason) return { ok: false, code: 'bad_input', error: 'Please choose why you want to cancel.' };
+  if (reason === 'Other' && !note) return { ok: false, code: 'bad_input', error: 'Please tell us why you want to cancel.' };
+  if (!env.SHOPIFY_ADMIN_TOKEN) {
+    return { ok: false, status: 503, code: 'not_configured', error: "Online cancellation isn't available yet — please chat with us on WhatsApp." };
+  }
+
+  // 1. Find the order and check the customer
+  const data = await shopifyGql(env, `query($q: String!) {
+    orders(first: 5, query: $q) { nodes {
+      id name cancelledAt email phone displayFinancialStatus paymentGatewayNames
+      totalPriceSet { shopMoney { amount } }
+      shippingAddress { phone } billingAddress { phone }
+      fulfillments(first: 10) { status }
+    } } }`, { q: 'name:' + num });
+  const o = ((data && data.orders && data.orders.nodes) || []).find(x => String(x.name).replace(/\D/g, '') === num);
+  const notFound = { ok: false, status: 404, code: 'not_found', error: "We couldn't find an order with these details. Check the order number and the mobile number or email used on the order." };
+  if (!o) return notFound;
+  const phones = [o.phone, o.shippingAddress && o.shippingAddress.phone, o.billingAddress && o.billingAddress.phone].map(normPhone).filter(Boolean);
+  const match = (phone && phones.includes(phone)) || (email && String(o.email || '').toLowerCase() === email);
+  if (!match) return notFound;
+
+  const isCod = (o.paymentGatewayNames || []).some(g => /cod|cash on delivery/i.test(g));
+  const amount = Number(o.totalPriceSet && o.totalPriceSet.shopMoney && o.totalPriceSet.shopMoney.amount) || 0;
+  const payment = isCod ? 'cod' : 'prepaid';
+  if (o.cancelledAt) return { ok: true, already: true, order: o.name, payment, amount };
+
+  // 2. Too late? Any live fulfillment = parcel handed to the courier.
+  if ((o.fulfillments || []).some(f => String(f.status || '').toUpperCase() !== 'CANCELLED')) {
+    return { ok: false, status: 409, code: 'already_picked', error: "Sorry, your parcel has already been handed to the courier and can't be cancelled here. Please chat with us on WhatsApp." };
+  }
+
+  // 3. Has the warehouse already packed it? (Unicommerce mirror, ~15 min old — warning only)
+  let ucState = '';
+  try {
+    if (env.SUPABASE_URL && env.SUPABASE_SECRET_KEY) {
+      const sb = env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/';
+      const codes = ['%23' + num, num].join(',');
+      const ords = await (await fetch(sb + 'uc_orders?select=code&channel=ilike.*shopify*&display_order_code=in.(' + codes + ')&limit=3', { headers: supabaseHeaders(env) })).json();
+      if (Array.isArray(ords) && ords.length) {
+        const items = await (await fetch(sb + 'uc_order_items?select=shipping_package_status&sale_order_code=in.(' +
+          ords.map(x => encodeURIComponent(x.code)).join(',') + ')', { headers: supabaseHeaders(env) })).json();
+        ucState = (Array.isArray(items) ? items : []).map(x => String(x.shipping_package_status || '').toUpperCase())
+          .find(st => UC_PACKED_STATES.includes(st)) || '';
+      }
+    }
+  } catch (e) { console.warn('orderCancel UC check', e.message); }
+
+  // 4. Cancel in Shopify
+  const staffNote = 'Cancelled by customer on Track Order page — ' + reason + (note ? ': ' + note : '');
+  const res = await shopifyGql(env, `mutation($id: ID!, $note: String) {
+    orderCancel(orderId: $id, reason: CUSTOMER, refund: true, restock: true, notifyCustomer: true, staffNote: $note) {
+      job { id } orderCancelUserErrors { field message code }
+    } }`, { id: o.id, note: staffNote });
+  const errs = (res && res.orderCancel && res.orderCancel.orderCancelUserErrors) || [];
+
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS order_cancellations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, order_name TEXT, shopify_id TEXT, payment TEXT, amount REAL,
+    reason TEXT, note TEXT, uc_state TEXT, ok INTEGER, error TEXT, created_at TEXT DEFAULT (datetime('now'))
+  )`).run();
+  await env.DB.prepare('INSERT INTO order_cancellations (order_name, shopify_id, payment, amount, reason, note, uc_state, ok, error) VALUES (?,?,?,?,?,?,?,?,?)')
+    .bind(o.name, o.id, payment, amount, reason, note, ucState, errs.length ? 0 : 1, errs.map(e => e.message).join('; ')).run();
+
+  if (errs.length) {
+    console.error('orderCancel userErrors', o.name, JSON.stringify(errs));
+    return { ok: false, status: 409, code: 'cancel_failed', error: "We couldn't cancel this order online — please chat with us on WhatsApp and we'll do it for you." };
+  }
+
+  // 5. Tell the team straight away (never blocks the customer's answer)
+  try {
+    const warn = ucState ? '⚠️ ALREADY ' + ucState + ' in Unicommerce — HOLD THE PARCEL and cancel the AWB / sale order.\n\n' : '';
+    await sendGmailMessage(env, {
+      to: CC_ORDER_EMAIL_TEST_MODE ? CC_ORDER_EMAIL_TEST_TO : CC_ORDER_EMAIL_TO,
+      subject: (ucState ? '⚠️ HOLD PARCEL · ' : '') + 'Order cancelled by customer · ' + o.name + ' · ' + (isCod ? 'COD' : 'Prepaid') + ' · ₹' + amount,
+      text: warn + [
+        'Order    : ' + o.name,
+        'Payment  : ' + (isCod ? 'COD' : 'Prepaid — refund started in Shopify'),
+        'Amount   : ₹' + amount,
+        'Reason   : ' + reason + (note ? ' — ' + note : ''),
+        'UC status: ' + (ucState || 'not packed yet (as of last sync)'), '',
+        'Cancelled in Shopify (restocked). Please make sure the sale order is also cancelled in Unicommerce.'
+      ].join('\n')
+    });
+  } catch (e) { console.error('orderCancel team email failed', o.name, e.message); }
+
+  return { ok: true, order: o.name, payment, amount,
+    message: 'Your order has been cancelled.' + (isCod ? '' : ' Your refund will be processed within 7 working days.') };
+}
+
 async function orderTrack(env, orderRaw, phoneRaw) {
   const num = String(orderRaw || '').replace(/\D/g, '');
   const phone = normPhone(phoneRaw);
