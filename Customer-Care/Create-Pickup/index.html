@@ -133,6 +133,8 @@ html[data-theme="light"]       .icon-moon { display: none; }
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); }
 .field input::placeholder, .field textarea::placeholder { color: var(--placeholder); opacity: 1; }
 .field input[readonly] { color: var(--text2); cursor: not-allowed; background: var(--surface); }
+/* City/State come only from the pincode lookup — not clickable at all */
+#f-city, #f-state { pointer-events: none; }
 /* Hide native up/down spinner arrows on all number fields (Chrome/Safari/Firefox) */
 .field input[type="number"]::-webkit-inner-spin-button,
 .field input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
@@ -749,7 +751,7 @@ table, .tile-n, .pay-total, .money { font-variant-numeric: tabular-nums; }
       <div id="order-form" autocomplete="off">
         <div class="form-row">
           <div class="field">
-            <label>Order ID</label>
+            <label>Request ID</label>
             <input type="text" id="f-order" required readonly placeholder="Fills in once you select Type below">
           </div>
           <div class="field">
@@ -790,7 +792,7 @@ table, .tile-n, .pay-total, .money { font-variant-numeric: tabular-nums; }
           </div>
           <div class="field">
             <label>Phone</label>
-            <input type="tel" id="f-phone" required autocomplete="off" placeholder="10-digit mobile" maxlength="10" pattern="[0-9]{10}">
+            <input type="tel" id="f-phone" required autocomplete="off" placeholder="10-digit mobile" maxlength="10" pattern="[0-9]{10}" inputmode="numeric" title="Enter a 10-digit mobile number">
           </div>
         </div>
 
@@ -809,11 +811,11 @@ table, .tile-n, .pay-total, .money { font-variant-numeric: tabular-nums; }
           </div>
           <div class="field">
             <label>City <span class="opt">auto-filled</span></label>
-            <input type="text" id="f-city" required readonly placeholder="From pincode">
+            <input type="text" id="f-city" required readonly tabindex="-1" placeholder="From pincode">
           </div>
           <div class="field">
             <label>State <span class="opt">auto-filled</span></label>
-            <input type="text" id="f-state" required readonly placeholder="From pincode">
+            <input type="text" id="f-state" required readonly tabindex="-1" placeholder="From pincode">
           </div>
         </div>
 
@@ -926,7 +928,7 @@ table, .tile-n, .pay-total, .money { font-variant-numeric: tabular-nums; }
           <thead>
             <tr>
               <th></th>
-              <th>Order ID</th>
+              <th>Request ID</th>
               <th>Date &amp; Time</th>
               <th>Customer</th>
               <th>Waybill</th>
@@ -1494,6 +1496,12 @@ function initDelhiveryApp() {
 
   var orderIdField = document.getElementById('f-order');
   var phoneField = document.getElementById('f-phone');
+  // Phone: digits only, max 10 — strips letters/spaces/+91 as you type or paste.
+  phoneField.addEventListener('input', function () {
+    var d = phoneField.value.replace(/\D/g, '');
+    if (d.length > 10) d = d.slice(-10);
+    if (phoneField.value !== d) phoneField.value = d;
+  });
 
   // GET helper — sends the session token like callWorker does for POSTs.
   async function workerGet(query) {
@@ -1533,7 +1541,7 @@ function initDelhiveryApp() {
     var reqNo = ++orderIdReq;
     orderIdField.value = '';
     if (claimQ && prefix) {
-      orderIdField.placeholder = 'Getting Order ID…';
+      orderIdField.placeholder = 'Getting Request ID…';
       try {
         var cr = await workerGet('delhiveryNextOrderId&' + claimQ);
         if (reqNo !== orderIdReq) return false;
@@ -1542,18 +1550,18 @@ function initDelhiveryApp() {
         if (cr && cr.ok === false) claimQ = null;
       } catch (e) { /* message below */ }
       if (claimQ) {
-        if (reqNo === orderIdReq) orderIdField.placeholder = "Couldn't get the Order ID — switch Type to retry";
+        if (reqNo === orderIdReq) orderIdField.placeholder = "Couldn't get the Request ID — switch Type to retry";
         return false;
       }
     }
     if (!prefix) { orderIdField.placeholder = pickupMode === 'reverse' ? 'Fills in once you select Return Reason below' : 'Fills in once you select Type below'; return false; }
-    orderIdField.placeholder = 'Getting next Order ID…';
+    orderIdField.placeholder = 'Getting next Request ID…';
     try {
       var res = await workerGet('delhiveryNextOrderId&prefix=' + prefix);
       if (reqNo !== orderIdReq) return false;
       if (res && res.ok && res.orderId) { orderIdField.value = res.orderId; return true; }
     } catch (e) { /* falls through to the message below */ }
-    if (reqNo === orderIdReq) orderIdField.placeholder = "Couldn't get the Order ID — switch Type to retry";
+    if (reqNo === orderIdReq) orderIdField.placeholder = "Couldn't get the Request ID — switch Type to retry";
     return false;
   }
   typeField.addEventListener('change', refreshOrderId);
@@ -1583,9 +1591,7 @@ function initDelhiveryApp() {
     var live = !!courierPrefix() || self;
     document.getElementById('order-form').classList.toggle('self-ship', self);
     document.getElementById('self-ship-wrap').style.display = self ? '' : 'none';
-    // City/State: still auto-filled from the pincode, but editable for
-    // self-ship (any pincode is fine — no courier serviceability needed).
-    document.getElementById('f-city').readOnly = !self; document.getElementById('f-state').readOnly = !self;
+    // City/State are always read-only — filled from the pincode lookup only.
     courierHint.style.display = live ? 'none' : '';
     courierHint.textContent = "Booking via this courier isn't live yet — use Delhivery or Ekart.";
     submitBtn.disabled = !live;
@@ -1889,10 +1895,10 @@ function initDelhiveryApp() {
       if (courier !== courierField.value) return; // courier switched mid-check
       if (!res.ok) { pinStatus.textContent = ''; return; }
       if (isSelfShip()) {
-        // No courier booking — only City/State matter (type them if blank).
+        // No courier booking — only City/State matter.
         cityField.value = res.city || ''; stateField.value = res.state || '';
         pinStatus.className = 'field-hint' + (res.city ? ' ok' : '');
-        pinStatus.textContent = res.city ? '✓ City/State filled' : 'Type City and State below';
+        pinStatus.textContent = res.city ? '✓ City/State filled' : '✗ Pincode not found — check it';
         return;
       }
       if (!res.serviceable) {
@@ -2565,8 +2571,8 @@ function initDelhiveryApp() {
 
     if (!orderIdField.value) {
       resultBox.className = 'result-box show error';
-      resultTitle.textContent = 'Order ID not ready';
-      resultBody.textContent = 'Select a Type above — the Order ID fills in automatically from it. If it stays blank, switch Type to retry.';
+      resultTitle.textContent = 'Request ID not ready';
+      resultBody.textContent = 'Select a Type above — the Request ID fills in automatically from it. If it stays blank, switch Type to retry.';
       return;
     }
 
@@ -2612,7 +2618,7 @@ function initDelhiveryApp() {
     submitBtn.disabled = true;
     submitBtn.textContent = 'Saving…';
     try {
-      if (!(await refreshOrderId())) throw new Error("Couldn't get the next Order ID from the server — try again.");
+      if (!(await refreshOrderId())) throw new Error("Couldn't get the next Request ID from the server — try again.");
       var res, attempts = 0;
       while (true) {
         order.order = orderIdField.value.trim();
@@ -2663,8 +2669,8 @@ function initDelhiveryApp() {
     try {
       // Re-fetch the serial right before creating, in case someone else
       // booked the same type while this form was open.
-      confirmYesBtn.textContent = 'Checking Order ID…';
-      if (!(await refreshOrderId())) throw new Error("Couldn't get the next Order ID from the server — try again.");
+      confirmYesBtn.textContent = 'Checking Request ID…';
+      if (!(await refreshOrderId())) throw new Error("Couldn't get the next Request ID from the server — try again.");
       confirmYesBtn.textContent = 'Creating order…';
       var res, attempts = 0;
       while (true) {
@@ -2690,7 +2696,7 @@ function initDelhiveryApp() {
         resultTitle.textContent = order.direction === 'reverse' ? 'Reverse pickup created' : 'Order created successfully';
         resultBody.innerHTML = (order.courier === 'Ekart' ? 'Ekart tracking ID: ' : 'Waybill: ') +
           '<span class="result-waybill">' + escapeHtml(res.waybill) + '</span>' +
-          (attempts ? ' <span style="color:var(--text2)">(order ID auto-adjusted to avoid a duplicate)</span>' : '') +
+          (attempts ? ' <span style="color:var(--text2)">(Request ID auto-adjusted to avoid a duplicate)</span>' : '') +
           (order.direction === 'reverse'
             ? '<div style="margin-top:6px;color:var(--text2);">Reverse pickup booked — Delhivery will collect it from the customer and deliver to our warehouse.</div>'
             : order.courier === 'Ekart'
