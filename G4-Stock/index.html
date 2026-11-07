@@ -977,7 +977,10 @@ button[hidden] { display: none !important; }
   <div class="panel sec-panel" id="sec-g4" hidden>
     <div class="panel-head">
       <div class="panel-title">G4 stock <span class="muted" style="font-size:12px;font-weight:500" id="g4-note"></span></div>
-      <input class="field" id="g4-search" placeholder="Search SKU or name" style="width:240px;height:36px">
+      <div class="actions">
+        <button class="chip-filter" id="g4-noppc">⚠ No Qty/box only</button>
+        <input class="field" id="g4-search" placeholder="Search SKU or name" style="width:240px;height:36px">
+      </div>
     </div>
     <div class="tbl-wrap">
       <table class="gp-tbl">
@@ -1074,6 +1077,8 @@ button[hidden] { display: none !important; }
 .sec-card.on::after { content: ''; position: absolute; left: 50%; bottom: -9px; width: 14px; height: 14px; background: var(--bg-surface); border-right: 2px solid var(--hero); border-bottom: 2px solid var(--hero); transform: translateX(-50%) rotate(45deg); }
 .sec-panel[hidden] { display: none; }
 .age-old { color: var(--c-red); font-weight: 700; }
+.noppc-row td { background: var(--c-orange-dim) !important; }
+.noppc-tag { color: var(--c-orange); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
 .po-row { cursor: pointer; }
 .po-chev { display: inline-block; transition: transform .15s; color: var(--text-secondary); }
 .po-row.open .po-chev { transform: rotate(90deg); }
@@ -1161,7 +1166,10 @@ button[hidden] { display: none !important; }
       $('stat-st-sub').textContent = tg.last ? 'last at ' + new Date(tg.last).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) + ' · print below' : 'none yet today · print below';
       // G4 Stock
       $('stat-qty').textContent = fmt(inG4.reduce(function (a, s) { return a + s.g4; }, 0)) + ' pcs';
-      $('stat-skus').textContent = fmt(inG4.length) + ' SKUs · UC sync ' + (D.syncedAt ? timeAgo(D.syncedAt) : '—');
+      var noPpc = inG4.filter(function (s) { return !s.ppc; }).length;
+      $('stat-skus').innerHTML = fmt(inG4.length) + ' SKUs · ' + (noPpc
+        ? '<span class="noppc-tag">⚠ ' + noPpc + ' without Qty/box</span>'
+        : 'UC sync ' + (D.syncedAt ? timeAgo(D.syncedAt) : '—'));
       // Open POs (+ inward pending)
       if (D.inward) {
         $('stat-pos').textContent = fmt(D.inward.pos);
@@ -1184,7 +1192,9 @@ button[hidden] { display: none !important; }
   var sec = 'st';
   document.querySelector('.g4-stats').addEventListener('click', function (e) {
     var c = e.target.closest('.sec-card'); if (!c) return;
-    sec = c.getAttribute('data-sec'); renderSection();
+    sec = c.getAttribute('data-sec');
+    if (e.target.closest('.noppc-tag')) { g4NoPpcOnly = true; $('g4-noppc').classList.add('active'); }
+    renderSection();
   });
   function renderSection() {
     [].forEach.call(document.querySelectorAll('.sec-card'), function (c) { c.classList.toggle('on', c.getAttribute('data-sec') === sec); });
@@ -1194,16 +1204,19 @@ button[hidden] { display: none !important; }
 
   // ════════════ G4 STOCK LIST ════════════
   $('g4-search').addEventListener('input', renderG4);
+  var g4NoPpcOnly = false;
+  $('g4-noppc').addEventListener('click', function () { g4NoPpcOnly = !g4NoPpcOnly; this.classList.toggle('active', g4NoPpcOnly); renderG4(); });
   function renderG4() {
     var q = $('g4-search').value.trim().toLowerCase();
     var rows = D.stock.filter(function (s) { return s.g4 > 0; })
+      .filter(function (s) { return !g4NoPpcOnly || !s.ppc; })
       .filter(function (s) { return !q || (s.sku + ' ' + (s.name || '')).toLowerCase().indexOf(q) !== -1; })
       .sort(function (a, b) { return b.g4 - a.g4; });
     $('g4-note').textContent = rows.length + ' SKUs · ' + fmt(rows.reduce(function (a, s) { return a + s.g4; }, 0)) + ' pcs';
     $('g4-body').innerHTML = rows.length ? rows.map(function (s, n) {
-      return '<tr><td class="muted">' + (n + 1) + '</td>' +
+      return '<tr' + (s.ppc ? '' : ' class="noppc-row"') + '><td class="muted">' + (n + 1) + '</td>' +
         '<td><span class="sku-code">' + esc(s.sku) + '</span>' + (s.name && s.name !== s.sku ? '<span class="sku-name">' + esc(s.name) + '</span>' : '') + '</td>' +
-        '<td class="num">' + (s.ppc || '<span class="muted">—</span>') + '</td>' +
+        '<td class="num">' + (s.ppc || '<span class="flag warn">No Qty/box</span>') + '</td>' +
         '<td class="num"><b>' + boxesText(s.g4, s.ppc) + '</b></td>' +
         '<td class="num"><b>' + fmt(s.g4) + '</b></td>' +
         '<td class="num">' + fmt(s.e3) + '</td>' +
