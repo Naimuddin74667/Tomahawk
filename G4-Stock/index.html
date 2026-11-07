@@ -1313,158 +1313,146 @@ button[hidden] { display: none !important; }
       .then(function () { $('btn-print').disabled = false; });
   }
 
-  // Black & white A4 gatepass. Layout, top to bottom:
-  //   header (logo · GATEPASS · code + barcode) → route band (G4 → E3) →
-  //   key figures (lines / boxes / qty) → details row → items table → signatures
+  // Two copies per A4 (portrait): top half = G4 COPY, bottom half = E3 COPY,
+  // dashed cut line between. Black & white. If the lines don't fit in one
+  // half, the gatepass continues on the next sheet (again two copies).
   function buildPdf(logo) {
     var g = cur;
     var doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4' });
-    var W = 210, M = 14, CW = W - 2 * M, y = 14;
+    var W = 210, HALF = 148.5, M = 10, CW = W - 2 * M;
+    var GREY = 236;
     var user = (function () { try { var s = JSON.parse(localStorage.getItem('tm_session_v1') || 'null'); return s && (s.display_name || s.username); } catch (e) { return ''; } })();
-    var GREY = 238; // light fill — prints fine on any B&W printer
-
-    // Totals first (used in the key-figure band)
-    var totalQty = 0, totalBoxes = 0, loose = 0;
-    g.items.forEach(function (it) {
-      var ppc = (bySku[it.sku] || {}).ppc;
-      totalQty += it.qty; if (ppc) { totalBoxes += Math.floor(it.qty / ppc); loose += it.qty % ppc; }
-    });
-
-    function label(t, x, yy, align) { doc.setFont('helvetica', 'bold'); doc.setFontSize(7); doc.text(t.toUpperCase(), x, yy, align ? { align: align, charSpace: 0.3 } : { charSpace: 0.3 }); }
-    function val(t, x, yy, size, bold, align) { doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(size); doc.text(String(t), x, yy, align ? { align: align } : undefined); }
-    doc.setTextColor(0); doc.setDrawColor(0);
-
-    // ── 1. Header ──
-    if (logo) doc.addImage(logo, 'PNG', M, y, 50, 9.3);
-    else val('TOMAHAWK', M, y + 8, 18, true);
-    val('Industrial Tools & Hardware', M, y + 14.5, 8, false);
-    val('Bhiwandi, Maharashtra', M, y + 18.3, 8, false);
-    label(g.type === 'STOCK_TRANSFER' ? 'Stock transfer gatepass' : typeLabel(g.type) + ' gatepass', W - M, y + 2.5, 'right');
-    val(g.code, W - M, y + 9.5, 15, true, 'right');
     var bc = window.JsBarcode ? barcodePng(g.code) : null;
-    if (bc) doc.addImage(bc, 'PNG', W - M - 70, y + 12, 70, 8);
-    y += 25;
-    doc.setLineWidth(0.8); doc.line(M, y, W - M, y); doc.setLineWidth(0.25);
-    y += 6;
+    var printed = fmtDT(new Date().toISOString());
 
-    // ── 2. Route band: FROM → TO (largest text after the code) ──
-    var rh = 20;
-    doc.setFillColor(GREY); doc.rect(M, y, CW, rh, 'F'); doc.rect(M, y, CW, rh);
-    var half = CW / 2;
-    label('From', M + 5, y + 6);
-    val('G4 Warehouse', M + 5, y + 13, 15, true);
-    val('TomahawkHub', M + 5, y + 17.5, 8, false);
-    label('To', M + half + 9, y + 6);
-    val(destLabel(g), M + half + 9, y + 13, 15, true);
-    val(g.to_party_code || '', M + half + 9, y + 17.5, 8, false);
-    // arrow in the middle
-    doc.setLineWidth(0.9); var ax = M + half - 6, ay = y + rh / 2;
-    doc.line(ax, ay, ax + 10, ay); doc.line(ax + 10, ay, ax + 7, ay - 2.5); doc.line(ax + 10, ay, ax + 7, ay + 2.5);
-    doc.setLineWidth(0.25);
-    y += rh + 5;
-
-    // ── 3. Key figures: what the picker / receiver checks first ──
-    var kh = 18, kw = CW / 3;
-    [['Total boxes', fmt(totalBoxes) + (loose ? ' + ' + loose + ' pcs' : '')], ['Total qty (pcs)', fmt(totalQty)], ['SKU lines', String(g.items.length)]]
-      .forEach(function (k, i) {
-        var x = M + i * kw;
-        doc.setLineWidth(i === 0 ? 0.8 : 0.25); doc.rect(x, y, kw, kh); doc.setLineWidth(0.25);
-        label(k[0], x + kw / 2, y + 5.5, 'center');
-        val(k[1], x + kw / 2, y + 14, 18, true, 'center');
-      });
-    y += kh + 5;
-
-    // ── 4. Details row ──
-    var det = [['Created', fmtDT(g.created)], ['UC status', g.status], ['Reference', g.reference || '—'], ['Printed', fmtDT(new Date().toISOString()) + (user ? '\nby ' + user : '')]];
-    var dw = CW / 4;
-    det.forEach(function (d, i) {
-      var x = M + i * dw;
-      label(d[0], x, y + 3);
-      var lines = String(d[1]).split('\n');
-      val(doc.splitTextToSize(lines[0], dw - 3)[0], x, y + 8, 9.5, false);
-      if (lines[1]) val(lines[1], x, y + 12, 8, false);
-    });
-    y += 16;
-
-    // ── 5. Items table ──
-    var cols = [
-      { h: '', w: 9, c: 1 }, { h: 'Sr', w: 9, c: 1 }, { h: 'UC SKU / Product', w: 68 },
-      { h: 'Qty/box', w: 16, c: 1 }, { h: 'Boxes', w: 18, c: 1 }, { h: 'Total qty', w: 18, c: 1 },
-      { h: 'Remark', w: 23 }, { h: 'G4 left (box)', w: 21, c: 1 }
-    ];
-    function headRow() {
-      var h = 8, x = M;
-      doc.setFillColor(0); doc.rect(M, y, CW, h, 'F');
-      doc.setTextColor(255); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
-      cols.forEach(function (c) {
-        if (c.c) doc.text(c.h, x + c.w / 2, y + 5.3, { align: 'center' }); else doc.text(c.h, x + 2.5, y + 5.3);
-        x += c.w;
-      });
-      doc.setTextColor(0); y += h;
-    }
-    headRow();
-    g.items.forEach(function (it, n) {
+    var totalQty = 0, totalBoxes = 0, loose = 0;
+    var rows = g.items.map(function (it) {
       var s = bySku[it.sku] || {}, ppc = s.ppc;
-      var hasName = s.name && s.name !== it.sku;
-      var h = hasName ? 12 : 10;
-      if (y + h > 238) { doc.addPage(); y = 16; headRow(); }
-      if (n % 2 === 1) { doc.setFillColor(GREY); doc.rect(M, y, CW, h, 'F'); }
-      var mid = y + h / 2 + 1.6, x = M;
-      cols.forEach(function (c, ci) {
-        if (ci > 0) { doc.setDrawColor(190); doc.line(x, y, x, y + h); doc.setDrawColor(0); }
-        var cx = x + c.w / 2;
-        if (ci === 0) { doc.setLineWidth(0.35); doc.rect(cx - 2.5, y + h / 2 - 2.5, 5, 5); doc.setLineWidth(0.25); }
-        else if (ci === 1) val(String(n + 1), cx, mid, 9, false, 'center');
-        else if (ci === 2) {
-          val(doc.splitTextToSize(it.sku, c.w - 5)[0], x + 2.5, hasName ? y + 5.4 : mid, 10.5, true);
-          if (hasName) val(doc.splitTextToSize(s.name, c.w - 5)[0], x + 2.5, y + 9.6, 7.5, false);
-        }
-        else if (ci === 3) val(ppc ? String(ppc) : '—', cx, mid, 9.5, false, 'center');
-        else if (ci === 4) val(boxesText(it.qty, ppc), cx, mid, 12, true, 'center');
-        else if (ci === 5) val(fmt(it.qty), cx, mid, 12, true, 'center');
-        else if (ci === 7) val(s.g4 == null ? '—' : (ppc ? boxesText(s.g4, ppc) : s.g4 + ' pcs'), cx, mid, 9.5, false, 'center');
-        x += c.w;
-      });
-      doc.setDrawColor(190); doc.line(M, y + h, W - M, y + h); doc.setDrawColor(0);
-      y += h;
-    });
-    // Totals row — heavy top rule
-    var th = 10, tx = M;
-    doc.setLineWidth(0.8); doc.line(M, y, W - M, y); doc.setLineWidth(0.25);
-    cols.forEach(function (c, ci) {
-      var cx = tx + c.w / 2;
-      if (ci === 2) val('TOTAL', tx + 2.5, y + 6.6, 10.5, true);
-      if (ci === 4) val(fmt(totalBoxes) + (loose ? ' + ' + loose : ''), cx, y + 6.6, 12, true, 'center');
-      if (ci === 5) val(fmt(totalQty), cx, y + 6.6, 12, true, 'center');
-      tx += c.w;
-    });
-    doc.line(M, y + th, W - M, y + th);
-    y += th + 4;
-    val('Boxes = full boxes + loose pcs.  G4 left = boxes still in G4 per UC at print time.  Tick each line when picked / received.', M, y, 7.5, false);
-
-    // ── 6. Signatures (bottom of last page) ──
-    if (y > 238) { doc.addPage(); y = 20; }
-    var sy = 246, sh = 30, sw = (CW - 8) / 3;
-    ['Picked By', 'Checked By', 'Received By'].forEach(function (t, i) {
-      var x = M + i * (sw + 4);
-      doc.rect(x, sy, sw, sh);
-      doc.setFillColor(GREY); doc.rect(x, sy, sw, 7, 'F'); doc.rect(x, sy, sw, 7);
-      val(t, x + 3, sy + 4.9, 9, true);
-      ['Name', 'Sign', 'Date'].forEach(function (f, j) {
-        var ly = sy + 14 + j * 7;
-        val(f, x + 3, ly, 8, false);
-        doc.setDrawColor(150); doc.line(x + 14, ly + 0.6, x + sw - 3, ly + 0.6); doc.setDrawColor(0);
-      });
+      totalQty += it.qty; if (ppc) { totalBoxes += Math.floor(it.qty / ppc); loose += it.qty % ppc; }
+      var hasName = s.name && s.name !== it.sku && s.name.replace(/[\s_-]/g, '').toLowerCase() !== it.sku.replace(/[\s_-]/g, '').toLowerCase();
+      return { it: it, s: s, ppc: ppc, name: hasName ? s.name : '', h: hasName ? 9.5 : 7.5 };
     });
 
-    // ── Footer on every page ──
-    var pages = doc.getNumberOfPages();
-    for (var p = 1; p <= pages; p++) {
-      doc.setPage(p);
-      doc.setDrawColor(0); doc.line(M, 284, W - M, 284);
-      val('Tomahawk Operations  ·  G4 Stock  ·  ' + g.code, M, 288.5, 7.5, false);
-      val('Page ' + p + ' of ' + pages, W - M, 288.5, 7.5, false, 'right');
+    function T(t, x, y, size, bold, align) {
+      doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(size);
+      doc.text(String(t), x, y, align ? { align: align } : undefined);
     }
+    function lab(t, x, y, align) { T(t.toUpperCase(), x, y, 6.5, true, align); }
+
+    // Split rows into chunks that fit one half-page table area
+    var TABLE_TOP = 58, TABLE_MAX = 112; // mm from top of the half
+    var chunks = [], curChunk = [], used = 0;
+    rows.forEach(function (r) {
+      if (used + r.h > TABLE_MAX - TABLE_TOP - 7 && curChunk.length) { chunks.push(curChunk); curChunk = []; used = 0; }
+      curChunk.push(r); used += r.h;
+    });
+    chunks.push(curChunk);
+
+    var cols = [
+      { h: '', w: 8, c: 1 }, { h: 'Sr', w: 8, c: 1 }, { h: 'UC SKU / Product', w: 76 },
+      { h: 'Qty/box', w: 15, c: 1 }, { h: 'Boxes', w: 17, c: 1 }, { h: 'Total qty', w: 18, c: 1 },
+      { h: 'Remark', w: 30 }, { h: 'G4 left', w: 18, c: 1 }
+    ];
+
+    function half(oy, copyName, chunk, ci, srStart) {
+      var y = oy + 9;
+      // ── Header ──
+      if (logo) doc.addImage(logo, 'PNG', M, y - 1, 38, 7.1); else T('TOMAHAWK', M, y + 5, 14, true);
+      T('Industrial Tools & Hardware · Bhiwandi', M, y + 10.5, 7, false);
+      // copy tag (black pill, white text)
+      doc.setFillColor(0); doc.roundedRect(W / 2 - 16, y - 1, 32, 7, 1.5, 1.5, 'F');
+      doc.setTextColor(255); T(copyName, W / 2, y + 3.8, 8.5, true, 'center'); doc.setTextColor(0);
+      lab(g.type === 'STOCK_TRANSFER' ? 'Stock transfer gatepass' : typeLabel(g.type) + ' gatepass', W - M, y + 1, 'right');
+      T(g.code, W - M, y + 6.8, 12.5, true, 'right');
+      if (bc) doc.addImage(bc, 'PNG', W - M - 52, y + 8.5, 52, 6);
+      y += 17;
+      doc.setLineWidth(0.6); doc.line(M, y, W - M, y); doc.setLineWidth(0.25);
+      y += 4;
+
+      // ── Route (left) + key figures (right) ──
+      var rh = 15, rw = 96;
+      doc.setFillColor(GREY); doc.rect(M, y, rw, rh, 'F'); doc.rect(M, y, rw, rh);
+      lab('From', M + 3, y + 4.5); T('G4 Warehouse', M + 3, y + 11, 11.5, true);
+      lab('To', M + 55, y + 4.5); T(doc.splitTextToSize(destLabel(g), 40)[0], M + 55, y + 11, 11.5, true);
+      doc.setLineWidth(0.7); var ax = M + 44, ay = y + 9.5;
+      doc.line(ax, ay, ax + 7, ay); doc.line(ax + 7, ay, ax + 4.8, ay - 1.8); doc.line(ax + 7, ay, ax + 4.8, ay + 1.8);
+      doc.setLineWidth(0.25);
+      var kx = M + rw + 3, kw = (CW - rw - 3) / 3;
+      [['Boxes', fmt(totalBoxes) + (loose ? '+' + loose : '')], ['Total qty', fmt(totalQty)], ['Lines', String(g.items.length)]].forEach(function (k, i) {
+        var x = kx + i * kw;
+        doc.setLineWidth(i === 0 ? 0.7 : 0.25); doc.rect(x, y, kw, rh); doc.setLineWidth(0.25);
+        lab(k[0], x + kw / 2, y + 4.5, 'center'); T(k[1], x + kw / 2, y + 11.8, 14, true, 'center');
+      });
+      y += rh + 4;
+
+      // ── Details ──
+      var det = [['Created', fmtDT(g.created)], ['UC status', g.status], ['Reference', g.reference || '—'], ['Printed', printed + (user ? ' · ' + String(user).split(' ')[0] : '')]];
+      var dw = CW / 4;
+      det.forEach(function (d, i) { var x = M + i * dw; lab(d[0], x, y + 2); doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); T(doc.splitTextToSize(String(d[1]), dw - 2)[0], x, y + 6.5, 8.5, false); });
+
+      // ── Table ──
+      y = oy + TABLE_TOP;
+      doc.setFillColor(0); doc.rect(M, y, CW, 6.5, 'F'); doc.setTextColor(255);
+      var x = M;
+      cols.forEach(function (c) { T(c.h, c.c ? x + c.w / 2 : x + 2, y + 4.4, 7.5, true, c.c ? 'center' : null); x += c.w; });
+      doc.setTextColor(0); y += 6.5;
+      chunk.forEach(function (r, n) {
+        var h = r.h, mid = y + h / 2 + 1.4;
+        if (n % 2 === 1) { doc.setFillColor(GREY); doc.rect(M, y, CW, h, 'F'); }
+        x = M;
+        cols.forEach(function (c, k) {
+          var cx = x + c.w / 2;
+          if (k > 0) { doc.setDrawColor(170); doc.line(x, y, x, y + h); doc.setDrawColor(0); }
+          if (k === 0) { doc.setLineWidth(0.35); doc.rect(cx - 2.2, y + h / 2 - 2.2, 4.4, 4.4); doc.setLineWidth(0.25); }
+          else if (k === 1) T(srStart + n + 1, cx, mid, 8.5, false, 'center');
+          else if (k === 2) {
+            T(doc.splitTextToSize(r.it.sku, c.w - 4)[0], x + 2, r.name ? y + 4.3 : mid, 9.5, true);
+            if (r.name) T(doc.splitTextToSize(r.name, c.w - 4)[0], x + 2, y + 8, 6.8, false);
+          }
+          else if (k === 3) T(r.ppc ? r.ppc : '—', cx, mid, 8.5, false, 'center');
+          else if (k === 4) T(boxesText(r.it.qty, r.ppc), cx, mid, 11, true, 'center');
+          else if (k === 5) T(fmt(r.it.qty), cx, mid, 11, true, 'center');
+          else if (k === 7) T(r.s.g4 == null ? '—' : (r.ppc ? boxesText(r.s.g4, r.ppc) : r.s.g4 + ' pcs'), cx, mid, 8.5, false, 'center');
+          x += c.w;
+        });
+        doc.setDrawColor(170); doc.line(M, y + h, W - M, y + h); doc.setDrawColor(0);
+        y += h;
+      });
+      // Total (last chunk) or "continued"
+      doc.setLineWidth(0.6); doc.line(M, y, W - M, y); doc.setLineWidth(0.25);
+      if (ci === chunks.length - 1) {
+        var bx = M + 8 + 8 + 76 + 15;
+        T('TOTAL', M + 18, y + 5, 9.5, true);
+        T(fmt(totalBoxes) + (loose ? ' + ' + loose : ''), bx + 17 / 2, y + 5, 11, true, 'center');
+        T(fmt(totalQty), bx + 17 + 18 / 2, y + 5, 11, true, 'center');
+      } else T('Continued on next sheet…', M + 18, y + 5, 8.5, false);
+
+      // ── Signatures (bottom of the half) ──
+      var sy = oy + HALF - 27, sw = (CW - 8) / 3;
+      ['Picked By', 'Checked By', 'Received By'].forEach(function (t, i) {
+        var sx = M + i * (sw + 4);
+        doc.rect(sx, sy, sw, 17);
+        doc.setFillColor(GREY); doc.rect(sx, sy, sw, 5.5, 'F'); doc.rect(sx, sy, sw, 5.5);
+        T(t, sx + 2.5, sy + 3.9, 8, true);
+        T('Name / Sign', sx + 2.5, sy + 10.5, 7, false); doc.setDrawColor(150); doc.line(sx + 19, sy + 11, sx + sw - 2.5, sy + 11);
+        T('Date', sx + 2.5, sy + 15, 7, false); doc.line(sx + 19, sy + 15.5, sx + sw - 2.5, sy + 15.5); doc.setDrawColor(0);
+      });
+      T('Tick each line when picked / received.  G4 left = boxes still in G4 (UC) at print time.', M, oy + HALF - 5.5, 6.5, false);
+      T('Sheet ' + (ci + 1) + ' of ' + chunks.length, W - M, oy + HALF - 5.5, 6.5, false, 'right');
+    }
+
+    var sr = 0;
+    chunks.forEach(function (chunk, ci) {
+      if (ci) doc.addPage();
+      doc.setTextColor(0); doc.setDrawColor(0); doc.setLineWidth(0.25);
+      half(0, 'G4 COPY', chunk, ci, sr);
+      // cut line
+      doc.setLineDashPattern([1.5, 1.5], 0); doc.setDrawColor(120); doc.line(4, HALF, W - 4, HALF);
+      doc.setLineDashPattern([], 0); doc.setDrawColor(0);
+      T('cut here', W / 2, HALF - 1, 6, false, 'center');
+      half(HALF, g.type === 'STOCK_TRANSFER' ? 'E3 COPY' : 'RECEIVER COPY', chunk, ci, sr);
+      sr += chunk.length;
+    });
     doc.save(g.code + '.pdf');
   }
 
