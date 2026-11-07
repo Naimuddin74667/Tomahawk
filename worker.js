@@ -11687,11 +11687,20 @@ async function ensureG4GpTables(DB) {
 
 // Live G4 stock + bundles + qty already on open UC gatepasses at G4.
 async function g4gpLiveData(env) {
-  const [inv, bundleRows, openRows] = await Promise.all([
+  const [inv, bundleRows, openRows, poRows] = await Promise.all([
     supabaseRpcJson(env, 'stock_alert_inventory'),
     g4gpSupabasePaged(env, 'uc_bundle_composition?select=parent_sku,child_sku,quantity_per_unit'),
-    g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code,sku,quantity&facility=eq.G4&status=in.(CREATED,RETURN_AWAITED)')
+    g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code,sku,quantity&facility=eq.G4&status=in.(CREATED,RETURN_AWAITED)'),
+    // Inward pending = G4 purchase orders not yet received (GRN) in UC
+    g4gpSupabasePaged(env, 'uc_purchase_orders?select=po_code,sku,pending_quantity&facility=eq.G4&po_status=not.in.(COMPLETE,CANCELLED,CLOSED)&pending_quantity=gt.0')
+      .catch(() => null)
   ]);
+  let inward = null;
+  if (poRows) {
+    const pos = new Set(), skus = new Set(); let qty = 0;
+    poRows.forEach(r => { pos.add(r.po_code); if (r.sku) skus.add(r.sku); qty += Number(r.pending_quantity) || 0; });
+    inward = { qty, pos: pos.size, skus: skus.size };
+  }
   const bundles = {};
   bundleRows.forEach(b => {
     if (!b.parent_sku || !b.child_sku) return;
@@ -11704,7 +11713,7 @@ async function g4gpLiveData(env) {
     g4: Number(r.G4_stock) || 0, e3: Number(r.E3_stock) || 0,
     ppc: r.piecesPerCarton && /^\d+$/.test(String(r.piecesPerCarton)) ? Number(r.piecesPerCarton) : null
   }));
-  return { stock, bundles, openGp, syncedAt: inv.syncedAt || null };
+  return { stock, bundles, openGp, inward, syncedAt: inv.syncedAt || null };
 }
 
 async function g4gpSupabasePaged(env, path) {

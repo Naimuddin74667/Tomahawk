@@ -525,8 +525,8 @@ html .site-header [hidden] { display: none !important; }
      BLOCK 7 — G4 STOCK: TABS, FORM, ITEMS TABLE, REGISTER
 ============================================================ -->
 <style>
-.stats-row.g4-stats { grid-template-columns: repeat(4, 1fr); }
-@media (max-width: 900px) { .stats-row.g4-stats { grid-template-columns: repeat(2, 1fr); } }
+.stats-row.g4-stats { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 720px) { .stats-row.g4-stats { grid-template-columns: 1fr; } }
 
 .tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 20px; }
 .tab-btn {
@@ -951,24 +951,19 @@ button[hidden] { display: none !important; }
 
   <div class="stats-row g4-stats">
     <div class="stat-card no-click">
-      <div class="stat-label">G4 stock</div>
-      <div class="stat-value accent" id="stat-g4-pcs"><span class="sk-block" style="width:70px;height:22px"></span></div>
-      <div class="stat-sub" id="stat-g4-skus"><span class="sk-block" style="width:90px"></span></div>
+      <div class="stat-label">Total SKUs</div>
+      <div class="stat-value accent" id="stat-skus"><span class="sk-block" style="width:60px;height:22px"></span></div>
+      <div class="stat-sub">with stock in G4</div>
     </div>
     <div class="stat-card no-click">
-      <div class="stat-label">On open UC gatepasses</div>
-      <div class="stat-value" id="stat-open-gp"><span class="sk-block" style="width:60px;height:22px"></span></div>
-      <div class="stat-sub">G4 · CREATED / awaited</div>
-    </div>
-    <div class="stat-card" id="card-drafts">
-      <div class="stat-label">Our drafts</div>
-      <div class="stat-value" id="stat-drafts"><span class="sk-block" style="width:40px;height:22px"></span></div>
-      <div class="stat-sub">not yet in UC · click to view</div>
-    </div>
-    <div class="stat-card" id="card-pushed">
-      <div class="stat-label">Pushed to UC · 7 days</div>
-      <div class="stat-value" id="stat-pushed"><span class="sk-block" style="width:40px;height:22px"></span></div>
+      <div class="stat-label">Total Qty</div>
+      <div class="stat-value" id="stat-qty"><span class="sk-block" style="width:90px;height:22px"></span></div>
       <div class="stat-sub" id="stat-synced"><span class="sk-block" style="width:110px"></span></div>
+    </div>
+    <div class="stat-card no-click">
+      <div class="stat-label">Inward Pending</div>
+      <div class="stat-value" id="stat-inward"><span class="sk-block" style="width:90px;height:22px"></span></div>
+      <div class="stat-sub" id="stat-inward-sub"><span class="sk-block" style="width:120px"></span></div>
     </div>
   </div>
 
@@ -1181,16 +1176,15 @@ button[hidden] { display: none !important; }
 
   function renderStats() {
     var inG4 = D.stock.filter(function (s) { return s.g4 > 0; });
-    $('stat-g4-pcs').textContent = fmt(inG4.reduce(function (a, s) { return a + s.g4; }, 0)) + ' pcs';
-    $('stat-g4-skus').textContent = fmt(inG4.length) + ' SKUs in stock';
-    var open = 0; Object.keys(D.openGp).forEach(function (k) { open += D.openGp[k]; });
-    $('stat-open-gp').textContent = fmt(open) + ' pcs';
-    $('stat-drafts').textContent = D.gatepasses.filter(function (g) { return g.status === 'draft'; }).length;
-    var weekAgo = Date.now() - 7 * 86400000;
-    $('stat-pushed').textContent = D.gatepasses.filter(function (g) {
-      return g.status === 'pushed' && g.pushed_at && new Date(g.pushed_at.replace(' ', 'T') + 'Z').getTime() > weekAgo;
-    }).length;
+    $('stat-skus').textContent = fmt(inG4.length);
+    $('stat-qty').textContent = fmt(inG4.reduce(function (a, s) { return a + s.g4; }, 0)) + ' pcs';
     $('stat-synced').textContent = 'UC sync ' + (D.syncedAt ? timeAgo(D.syncedAt) : '—');
+    if (D.inward) {
+      $('stat-inward').textContent = fmt(D.inward.qty) + ' pcs';
+      $('stat-inward-sub').textContent = D.inward.pos + ' open PO' + (D.inward.pos === 1 ? '' : 's') + ' · ' + D.inward.skus + ' SKUs · not GRN\'d';
+    } else {
+      $('stat-inward').textContent = '—'; $('stat-inward-sub').textContent = 'PO data not available';
+    }
   }
 
   // ════════════ FORM ════════════
@@ -1588,8 +1582,6 @@ button[hidden] { display: none !important; }
     [].forEach.call(this.querySelectorAll('.chip-filter'), function (c) { c.classList.toggle('active', c === e.target); });
     renderRegister();
   });
-  $('card-drafts').addEventListener('click', function () { setRegFilter('draft'); switchTab('register'); });
-  $('card-pushed').addEventListener('click', function () { setRegFilter('pushed'); switchTab('register'); });
   function setRegFilter(f) {
     regFilter = f;
     [].forEach.call(document.querySelectorAll('.chip-filter'), function (c) { c.classList.toggle('active', c.getAttribute('data-f') === f); });
