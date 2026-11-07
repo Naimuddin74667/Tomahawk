@@ -7067,6 +7067,9 @@ const SR_DEFAULT_TEXT = {
   resolve: 'Your service request is now resolved. Thank you for your patience.'
 };
 
+const SR_FOC_TEXT = 'Good news: we are sending you the part free of cost under warranty, so you do not need to send the product back. ' +
+  'It should reach you in a few days. We will email you the tracking details.';
+
 // ── Team actions ──
 async function srAction(env, user, b) {
   await ensureServiceRequestCols(env.DB);
@@ -7093,10 +7096,12 @@ async function srAction(env, user, b) {
   }
   let emailed = false;
   if (k.subject) {
-    const lines = [SR_DEFAULT_TEXT[kind]];
+    // Send FOC part (07-Nov-2026): approve with a free part instead of a pickup
+    const focApprove = kind === 'approve' && b.foc === true;
+    const lines = [focApprove ? SR_FOC_TEXT : SR_DEFAULT_TEXT[kind]];
     if (msg && kind !== 'approve' && kind !== 'resolve') lines.push('', msg);
     if (msg && (kind === 'approve' || kind === 'resolve')) lines.push('', msg);
-    emailed = await srEmailCustomer(env, row, k.subject, lines);
+    emailed = await srEmailCustomer(env, row, focApprove ? 'Free part on its way' : k.subject, lines);
   }
   await srAddEvent(env.DB, row.claim_id, { by: (user && user.username) || 'unknown', kind, note: msg || null,
     case_id: sets.case_id || null, emailed }, sets);
