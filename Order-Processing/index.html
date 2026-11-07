@@ -180,6 +180,7 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
 .combo-line .cname { font-weight: 600; color: #111; }
 
 #print-header { display: none; }
+.print-page-break, .print-header-repeat { display: none; }
 
 /* ── Tabs (shared pattern with other Tomahawk apps) ── */
 .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); }
@@ -223,6 +224,14 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
   .section-divider-label { font-size: 10px !important; }
   #upload-screen { display: none !important; }
   #picklist-screen { display: block !important; }
+  /* Singles start on a fresh sheet (see render()) */
+  .print-page-break { display: block !important; break-before: page; page-break-before: always; height: 0; }
+  .print-header-repeat {
+    display: flex !important; justify-content: space-between; align-items: center;
+    padding: 0 8px 8px; margin-bottom: 4px; border-bottom: 2px solid #000;
+  }
+  .print-header-repeat .ph-channel { font-family: var(--font-display); font-weight: 800; font-size: 16px; color: #000; }
+  .print-header-repeat .ph-meta { display: flex; gap: 18px; font-size: 15px; color: #000; font-weight: 700; }
 
   /* ── Combo tables only: stack price breakdown lines, and rebalance ──
      column widths since Combo/UC SKU/Channel SKU need the most reading
@@ -1502,6 +1511,13 @@ async function render(rows) {
   // Render sections: 3+ first, then 2, then 1
   const sizes = Object.keys(sections).map(Number).sort((a,b) => b-a);
   sizes.forEach(size => {
+    // Print: single orders go on their own page, away from the combo
+    // (multi-SKU) sections — only when combos exist, else no blank page.
+    // The print header is repeated so the second sheet is self-explanatory.
+    if (size === 1 && fullHtml) {
+      fullHtml += `<div class="print-page-break"></div>
+        <div class="print-header-repeat">${document.getElementById('print-header').innerHTML.replace(/ id="[^"]*"/g, '')}</div>`;
+    }
     const result = renderSection(sections[size], size, rowNum);
     fullHtml += result.html;
     rowNum = result.nextRow;
