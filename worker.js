@@ -758,6 +758,9 @@ const ACTION_TIERS = {
   sa_getRecQtyOverrides: 'viewer_read', sa_getSettings: 'viewer_read',
   sa_getG4BoxCounts: 'viewer_read',
   sa_loadAll: 'viewer_read',
+  // G4 Stock — own gatepass module (Nov 2026)
+  g4gpLoad: 'viewer_read', g4gpGet: 'viewer_read',
+  g4gpSave: 'manager_up', g4gpDiscard: 'manager_up', g4gpPush: 'manager_up',
   sa_saveQtyOverride: 'manager_up', sa_deleteQtyOverride: 'manager_up',
   sa_bulkImportQtyOverrides: 'manager_up', sa_archiveSku: 'manager_up',
   sa_unarchiveSku: 'manager_up', sa_saveRecQtyOverride: 'manager_up',
@@ -1394,6 +1397,10 @@ export default {
       if (!authResult.ok) {
         return json({ ok: false, error: authResult.error, authError: true }, authResult.status || 401);
       }
+
+      // ── G4 STOCK — own gatepass module (g4gp* actions) ──
+      const g4gpResp = await handleG4Gatepass(act, body, url, env, authResult.user);
+      if (g4gpResp) return g4gpResp;
 
       // ── AUTH ROUTES ───────────────────────────────────────
       if (request.method === 'POST' && act === 'login') {
@@ -11614,4 +11621,285 @@ async function handleInstamart(method, act, url, body, env) {
     return null;
   }
   return null;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// G4 STOCK — our own gatepass for the G4 warehouse (TomahawkHub)
+// (/G4-Stock/, Nov 2026)
+//
+// Read side: Supabase API mirror only (G4/E3 stock, bundles, UC gatepasses).
+// Our gatepasses: D1 tables g4_gatepasses + g4_gatepass_items.
+// Push to UC: goes through SK's UC API (Worker secrets SK_UC_API_URL +
+// SK_UC_API_KEY). Until those are set, g4gpPush answers "not configured"
+// and the team uses the "Download UC CSV" button instead.
+//
+// Status flow:  draft → pushing → pushed   (or draft → discarded)
+// Once pushed, the live UC status (CREATED / CLOSED / …) is read back from
+// Supabase uc_gatepass by the UC gatepass code.
+// ══════════════════════════════════════════════════════════════════
+
+// Destinations the team ships to from G4. 'Other' takes a free party code.
+const G4GP_DESTINATIONS = {
+  'E3':         { party: 'industrialtoolsandhardware', type: 'STOCK_TRANSFER', label: 'E3 · Stock transfer' },
+  'Amazon-FBA': { party: 'Amazon-FBA', type: 'NON_RETURNABLE', label: 'Amazon FBA' },
+  'FK-FBF':     { party: 'FK-FBF',     type: 'NON_RETURNABLE', label: 'Flipkart FBF' },
+  'Blinkit':    { party: 'Blinkit',    type: 'NON_RETURNABLE', label: 'Blinkit' },
+  'Instamart':  { party: 'Instamart',  type: 'NON_RETURNABLE', label: 'Instamart' },
+  'VLDD':       { party: 'VLDD',       type: 'NON_RETURNABLE', label: 'VLDD' },
+  'ITC':        { party: 'ITC',        type: 'NON_RETURNABLE', label: 'ITC' }
+};
+const G4GP_TYPES = ['STOCK_TRANSFER', 'NON_RETURNABLE', 'RETURNABLE', 'RETURN_TO_VENDOR'];
+const G4GP_FACILITY = 'TomahawkHub';
+
+async function ensureG4GpTables(DB) {
+  await DB.batch([
+    DB.prepare(`CREATE TABLE IF NOT EXISTS g4_gatepasses (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      local_code  TEXT,
+      status      TEXT NOT NULL DEFAULT 'draft',
+      dest_key    TEXT,
+      to_party    TEXT,
+      gp_type     TEXT,
+      reference   TEXT DEFAULT '',
+      purpose     TEXT DEFAULT '',
+      total_qty   INTEGER DEFAULT 0,
+      total_lines INTEGER DEFAULT 0,
+      created_by  TEXT,
+      created_at  TEXT DEFAULT (datetime('now')),
+      updated_at  TEXT DEFAULT (datetime('now')),
+      uc_code     TEXT,
+      pushed_by   TEXT,
+      pushed_at   TEXT,
+      last_error  TEXT
+    )`),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS g4_gatepass_items (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      gp_id     INTEGER NOT NULL,
+      line_no   INTEGER,
+      sku       TEXT NOT NULL,
+      qty       INTEGER NOT NULL,
+      ppc       INTEGER,
+      from_bundle TEXT
+    )`),
+    DB.prepare(`CREATE INDEX IF NOT EXISTS idx_g4gp_items_gp ON g4_gatepass_items (gp_id)`)
+  ]);
+}
+
+// Live G4 stock + bundles + qty already on open UC gatepasses at G4.
+async function g4gpLiveData(env) {
+  const [inv, bundleRows, openRows] = await Promise.all([
+    supabaseRpcJson(env, 'stock_alert_inventory'),
+    g4gpSupabasePaged(env, 'uc_bundle_composition?select=parent_sku,child_sku,quantity_per_unit'),
+    g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code,sku,quantity&facility=eq.G4&status=in.(CREATED,RETURN_AWAITED)')
+  ]);
+  const bundles = {};
+  bundleRows.forEach(b => {
+    if (!b.parent_sku || !b.child_sku) return;
+    (bundles[b.parent_sku] = bundles[b.parent_sku] || []).push({ sku: b.child_sku, qty: Number(b.quantity_per_unit) || 1 });
+  });
+  const openGp = {};
+  openRows.forEach(g => { if (g.sku) openGp[g.sku] = (openGp[g.sku] || 0) + (Number(g.quantity) || 0); });
+  const stock = (inv.rows || []).map(r => ({
+    sku: r.skuCode, name: r.name || '', enabled: r.enabled !== false,
+    g4: Number(r.G4_stock) || 0, e3: Number(r.E3_stock) || 0,
+    ppc: r.piecesPerCarton && /^\d+$/.test(String(r.piecesPerCarton)) ? Number(r.piecesPerCarton) : null
+  }));
+  return { stock, bundles, openGp, syncedAt: inv.syncedAt || null };
+}
+
+async function g4gpSupabasePaged(env, path) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured on Worker');
+  const base = env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/' + path;
+  const out = [];
+  for (let from = 0; from < 50000; from += 1000) {
+    const r = await fetch(base + '&limit=1000&offset=' + from, { headers: supabaseHeaders(env) });
+    if (!r.ok) throw new Error('Supabase ' + path.split('?')[0] + ' ' + r.status);
+    const rows = await r.json();
+    out.push(...rows);
+    if (rows.length < 1000) break;
+  }
+  return out;
+}
+
+// Qty per SKU on OUR drafts not yet in UC (so two drafts can't both claim
+// the same G4 stock). excludeId = the draft being edited.
+async function g4gpDraftReserved(DB, excludeId) {
+  const rows = await DB.prepare(`
+    SELECT i.sku, SUM(i.qty) AS qty FROM g4_gatepass_items i
+    JOIN g4_gatepasses g ON g.id = i.gp_id
+    WHERE g.status IN ('draft','pushing') AND g.id != ?
+    GROUP BY i.sku`).bind(excludeId || 0).all();
+  const m = {};
+  (rows.results || []).forEach(r => { m[r.sku] = Number(r.qty) || 0; });
+  return m;
+}
+
+// Cleans the item list: trims SKUs, drops zero lines, merges duplicates.
+function g4gpCleanItems(items) {
+  const merged = new Map();
+  (Array.isArray(items) ? items : []).forEach(it => {
+    const sku = String((it && it.sku) || '').trim();
+    const qty = Math.floor(Number(it && it.qty) || 0);
+    if (!sku || qty <= 0) return;
+    const prev = merged.get(sku);
+    if (prev) prev.qty += qty;
+    else merged.set(sku, { sku, qty, ppc: Number(it.ppc) || null, from_bundle: it.from_bundle ? String(it.from_bundle) : null });
+  });
+  return [...merged.values()];
+}
+
+// Problems that must stop a push: unknown / disabled / placeholder /
+// bundle SKUs, and qty above what G4 really has free.
+function g4gpBlockers(items, live, draftReserved) {
+  const bySku = new Map(live.stock.map(s => [s.sku, s]));
+  const errs = [];
+  items.forEach(it => {
+    const s = bySku.get(it.sku);
+    if (/^(block|unlinked|bundle)-/i.test(it.sku)) errs.push(it.sku + ': placeholder SKU');
+    else if (!s) errs.push(it.sku + ': not found in UC');
+    else if (!s.enabled) errs.push(it.sku + ': disabled in UC');
+    else if (live.bundles[it.sku]) errs.push(it.sku + ': bundle SKU — add its components');
+    else {
+      const free = s.g4 - (draftReserved[it.sku] || 0);
+      if (it.qty > free) errs.push(it.sku + ': qty ' + it.qty + ' > G4 free ' + Math.max(free, 0));
+    }
+  });
+  return errs;
+}
+
+async function g4gpGetFull(DB, id) {
+  const gp = await DB.prepare('SELECT * FROM g4_gatepasses WHERE id = ?').bind(id).first();
+  if (!gp) return null;
+  const items = await DB.prepare('SELECT sku, qty, ppc, from_bundle, line_no FROM g4_gatepass_items WHERE gp_id = ? ORDER BY line_no, id').bind(id).all();
+  gp.items = items.results || [];
+  return gp;
+}
+
+// Returns a Response for g4gp* actions, or null if the action isn't ours.
+async function handleG4Gatepass(act, body, url, env, user) {
+  if (!act || act.indexOf('g4gp') !== 0) return null;
+  await ensureG4GpTables(env.DB);
+  const who = (user && (user.display_name || user.username)) || 'unknown';
+  const pushReady = !!(env.SK_UC_API_URL && env.SK_UC_API_KEY);
+
+  // ── Everything the page needs in one call ──
+  if (act === 'g4gpLoad') {
+    const [live, list] = await Promise.all([
+      g4gpLiveData(env),
+      env.DB.prepare(`SELECT * FROM g4_gatepasses WHERE status != 'discarded' OR updated_at > datetime('now','-30 days')
+                      ORDER BY id DESC LIMIT 300`).all()
+    ]);
+    const gps = list.results || [];
+    // Live UC status for pushed gatepasses
+    const codes = gps.filter(g => g.uc_code).map(g => g.uc_code);
+    const ucStatus = {};
+    if (codes.length) {
+      try {
+        const rows = await g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code,status&gatepass_code=in.(' +
+          codes.map(c => '"' + String(c).replace(/"/g, '') + '"').join(',') + ')');
+        rows.forEach(r => { ucStatus[r.gatepass_code] = r.status; });
+      } catch (e) { /* status column just stays blank */ }
+    }
+    gps.forEach(g => { g.uc_status = g.uc_code ? (ucStatus[g.uc_code] || null) : null; });
+    return json({ ok: true, ...live, draftReserved: await g4gpDraftReserved(env.DB, 0),
+      gatepasses: gps, destinations: G4GP_DESTINATIONS, types: G4GP_TYPES, pushReady });
+  }
+
+  if (act === 'g4gpGet') {
+    const id = Number((body && body.id) || url.searchParams.get('id'));
+    const gp = await g4gpGetFull(env.DB, id);
+    if (!gp) return json({ ok: false, error: 'Gatepass not found' }, 404);
+    return json({ ok: true, gatepass: gp });
+  }
+
+  // ── Create / update a draft ──
+  if (act === 'g4gpSave') {
+    const b = body || {};
+    const items = g4gpCleanItems(b.items);
+    if (!items.length) return json({ ok: false, error: 'Add at least one SKU' });
+    const dest = G4GP_DESTINATIONS[b.destKey];
+    const toParty = dest ? dest.party : String(b.toParty || '').trim();
+    const gpType = dest ? dest.type : (G4GP_TYPES.includes(b.gpType) ? b.gpType : 'NON_RETURNABLE');
+    if (!toParty) return json({ ok: false, error: 'Destination party is required' });
+    const totalQty = items.reduce((a, i) => a + i.qty, 0);
+    let id = Number(b.id) || 0;
+    if (id) {
+      const cur = await env.DB.prepare('SELECT status FROM g4_gatepasses WHERE id = ?').bind(id).first();
+      if (!cur) return json({ ok: false, error: 'Gatepass not found' }, 404);
+      if (cur.status !== 'draft') return json({ ok: false, error: 'Only drafts can be edited (this one is ' + cur.status + ')' });
+      await env.DB.prepare(`UPDATE g4_gatepasses SET dest_key=?, to_party=?, gp_type=?, reference=?, purpose=?,
+        total_qty=?, total_lines=?, updated_at=datetime('now'), last_error=NULL WHERE id=?`)
+        .bind(b.destKey || 'Other', toParty, gpType, String(b.reference || ''), String(b.purpose || ''), totalQty, items.length, id).run();
+      await env.DB.prepare('DELETE FROM g4_gatepass_items WHERE gp_id = ?').bind(id).run();
+    } else {
+      const r = await env.DB.prepare(`INSERT INTO g4_gatepasses (status, dest_key, to_party, gp_type, reference, purpose,
+        total_qty, total_lines, created_by) VALUES ('draft',?,?,?,?,?,?,?,?)`)
+        .bind(b.destKey || 'Other', toParty, gpType, String(b.reference || ''), String(b.purpose || ''), totalQty, items.length, who).run();
+      id = r.meta.last_row_id;
+      await env.DB.prepare('UPDATE g4_gatepasses SET local_code = ? WHERE id = ?').bind('G4-' + String(id).padStart(5, '0'), id).run();
+    }
+    await env.DB.batch(items.map((it, n) => env.DB.prepare(
+      'INSERT INTO g4_gatepass_items (gp_id, line_no, sku, qty, ppc, from_bundle) VALUES (?,?,?,?,?,?)')
+      .bind(id, n + 1, it.sku, it.qty, it.ppc, it.from_bundle)));
+    return json({ ok: true, gatepass: await g4gpGetFull(env.DB, id) });
+  }
+
+  if (act === 'g4gpDiscard') {
+    const id = Number(body && body.id);
+    const cur = await env.DB.prepare('SELECT status FROM g4_gatepasses WHERE id = ?').bind(id).first();
+    if (!cur) return json({ ok: false, error: 'Gatepass not found' }, 404);
+    if (cur.status !== 'draft') return json({ ok: false, error: 'Only drafts can be discarded here — a pushed gatepass is discarded in UC' });
+    await env.DB.prepare("UPDATE g4_gatepasses SET status='discarded', updated_at=datetime('now') WHERE id=?").bind(id).run();
+    return json({ ok: true });
+  }
+
+  // ── Push a draft to UC through SK's API ──
+  // Expected contract (to agree with SK):
+  //   POST SK_UC_API_URL   Authorization: Bearer SK_UC_API_KEY
+  //   { facility, type, toPartyCode, reference, purpose, externalRef,
+  //     items:[{ skuCode, quantity, inventoryType, unitPrice }] }
+  //   → { ok:true, gatepassCode:"GP…" }  |  { ok:false, error:"…" }
+  if (act === 'g4gpPush') {
+    if (!pushReady) return json({ ok: false, notConfigured: true,
+      error: 'UC push not set up yet — waiting for SK\'s API details. Use "Download UC CSV" for now.' });
+    const id = Number(body && body.id);
+    const gp = await g4gpGetFull(env.DB, id);
+    if (!gp) return json({ ok: false, error: 'Gatepass not found' }, 404);
+    if (gp.status !== 'draft') return json({ ok: false, error: 'Already ' + gp.status + (gp.uc_code ? ' (' + gp.uc_code + ')' : '') });
+
+    // Re-check against live G4 stock right before pushing
+    const live = await g4gpLiveData(env);
+    const blockers = g4gpBlockers(gp.items, live, await g4gpDraftReserved(env.DB, id));
+    if (blockers.length) return json({ ok: false, error: 'Fix before pushing', blockers });
+
+    // Lock it so a double click can't create two UC gatepasses
+    const lock = await env.DB.prepare("UPDATE g4_gatepasses SET status='pushing', updated_at=datetime('now') WHERE id=? AND status='draft'").bind(id).run();
+    if (!lock.meta || !lock.meta.changes) return json({ ok: false, error: 'Push already in progress' });
+
+    let res, data;
+    try {
+      res = await fetch(env.SK_UC_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + env.SK_UC_API_KEY },
+        body: JSON.stringify({
+          facility: G4GP_FACILITY, type: gp.gp_type, toPartyCode: gp.to_party,
+          reference: gp.reference || '', purpose: gp.purpose || '', externalRef: gp.local_code,
+          items: gp.items.map(i => ({ skuCode: i.sku, quantity: i.qty, inventoryType: 'GOOD_INVENTORY', unitPrice: 100 }))
+        })
+      });
+      data = await res.json().catch(() => ({}));
+    } catch (e) { data = { ok: false, error: 'Could not reach SK\'s API: ' + e.message }; }
+
+    const code = data && (data.gatepassCode || data.gatePassCode || data.code);
+    if (res && res.ok && data.ok !== false && code) {
+      await env.DB.prepare(`UPDATE g4_gatepasses SET status='pushed', uc_code=?, pushed_by=?, pushed_at=datetime('now'),
+        last_error=NULL, updated_at=datetime('now') WHERE id=?`).bind(String(code), who, id).run();
+      return json({ ok: true, ucCode: String(code), gatepass: await g4gpGetFull(env.DB, id) });
+    }
+    const err = (data && (data.error || data.message)) || ('HTTP ' + (res ? res.status : '—'));
+    await env.DB.prepare("UPDATE g4_gatepasses SET status='draft', last_error=?, updated_at=datetime('now') WHERE id=?").bind(String(err).slice(0, 500), id).run();
+    return json({ ok: false, error: 'UC push failed: ' + err });
+  }
+
+  return json({ ok: false, error: 'Unknown G4 action: ' + act }, 400);
 }
