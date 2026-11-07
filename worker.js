@@ -11687,10 +11687,13 @@ async function ensureG4GpTables(DB) {
 
 // Live G4 stock + bundles + qty already on open UC gatepasses at G4.
 async function g4gpLiveData(env) {
-  const [inv, bundleRows, openRows, poRows] = await Promise.all([
+  const [inv, bundleRows, openRows, todayRows, poRows] = await Promise.all([
     supabaseRpcJson(env, 'stock_alert_inventory'),
     g4gpSupabasePaged(env, 'uc_bundle_composition?select=parent_sku,child_sku,quantity_per_unit'),
-    g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code,sku,quantity&facility=eq.G4&status=in.(CREATED,RETURN_AWAITED)'),
+    g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code,sku,quantity,to_party,gp_type,status,created_at&facility=eq.G4&status=in.(CREATED,RETURN_AWAITED)'),
+    // Gatepasses made at G4 today (IST) — for the Stock Transfer card
+    g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code,created_at&facility=eq.G4&created_at=gte.' +
+      encodeURIComponent(new Date(Date.parse(new Date(Date.now() + 19800000).toISOString().slice(0, 10) + 'T00:00:00Z') - 19800000).toISOString())).catch(() => []),
     // Inward pending = G4 purchase orders not yet received (GRN) in UC
     g4gpSupabasePaged(env, 'uc_purchase_orders?select=po_code,sku,quantity,received_quantity,pending_quantity,po_created,vendor_code,po_status&facility=eq.G4&po_status=not.in.(COMPLETE,CANCELLED,CLOSED)&pending_quantity=gt.0')
       .catch(() => null)
@@ -11721,13 +11724,24 @@ async function g4gpLiveData(env) {
     (bundles[b.parent_sku] = bundles[b.parent_sku] || []).push({ sku: b.child_sku, qty: Number(b.quantity_per_unit) || 1 });
   });
   const openGp = {};
-  openRows.forEach(g => { if (g.sku) openGp[g.sku] = (openGp[g.sku] || 0) + (Number(g.quantity) || 0); });
+  const openMap = new Map();   // In Transit: open G4 gatepasses, one entry each
+  openRows.forEach(g => {
+    const q = Number(g.quantity) || 0;
+    if (g.sku) openGp[g.sku] = (openGp[g.sku] || 0) + q;
+    let o = openMap.get(g.gatepass_code);
+    if (!o) { o = { code: g.gatepass_code, to_party: g.to_party || '', type: g.gp_type, status: g.status, created: g.created_at, qty: 0, lines: [] }; openMap.set(g.gatepass_code, o); }
+    o.qty += q; if (g.sku) o.lines.push({ sku: g.sku, qty: q });
+  });
+  const openList = [...openMap.values()].sort((a, b) => String(a.created || '').localeCompare(String(b.created || '')));
+  const todayCodes = new Map();
+  (todayRows || []).forEach(r => { if (!todayCodes.has(r.gatepass_code) || r.created_at > todayCodes.get(r.gatepass_code)) todayCodes.set(r.gatepass_code, r.created_at); });
+  const todayGp = { count: todayCodes.size, last: [...todayCodes.values()].sort().pop() || null };
   const stock = (inv.rows || []).map(r => ({
     sku: r.skuCode, name: r.name || '', enabled: r.enabled !== false,
     g4: Number(r.G4_stock) || 0, e3: Number(r.E3_stock) || 0,
     ppc: r.piecesPerCarton && /^\d+$/.test(String(r.piecesPerCarton)) ? Number(r.piecesPerCarton) : null
   }));
-  return { stock, bundles, openGp, inward, syncedAt: inv.syncedAt || null };
+  return { stock, bundles, openGp, openList, todayGp, inward, syncedAt: inv.syncedAt || null };
 }
 
 async function g4gpSupabasePaged(env, path) {

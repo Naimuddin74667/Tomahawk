@@ -949,37 +949,49 @@ button[hidden] { display: none !important; }
     </div>
   </div>
 
+  <!-- Section cards — click one to open its section below (one at a time) -->
   <div class="stats-row g4-stats">
-    <div class="stat-card no-click">
-      <div class="stat-label">Total SKUs</div>
-      <div class="stat-value accent" id="stat-skus"><span class="sk-block" style="width:60px;height:22px"></span></div>
-      <div class="stat-sub">with stock in G4</div>
+    <div class="stat-card sec-card on" data-sec="st">
+      <div class="stat-label">Stock Transfer</div>
+      <div class="stat-value accent" id="stat-st"><span class="sk-block" style="width:40px;height:22px"></span></div>
+      <div class="stat-sub" id="stat-st-sub"><span class="sk-block" style="width:120px;height:12px"></span></div>
     </div>
-    <div class="stat-card no-click">
-      <div class="stat-label">Total Qty</div>
-      <div class="stat-value" id="stat-qty"><span class="sk-block" style="width:90px;height:22px"></span></div>
-      <div class="stat-sub" id="stat-synced"><span class="sk-block" style="width:110px"></span></div>
+    <div class="stat-card sec-card" data-sec="g4">
+      <div class="stat-label">G4 Stock</div>
+      <div class="stat-value" id="stat-qty"><span class="sk-block" style="width:100px;height:22px"></span></div>
+      <div class="stat-sub" id="stat-skus"><span class="sk-block" style="width:80px;height:12px"></span></div>
     </div>
-    <div class="stat-card no-click">
-      <div class="stat-label">Inward Pending</div>
-      <div class="stat-value" id="stat-inward"><span class="sk-block" style="width:90px;height:22px"></span></div>
-      <div class="stat-sub" id="stat-inward-sub"><span class="sk-block" style="width:120px"></span></div>
-    </div>
-    <div class="stat-card" id="card-pos" title="Show open POs">
+    <div class="stat-card sec-card" data-sec="po">
       <div class="stat-label">Open POs</div>
       <div class="stat-value" id="stat-pos"><span class="sk-block" style="width:40px;height:22px"></span></div>
-      <div class="stat-sub" id="stat-pos-sub"><span class="sk-block" style="width:120px"></span></div>
+      <div class="stat-sub" id="stat-pos-sub"><span class="sk-block" style="width:130px;height:12px"></span></div>
+    </div>
+    <div class="stat-card sec-card" data-sec="tr">
+      <div class="stat-label">In Transit</div>
+      <div class="stat-value" id="stat-tr"><span class="sk-block" style="width:90px;height:22px"></span></div>
+      <div class="stat-sub" id="stat-tr-sub"><span class="sk-block" style="width:120px;height:12px"></span></div>
     </div>
   </div>
 
-  <!-- ───────────── OPEN POs (from the Open POs card) ───────────── -->
-  <div class="panel" id="po-panel" hidden>
+  <!-- ───────────── G4 STOCK LIST ───────────── -->
+  <div class="panel sec-panel" id="sec-g4" hidden>
+    <div class="panel-head">
+      <div class="panel-title">G4 stock <span class="muted" style="font-size:12px;font-weight:500" id="g4-note"></span></div>
+      <input class="field" id="g4-search" placeholder="Search SKU or name" style="width:240px;height:36px">
+    </div>
+    <div class="tbl-wrap">
+      <table class="gp-tbl">
+        <thead><tr><th>#</th><th>UC SKU</th><th class="num">Qty/box</th><th class="num">G4 boxes</th><th class="num">G4 pcs</th><th class="num">E3 pcs</th><th class="num">On open GPs</th></tr></thead>
+        <tbody id="g4-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ───────────── OPEN POs ───────────── -->
+  <div class="panel sec-panel" id="sec-po" hidden>
     <div class="panel-head">
       <div class="panel-title">Open G4 purchase orders <span class="muted" style="font-size:12px;font-weight:500" id="po-note"></span></div>
-      <div class="actions">
-        <input class="field" id="po-search" placeholder="Search PO, vendor or SKU" style="width:240px;height:36px">
-        <button class="btn-ghost" id="po-close" style="min-height:36px">Close</button>
-      </div>
+      <input class="field" id="po-search" placeholder="Search PO, vendor or SKU" style="width:240px;height:36px">
     </div>
     <div class="tbl-wrap">
       <table class="gp-tbl">
@@ -989,7 +1001,21 @@ button[hidden] { display: none !important; }
     </div>
   </div>
 
-  <!-- ───────────── PRINT UC GATEPASS (our format) ───────────── -->
+  <!-- ───────────── IN TRANSIT: open G4 gatepasses ───────────── -->
+  <div class="panel sec-panel" id="sec-tr" hidden>
+    <div class="panel-head">
+      <div class="panel-title">In transit — open G4 gatepasses <span class="muted" style="font-size:12px;font-weight:500" id="tr-note"></span></div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="gp-tbl">
+        <thead><tr><th></th><th>Gatepass</th><th>Created</th><th>Age</th><th>To</th><th>Type</th><th class="num">Lines</th><th class="num">Qty</th><th></th></tr></thead>
+        <tbody id="tr-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ───────────── STOCK TRANSFER: print UC gatepass (our format) ───────────── -->
+  <div class="sec-panel" id="sec-st">
   <div class="panel">
     <div class="panel-head">
       <div class="panel-title">Print UC gatepass</div>
@@ -1031,6 +1057,7 @@ button[hidden] { display: none !important; }
       <div class="summary-stats" id="gp-sum"></div>
     </div>
   </div>
+  </div>
 
 </div>
 
@@ -1042,8 +1069,11 @@ button[hidden] { display: none !important; }
 .recv-ok { color: var(--c-green); font-weight: 700; }
 .recv-bad { color: var(--c-red); font-weight: 700; }
 #gp-panel { border-color: var(--hero); }
-#card-pos { cursor: pointer; }
-#card-pos.on { border-color: var(--hero); box-shadow: inset 0 0 0 1px var(--hero); }
+.sec-card { cursor: pointer; position: relative; }
+.sec-card.on { border-color: var(--hero); box-shadow: inset 0 0 0 1px var(--hero); }
+.sec-card.on::after { content: ''; position: absolute; left: 50%; bottom: -9px; width: 14px; height: 14px; background: var(--bg-surface); border-right: 2px solid var(--hero); border-bottom: 2px solid var(--hero); transform: translateX(-50%) rotate(45deg); }
+.sec-panel[hidden] { display: none; }
+.age-old { color: var(--c-red); font-weight: 700; }
 .po-row { cursor: pointer; }
 .po-chev { display: inline-block; transition: transform .15s; color: var(--text-secondary); }
 .po-row.open .po-chev { transform: rotate(90deg); }
@@ -1125,33 +1155,91 @@ button[hidden] { display: none !important; }
       D = res; bySku = {};
       D.stock.forEach(function (s) { bySku[s.sku] = s; });
       var inG4 = D.stock.filter(function (s) { return s.g4 > 0; });
-      $('stat-skus').textContent = fmt(inG4.length);
+      // Stock Transfer: gatepasses made at G4 today
+      var tg = D.todayGp || { count: 0 };
+      $('stat-st').textContent = fmt(tg.count) + ' today';
+      $('stat-st-sub').textContent = tg.last ? 'last at ' + new Date(tg.last).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) + ' · print below' : 'none yet today · print below';
+      // G4 Stock
       $('stat-qty').textContent = fmt(inG4.reduce(function (a, s) { return a + s.g4; }, 0)) + ' pcs';
-      $('stat-synced').textContent = 'UC sync ' + (D.syncedAt ? timeAgo(D.syncedAt) : '—');
+      $('stat-skus').textContent = fmt(inG4.length) + ' SKUs · UC sync ' + (D.syncedAt ? timeAgo(D.syncedAt) : '—');
+      // Open POs (+ inward pending)
       if (D.inward) {
-        $('stat-inward').textContent = fmt(D.inward.qty) + ' pcs';
-        $('stat-inward-sub').textContent = D.inward.skus + ' SKUs · not GRN\'d yet';
         $('stat-pos').textContent = fmt(D.inward.pos);
-        $('stat-pos-sub').textContent = (D.inward.vendors ? D.inward.vendors + ' vendor' + (D.inward.vendors === 1 ? '' : 's') + ' · ' : '') +
-          (D.inward.oldest ? 'oldest ' + new Date(D.inward.oldest).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '');
-      } else {
-        ['stat-inward', 'stat-pos'].forEach(function (id) { $(id).textContent = '—'; });
-        ['stat-inward-sub', 'stat-pos-sub'].forEach(function (id) { $(id).textContent = 'PO data not available'; });
-      }
+        $('stat-pos-sub').textContent = fmt(D.inward.qty) + ' pcs pending' +
+          (D.inward.oldest ? ' · oldest ' + new Date(D.inward.oldest).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '');
+      } else { $('stat-pos').textContent = '—'; $('stat-pos-sub').textContent = 'PO data not available'; }
+      // In Transit: open G4 gatepasses
+      var ol = D.openList || [];
+      $('stat-tr').textContent = fmt(ol.reduce(function (a, g) { return a + g.qty; }, 0)) + ' pcs';
+      var oldest = ol[0] ? daysOld(ol[0].created) : 0;
+      $('stat-tr-sub').textContent = ol.length + ' open gatepass' + (ol.length === 1 ? '' : 'es') + (ol.length ? ' · oldest ' + oldest + 'd' : '');
       setStatus('UC synced ' + (D.syncedAt ? timeAgo(D.syncedAt) : '—'));
       if (cur) renderGatepass(); // refresh Qty/box once stock arrives
-      if (!$('po-panel').hidden) renderPos();
+      renderSection();
     }).catch(function (e) { setStatus('Could not load — ' + e.message, true); });
+  }
+  function daysOld(iso) { return iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)) : 0; }
+
+  // ════════════ SECTION CARDS (one section open at a time) ════════════
+  var sec = 'st';
+  document.querySelector('.g4-stats').addEventListener('click', function (e) {
+    var c = e.target.closest('.sec-card'); if (!c) return;
+    sec = c.getAttribute('data-sec'); renderSection();
+  });
+  function renderSection() {
+    [].forEach.call(document.querySelectorAll('.sec-card'), function (c) { c.classList.toggle('on', c.getAttribute('data-sec') === sec); });
+    ['st', 'g4', 'po', 'tr'].forEach(function (k) { $('sec-' + k).hidden = k !== sec; });
+    if (sec === 'g4') renderG4(); else if (sec === 'po') renderPos(); else if (sec === 'tr') renderTransit();
+  }
+
+  // ════════════ G4 STOCK LIST ════════════
+  $('g4-search').addEventListener('input', renderG4);
+  function renderG4() {
+    var q = $('g4-search').value.trim().toLowerCase();
+    var rows = D.stock.filter(function (s) { return s.g4 > 0; })
+      .filter(function (s) { return !q || (s.sku + ' ' + (s.name || '')).toLowerCase().indexOf(q) !== -1; })
+      .sort(function (a, b) { return b.g4 - a.g4; });
+    $('g4-note').textContent = rows.length + ' SKUs · ' + fmt(rows.reduce(function (a, s) { return a + s.g4; }, 0)) + ' pcs';
+    $('g4-body').innerHTML = rows.length ? rows.map(function (s, n) {
+      return '<tr><td class="muted">' + (n + 1) + '</td>' +
+        '<td><span class="sku-code">' + esc(s.sku) + '</span>' + (s.name && s.name !== s.sku ? '<span class="sku-name">' + esc(s.name) + '</span>' : '') + '</td>' +
+        '<td class="num">' + (s.ppc || '<span class="muted">—</span>') + '</td>' +
+        '<td class="num"><b>' + boxesText(s.g4, s.ppc) + '</b></td>' +
+        '<td class="num"><b>' + fmt(s.g4) + '</b></td>' +
+        '<td class="num">' + fmt(s.e3) + '</td>' +
+        '<td class="num">' + (D.openGp[s.sku] ? fmt(D.openGp[s.sku]) : '<span class="muted">0</span>') + '</td></tr>';
+    }).join('') : '<tr class="empty-row"><td colspan="7">No SKUs match.</td></tr>';
+  }
+
+  // ════════════ IN TRANSIT ════════════
+  var openTr = {};
+  $('tr-body').addEventListener('click', function (e) {
+    var p = e.target.getAttribute('data-print'); if (p) { e.stopPropagation(); sec = 'st'; renderSection(); openGatepass(p, true); return; }
+    var tr = e.target.closest('tr[data-gp]'); if (!tr) return;
+    var c = tr.getAttribute('data-gp'); openTr[c] = !openTr[c]; renderTransit();
+  });
+  function renderTransit() {
+    var ol = D.openList || [];
+    $('tr-note').textContent = ol.length + ' gatepasses · ' + fmt(ol.reduce(function (a, g) { return a + g.qty; }, 0)) + ' pcs · oldest first';
+    $('tr-body').innerHTML = ol.length ? ol.map(function (g) {
+      var d = daysOld(g.created), open = !!openTr[g.code];
+      var row = '<tr class="po-row' + (open ? ' open' : '') + '" data-gp="' + esc(g.code) + '">' +
+        '<td style="width:24px"><span class="po-chev">›</span></td>' +
+        '<td><b>' + esc(g.code) + '</b></td>' +
+        '<td class="muted" style="white-space:nowrap">' + esc(fmtDT(g.created)) + '</td>' +
+        '<td class="' + (d >= 3 ? 'age-old' : '') + '">' + d + 'd</td>' +
+        '<td>' + esc(g.to_party || '—') + '</td><td>' + esc(typeLabel(g.type)) + '</td>' +
+        '<td class="num">' + g.lines.length + '</td><td class="num"><b>' + fmt(g.qty) + '</b></td>' +
+        '<td><button class="link-btn" data-print="' + esc(g.code) + '">Print</button></td></tr>';
+      if (!open) return row;
+      return row + g.lines.map(function (l) {
+        return '<tr class="po-line"><td></td><td colspan="6">' + esc(l.sku) + '</td><td class="num">' + fmt(l.qty) + '</td><td></td></tr>';
+      }).join('');
+    }).join('') : '<tr class="empty-row"><td colspan="9">Nothing in transit — every G4 gatepass is closed.</td></tr>';
   }
 
   // ════════════ OPEN POs LIST ════════════
   var openPo = {};
-  $('card-pos').addEventListener('click', function () {
-    var show = $('po-panel').hidden;
-    $('po-panel').hidden = !show; this.classList.toggle('on', show);
-    if (show) { renderPos(); $('po-panel').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
-  });
-  $('po-close').addEventListener('click', function () { $('po-panel').hidden = true; $('card-pos').classList.remove('on'); });
   $('po-search').addEventListener('input', renderPos);
   $('po-body').addEventListener('click', function (e) {
     var tr = e.target.closest('tr[data-po]'); if (!tr) return;
