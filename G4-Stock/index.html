@@ -1347,38 +1347,29 @@ button[hidden] { display: none !important; }
     doc.setLineWidth(0.9); doc.line(M, y, W - M, y); doc.setLineWidth(0.25);
     y += 5;
 
-    // ── Details block ──
+    // ── Details — compact and light (rarely read; totals are in the table) ──
     var bx = M, by = y, half = CW / 2;
-    // Row 1: gatepass number + barcode (grey band)
-    var r1 = 16;
-    doc.setFillColor(GREY); doc.rect(bx, by, CW, r1, 'F');
-    lab('Gatepass No.', bx + 4, by + 5.5);
-    T(g.code, bx + 4, by + 12.5, 15, true);
-    if (bc) doc.addImage(bc, 'PNG', W - M - 74, by + 3.5, 70, 9);
-    // Row 2: From → To
-    var r2 = 15, y2 = by + r1;
-    lab('From', bx + 4, y2 + 5); T('G4 Warehouse', bx + 4, y2 + 11.5, 13, true);
-    T('(TomahawkHub)', bx + 4 + doc.getTextWidth('G4 Warehouse') + 2, y2 + 11.5, 8, false);
-    lab('To', bx + half + 4, y2 + 5); T(fit(destLabel(g), half - 30, 13), bx + half + 4, y2 + 11.5, 13, true);
-    doc.setLineWidth(0.7); var ax = bx + half - 9, ay = y2 + 9;
-    doc.line(ax, ay, ax + 7, ay); doc.line(ax + 7, ay, ax + 4.8, ay - 1.8); doc.line(ax + 7, ay, ax + 4.8, ay + 1.8);
-    doc.setLineWidth(0.25);
-    // Row 3: created · status · reference · printed
-    var r3 = 15, y3 = y2 + r2, q = CW / 4;
-    [['Created', fmtDT(g.created)], ['UC status', g.status], ['Reference', g.reference || '—'], ['Printed', fmtDT(new Date().toISOString())]]
-      .forEach(function (d, i) { var x = bx + 4 + i * q; lab(d[0], x, y3 + 5); T(fit(d[1], q - 6, 9.5), x, y3 + 10, 9.5, false); });
-    if (user) T(fit('by ' + user, q - 6, 7.5), bx + 4 + 3 * q, y3 + 13.3, 7.5, false);
-    // Row 4: totals
-    var r4 = 15, y4 = y3 + r3, t3 = CW / 3;
-    [['Total boxes', fmt(totalBoxes) + (loose ? ' + ' + loose + ' pcs' : '')], ['Total qty (pcs)', fmt(totalQty)], ['SKU lines', String(g.items.length)]]
-      .forEach(function (k, i) { var x = bx + i * t3; lab(k[0], x + 4, y4 + 5); T(k[1], x + 4, y4 + 12, 14, true); if (i) doc.line(x, y4, x, y4 + r4); });
-    // grid lines of the block
-    var bh = r1 + r2 + r3 + r4;
-    doc.setLineWidth(0.5); doc.rect(bx, by, CW, bh); doc.setLineWidth(0.25);
-    doc.line(bx, y2, bx + CW, y2); doc.line(bx, y3, bx + CW, y3); doc.line(bx, y4, bx + CW, y4);
-    doc.line(bx + half, y2, bx + half, y3);
-    for (var k = 1; k < 4; k++) doc.line(bx + k * q, y3, bx + k * q, y4);
-    y = by + bh + 7;
+    // Line 1: gatepass no. + small barcode
+    lab('Gatepass No.', bx, by + 3);
+    T(g.code, bx, by + 9, 11.5, true);
+    if (bc) doc.addImage(bc, 'PNG', W - M - 52, by + 1.5, 52, 7);
+    by += 13;
+    // Line 2: one thin-ruled strip — From → To · Created · Status · Reference · Printed
+    var cells = [
+      ['From / To', 'G4  >  ' + destLabel(g), 45], ['Created', fmtDT(g.created), 37], ['UC status', g.status, 21],
+      ['Reference', g.reference || '—', 27], ['Printed', fmtDT(new Date().toISOString()) + (user ? ' · ' + String(user).split(' ')[0] : ''), CW - 45 - 37 - 21 - 27]
+    ];
+    doc.setDrawColor(180); doc.setLineWidth(0.2);
+    doc.line(bx, by, bx + CW, by); doc.line(bx, by + 11, bx + CW, by + 11);
+    var cx = bx;
+    cells.forEach(function (c, i) {
+      if (i) doc.line(cx, by + 1.5, cx, by + 9.5);
+      lab(c[0], cx + (i ? 2.5 : 0), by + 4);
+      T(fit(c[1], c[2] - 4, 8.5), cx + (i ? 2.5 : 0), by + 8.5, 8.5, false);
+      cx += c[2];
+    });
+    doc.setDrawColor(0); doc.setLineWidth(0.25);
+    y = by + 17;
 
     // ── SKU table ──
     var cols = [
