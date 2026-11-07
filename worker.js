@@ -11690,7 +11690,7 @@ async function g4gpLiveData(env) {
   const [inv, bundleRows, openRows, todayRows, poRows] = await Promise.all([
     supabaseRpcJson(env, 'stock_alert_inventory'),
     g4gpSupabasePaged(env, 'uc_bundle_composition?select=parent_sku,child_sku,quantity_per_unit'),
-    g4gpOpenRowsClean(env),
+    g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code,sku,quantity,to_party,gp_type,status,created_at,rcv:raw->item->>receivedQuantity&facility=eq.G4&status=in.(CREATED,RETURN_AWAITED)'),
     // Gatepasses made at G4 today (IST) — for the Stock Transfer card
     g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code,created_at&facility=eq.G4&gp_type=eq.STOCK_TRANSFER&created_at=gte.' +
       encodeURIComponent(new Date(Date.parse(new Date(Date.now() + 19800000).toISOString().slice(0, 10) + 'T00:00:00Z') - 19800000).toISOString())).catch(() => []),
@@ -11881,7 +11881,6 @@ async function handleG4Gatepass(act, body, url, env, user) {
       } catch (e) { return json({ ok: false, error: e.message }); }
       return json({ ok: false, error: 'Gatepass ' + code + ' not found in the UC sync yet (sync runs every ~15 min)' });
     }
-    rows = g4gpLatestRows(rows);   // drop stale lines left by earlier syncs
     const g0 = (rows[0].raw && rows[0].raw.gatepass) || {};
     const items = rows.map(r => {
       const it = (r.raw && r.raw.item) || {};
@@ -12082,27 +12081,3 @@ async function g4gpSkFetch(env, code) {
   return d;
 }
 
-// Open G4 gatepass lines, cleaned of stale mirror rows.
-// The Supabase mirror keys each line as "<code>:<sku>:<index>". If a gatepass
-// is edited while open, the line indexes shift and the old rows are never
-// deleted — they stay "CREATED" forever even after UC closes the gatepass.
-// Fix: for each gatepass keep only rows from its latest sync; if that latest
-// sync says CLOSED (or anything not open), the gatepass is not open.
-async function g4gpOpenRowsClean(env) {
-  const open = await g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code&facility=eq.G4&status=in.(CREATED,RETURN_AWAITED)');
-  const codes = [...new Set(open.map(r => r.gatepass_code))];
-  if (!codes.length) return [];
-  const all = [];
-  for (let i = 0; i < codes.length; i += 40) {
-    const chunk = codes.slice(i, i + 40).map(c => '"' + String(c).replace(/"/g, '') + '"').join(',');
-    all.push(...await g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code,sku,quantity,to_party,gp_type,status,created_at,synced_at,rcv:raw->item->>receivedQuantity&gatepass_code=in.(' + chunk + ')'));
-  }
-  const latest = {};
-  all.forEach(r => { if (!latest[r.gatepass_code] || r.synced_at > latest[r.gatepass_code]) latest[r.gatepass_code] = r.synced_at; });
-  return all.filter(r => r.synced_at === latest[r.gatepass_code] && (r.status === 'CREATED' || r.status === 'RETURN_AWAITED'));
-}
-// Same clean-up for one gatepass's lines (print by code)
-function g4gpLatestRows(rows) {
-  let max = null; rows.forEach(r => { if (!max || r.synced_at > max) max = r.synced_at; });
-  return rows.filter(r => r.synced_at === max);
-}
