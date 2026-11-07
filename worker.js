@@ -12065,10 +12065,11 @@ async function g4gpUcLatest(env) {
 // Worker secret SK_UC_GP_KEY (Bearer key from Shikhar); SK_UC_GP_URL optional.
 // Same response shape as g4gpUcLatest(). Returns null if not configured.
 async function g4gpSkFetch(env, code) {
-  if (!env.SK_UC_GP_KEY) return null;
+  const key = env.SK_UC_GP_KEY || env.G4_KEY;   // either secret name works
+  if (!key) return null;
   const base = env.SK_UC_GP_URL || 'https://team.tomahawk.tools/uc/g4-gatepasses';
   const r = await fetch(base + (code ? '?code=' + encodeURIComponent(code) : ''), {
-    headers: { 'Authorization': 'Bearer ' + env.SK_UC_GP_KEY, 'Accept': 'application/json' }
+    headers: { 'Authorization': 'Bearer ' + key, 'Accept': 'application/json' }
   });
   const d = await r.json().catch(() => ({ ok: false, error: 'Bad response from SK API (HTTP ' + r.status + ')' }));
   if (!d.ok) throw new Error('SK API: ' + (d.error || ('HTTP ' + r.status)));
