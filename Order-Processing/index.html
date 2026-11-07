@@ -158,6 +158,8 @@ td { padding: 6px 10px; border-bottom: 1px solid #eee; vertical-align: middle; f
 tr:last-child td { border-bottom: none; }
 tr:nth-child(even) td { background: #fafafa; }
 tr.combo-row td { background: #fffbeb !important; }
+/* SKU mismatch → whole row red */
+tr.row-diff td { background: #ffe1e1 !important; border-top: 1px solid #e57373; border-bottom: 1px solid #e57373; }
 
 .sku { font-family: var(--font-body); font-size: 13px; font-weight: 700; color: #111118; }
 .sku-sell { font-family: var(--font-body); font-size: 12px; color: #555566; }
@@ -219,6 +221,7 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: #c8410a; cursor:
   .img-cell img, .img-na { width: 40px !important; height: 40px !important; line-height: 40px !important; }
   tr.combo-row td { background: #fff !important; }
   tr:nth-child(even) td { background: #fff !important; }
+  tr.row-diff td { background: #ffe1e1 !important; border-top: 1px solid #b71c1c !important; border-bottom: 1px solid #b71c1c !important; }
   .combo-box { background: #fff !important; border: 1px solid #999 !important; }
   .section-divider { padding: 6px 8px 3px; }
   .section-divider-label { font-size: 10px !important; }
@@ -1325,6 +1328,11 @@ function renderSection(groups, comboSize, rowNumStart) {
       // only if it matches NONE of the components, not just the first.
       const sharedSelMatchesAny = group.uniqueSkus.some(s => !skusDiffer(s, selVals[0]));
 
+      // Any mismatch in this combo → highlight every row of the group
+      const groupDiff = allSameSel
+        ? !sharedSelMatchesAny
+        : group.uniqueSkus.some(s => skusDiffer(s, group.selMap[s]||''));
+
       group.uniqueSkus.forEach((sku, idx) => {
         const isFirst = idx === 0;
         const rowspan = group.uniqueSkus.length;
@@ -1332,7 +1340,7 @@ function renderSection(groups, comboSize, rowNumStart) {
         const selCell = allSameSel
           ? (isFirst ? `<td rowspan="${rowspan}"><div class="sku-sell${!sharedSelMatchesAny ? ' diff' : ''}">${selVals[0]}</div></td>` : '')
           : `<td><div class="sku-sell${selDiff ? ' diff' : ''}">${group.selMap[sku]||''}</div></td>`;
-        html += `<tr class="combo-row">
+        html += `<tr class="combo-row${groupDiff ? ' row-diff' : ''}">
           ${isFirst ? `<td rowspan="${rowspan}" style="color:#999;font-size:11px">${rowNum}</td>` : ''}
           <td><div class="sku">${sku}</div></td>
           ${selCell}
@@ -1345,10 +1353,11 @@ function renderSection(groups, comboSize, rowNumStart) {
       });
     } else {
       const sku = group.uniqueSkus[0];
-      html += `<tr>
+      const rowDiff = skusDiffer(sku, group.selMap[sku]||'');
+      html += `<tr${rowDiff ? ' class="row-diff"' : ''}>
         <td style="color:#999;font-size:11px">${rowNum}</td>
         <td><div class="sku">${sku}</div></td>
-        <td><div class="sku-sell${skusDiffer(sku, group.selMap[sku]||'') ? ' diff' : ''}">${group.selMap[sku]||''}</div></td>
+        <td><div class="sku-sell${rowDiff ? ' diff' : ''}">${group.selMap[sku]||''}</div></td>
         <td style="width:200px"></td>
         <td class="img-cell">${imgHtml}</td>
         <td class="price-cell">${priceHtml}</td>
