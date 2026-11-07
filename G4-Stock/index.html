@@ -525,8 +525,8 @@ html .site-header [hidden] { display: none !important; }
      BLOCK 7 — G4 STOCK: TABS, FORM, ITEMS TABLE, REGISTER
 ============================================================ -->
 <style>
-.stats-row.g4-stats { grid-template-columns: repeat(3, 1fr); }
-@media (max-width: 720px) { .stats-row.g4-stats { grid-template-columns: 1fr; } }
+.stats-row.g4-stats { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 900px) { .stats-row.g4-stats { grid-template-columns: repeat(2, 1fr); } }
 
 .tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 20px; }
 .tab-btn {
@@ -760,7 +760,7 @@ table, .stat-value, .num { font-variant-numeric: tabular-nums; }
 button[hidden] { display: none !important; }
 </style>
 </head>
-<body class="g4-loading">
+<body>
 
 <div class="auth-gate" id="auth-gate">
   <div class="auth-card">
@@ -965,147 +965,103 @@ button[hidden] { display: none !important; }
       <div class="stat-value" id="stat-inward"><span class="sk-block" style="width:90px;height:22px"></span></div>
       <div class="stat-sub" id="stat-inward-sub"><span class="sk-block" style="width:120px"></span></div>
     </div>
+    <div class="stat-card no-click">
+      <div class="stat-label">Open POs</div>
+      <div class="stat-value" id="stat-pos"><span class="sk-block" style="width:40px;height:22px"></span></div>
+      <div class="stat-sub" id="stat-pos-sub"><span class="sk-block" style="width:120px"></span></div>
+    </div>
   </div>
 
-  <div class="tabs" role="tablist">
-    <button class="tab-btn active" data-tab="create" role="tab">Create Gatepass</button>
-    <button class="tab-btn" data-tab="register" role="tab">Gatepass Register <span class="tab-count" id="reg-count">0</span></button>
+  <!-- ───────────── PRINT UC GATEPASS (our format) ───────────── -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">Print UC gatepass</div>
+      <span class="muted" style="font-size:12px" id="recent-note"></span>
+    </div>
+    <div class="add-bar" style="grid-template-columns: 1fr auto">
+      <div>
+        <label class="field-label" for="f-code">Gatepass code</label>
+        <input class="field" id="f-code" placeholder="e.g. GP8601TOMAHAWKHUB0271 — or pick one below" autocomplete="off">
+      </div>
+      <button class="btn-primary" id="btn-load">Open</button>
+    </div>
+    <div class="err-box" id="err-box" hidden></div>
   </div>
 
-  <!-- ───────────── TAB 1: CREATE GATEPASS ───────────── -->
-  <section class="tab-panel" id="panel-create">
-    <div class="panel needs-data">
-      <div class="panel-head">
-        <div class="panel-title">Gatepass details <span class="gp-code-pill" id="gp-code-pill">New</span></div>
-        <button class="btn-ghost" id="btn-new" style="padding:7px 14px">+ New gatepass</button>
-      </div>
-      <div class="form-grid">
-        <div>
-          <label class="field-label" for="f-dest">Destination</label>
-          <select class="field-select" id="f-dest"></select>
-        </div>
-        <div>
-          <label class="field-label" for="f-type">Gatepass type</label>
-          <select class="field-select" id="f-type"></select>
-        </div>
-        <div>
-          <label class="field-label" for="f-party">UC party code</label>
-          <input class="field" id="f-party" autocomplete="off">
-        </div>
-        <div>
-          <label class="field-label" for="f-ref">Reference</label>
-          <input class="field" id="f-ref" placeholder="RO / PO / FBA shipment ID" autocomplete="off">
-        </div>
-        <div class="span-2" style="grid-column: 1 / -1">
-          <label class="field-label" for="f-purpose">Purpose / remark</label>
-          <input class="field" id="f-purpose" placeholder="Optional" autocomplete="off">
-        </div>
+  <!-- Loaded gatepass preview -->
+  <div class="panel" id="gp-panel" hidden>
+    <div class="panel-head">
+      <div class="panel-title"><span id="gp-title">—</span> <span class="st" id="gp-status"></span></div>
+      <div class="actions">
+        <button class="btn-ghost" id="btn-close-gp">Close</button>
+        <button class="btn-primary" id="btn-print">Print PDF</button>
       </div>
     </div>
-
-    <div class="panel needs-data">
-      <div class="panel-head"><div class="panel-title">Items</div></div>
-      <div class="add-bar" id="add-bar">
-        <div>
-          <label class="field-label" for="f-sku">Scan or search UC SKU</label>
-          <input class="field" id="f-sku" list="sku-list" placeholder="Scan barcode or type SKU / name" autocomplete="off">
-          <datalist id="sku-list"></datalist>
-        </div>
-        <div>
-          <label class="field-label">Enter qty in</label>
-          <div class="unit-toggle" id="unit-toggle">
-            <button type="button" data-unit="box" class="active">Boxes</button>
-            <button type="button" data-unit="pcs">Pieces</button>
-          </div>
-        </div>
-        <div>
-          <label class="field-label" for="f-qty">Qty</label>
-          <input class="field" id="f-qty" type="number" min="1" step="1" inputmode="numeric">
-        </div>
-        <button class="btn-primary" id="btn-add" style="height:40px">Add</button>
-      </div>
-      <div class="add-hint" id="add-hint">Pick a SKU to see its G4 stock and Qty/box.</div>
-
-      <div class="tbl-wrap" style="margin-top:14px">
-        <table class="gp-tbl">
-          <thead><tr>
-            <th>#</th><th>UC SKU</th><th class="num">Qty/box</th><th class="num">Boxes</th><th class="num">Qty (pcs)</th>
-            <th class="num">G4 free</th><th class="num">G4 after</th><th class="num">On open UC GPs</th><th>Check</th><th></th>
-          </tr></thead>
-          <tbody id="items-body"></tbody>
-        </table>
-      </div>
-
-      <div class="summary-bar">
-        <div class="summary-stats">
-          <span>Lines <b id="sum-lines">0</b></span>
-          <span>Total qty <b id="sum-qty">0</b></span>
-          <span class="bad">Blockers <b id="sum-bad">0</b></span>
-          <span class="warn">Warnings <b id="sum-warn">0</b></span>
-        </div>
-        <div class="actions" id="create-actions">
-          <button class="btn-ghost btn-danger" id="btn-discard" hidden>Discard draft</button>
-          <button class="btn-ghost" id="btn-pdf">Pick slip PDF</button>
-          <button class="btn-ghost" id="btn-csv">Download UC CSV</button>
-          <button class="btn-ghost" id="btn-save">Save draft</button>
-          <button class="btn-primary btn-push" id="btn-push">Push to UC</button>
-        </div>
-      </div>
-      <div class="push-note" id="push-note"></div>
-      <div class="err-box" id="err-box" hidden></div>
+    <div class="gp-meta" id="gp-meta"></div>
+    <div class="tbl-wrap" style="margin-top:14px">
+      <table class="gp-tbl">
+        <thead><tr>
+          <th>#</th><th>UC SKU</th><th>HSN</th><th class="num">Qty/box</th><th class="num">Boxes</th><th class="num">Qty (pcs)</th><th class="num">Received in UC</th>
+        </tr></thead>
+        <tbody id="gp-items"></tbody>
+      </table>
     </div>
-  </section>
+    <div class="summary-bar">
+      <div class="summary-stats" id="gp-sum"></div>
+    </div>
+  </div>
 
-  <!-- ───────────── TAB 2: REGISTER ───────────── -->
-  <section class="tab-panel" id="panel-register" hidden>
-    <div class="reg-toolbar">
-      <button class="chip-filter active" data-f="all">All</button>
-      <button class="chip-filter" data-f="draft">Drafts</button>
-      <button class="chip-filter" data-f="pushed">Pushed to UC</button>
-      <button class="chip-filter" data-f="discarded">Discarded</button>
-      <input class="field reg-search" id="reg-search" placeholder="Search code, ref, party, user">
+  <!-- Recent G4 gatepasses from UC -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">Recent G4 gatepasses</div>
+      <div class="reg-toolbar" style="margin:0">
+        <button class="chip-filter active" data-f="all">All</button>
+        <button class="chip-filter" data-f="STOCK_TRANSFER">To E3</button>
+        <button class="chip-filter" data-f="CREATED">Open</button>
+        <input class="field reg-search" id="reg-search" placeholder="Search code or party" style="margin-left:6px">
+      </div>
     </div>
     <div class="tbl-wrap">
       <table class="gp-tbl">
         <thead><tr>
-          <th>Our code</th><th>Created</th><th>Destination</th><th>Reference</th><th class="num">Lines</th><th class="num">Qty</th>
-          <th>Status</th><th>UC gatepass</th><th>UC status</th><th>By</th><th></th>
+          <th>Gatepass</th><th>Created</th><th>To</th><th>Type</th><th class="num">Lines</th><th class="num">Qty</th><th>UC status</th><th></th>
         </tr></thead>
-        <tbody id="reg-body"></tbody>
+        <tbody id="recent-body"></tbody>
       </table>
     </div>
-  </section>
-
-</div>
-
-<!-- CSV modal: UC gatepass code goes on every row -->
-<div class="modal-overlay" id="csv-modal" hidden>
-  <div class="modal-box">
-    <div class="modal-title">Download UC CSV</div>
-    <div class="modal-sub">Create the gatepass header in UC first, then import this file to add its items.</div>
-    <label class="modal-label" for="csv-code">UC gatepass code</label>
-    <input class="modal-input" id="csv-code" placeholder="e.g. GP1234">
-    <div class="modal-hint">Columns: Gatepass Code, Item Or Sku Code, Qty, Inventory Type (GOOD_INVENTORY), Unit Price (100).</div>
-    <div class="modal-actions">
-      <button class="btn-ghost" id="csv-cancel">Cancel</button>
-      <button class="btn-primary" id="csv-go">Download</button>
-    </div>
   </div>
+
 </div>
+
+<style>
+.gp-meta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 18px; }
+.gp-meta div span { display: block; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 2px; }
+.gp-meta div b { font-size: 14px; font-weight: 600; color: var(--text-primary); word-break: break-word; }
+@media (max-width: 800px) { .gp-meta { grid-template-columns: 1fr 1fr; } }
+.recv-ok { color: var(--c-green); font-weight: 700; }
+.recv-bad { color: var(--c-red); font-weight: 700; }
+#gp-panel { border-color: var(--hero); }
+.panel-head .reg-toolbar { flex-wrap: nowrap; }
+.panel-head .reg-search { width: 220px; height: 36px; margin-left: 6px; }
+@media (max-width: 720px) { .panel-head .reg-toolbar { flex-wrap: wrap; } }
+</style>
 
 <div class="toast" id="toast"></div>
 
 <script>
 // ══════════════════════════════════════════════════════════════════
-// G4 STOCK — Create Gatepass + Register
-// Data: Worker action g4gpLoad (Supabase mirror for stock/bundles/UC
-// gatepasses + D1 for our own gatepasses). Writes: g4gpSave / g4gpDiscard
-// / g4gpPush. Push goes to UC through SK's API (set on the Worker).
+// G4 STOCK — cards + print UC gatepasses in our own format.
+// Gatepasses are created in Unicommerce as usual; this page only reads
+// them from the Supabase mirror (g4gpUcRecent / g4gpUcGet) and prints.
+// Cards: g4gpLoad (G4 stock + open G4 purchase orders).
 // ══════════════════════════════════════════════════════════════════
 (function () {
   var WORKER_URL = 'https://tomahawk-returns.naimuddin.workers.dev';
+  var JSPDF_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+  var JSBARCODE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js';
 
-  // ---- Theme (shared tm_theme key) ----
+  // ---- Theme (shared tm_theme key, light by default) ----
   var html = document.documentElement;
   if (localStorage.getItem('tm_theme') !== 'dark') html.setAttribute('data-theme', 'light');
   document.getElementById('theme-toggle').addEventListener('click', function () {
@@ -1114,498 +1070,335 @@ button[hidden] { display: none !important; }
     else { html.setAttribute('data-theme', 'light'); localStorage.setItem('tm_theme', 'light'); }
   });
 
-  // ---- State ----
-  var D = { stock: [], bundles: {}, openGp: {}, draftReserved: {}, gatepasses: [], destinations: {}, types: [], pushReady: false, syncedAt: null };
-  var bySku = {};          // sku → stock row
-  var cur = null;          // gatepass being edited: { id, local_code, status, items:[{sku, qty, ppc, from_bundle}] }
-  var unit = 'box';        // qty entry unit for the add bar
-  var regFilter = 'all';
+  var D = { stock: [], inward: null, syncedAt: null };
+  var bySku = {};
+  var recent = [];
+  var recentFilter = 'all';
+  var cur = null; // loaded UC gatepass
 
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function fmt(n) { return Number(n || 0).toLocaleString('en-IN'); }
-  function canEdit() { return window.TM_ROLE === 'admin' || window.TM_ROLE === 'manager'; }
-
   var toastTimer;
   window.toast = function (msg, kind) {
     var t = $('toast'); t.textContent = msg; t.className = 'toast show ' + (kind || '');
     clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.className = 'toast'; }, 3200);
   };
-
   function api(action, payload) {
-    var opts = payload
-      ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ action: action }, payload)) }
-      : undefined;
+    var opts = payload ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ action: action }, payload)) } : undefined;
     return fetch(WORKER_URL + '?action=' + action, opts).then(function (r) { return r.json(); });
   }
-
-  function setStatus(text, isErr) {
-    $('status-text').textContent = text;
-    $('status-dot').classList.toggle('is-error', !!isErr);
-  }
-
-  // ════════════ LOAD ════════════
-  function load(keepCurrent) {
-    setStatus('Loading G4 stock…');
-    return api('g4gpLoad').then(function (res) {
-      if (!res || res.ok === false) throw new Error((res && res.error) || 'Load failed');
-      D = res;
-      bySku = {};
-      D.stock.forEach(function (s) { bySku[s.sku] = s; });
-      document.body.classList.remove('g4-loading');
-      fillDestinations();
-      fillSkuList();
-      renderStats();
-      renderRegister();
-      if (!keepCurrent || !cur) newGatepass();
-      else renderItems();
-      var ago = D.syncedAt ? timeAgo(D.syncedAt) : '—';
-      setStatus('UC synced ' + ago);
-    }).catch(function (e) {
-      setStatus('Could not load — ' + e.message, true);
-      toast('Load failed: ' + e.message, 'err');
-    });
-  }
-
+  function setStatus(text, isErr) { $('status-text').textContent = text; $('status-dot').classList.toggle('is-error', !!isErr); }
   function timeAgo(iso) {
     var m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
-    if (m < 1) return 'just now';
-    if (m < 60) return m + ' min ago';
+    if (m < 1) return 'just now'; if (m < 60) return m + ' min ago';
     var h = Math.round(m / 60); return h < 24 ? h + ' h ago' : Math.round(h / 24) + ' d ago';
   }
+  function fmtDT(iso) {
+    if (!iso) return '—';
+    var d = new Date(iso);
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) + ', ' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  }
+  function boxesText(qty, ppc) {
+    if (!ppc) return '—';
+    return qty % ppc === 0 ? String(qty / ppc) : Math.floor(qty / ppc) + ' + ' + (qty % ppc);
+  }
+  function destLabel(g) { return g.to_party || g.to_party_code || '—'; }
+  function typeLabel(t) { return ({ STOCK_TRANSFER: 'Stock transfer', NON_RETURNABLE: 'Non-returnable', RETURNABLE: 'Returnable', RETURN_TO_VENDOR: 'Return to vendor' })[t] || t || '—'; }
+  function stClass(s) { return s === 'CLOSED' ? 'st-pushed' : s === 'CREATED' ? 'st-draft' : 'st-discarded'; }
 
-  function renderStats() {
-    var inG4 = D.stock.filter(function (s) { return s.g4 > 0; });
-    $('stat-skus').textContent = fmt(inG4.length);
-    $('stat-qty').textContent = fmt(inG4.reduce(function (a, s) { return a + s.g4; }, 0)) + ' pcs';
-    $('stat-synced').textContent = 'UC sync ' + (D.syncedAt ? timeAgo(D.syncedAt) : '—');
-    if (D.inward) {
-      $('stat-inward').textContent = fmt(D.inward.qty) + ' pcs';
-      $('stat-inward-sub').textContent = D.inward.pos + ' open PO' + (D.inward.pos === 1 ? '' : 's') + ' · ' + D.inward.skus + ' SKUs · not GRN\'d';
-    } else {
-      $('stat-inward').textContent = '—'; $('stat-inward-sub').textContent = 'PO data not available';
-    }
+  // ════════════ CARDS ════════════
+  function loadCards() {
+    return api('g4gpLoad').then(function (res) {
+      if (!res || res.ok === false) throw new Error((res && res.error) || 'Load failed');
+      D = res; bySku = {};
+      D.stock.forEach(function (s) { bySku[s.sku] = s; });
+      var inG4 = D.stock.filter(function (s) { return s.g4 > 0; });
+      $('stat-skus').textContent = fmt(inG4.length);
+      $('stat-qty').textContent = fmt(inG4.reduce(function (a, s) { return a + s.g4; }, 0)) + ' pcs';
+      $('stat-synced').textContent = 'UC sync ' + (D.syncedAt ? timeAgo(D.syncedAt) : '—');
+      if (D.inward) {
+        $('stat-inward').textContent = fmt(D.inward.qty) + ' pcs';
+        $('stat-inward-sub').textContent = D.inward.skus + ' SKUs · not GRN\'d yet';
+        $('stat-pos').textContent = fmt(D.inward.pos);
+        $('stat-pos-sub').textContent = (D.inward.vendors ? D.inward.vendors + ' vendor' + (D.inward.vendors === 1 ? '' : 's') + ' · ' : '') +
+          (D.inward.oldest ? 'oldest ' + new Date(D.inward.oldest).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '');
+      } else {
+        ['stat-inward', 'stat-pos'].forEach(function (id) { $(id).textContent = '—'; });
+        ['stat-inward-sub', 'stat-pos-sub'].forEach(function (id) { $(id).textContent = 'PO data not available'; });
+      }
+      setStatus('UC synced ' + (D.syncedAt ? timeAgo(D.syncedAt) : '—'));
+      if (cur) renderGatepass(); // refresh Qty/box once stock arrives
+    }).catch(function (e) { setStatus('Could not load — ' + e.message, true); });
   }
 
-  // ════════════ FORM ════════════
-  function fillDestinations() {
-    var sel = $('f-dest'); var keep = sel.value;
-    sel.innerHTML = Object.keys(D.destinations).map(function (k) {
-      return '<option value="' + esc(k) + '">' + esc(D.destinations[k].label) + '</option>';
-    }).join('') + '<option value="Other">Other party…</option>';
-    if (keep) sel.value = keep;
-    $('f-type').innerHTML = D.types.map(function (t) { return '<option>' + esc(t) + '</option>'; }).join('');
-  }
-
-  // Destination decides party + type; only "Other" lets you type them.
-  function applyDestination() {
-    var k = $('f-dest').value, d = D.destinations[k];
-    var other = !d;
-    $('f-party').disabled = !other; $('f-type').disabled = !other;
-    if (d) { $('f-party').value = d.party; $('f-type').value = d.type; }
-    else if (!$('f-party').value || isKnownParty($('f-party').value)) $('f-party').value = '';
-    $('hero-dest-label').textContent = d ? d.label : ($('f-party').value || 'Other party');
-  }
-  function isKnownParty(p) { return Object.keys(D.destinations).some(function (k) { return D.destinations[k].party === p; }); }
-
-  function fillSkuList() {
-    // G4-stocked enabled SKUs first, then the rest of the enabled ones
-    var rows = D.stock.filter(function (s) { return s.enabled; })
-      .sort(function (a, b) { return (b.g4 > 0) - (a.g4 > 0) || a.sku.localeCompare(b.sku); });
-    $('sku-list').innerHTML = rows.map(function (s) {
-      return '<option value="' + esc(s.sku) + '">' + esc((s.name && s.name !== s.sku ? s.name + ' · ' : '') + 'G4 ' + s.g4) + '</option>';
-    }).join('');
-  }
-
-  function newGatepass() {
-    cur = { id: null, local_code: null, status: 'draft', items: [] };
-    $('f-dest').value = 'E3'; $('f-ref').value = ''; $('f-purpose').value = ''; $('f-party').value = '';
-    applyDestination(); renderItems(); hideErr();
-  }
-
-  function openGatepass(id) {
-    api('g4gpGet', { id: id }).then(function (res) {
+  // ════════════ RECENT LIST ════════════
+  function loadRecent() {
+    return api('g4gpUcRecent').then(function (res) {
       if (!res.ok) throw new Error(res.error);
-      var g = res.gatepass;
-      cur = { id: g.id, local_code: g.local_code, status: g.status, uc_code: g.uc_code, last_error: g.last_error,
-              created_by: g.created_by, created_at: g.created_at,
-              items: g.items.map(function (i) { return { sku: i.sku, qty: i.qty, ppc: i.ppc, from_bundle: i.from_bundle }; }) };
-      cur._savedQty = {}; g.items.forEach(function (i) { cur._savedQty[i.sku] = (cur._savedQty[i.sku] || 0) + i.qty; });
-      $('f-dest').value = D.destinations[g.dest_key] ? g.dest_key : 'Other';
-      $('f-party').value = g.to_party || ''; $('f-type').value = g.gp_type || 'NON_RETURNABLE';
-      $('f-ref').value = g.reference || ''; $('f-purpose').value = g.purpose || '';
-      applyDestination();
-      if (!D.destinations[g.dest_key]) { $('f-party').value = g.to_party || ''; $('f-type').value = g.gp_type; }
-      switchTab('create'); renderItems();
-      if (g.last_error) showErr('Last push failed: ' + g.last_error); else hideErr();
-    }).catch(function (e) { toast(e.message, 'err'); });
-  }
-
-  // ---- Add bar ----
-  $('unit-toggle').addEventListener('click', function (e) {
-    var b = e.target.closest('button'); if (!b) return;
-    unit = b.getAttribute('data-unit');
-    [].forEach.call(this.querySelectorAll('button'), function (x) { x.classList.toggle('active', x === b); });
-    updateAddHint();
-  });
-  $('f-sku').addEventListener('input', updateAddHint);
-  $('f-qty').addEventListener('input', updateAddHint);
-  // Scanner types the SKU then Enter → jump to qty. Enter in qty → Add.
-  $('f-sku').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); updateAddHint(); $('f-qty').focus(); $('f-qty').select(); } });
-  $('f-qty').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); addLine(); } });
-  $('btn-add').addEventListener('click', addLine);
-
-  function findSku(text) {
-    var t = String(text || '').trim(); if (!t) return null;
-    if (bySku[t]) return bySku[t];
-    var lower = t.toLowerCase();
-    var hit = D.stock.filter(function (s) { return s.sku.toLowerCase() === lower; });
-    return hit[0] || null;
-  }
-
-  function updateAddHint() {
-    var s = findSku($('f-sku').value), h = $('add-hint');
-    if (!$('f-sku').value.trim()) { h.innerHTML = 'Pick a SKU to see its G4 stock and Qty/box.'; return; }
-    if (!s) { h.innerHTML = '<span style="color:var(--c-red)">Not a UC SKU</span>'; return; }
-    var parts = ['<b>' + esc(s.sku) + '</b>' + (s.name && s.name !== s.sku ? ' · ' + esc(s.name) : '')];
-    if (D.bundles[s.sku]) parts.push('<span style="color:var(--c-purple)">Bundle → adds ' + D.bundles[s.sku].length + ' components</span>');
-    else parts.push('G4 free <b>' + fmt(freeFor(s.sku)) + '</b>');
-    parts.push(s.ppc ? 'Qty/box <b>' + s.ppc + '</b>' : '<span style="color:var(--c-orange)">No Qty/box in UC</span>');
-    var q = Number($('f-qty').value) || 0;
-    if (q && unit === 'box') parts.push(s.ppc ? '= <b>' + fmt(q * s.ppc) + ' pcs</b>' : 'enter in Pieces');
-    if (!s.enabled) parts.push('<span style="color:var(--c-red)">Disabled in UC</span>');
-    h.innerHTML = parts.join(' &nbsp;·&nbsp; ');
-  }
-
-  function addLine() {
-    if (!editable()) return;
-    var s = findSku($('f-sku').value);
-    var q = Math.floor(Number($('f-qty').value) || 0);
-    if (!s) { toast('Pick a valid UC SKU', 'err'); $('f-sku').focus(); return; }
-    if (q <= 0) { toast('Enter a qty', 'err'); $('f-qty').focus(); return; }
-    var pcs = q;
-    if (unit === 'box') {
-      if (!s.ppc) { toast(s.sku + ' has no Qty/box in UC — enter in Pieces', 'err'); return; }
-      pcs = q * s.ppc;
-    }
-    // Bundle: add its components instead (UC gatepasses carry simple SKUs)
-    if (D.bundles[s.sku]) {
-      if (unit === 'box') { toast('Bundles are added in pieces (sets)', 'err'); return; }
-      D.bundles[s.sku].forEach(function (c) { pushItem(c.sku, pcs * c.qty, s.sku); });
-      toast('Bundle ' + s.sku + ' → ' + D.bundles[s.sku].length + ' components added', 'ok');
-    } else pushItem(s.sku, pcs, null);
-    $('f-sku').value = ''; $('f-qty').value = ''; updateAddHint(); renderItems(); $('f-sku').focus();
-  }
-
-  // Same SKU twice → one line (qty added up)
-  function pushItem(sku, qty, fromBundle) {
-    var ex = cur.items.filter(function (i) { return i.sku === sku; })[0];
-    if (ex) { ex.qty += qty; if (fromBundle && !ex.from_bundle) ex.from_bundle = fromBundle; }
-    else cur.items.push({ sku: sku, qty: qty, ppc: bySku[sku] ? bySku[sku].ppc : null, from_bundle: fromBundle });
-  }
-
-  // G4 free = UC available − qty on our OTHER drafts not yet pushed
-  function freeFor(sku) {
-    var s = bySku[sku]; if (!s) return 0;
-    var reserved = D.draftReserved[sku] || 0;
-    if (cur && cur.id && cur._savedQty && cur._savedQty[sku]) reserved -= cur._savedQty[sku];
-    return s.g4 - Math.max(reserved, 0);
-  }
-
-  // Per-line checks. bad = blocks save-to-UC; warn = allowed but flagged.
-  function checkLine(it) {
-    var s = bySku[it.sku], out = { bad: [], warn: [] };
-    if (/^(block|unlinked|bundle)-/i.test(it.sku)) out.bad.push('Placeholder SKU');
-    if (!s) { out.bad.push('Not in UC'); return out; }
-    if (!s.enabled) out.bad.push('Disabled in UC');
-    if (D.bundles[it.sku]) out.bad.push('Bundle SKU');
-    var free = freeFor(it.sku);
-    if (it.qty > free) out.bad.push('Short ' + fmt(it.qty - Math.max(free, 0)));
-    if (s.ppc && it.qty % s.ppc !== 0) out.warn.push('Loose ' + (it.qty % s.ppc) + ' pcs');
-    if (!s.ppc) out.warn.push('No Qty/box');
-    return out;
-  }
-
-  function editable() { return canEdit() && cur && cur.status === 'draft'; }
-
-  function renderItems() {
-    var body = $('items-body'), nBad = 0, nWarn = 0, total = 0;
-    var ed = editable();
-    if (!cur.items.length) {
-      body.innerHTML = '<tr class="empty-row"><td colspan="10">No items yet — scan or search a SKU above.</td></tr>';
-    } else {
-      body.innerHTML = cur.items.map(function (it, n) {
-        var s = bySku[it.sku] || {}, chk = checkLine(it), free = freeFor(it.sku), after = free - it.qty;
-        total += it.qty; if (chk.bad.length) nBad++; if (chk.warn.length) nWarn++;
-        var flags = chk.bad.map(function (x) { return '<span class="flag bad">' + esc(x) + '</span>'; })
-          .concat(chk.warn.map(function (x) { return '<span class="flag warn">' + esc(x) + '</span>'; }));
-        if (!flags.length) flags = ['<span class="flag ok">OK</span>'];
-        var boxes = s.ppc ? (it.qty % s.ppc === 0 ? fmt(it.qty / s.ppc) : (Math.floor(it.qty / s.ppc) + ' + ' + (it.qty % s.ppc))) : '<span class="muted">—</span>';
-        return '<tr>' +
-          '<td class="muted">' + (n + 1) + '</td>' +
-          '<td><span class="sku-code">' + esc(it.sku) + '</span>' +
-            (s.name && s.name !== it.sku ? '<span class="sku-name" title="' + esc(s.name) + '">' + esc(s.name) + '</span>' : '') +
-            (it.from_bundle ? '<span class="from-bundle">incl. bundle ' + esc(it.from_bundle) + '</span>' : '') + '</td>' +
-          '<td class="num">' + (s.ppc || '<span class="muted">—</span>') + '</td>' +
-          '<td class="num">' + boxes + '</td>' +
-          '<td class="num">' + (ed ? '<input class="qty-input" type="number" min="1" data-i="' + n + '" value="' + it.qty + '">' : '<b>' + fmt(it.qty) + '</b>') + '</td>' +
-          '<td class="num">' + fmt(free) + '</td>' +
-          '<td class="num ' + (after < 0 ? 'after-neg' : '') + '">' + fmt(after) + '</td>' +
-          '<td class="num">' + (D.openGp[it.sku] ? fmt(D.openGp[it.sku]) : '<span class="muted">0</span>') + '</td>' +
-          '<td>' + flags.join('') + '</td>' +
-          '<td>' + (ed ? '<button class="row-del" data-del="' + n + '" title="Remove">×</button>' : '') + '</td>' +
-        '</tr>';
-      }).join('');
-    }
-    $('sum-lines').textContent = cur.items.length; $('sum-qty').textContent = fmt(total);
-    $('sum-bad').textContent = nBad; $('sum-warn').textContent = nWarn;
-    cur._bad = nBad;
-    renderHeaderState();
-  }
-
-  $('items-body').addEventListener('change', function (e) {
-    var i = e.target.getAttribute('data-i'); if (i === null) return;
-    var q = Math.floor(Number(e.target.value) || 0);
-    if (q <= 0) { cur.items.splice(Number(i), 1); } else cur.items[Number(i)].qty = q;
-    renderItems();
-  });
-  $('items-body').addEventListener('click', function (e) {
-    var d = e.target.getAttribute('data-del'); if (d === null) return;
-    cur.items.splice(Number(d), 1); renderItems();
-  });
-
-  // Buttons + header fields follow the gatepass status and the user's role
-  function renderHeaderState() {
-    var ed = editable(), isDraft = cur.status === 'draft';
-    $('gp-code-pill').textContent = cur.local_code ? cur.local_code + ' · ' + cur.status + (cur.uc_code ? ' · UC ' + cur.uc_code : '') : 'New';
-    ['f-dest', 'f-ref', 'f-purpose'].forEach(function (id) { $(id).disabled = !ed; });
-    if (!ed) { $('f-party').disabled = true; $('f-type').disabled = true; } else applyDestinationLockOnly();
-    $('add-bar').style.display = ed ? '' : 'none';
-    $('add-hint').style.display = ed ? '' : 'none';
-    $('btn-save').hidden = !ed;
-    $('btn-push').hidden = !ed;
-    $('btn-discard').hidden = !(ed && cur.id);
-    $('btn-new').hidden = !canEdit();
-    var hasItems = cur.items.length > 0;
-    $('btn-save').disabled = !hasItems;
-    $('btn-csv').disabled = !hasItems; $('btn-pdf').disabled = !hasItems;
-    $('btn-push').disabled = !hasItems || cur._bad > 0 || !D.pushReady;
-    var note = '';
-    if (isDraft && ed) {
-      if (!D.pushReady) note = 'Push to UC switches on once SK\'s UC API is connected — use “Download UC CSV” meanwhile.';
-      else if (cur._bad > 0) note = 'Fix the red blockers to push.';
-      else note = 'Push saves the draft and creates the gatepass in UC (facility TomahawkHub).';
-    } else if (cur.status === 'pushed') note = 'In UC as ' + (cur.uc_code || '—') + '. Pushed gatepasses are read-only here.';
-    else if (cur.status === 'discarded') note = 'Discarded draft — read-only.';
-    $('push-note').textContent = note;
-  }
-  function applyDestinationLockOnly() { var other = !D.destinations[$('f-dest').value]; $('f-party').disabled = !other; $('f-type').disabled = !other; }
-
-  $('f-dest').addEventListener('change', applyDestination);
-  $('f-party').addEventListener('input', function () { if (!D.destinations[$('f-dest').value]) $('hero-dest-label').textContent = this.value || 'Other party'; });
-  $('btn-new').addEventListener('click', function () {
-    if (cur && cur.items.length && cur.status === 'draft' && !confirmLeave()) return;
-    newGatepass(); $('f-sku').focus();
-  });
-  function confirmLeave() { return window.confirm('Start a new gatepass? Unsaved changes on this one will be lost.'); }
-
-  function collect() {
-    return {
-      id: cur.id, destKey: $('f-dest').value, toParty: $('f-party').value.trim(), gpType: $('f-type').value,
-      reference: $('f-ref').value.trim(), purpose: $('f-purpose').value.trim(),
-      items: cur.items.map(function (i) { return { sku: i.sku, qty: i.qty, ppc: i.ppc, from_bundle: i.from_bundle }; })
-    };
-  }
-
-  function save() {
-    var p = collect();
-    if (!p.toParty) { toast('Enter the UC party code', 'err'); return Promise.reject(new Error('party')); }
-    return api('g4gpSave', p).then(function (res) {
-      if (!res.ok) throw new Error(res.error);
-      var g = res.gatepass;
-      cur.id = g.id; cur.local_code = g.local_code; cur.status = g.status;
-      cur._savedQty = {}; g.items.forEach(function (i) { cur._savedQty[i.sku] = (cur._savedQty[i.sku] || 0) + i.qty; });
-      return g;
+      recent = res.gatepasses || [];
+      $('recent-note').textContent = recent.length + ' gatepasses from G4 · last 45 days';
+      renderRecent();
+    }).catch(function (e) {
+      $('recent-body').innerHTML = '<tr class="empty-row"><td colspan="8">Could not load — ' + esc(e.message) + '</td></tr>';
     });
   }
-
-  $('btn-save').addEventListener('click', function () {
-    var b = this; b.disabled = true;
-    save().then(function (g) { toast('Saved ' + g.local_code, 'ok'); return load(true); })
-      .catch(function (e) { if (e.message !== 'party') toast(e.message, 'err'); })
-      .then(function () { b.disabled = false; renderHeaderState(); });
-  });
-
-  $('btn-push').addEventListener('click', function () {
-    if (!window.confirm('Create this gatepass in UC now (' + cur.items.length + ' lines)?')) return;
-    var b = this; b.disabled = true; b.textContent = 'Pushing…'; hideErr();
-    save().then(function (g) { return api('g4gpPush', { id: g.id }); })
-      .then(function (res) {
-        if (!res.ok) {
-          showErr(res.error + (res.blockers ? '\n• ' + res.blockers.join('\n• ') : ''));
-          throw new Error(res.notConfigured ? 'UC push not set up yet' : 'Push failed');
-        }
-        cur.status = 'pushed'; cur.uc_code = res.ucCode;
-        toast('Created in UC: ' + res.ucCode, 'ok');
-        return load(true);
-      })
-      .catch(function (e) { if (e.message !== 'party') toast(e.message, 'err'); })
-      .then(function () { b.textContent = 'Push to UC'; renderItems(); });
-  });
-
-  $('btn-discard').addEventListener('click', function () {
-    if (!window.confirm('Discard draft ' + cur.local_code + '?')) return;
-    api('g4gpDiscard', { id: cur.id }).then(function (res) {
-      if (!res.ok) throw new Error(res.error);
-      toast('Discarded ' + cur.local_code, 'ok'); cur = null; return load(false);
-    }).catch(function (e) { toast(e.message, 'err'); });
-  });
-
-  function showErr(t) { $('err-box').textContent = t; $('err-box').style.whiteSpace = 'pre-line'; $('err-box').hidden = false; }
-  function hideErr() { $('err-box').hidden = true; }
-
-  // ════════════ CSV (UC "Add gatepass items" import) ════════════
-  $('btn-csv').addEventListener('click', function () {
-    $('csv-code').value = cur.uc_code || ''; $('csv-modal').hidden = false; $('csv-code').focus();
-  });
-  $('csv-cancel').addEventListener('click', function () { $('csv-modal').hidden = true; });
-  $('csv-go').addEventListener('click', function () {
-    var code = $('csv-code').value.trim();
-    if (!code) { toast('Enter the UC gatepass code', 'err'); return; }
-    var lines = ['Gatepass Code,Item Or Sku Code,Qty,Inventory Type,Unit Price,Shelf Code,Batch Code,Force Allocate'];
-    cur.items.forEach(function (i) { lines.push([code, i.sku, i.qty, 'GOOD_INVENTORY', 100, '', '', ''].map(csvCell).join(',')); });
-    var blob = new Blob([lines.join('\n') + '\n'], { type: 'text/csv' });
-    var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = 'G4-gatepass-' + code + '.csv'; a.click(); URL.revokeObjectURL(a.href);
-    $('csv-modal').hidden = true;
-  });
-  function csvCell(v) { v = String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
-
-  // ════════════ PICK SLIP PDF ════════════
-  var JSPDF_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
-  function loadJsPdf() {
-    if (window.jspdf) return Promise.resolve();
-    return new Promise(function (ok, bad) { var s = document.createElement('script'); s.src = JSPDF_URL; s.onload = ok; s.onerror = function () { bad(new Error('PDF library failed to load')); }; document.head.appendChild(s); });
-  }
-  $('btn-pdf').addEventListener('click', function () {
-    loadJsPdf().then(buildPdf).catch(function (e) { toast(e.message, 'err'); });
-  });
-  function buildPdf() {
-    var doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4' });
-    var W = 210, M = 14, y = 16;
-    var destLabel = D.destinations[$('f-dest').value] ? D.destinations[$('f-dest').value].label : $('f-party').value;
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(16);
-    doc.text('G4 Gatepass — Pick Slip', M, y);
-    doc.setFontSize(11); doc.text(cur.local_code || 'Unsaved draft', W - M, y, { align: 'right' });
-    y += 8; doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5);
-    var meta = [
-      ['From', 'G4 · TomahawkHub'], ['To', D.destinations[$('f-dest').value] ? destLabel : $('f-party').value],
-      ['Type', $('f-type').value], ['Reference', $('f-ref').value || '—'],
-      ['UC gatepass', cur.uc_code || '—'], ['Printed', new Date().toLocaleString('en-IN')]
-    ];
-    meta.forEach(function (m, i) {
-      var x = M + (i % 2) * 92; if (i % 2 === 0 && i) y += 5.5;
-      doc.setFont('helvetica', 'bold'); doc.text(m[0] + ':', x, y);
-      doc.setFont('helvetica', 'normal'); doc.text(String(m[1]), x + 24, y);
-    });
-    y += 9;
-    var cols = [{ h: 'Sr', w: 10 }, { h: 'UC SKU', w: 78 }, { h: 'Box', w: 18, r: 1 }, { h: 'Qty/box', w: 18, r: 1 }, { h: 'Total Qty', w: 22, r: 1 }, { h: 'Remark', w: 36 }];
-    function headRow() {
-      doc.setFillColor(235, 235, 240); doc.rect(M, y - 4.5, W - 2 * M, 7, 'F');
-      doc.setFont('helvetica', 'bold'); var x = M + 2;
-      cols.forEach(function (c) { doc.text(c.h, c.r ? x + c.w - 4 : x, y, c.r ? { align: 'right' } : undefined); x += c.w; });
-      y += 7; doc.setFont('helvetica', 'normal');
-    }
-    headRow();
-    var total = 0;
-    cur.items.forEach(function (it, n) {
-      if (y > 275) { doc.addPage(); y = 18; headRow(); }
-      var ppc = bySku[it.sku] && bySku[it.sku].ppc;
-      var box = ppc ? (it.qty % ppc === 0 ? String(it.qty / ppc) : Math.floor(it.qty / ppc) + '+' + (it.qty % ppc)) : '—';
-      var cells = [String(n + 1), it.sku, box, ppc ? String(ppc) : '—', String(it.qty), ''];
-      var x = M + 2;
-      cols.forEach(function (c, ci) {
-        var t = ci === 1 ? doc.splitTextToSize(cells[ci], c.w - 3)[0] : cells[ci];
-        doc.text(t, c.r ? x + c.w - 4 : x, y, c.r ? { align: 'right' } : undefined); x += c.w;
-      });
-      doc.setDrawColor(215, 215, 222); doc.line(M, y + 2.2, W - M, y + 2.2);
-      total += it.qty; y += 6.6;
-    });
-    doc.setFont('helvetica', 'bold');
-    doc.text('Total: ' + cur.items.length + ' lines · ' + total + ' pcs', W - M, y + 3, { align: 'right' });
-    y += 22; if (y > 270) { doc.addPage(); y = 30; }
-    doc.setFont('helvetica', 'normal');
-    ['Picked by', 'Checked by', 'Received by'].forEach(function (l, i) {
-      var x = M + i * 62; doc.line(x, y, x + 52, y); doc.text(l, x, y + 5);
-    });
-    doc.save('G4-pick-slip-' + (cur.local_code || 'draft') + '.pdf');
-  }
-
-  // ════════════ REGISTER ════════════
-  function renderRegister() {
+  function renderRecent() {
     var q = $('reg-search').value.trim().toLowerCase();
-    var rows = D.gatepasses.filter(function (g) {
-      if (regFilter !== 'all' && g.status !== regFilter && !(regFilter === 'draft' && g.status === 'pushing')) return false;
-      if (!q) return true;
-      return [g.local_code, g.reference, g.to_party, g.created_by, g.uc_code].join(' ').toLowerCase().indexOf(q) !== -1;
+    var rows = recent.filter(function (g) {
+      if (recentFilter === 'STOCK_TRANSFER' && g.type !== 'STOCK_TRANSFER') return false;
+      if (recentFilter === 'CREATED' && g.status === 'CLOSED') return false;
+      return !q || (g.code + ' ' + (g.to_party || '')).toLowerCase().indexOf(q) !== -1;
     });
-    $('reg-count').textContent = D.gatepasses.filter(function (g) { return g.status !== 'discarded'; }).length;
-    $('reg-body').innerHTML = rows.length ? rows.map(function (g) {
-      var dest = D.destinations[g.dest_key] ? D.destinations[g.dest_key].label : g.to_party;
-      var acts = '<button class="link-btn" data-open="' + g.id + '">Open</button>';
+    $('recent-body').innerHTML = rows.length ? rows.slice(0, 200).map(function (g) {
       return '<tr>' +
-        '<td><b>' + esc(g.local_code) + '</b></td>' +
-        '<td class="muted" style="white-space:nowrap">' + esc(fmtDate(g.created_at)) + '</td>' +
-        '<td>' + esc(dest) + '</td>' +
-        '<td>' + (g.reference ? esc(g.reference) : '<span class="muted">—</span>') + '</td>' +
-        '<td class="num">' + g.total_lines + '</td>' +
-        '<td class="num"><b>' + fmt(g.total_qty) + '</b></td>' +
-        '<td><span class="st st-' + esc(g.status) + '">' + esc(g.status) + '</span>' + (g.last_error && g.status === 'draft' ? ' <span class="flag bad" title="' + esc(g.last_error) + '">push failed</span>' : '') + '</td>' +
-        '<td>' + (g.uc_code ? '<b>' + esc(g.uc_code) + '</b>' : '<span class="muted">—</span>') + '</td>' +
-        '<td>' + (g.uc_status ? '<span class="uc-st ' + esc(g.uc_status) + '">' + esc(g.uc_status) + '</span>' : (g.uc_code ? '<span class="muted">syncing…</span>' : '<span class="muted">—</span>')) + '</td>' +
-        '<td class="muted">' + esc(g.created_by || '') + '</td>' +
-        '<td>' + acts + '</td></tr>';
-    }).join('') : '<tr class="empty-row"><td colspan="11">No gatepasses here yet.</td></tr>';
+        '<td><b>' + esc(g.code) + '</b></td>' +
+        '<td class="muted" style="white-space:nowrap">' + esc(fmtDT(g.created)) + '</td>' +
+        '<td>' + esc(g.to_party || '—') + '</td>' +
+        '<td>' + esc(typeLabel(g.type)) + '</td>' +
+        '<td class="num">' + g.lines + '</td>' +
+        '<td class="num"><b>' + fmt(g.qty) + '</b></td>' +
+        '<td><span class="st ' + stClass(g.status) + '">' + esc(g.status) + '</span></td>' +
+        '<td><button class="link-btn" data-code="' + esc(g.code) + '">Open</button> ' +
+            '<button class="link-btn" data-print="' + esc(g.code) + '">Print</button></td>' +
+      '</tr>';
+    }).join('') : '<tr class="empty-row"><td colspan="8">No gatepasses match.</td></tr>';
   }
-  function fmtDate(s) {
-    if (!s) return '';
-    var d = new Date(String(s).replace(' ', 'T') + 'Z');
-    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) + ', ' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-  }
-  $('reg-body').addEventListener('click', function (e) {
-    var id = e.target.getAttribute('data-open'); if (id) openGatepass(Number(id));
+  $('recent-body').addEventListener('click', function (e) {
+    var c = e.target.getAttribute('data-code'), p = e.target.getAttribute('data-print');
+    if (c) openGatepass(c, false);
+    if (p) openGatepass(p, true);
   });
-  $('reg-search').addEventListener('input', renderRegister);
+  $('reg-search').addEventListener('input', renderRecent);
   document.querySelector('.reg-toolbar').addEventListener('click', function (e) {
     var f = e.target.getAttribute('data-f'); if (!f) return;
-    regFilter = f;
+    recentFilter = f;
     [].forEach.call(this.querySelectorAll('.chip-filter'), function (c) { c.classList.toggle('active', c === e.target); });
-    renderRegister();
+    renderRecent();
   });
-  function setRegFilter(f) {
-    regFilter = f;
-    [].forEach.call(document.querySelectorAll('.chip-filter'), function (c) { c.classList.toggle('active', c.getAttribute('data-f') === f); });
-    renderRegister();
+
+  // ════════════ OPEN ONE GATEPASS ════════════
+  $('btn-load').addEventListener('click', function () { openGatepass($('f-code').value, false); });
+  $('f-code').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); openGatepass($('f-code').value, false); } });
+  $('btn-close-gp').addEventListener('click', function () { cur = null; $('gp-panel').hidden = true; });
+  $('btn-print').addEventListener('click', function () { printPdf(); });
+
+  function openGatepass(code, andPrint) {
+    code = String(code || '').trim();
+    // Accept a pasted UC link too (…?gatePassCode=GP…)
+    var m = code.match(/gatePassCode=([A-Za-z0-9-]+)/); if (m) code = m[1];
+    if (!code) { toast('Enter a gatepass code', 'err'); return; }
+    $('err-box').hidden = true; $('btn-load').disabled = true;
+    api('g4gpUcGet', { code: code }).then(function (res) {
+      if (!res.ok) throw new Error(res.error);
+      cur = res.gatepass; $('f-code').value = cur.code;
+      renderGatepass();
+      $('gp-panel').hidden = false;
+      $('gp-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (andPrint) printPdf();
+    }).catch(function (e) {
+      $('err-box').textContent = e.message; $('err-box').hidden = false;
+    }).then(function () { $('btn-load').disabled = false; });
   }
 
-  // ════════════ TABS ════════════
-  function switchTab(t) {
-    [].forEach.call(document.querySelectorAll('.tab-btn'), function (b) { b.classList.toggle('active', b.getAttribute('data-tab') === t); });
-    $('panel-create').hidden = t !== 'create'; $('panel-register').hidden = t !== 'register';
+  function renderGatepass() {
+    var g = cur, totalQty = 0, totalBoxes = 0, loose = 0;
+    $('gp-title').textContent = g.code;
+    $('gp-status').textContent = g.status; $('gp-status').className = 'st ' + stClass(g.status);
+    $('gp-meta').innerHTML = [
+      ['From', 'G4 · TomahawkHub'], ['To', destLabel(g)], ['Type', typeLabel(g.type)], ['Created', fmtDT(g.created)],
+      ['Reference', g.reference || '—'], ['Lines', g.items.length], ['UC sync', g.synced ? timeAgo(g.synced) : '—'], ['UC party code', g.to_party_code || '—']
+    ].map(function (x) { return '<div><span>' + x[0] + '</span><b>' + esc(x[1]) + '</b></div>'; }).join('');
+    $('gp-items').innerHTML = g.items.map(function (it, n) {
+      var s = bySku[it.sku] || {}, ppc = s.ppc;
+      totalQty += it.qty;
+      if (ppc) { totalBoxes += Math.floor(it.qty / ppc); loose += it.qty % ppc; }
+      var rec = it.received == null ? '<span class="muted">—</span>'
+        : '<span class="' + (it.received === it.qty ? 'recv-ok' : 'recv-bad') + '">' + fmt(it.received) + '</span>';
+      return '<tr><td class="muted">' + (n + 1) + '</td>' +
+        '<td><span class="sku-code">' + esc(it.sku) + '</span>' + (s.name && s.name !== it.sku ? '<span class="sku-name">' + esc(s.name) + '</span>' : '') + '</td>' +
+        '<td class="muted">' + esc(it.hsn || '—') + '</td>' +
+        '<td class="num">' + (ppc || '<span class="muted">—</span>') + '</td>' +
+        '<td class="num">' + boxesText(it.qty, ppc) + '</td>' +
+        '<td class="num"><b>' + fmt(it.qty) + '</b></td>' +
+        '<td class="num">' + rec + '</td></tr>';
+    }).join('');
+    $('gp-sum').innerHTML = '<span>Lines <b>' + g.items.length + '</b></span><span>Boxes <b>' + fmt(totalBoxes) + (loose ? ' + ' + loose + ' loose' : '') +
+      '</b></span><span>Total qty <b>' + fmt(totalQty) + '</b></span>';
   }
-  document.querySelector('.tabs').addEventListener('click', function (e) {
-    var b = e.target.closest('.tab-btn'); if (b) switchTab(b.getAttribute('data-tab'));
-  });
+
+  // ════════════ PDF — our gatepass format (A4) ════════════
+  function loadScript(url, globalName) {
+    if (window[globalName]) return Promise.resolve();
+    return new Promise(function (ok, bad) {
+      var s = document.createElement('script'); s.src = url; s.onload = ok;
+      s.onerror = function () { bad(new Error('Could not load ' + globalName)); }; document.head.appendChild(s);
+    });
+  }
+  // Tomahawk logo from the page header, rendered to a PNG in black
+  function logoPng() {
+    return new Promise(function (ok) {
+      try {
+        var svg = document.querySelector('.logo-svg-wrap svg').cloneNode(true);
+        svg.setAttribute('fill', '#181818'); svg.style.fill = '#181818';
+        svg.setAttribute('width', '1360'); svg.setAttribute('height', '254');
+        var img = new Image();
+        img.onload = function () {
+          var c = document.createElement('canvas'); c.width = 1360; c.height = 254;
+          c.getContext('2d').drawImage(img, 0, 0, 1360, 254); ok(c.toDataURL('image/png'));
+        };
+        img.onerror = function () { ok(null); };
+        img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(svg));
+      } catch (e) { ok(null); }
+    });
+  }
+  function barcodePng(text) {
+    try {
+      var c = document.createElement('canvas');
+      window.JsBarcode(c, text, { format: 'CODE128', displayValue: false, margin: 0, height: 60, width: 2 });
+      return c.toDataURL('image/png');
+    } catch (e) { return null; }
+  }
+
+  function printPdf() {
+    if (!cur) return;
+    $('btn-print').disabled = true;
+    Promise.all([loadScript(JSPDF_URL, 'jspdf'), loadScript(JSBARCODE_URL, 'JsBarcode').catch(function () {})])
+      .then(logoPng).then(buildPdf)
+      .catch(function (e) { toast(e.message, 'err'); })
+      .then(function () { $('btn-print').disabled = false; });
+  }
+
+  function buildPdf(logo) {
+    var g = cur;
+    var doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4' });
+    var W = 210, M = 12, y = 12;
+    var user = (function () { try { var s = JSON.parse(localStorage.getItem('tm_session_v1') || 'null'); return s && (s.display_name || s.username); } catch (e) { return ''; } })();
+
+    // ── Header: logo left, title + code + barcode right ──
+    if (logo) doc.addImage(logo, 'PNG', M, y, 54, 10);
+    else { doc.setFont('helvetica', 'bold'); doc.setFontSize(18); doc.text('TOMAHAWK', M, y + 8); }
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(90);
+    doc.text('Industrial Tools & Hardware · Bhiwandi, Maharashtra', M, y + 15);
+    doc.setTextColor(0);
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(13);
+    doc.text((g.type === 'STOCK_TRANSFER' ? 'STOCK TRANSFER' : typeLabel(g.type).toUpperCase()) + ' GATEPASS', W - M, y + 4, { align: 'right' });
+    doc.setFontSize(11); doc.text(g.code, W - M, y + 10, { align: 'right' });
+    var bc = window.JsBarcode ? barcodePng(g.code) : null;
+    if (bc) doc.addImage(bc, 'PNG', W - M - 62, y + 12, 62, 9);
+    y += 25;
+    doc.setDrawColor(247, 166, 0); doc.setLineWidth(1.2); doc.line(M, y, W - M, y); doc.setLineWidth(0.2);
+    y += 6;
+
+    // ── From → To + details box ──
+    var bx = M, bw = W - 2 * M, bh = 30;
+    doc.setDrawColor(200); doc.rect(bx, y, bw, bh);
+    doc.line(bx + bw / 2, y, bx + bw / 2, y + 16); doc.line(bx, y + 16, bx + bw, y + 16);
+    doc.setFontSize(7.5); doc.setTextColor(110); doc.setFont('helvetica', 'bold');
+    doc.text('FROM', bx + 3, y + 5); doc.text('TO', bx + bw / 2 + 3, y + 5);
+    doc.setTextColor(0); doc.setFontSize(11);
+    doc.text('G4 Warehouse', bx + 3, y + 10.5); doc.text(destLabel(g), bx + bw / 2 + 3, y + 10.5);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(90);
+    doc.text('UC facility: TomahawkHub', bx + 3, y + 14.2);
+    doc.text('UC party: ' + (g.to_party_code || '—'), bx + bw / 2 + 3, y + 14.2);
+    var cols4 = [['Created', fmtDT(g.created)], ['UC status', g.status], ['Reference', g.reference || '—'], ['Printed', fmtDT(new Date().toISOString())]];
+    cols4.forEach(function (c, i) {
+      var x = bx + 3 + i * (bw / 4);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5); doc.setTextColor(110); doc.text(c[0].toUpperCase(), x, y + 21);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(0);
+      doc.text(doc.splitTextToSize(String(c[1]), bw / 4 - 5)[0], x, y + 26);
+      if (i === 3 && user) { doc.setFontSize(7.5); doc.setTextColor(90); doc.text('by ' + user, x, y + 29.3); doc.setTextColor(0); }
+    });
+    y += bh + 7;
+
+    // ── Items table ──
+    var cols = [
+      { h: 'Sr', w: 9 }, { h: 'UC SKU / Product', w: 70 }, { h: 'HSN', w: 18 }, { h: 'Qty/box', w: 15, r: 1 },
+      { h: 'Boxes', w: 15, r: 1 }, { h: 'Qty', w: 15, r: 1 }, { h: 'Received', w: 22, c: 1 }, { h: 'Remark', w: 22 }
+    ];
+    function headRow() {
+      doc.setFillColor(24, 24, 24); doc.rect(M, y - 4.6, W - 2 * M, 7, 'F');
+      doc.setTextColor(255); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
+      var x = M + 2;
+      cols.forEach(function (c) {
+        if (c.r) doc.text(c.h, x + c.w - 3, y, { align: 'right' });
+        else if (c.c) doc.text(c.h, x + c.w / 2 - 2, y, { align: 'center' });
+        else doc.text(c.h, x, y);
+        x += c.w;
+      });
+      doc.setTextColor(0); y += 7.5;
+    }
+    headRow();
+    var totalQty = 0, totalBoxes = 0, loose = 0;
+    g.items.forEach(function (it, n) {
+      var s = bySku[it.sku] || {}, ppc = s.ppc;
+      var hasName = s.name && s.name !== it.sku;
+      var rowH = hasName ? 10 : 7;
+      if (y + rowH > 250) { doc.addPage(); y = 18; headRow(); }
+      totalQty += it.qty; if (ppc) { totalBoxes += Math.floor(it.qty / ppc); loose += it.qty % ppc; }
+      var x = M + 2;
+      doc.setFontSize(9);
+      cols.forEach(function (c, ci) {
+        if (ci === 1) {
+          doc.setFont('helvetica', 'bold'); doc.text(doc.splitTextToSize(it.sku, c.w - 3)[0], x, y);
+          if (hasName) { doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(100);
+            doc.text(doc.splitTextToSize(s.name, c.w - 3)[0], x, y + 3.8); doc.setTextColor(0); doc.setFontSize(9); }
+        } else if (ci === 6) {
+          doc.setDrawColor(150); doc.rect(x + c.w / 2 - 6, y - 3.6, 10, 5); // hand-fill box at E3
+        } else {
+          var t = [String(n + 1), '', it.hsn || '—', ppc ? String(ppc) : '—', boxesText(it.qty, ppc), String(it.qty), '', ''][ci];
+          doc.setFont('helvetica', ci === 5 ? 'bold' : 'normal');
+          if (c.r) doc.text(t, x + c.w - 3, y, { align: 'right' }); else doc.text(t, x, y);
+        }
+        x += c.w;
+      });
+      doc.setDrawColor(220); doc.line(M, y + rowH - 4.4, W - M, y + rowH - 4.4);
+      y += rowH;
+    });
+
+    // Totals row
+    doc.setFillColor(252, 239, 207); doc.rect(M, y - 4.4, W - 2 * M, 7.5, 'F');
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5);
+    doc.text('Total · ' + g.items.length + ' line' + (g.items.length === 1 ? '' : 's'), M + 2, y);
+    var xBoxes = M + 2 + 9 + 70 + 18 + 15, xQty = xBoxes + 15;
+    doc.text(fmt(totalBoxes) + (loose ? ' +' + loose : ''), xBoxes + 15 - 3, y, { align: 'right' });
+    doc.text(fmt(totalQty), xQty + 15 - 3, y, { align: 'right' });
+    y += 12;
+
+    // ── Signatures ──
+    if (y > 245) { doc.addPage(); y = 30; }
+    y = Math.max(y, 232);
+    var sig = ['Picked by (G4)', 'Checked by (G4)', 'Driver / Vehicle no.', 'Received by (E3)'];
+    var sw = (W - 2 * M) / 4;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setDrawColor(120);
+    sig.forEach(function (l, i) {
+      var x = M + i * sw;
+      doc.line(x + 2, y + 12, x + sw - 4, y + 12);
+      doc.setFont('helvetica', 'bold'); doc.text(l, x + 2, y + 16.5);
+      doc.setFont('helvetica', 'normal'); doc.setTextColor(120); doc.text('Name · Sign · Date', x + 2, y + 20.5); doc.setTextColor(0);
+    });
+
+    // ── Footer on every page ──
+    var pages = doc.getNumberOfPages();
+    for (var p = 1; p <= pages; p++) {
+      doc.setPage(p); doc.setFontSize(7.5); doc.setTextColor(130);
+      doc.text('Tomahawk Operations · G4 Stock · ' + g.code, M, 290);
+      doc.text('Page ' + p + ' of ' + pages, W - M, 290, { align: 'right' });
+      doc.setTextColor(0);
+    }
+    doc.save(g.code + '.pdf');
+  }
 
   // Skeleton rows until data arrives
-  $('items-body').innerHTML = [1, 2, 3].map(function () {
-    return '<tr class="sk-row">' + [24, 220, 40, 40, 60, 50, 50, 50, 70, 10].map(function (w) { return '<td><span class="sk-block" style="width:' + w + 'px"></span></td>'; }).join('') + '</tr>';
+  $('recent-body').innerHTML = [1, 2, 3, 4].map(function () {
+    return '<tr class="sk-row">' + [150, 110, 120, 90, 30, 40, 60, 60].map(function (w) { return '<td><span class="sk-block" style="width:' + w + 'px"></span></td>'; }).join('') + '</tr>';
   }).join('');
-  $('reg-body').innerHTML = '<tr class="sk-row"><td colspan="11"><span class="sk-block" style="width:100%"></span></td></tr>';
 
-  window.G4_onRole = function () { if (cur && D.stock.length) renderItems(); };
-  window.G4_load = load;
-  load(false);
+  // ?gp=CODE in the URL opens that gatepass straight away
+  var qs = new URLSearchParams(location.search).get('gp');
+  loadCards();
+  loadRecent();
+  if (qs) openGatepass(qs, false);
 })();
 </script>
 </body>

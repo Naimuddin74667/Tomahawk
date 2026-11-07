@@ -759,7 +759,7 @@ const ACTION_TIERS = {
   sa_getG4BoxCounts: 'viewer_read',
   sa_loadAll: 'viewer_read',
   // G4 Stock — own gatepass module (Nov 2026)
-  g4gpLoad: 'viewer_read', g4gpGet: 'viewer_read',
+  g4gpLoad: 'viewer_read', g4gpGet: 'viewer_read', g4gpUcRecent: 'viewer_read', g4gpUcGet: 'viewer_read',
   g4gpSave: 'manager_up', g4gpDiscard: 'manager_up', g4gpPush: 'manager_up',
   sa_saveQtyOverride: 'manager_up', sa_deleteQtyOverride: 'manager_up',
   sa_bulkImportQtyOverrides: 'manager_up', sa_archiveSku: 'manager_up',
@@ -11692,14 +11692,18 @@ async function g4gpLiveData(env) {
     g4gpSupabasePaged(env, 'uc_bundle_composition?select=parent_sku,child_sku,quantity_per_unit'),
     g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code,sku,quantity&facility=eq.G4&status=in.(CREATED,RETURN_AWAITED)'),
     // Inward pending = G4 purchase orders not yet received (GRN) in UC
-    g4gpSupabasePaged(env, 'uc_purchase_orders?select=po_code,sku,pending_quantity&facility=eq.G4&po_status=not.in.(COMPLETE,CANCELLED,CLOSED)&pending_quantity=gt.0')
+    g4gpSupabasePaged(env, 'uc_purchase_orders?select=po_code,sku,pending_quantity,po_created,vendor_code&facility=eq.G4&po_status=not.in.(COMPLETE,CANCELLED,CLOSED)&pending_quantity=gt.0')
       .catch(() => null)
   ]);
   let inward = null;
   if (poRows) {
-    const pos = new Set(), skus = new Set(); let qty = 0;
-    poRows.forEach(r => { pos.add(r.po_code); if (r.sku) skus.add(r.sku); qty += Number(r.pending_quantity) || 0; });
-    inward = { qty, pos: pos.size, skus: skus.size };
+    const pos = new Set(), skus = new Set(), vendors = new Set(); let qty = 0, oldest = null;
+    poRows.forEach(r => {
+      pos.add(r.po_code); if (r.sku) skus.add(r.sku); if (r.vendor_code) vendors.add(r.vendor_code);
+      qty += Number(r.pending_quantity) || 0;
+      if (r.po_created && (!oldest || r.po_created < oldest)) oldest = r.po_created;
+    });
+    inward = { qty, pos: pos.size, skus: skus.size, vendors: vendors.size, oldest };
   }
   const bundles = {};
   bundleRows.forEach(b => {
@@ -11812,6 +11816,38 @@ async function handleG4Gatepass(act, body, url, env, user) {
     gps.forEach(g => { g.uc_status = g.uc_code ? (ucStatus[g.uc_code] || null) : null; });
     return json({ ok: true, ...live, draftReserved: await g4gpDraftReserved(env.DB, 0),
       gatepasses: gps, destinations: G4GP_DESTINATIONS, types: G4GP_TYPES, pushReady });
+  }
+
+  // ── UC gatepasses created at G4 (from the Supabase mirror) — for printing in our format ──
+  // g4gpUcRecent: last 45 days, one row per gatepass. g4gpUcGet: one gatepass with its lines.
+  if (act === 'g4gpUcRecent') {
+    const since = new Date(Date.now() - 45 * 86400000).toISOString();
+    const rows = await g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code,status,gp_type,to_party,sku,quantity,created_at' +
+      '&facility=eq.G4&created_at=gte.' + encodeURIComponent(since) + '&order=created_at.desc');
+    const by = new Map();
+    rows.forEach(r => {
+      let g = by.get(r.gatepass_code);
+      if (!g) { g = { code: r.gatepass_code, status: r.status, type: r.gp_type, to_party: r.to_party, created: r.created_at, lines: 0, qty: 0 }; by.set(r.gatepass_code, g); }
+      g.lines++; g.qty += Number(r.quantity) || 0;
+    });
+    return json({ ok: true, gatepasses: [...by.values()] });
+  }
+  if (act === 'g4gpUcGet') {
+    const code = String((body && body.code) || url.searchParams.get('code') || '').trim();
+    if (!code) return json({ ok: false, error: 'Gatepass code required' });
+    const rows = await g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code,facility,status,gp_type,to_party,sku,quantity,created_at,synced_at,raw' +
+      '&gatepass_code=ilike.' + encodeURIComponent(code));
+    if (!rows.length) return json({ ok: false, error: 'Gatepass ' + code + ' not found in the UC sync yet (sync runs every ~15 min)' });
+    const g0 = (rows[0].raw && rows[0].raw.gatepass) || {};
+    const items = rows.map(r => {
+      const it = (r.raw && r.raw.item) || {};
+      return { sku: r.sku, name: it.itemTypeName || '', hsn: it.hsnCode || '', qty: Number(r.quantity) || 0,
+        received: it.receivedQuantity == null ? null : Number(it.receivedQuantity), status: it.gatePassItemStatus || r.status };
+    });
+    return json({ ok: true, gatepass: {
+      code: rows[0].gatepass_code, facility: rows[0].facility, status: rows[0].status, type: rows[0].gp_type,
+      to_party: rows[0].to_party, to_party_code: g0.toPartyCode || '', reference: g0.reference || '',
+      created: rows[0].created_at, synced: rows[0].synced_at, items } });
   }
 
   if (act === 'g4gpGet') {
