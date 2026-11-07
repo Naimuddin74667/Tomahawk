@@ -1974,6 +1974,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       if (!r.bank_submitted_at) return { label: 'Awaiting Bank Details', tone: 'house' };
       return r.refund_approved_at ? { label: 'Refund Approved', tone: 'house' } : { label: 'Refund Pending', tone: 'house' };
     }
+    // Marked received early and still no Delivered scan 48h later → check it (07-Nov-2026)
+    if (recvEarly(r) && hrsSince(tsMs(r.received_at)) >= 48) return { label: 'In Process', tone: 'house', attn: 'nocourier' };
     if (r.in_process_at || r.received_at) return { label: 'In Process', tone: 'house' }; // Received = In Process
     if (rs === 'RTO' || rs === 'Lost') return { label: 'Pickup ' + rs, tone: 'bad-in' };
     if (rs === 'Delivered') return { label: PICKUP_LABEL.Delivered, tone: 'in', attn: 'verify' }; // needs Verify received
@@ -2092,6 +2094,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   function attnRank(c) {
     if (c.st.attn === 'verify') return 0;
     if (c.st.attn === 'rtoback' || c.st.attn === 'rtodecide') return 4;
+    if (c.st.attn === 'nocourier') return 5;   // Escalation group: courier never marked it delivered
     if (c.call) return 3;                   // a call case is not escalated yet; the courier ticket comes after if needed
     if (c.esc && !c.esc.raised) return 5;   // e.g. "at Bhiwandi Hub" for 3 days = escalation, not arriving
     if (c.st.attn === 'arriving') return c.st.label === 'Out For Delivery' ? 1 : 2;
@@ -2140,6 +2143,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
 
   function scanInfo(o) { try { return o && o.scan_info ? JSON.parse(o.scan_info) : null; } catch (e) { return null; } }
   function hrsSince(ms) { return (Date.now() - ms) / 36e5; }
+  // Received early (07-Nov-2026): we marked the pickup Received while the
+  // courier still hasn't scanned it Delivered (they often scan hours late).
+  function recvEarly(r) { return !!(r && r.received_at && r.direction === 'reverse' && legStage(r) !== 'Delivered' && !isSelfShip(r)); }
+  var RECV_EARLY_STAGES = ['Picked', 'In Transit', 'At Last Mile', 'Out For Delivery'];
   function tsMs(t) { var d = parseTs(t); return d ? d.getTime() : null; }
   function fmtMs(ms) { return new Date(ms).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); }
   function durTxt(h) { return h >= 48 ? Math.floor(h / 24) + ' days' : Math.round(h) + ' hours'; }
@@ -2374,6 +2381,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var dv = tsMs(c.reverse.delivered_at || c.reverse.tracked_at); age = dv ? hrsSince(dv) : 0;
       h = 'Verify receipt'; sub = 'Delivered to our warehouse'; ico = ndIcon('verify', 'green');
       if (age < 24) age = 0;
+    }
+    else if (c.st.attn === 'nocourier') {
+      age = hrsSince(tsMs(c.reverse.received_at));
+      h = 'Courier not updated'; sub = 'Received by us early — courier still not marked delivered'; ico = ndIcon('verify', 'red');
     }
     else if (c.st.attn === 'arriving') {
       var ofd = c.st.label === 'Out For Delivery';
@@ -2800,7 +2811,12 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (fs && fs !== 'Cancelled') return '';
     if (!r.received_at && isSelfShip(r) && legStage(r) !== 'Delivered')   // self-ship: tracking + arrival by hand
       return '<button class="case-act" data-act="addtrk">' + (r.waybill ? 'Edit tracking no.' : 'Add tracking no.') + '</button>' + btn('arrived', 'Mark arrived');
-    if (!r.received_at) return legStage(r) === 'Delivered' && canReceive() ? btn('recv', 'Received') : '';
+    if (!r.received_at) {
+      if (!canReceive()) return '';
+      if (legStage(r) === 'Delivered') return btn('recv', 'Received');
+      // Courier scans Delivered late (we get it at 2 pm, they mark 8 pm) → receive early
+      return RECV_EARLY_STAGES.indexOf(legStage(r)) !== -1 ? '<button class="case-act" data-act="recvearly">Received (before courier update)</button>' : '';
+    }
     // Refund path: start (reason) → customer link → bank details →
     //   Approve refund + amount (Admin / Shikhar only) → Refund completed (UTR)
     if (r.resolution === 'refund') {
@@ -3706,6 +3722,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
 
   var ACTS = {
     recv:    { worker: 'delhiveryMarkReceived',  ask: 'Confirm the parcel has physically arrived at the warehouse? It moves to In Process.' },
+    recvearly: { worker: 'delhiveryMarkReceived', ask: 'The courier has NOT marked this parcel delivered yet.\n\nIs the parcel physically with us at the Bhiwandi warehouse?\n\nOK = mark it Received now (moves to In Process). The courier\'s later Delivered scan won\'t change it.' },
     process: { worker: 'delhiveryMarkInProcess', ask: 'Start processing this case (repair / replacement / refund check)?' },
     refund:  { worker: 'delhiveryMarkRefunded',  ask: 'Refund given? This closes the case.' }
   };
@@ -4027,7 +4044,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     // Step 2 = when booked (+ amount paid); the courier goes with Step 3 so each note stays on one line.
     notes[1] = rvOk ? shortWhen(rv.created_at) + ' · booked' : '';
     notes[2] = rvOk ? courierName(rv) + ' · ' + (rv.received_at || rs === 'Delivered' || PICKED_STAGES.indexOf(rs) === -1 ? 'Collected' : (PICKUP_LABEL[rs] || rs)) : '';
-    notes[3] = rvOk && rv.received_at ? shortWhen(rv.received_at) + (rv.received_by ? ' · ' + rv.received_by : '') : '';
+    notes[3] = rvOk && rv.received_at ? shortWhen(rv.received_at) + (recvEarly(rv) ? ' · before courier scan' : rv.received_by ? ' · ' + rv.received_by : '') : '';
     notes[4] = rvOk && rv.repair_done_at ? shortWhen(rv.repair_done_at) + (rv.repair_done_by ? ' · ' + rv.repair_done_by : '') +
       (pay && pay.repair && pay.repair.status === 'skipped' ? ' · Not repaired' : '') : '';
     notes[5] = fwOk ? shortWhen(fw.created_at) + ' · ' + courierName(fw) : '';
