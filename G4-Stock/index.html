@@ -1313,146 +1313,139 @@ button[hidden] { display: none !important; }
       .then(function () { $('btn-print').disabled = false; });
   }
 
-  // Two copies per A4 (portrait): top half = G4 COPY, bottom half = E3 COPY,
-  // dashed cut line between. Black & white. If the lines don't fit in one
-  // half, the gatepass continues on the next sheet (again two copies).
+  // One A4 page per gatepass, black & white.
+  //   Header: logo · "STOCK TRANSFER"
+  //   Details block: gatepass no. + barcode, From → To, created, status,
+  //                  reference, printed, totals
+  //   SKU table → signatures at the bottom
   function buildPdf(logo) {
     var g = cur;
     var doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4' });
-    var W = 210, HALF = 148.5, M = 10, CW = W - 2 * M;
+    var W = 210, M = 14, CW = W - 2 * M, y = 14;
     var GREY = 236;
     var user = (function () { try { var s = JSON.parse(localStorage.getItem('tm_session_v1') || 'null'); return s && (s.display_name || s.username); } catch (e) { return ''; } })();
     var bc = window.JsBarcode ? barcodePng(g.code) : null;
-    var printed = fmtDT(new Date().toISOString());
+
+    function T(t, x, yy, size, bold, align) {
+      doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(size);
+      doc.text(String(t), x, yy, align ? { align: align } : undefined);
+    }
+    function lab(t, x, yy, align) { T(t.toUpperCase(), x, yy, 7, true, align); }
+    function fit(t, w, size) { doc.setFont('helvetica', 'normal'); doc.setFontSize(size); return doc.splitTextToSize(String(t), w)[0]; }
+    doc.setTextColor(0); doc.setDrawColor(0); doc.setLineWidth(0.25);
 
     var totalQty = 0, totalBoxes = 0, loose = 0;
-    var rows = g.items.map(function (it) {
-      var s = bySku[it.sku] || {}, ppc = s.ppc;
+    g.items.forEach(function (it) {
+      var ppc = (bySku[it.sku] || {}).ppc;
       totalQty += it.qty; if (ppc) { totalBoxes += Math.floor(it.qty / ppc); loose += it.qty % ppc; }
-      var hasName = s.name && s.name !== it.sku && s.name.replace(/[\s_-]/g, '').toLowerCase() !== it.sku.replace(/[\s_-]/g, '').toLowerCase();
-      return { it: it, s: s, ppc: ppc, name: hasName ? s.name : '', h: hasName ? 9.5 : 7.5 };
     });
 
-    function T(t, x, y, size, bold, align) {
-      doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(size);
-      doc.text(String(t), x, y, align ? { align: align } : undefined);
-    }
-    function lab(t, x, y, align) { T(t.toUpperCase(), x, y, 6.5, true, align); }
+    // ── Header: logo + title ──
+    if (logo) doc.addImage(logo, 'PNG', M, y, 52, 9.7); else T('TOMAHAWK', M, y + 8, 18, true);
+    T(g.type === 'STOCK_TRANSFER' ? 'STOCK TRANSFER' : typeLabel(g.type).toUpperCase() + ' GATEPASS', W - M, y + 8, 18, true, 'right');
+    y += 14;
+    doc.setLineWidth(0.9); doc.line(M, y, W - M, y); doc.setLineWidth(0.25);
+    y += 5;
 
-    // Split rows into chunks that fit one half-page table area
-    var TABLE_TOP = 58, TABLE_MAX = 112; // mm from top of the half
-    var chunks = [], curChunk = [], used = 0;
-    rows.forEach(function (r) {
-      if (used + r.h > TABLE_MAX - TABLE_TOP - 7 && curChunk.length) { chunks.push(curChunk); curChunk = []; used = 0; }
-      curChunk.push(r); used += r.h;
-    });
-    chunks.push(curChunk);
+    // ── Details block ──
+    var bx = M, by = y, half = CW / 2;
+    // Row 1: gatepass number + barcode (grey band)
+    var r1 = 16;
+    doc.setFillColor(GREY); doc.rect(bx, by, CW, r1, 'F');
+    lab('Gatepass No.', bx + 4, by + 5.5);
+    T(g.code, bx + 4, by + 12.5, 15, true);
+    if (bc) doc.addImage(bc, 'PNG', W - M - 74, by + 3.5, 70, 9);
+    // Row 2: From → To
+    var r2 = 15, y2 = by + r1;
+    lab('From', bx + 4, y2 + 5); T('G4 Warehouse', bx + 4, y2 + 11.5, 13, true);
+    T('(TomahawkHub)', bx + 4 + doc.getTextWidth('G4 Warehouse') + 2, y2 + 11.5, 8, false);
+    lab('To', bx + half + 4, y2 + 5); T(fit(destLabel(g), half - 30, 13), bx + half + 4, y2 + 11.5, 13, true);
+    doc.setLineWidth(0.7); var ax = bx + half - 9, ay = y2 + 9;
+    doc.line(ax, ay, ax + 7, ay); doc.line(ax + 7, ay, ax + 4.8, ay - 1.8); doc.line(ax + 7, ay, ax + 4.8, ay + 1.8);
+    doc.setLineWidth(0.25);
+    // Row 3: created · status · reference · printed
+    var r3 = 15, y3 = y2 + r2, q = CW / 4;
+    [['Created', fmtDT(g.created)], ['UC status', g.status], ['Reference', g.reference || '—'], ['Printed', fmtDT(new Date().toISOString())]]
+      .forEach(function (d, i) { var x = bx + 4 + i * q; lab(d[0], x, y3 + 5); T(fit(d[1], q - 6, 9.5), x, y3 + 10, 9.5, false); });
+    if (user) T(fit('by ' + user, q - 6, 7.5), bx + 4 + 3 * q, y3 + 13.3, 7.5, false);
+    // Row 4: totals
+    var r4 = 15, y4 = y3 + r3, t3 = CW / 3;
+    [['Total boxes', fmt(totalBoxes) + (loose ? ' + ' + loose + ' pcs' : '')], ['Total qty (pcs)', fmt(totalQty)], ['SKU lines', String(g.items.length)]]
+      .forEach(function (k, i) { var x = bx + i * t3; lab(k[0], x + 4, y4 + 5); T(k[1], x + 4, y4 + 12, 14, true); if (i) doc.line(x, y4, x, y4 + r4); });
+    // grid lines of the block
+    var bh = r1 + r2 + r3 + r4;
+    doc.setLineWidth(0.5); doc.rect(bx, by, CW, bh); doc.setLineWidth(0.25);
+    doc.line(bx, y2, bx + CW, y2); doc.line(bx, y3, bx + CW, y3); doc.line(bx, y4, bx + CW, y4);
+    doc.line(bx + half, y2, bx + half, y3);
+    for (var k = 1; k < 4; k++) doc.line(bx + k * q, y3, bx + k * q, y4);
+    y = by + bh + 7;
 
+    // ── SKU table ──
     var cols = [
-      { h: '', w: 8, c: 1 }, { h: 'Sr', w: 8, c: 1 }, { h: 'UC SKU / Product', w: 76 },
-      { h: 'Qty/box', w: 15, c: 1 }, { h: 'Boxes', w: 17, c: 1 }, { h: 'Total qty', w: 18, c: 1 },
-      { h: 'Remark', w: 30 }, { h: 'G4 left', w: 18, c: 1 }
+      { h: '', w: 9, c: 1 }, { h: 'Sr', w: 9, c: 1 }, { h: 'UC SKU / Product', w: 68 },
+      { h: 'Qty/box', w: 16, c: 1 }, { h: 'Boxes', w: 18, c: 1 }, { h: 'Total qty', w: 18, c: 1 },
+      { h: 'Remark', w: 24 }, { h: 'G4 left', w: 20, c: 1 }
     ];
-
-    function half(oy, copyName, chunk, ci, srStart) {
-      var y = oy + 9;
-      // ── Header ──
-      if (logo) doc.addImage(logo, 'PNG', M, y - 1, 38, 7.1); else T('TOMAHAWK', M, y + 5, 14, true);
-      T('Industrial Tools & Hardware · Bhiwandi', M, y + 10.5, 7, false);
-      // copy tag (black pill, white text)
-      doc.setFillColor(0); doc.roundedRect(W / 2 - 16, y - 1, 32, 7, 1.5, 1.5, 'F');
-      doc.setTextColor(255); T(copyName, W / 2, y + 3.8, 8.5, true, 'center'); doc.setTextColor(0);
-      lab(g.type === 'STOCK_TRANSFER' ? 'Stock transfer gatepass' : typeLabel(g.type) + ' gatepass', W - M, y + 1, 'right');
-      T(g.code, W - M, y + 6.8, 12.5, true, 'right');
-      if (bc) doc.addImage(bc, 'PNG', W - M - 52, y + 8.5, 52, 6);
-      y += 17;
-      doc.setLineWidth(0.6); doc.line(M, y, W - M, y); doc.setLineWidth(0.25);
-      y += 4;
-
-      // ── Route (left) + key figures (right) ──
-      var rh = 15, rw = 96;
-      doc.setFillColor(GREY); doc.rect(M, y, rw, rh, 'F'); doc.rect(M, y, rw, rh);
-      lab('From', M + 3, y + 4.5); T('G4 Warehouse', M + 3, y + 11, 11.5, true);
-      lab('To', M + 55, y + 4.5); T(doc.splitTextToSize(destLabel(g), 40)[0], M + 55, y + 11, 11.5, true);
-      doc.setLineWidth(0.7); var ax = M + 44, ay = y + 9.5;
-      doc.line(ax, ay, ax + 7, ay); doc.line(ax + 7, ay, ax + 4.8, ay - 1.8); doc.line(ax + 7, ay, ax + 4.8, ay + 1.8);
-      doc.setLineWidth(0.25);
-      var kx = M + rw + 3, kw = (CW - rw - 3) / 3;
-      [['Boxes', fmt(totalBoxes) + (loose ? '+' + loose : '')], ['Total qty', fmt(totalQty)], ['Lines', String(g.items.length)]].forEach(function (k, i) {
-        var x = kx + i * kw;
-        doc.setLineWidth(i === 0 ? 0.7 : 0.25); doc.rect(x, y, kw, rh); doc.setLineWidth(0.25);
-        lab(k[0], x + kw / 2, y + 4.5, 'center'); T(k[1], x + kw / 2, y + 11.8, 14, true, 'center');
-      });
-      y += rh + 4;
-
-      // ── Details ──
-      var det = [['Created', fmtDT(g.created)], ['UC status', g.status], ['Reference', g.reference || '—'], ['Printed', printed + (user ? ' · ' + String(user).split(' ')[0] : '')]];
-      var dw = CW / 4;
-      det.forEach(function (d, i) { var x = M + i * dw; lab(d[0], x, y + 2); doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); T(doc.splitTextToSize(String(d[1]), dw - 2)[0], x, y + 6.5, 8.5, false); });
-
-      // ── Table ──
-      y = oy + TABLE_TOP;
-      doc.setFillColor(0); doc.rect(M, y, CW, 6.5, 'F'); doc.setTextColor(255);
+    function headRow() {
+      doc.setFillColor(0); doc.rect(M, y, CW, 8, 'F'); doc.setTextColor(255);
       var x = M;
-      cols.forEach(function (c) { T(c.h, c.c ? x + c.w / 2 : x + 2, y + 4.4, 7.5, true, c.c ? 'center' : null); x += c.w; });
-      doc.setTextColor(0); y += 6.5;
-      chunk.forEach(function (r, n) {
-        var h = r.h, mid = y + h / 2 + 1.4;
-        if (n % 2 === 1) { doc.setFillColor(GREY); doc.rect(M, y, CW, h, 'F'); }
-        x = M;
-        cols.forEach(function (c, k) {
-          var cx = x + c.w / 2;
-          if (k > 0) { doc.setDrawColor(170); doc.line(x, y, x, y + h); doc.setDrawColor(0); }
-          if (k === 0) { doc.setLineWidth(0.35); doc.rect(cx - 2.2, y + h / 2 - 2.2, 4.4, 4.4); doc.setLineWidth(0.25); }
-          else if (k === 1) T(srStart + n + 1, cx, mid, 8.5, false, 'center');
-          else if (k === 2) {
-            T(doc.splitTextToSize(r.it.sku, c.w - 4)[0], x + 2, r.name ? y + 4.3 : mid, 9.5, true);
-            if (r.name) T(doc.splitTextToSize(r.name, c.w - 4)[0], x + 2, y + 8, 6.8, false);
-          }
-          else if (k === 3) T(r.ppc ? r.ppc : '—', cx, mid, 8.5, false, 'center');
-          else if (k === 4) T(boxesText(r.it.qty, r.ppc), cx, mid, 11, true, 'center');
-          else if (k === 5) T(fmt(r.it.qty), cx, mid, 11, true, 'center');
-          else if (k === 7) T(r.s.g4 == null ? '—' : (r.ppc ? boxesText(r.s.g4, r.ppc) : r.s.g4 + ' pcs'), cx, mid, 8.5, false, 'center');
-          x += c.w;
-        });
-        doc.setDrawColor(170); doc.line(M, y + h, W - M, y + h); doc.setDrawColor(0);
-        y += h;
-      });
-      // Total (last chunk) or "continued"
-      doc.setLineWidth(0.6); doc.line(M, y, W - M, y); doc.setLineWidth(0.25);
-      if (ci === chunks.length - 1) {
-        var bx = M + 8 + 8 + 76 + 15;
-        T('TOTAL', M + 18, y + 5, 9.5, true);
-        T(fmt(totalBoxes) + (loose ? ' + ' + loose : ''), bx + 17 / 2, y + 5, 11, true, 'center');
-        T(fmt(totalQty), bx + 17 + 18 / 2, y + 5, 11, true, 'center');
-      } else T('Continued on next sheet…', M + 18, y + 5, 8.5, false);
-
-      // ── Signatures (bottom of the half) ──
-      var sy = oy + HALF - 27, sw = (CW - 8) / 3;
-      ['Picked By', 'Checked By', 'Received By'].forEach(function (t, i) {
-        var sx = M + i * (sw + 4);
-        doc.rect(sx, sy, sw, 17);
-        doc.setFillColor(GREY); doc.rect(sx, sy, sw, 5.5, 'F'); doc.rect(sx, sy, sw, 5.5);
-        T(t, sx + 2.5, sy + 3.9, 8, true);
-        T('Name / Sign', sx + 2.5, sy + 10.5, 7, false); doc.setDrawColor(150); doc.line(sx + 19, sy + 11, sx + sw - 2.5, sy + 11);
-        T('Date', sx + 2.5, sy + 15, 7, false); doc.line(sx + 19, sy + 15.5, sx + sw - 2.5, sy + 15.5); doc.setDrawColor(0);
-      });
-      T('Tick each line when picked / received.  G4 left = boxes still in G4 (UC) at print time.', M, oy + HALF - 5.5, 6.5, false);
-      T('Sheet ' + (ci + 1) + ' of ' + chunks.length, W - M, oy + HALF - 5.5, 6.5, false, 'right');
+      cols.forEach(function (c) { T(c.h, c.c ? x + c.w / 2 : x + 2.5, y + 5.3, 8, true, c.c ? 'center' : null); x += c.w; });
+      doc.setTextColor(0); y += 8;
     }
-
-    var sr = 0;
-    chunks.forEach(function (chunk, ci) {
-      if (ci) doc.addPage();
-      doc.setTextColor(0); doc.setDrawColor(0); doc.setLineWidth(0.25);
-      half(0, 'G4 COPY', chunk, ci, sr);
-      // cut line
-      doc.setLineDashPattern([1.5, 1.5], 0); doc.setDrawColor(120); doc.line(4, HALF, W - 4, HALF);
-      doc.setLineDashPattern([], 0); doc.setDrawColor(0);
-      T('cut here', W / 2, HALF - 1, 6, false, 'center');
-      half(HALF, g.type === 'STOCK_TRANSFER' ? 'E3 COPY' : 'RECEIVER COPY', chunk, ci, sr);
-      sr += chunk.length;
+    headRow();
+    g.items.forEach(function (it, n) {
+      var s = bySku[it.sku] || {}, ppc = s.ppc;
+      var nm = s.name && s.name.replace(/[\s_-]/g, '').toLowerCase() !== it.sku.replace(/[\s_-]/g, '').toLowerCase() ? s.name : '';
+      var h = nm ? 11.5 : 9;
+      if (y + h > 240) { doc.addPage(); y = 16; headRow(); }
+      if (n % 2 === 1) { doc.setFillColor(GREY); doc.rect(M, y, CW, h, 'F'); }
+      var mid = y + h / 2 + 1.5, x = M;
+      cols.forEach(function (c, ci) {
+        var cx = x + c.w / 2;
+        if (ci > 0) { doc.setDrawColor(170); doc.line(x, y, x, y + h); doc.setDrawColor(0); }
+        if (ci === 0) { doc.setLineWidth(0.35); doc.rect(cx - 2.5, y + h / 2 - 2.5, 5, 5); doc.setLineWidth(0.25); }
+        else if (ci === 1) T(n + 1, cx, mid, 9, false, 'center');
+        else if (ci === 2) {
+          T(fit(it.sku, c.w - 5, 10.5), x + 2.5, nm ? y + 5 : mid, 10.5, true);
+          if (nm) T(fit(nm, c.w - 5, 7.5), x + 2.5, y + 9.2, 7.5, false);
+        }
+        else if (ci === 3) T(ppc || '—', cx, mid, 9.5, false, 'center');
+        else if (ci === 4) T(boxesText(it.qty, ppc), cx, mid, 12, true, 'center');
+        else if (ci === 5) T(fmt(it.qty), cx, mid, 12, true, 'center');
+        else if (ci === 7) T(s.g4 == null ? '—' : (ppc ? boxesText(s.g4, ppc) : s.g4 + ' pcs'), cx, mid, 9.5, false, 'center');
+        x += c.w;
+      });
+      doc.setDrawColor(170); doc.line(M, y + h, W - M, y + h); doc.setDrawColor(0);
+      y += h;
     });
+    // Total row
+    doc.setLineWidth(0.8); doc.line(M, y, W - M, y); doc.setLineWidth(0.25);
+    var bx2 = M + 9 + 9 + 68 + 16;
+    T('TOTAL', M + 20.5, y + 6.5, 10.5, true);
+    T(fmt(totalBoxes) + (loose ? ' + ' + loose : ''), bx2 + 9, y + 6.5, 12, true, 'center');
+    T(fmt(totalQty), bx2 + 18 + 9, y + 6.5, 12, true, 'center');
+    doc.line(M, y + 10, W - M, y + 10);
+    y += 15;
+    T('Tick each line when picked / received.  Boxes = full boxes + loose pcs.  G4 left = boxes still in G4 (UC) at print time.', M, y, 7.5, false);
+
+    // ── Signatures: a line with the label under it ──
+    if (y > 250) { doc.addPage(); }
+    var sy = 268, sw = (CW - 20) / 3;
+    doc.setLineWidth(0.4);
+    ['Picked By', 'Checked By', 'Received By'].forEach(function (t, i) {
+      var sx = M + i * (sw + 10);
+      doc.line(sx, sy, sx + sw, sy);
+      T(t, sx + sw / 2, sy + 5, 9.5, true, 'center');
+    });
+    doc.setLineWidth(0.25);
+
+    // ── Footer ──
+    var pages = doc.getNumberOfPages();
+    for (var p = 1; p <= pages; p++) {
+      doc.setPage(p); doc.line(M, 284, W - M, 284);
+      T('Tomahawk Operations  ·  ' + g.code, M, 288.5, 7.5, false);
+      T('Page ' + p + ' of ' + pages, W - M, 288.5, 7.5, false, 'right');
+    }
     doc.save(g.code + '.pdf');
   }
 
