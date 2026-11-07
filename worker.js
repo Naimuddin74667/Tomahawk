@@ -11821,7 +11821,11 @@ async function handleG4Gatepass(act, body, url, env, user) {
   // ── UC gatepasses created at G4 (from the Supabase mirror) — for printing in our format ──
   // g4gpUcRecent: last 45 days, one row per gatepass. g4gpUcGet: one gatepass with its lines.
   if (act === 'g4gpUcLive') {
-    try { return json({ ok: true, ...(await g4gpUcLatest(env)) }); }
+    try {
+      const sk = await g4gpSkFetch(env);           // SK's endpoint first
+      if (sk) return json({ ok: true, today: !!sk.today, gatepasses: sk.gatepasses || [] });
+      return json({ ok: true, ...(await g4gpUcLatest(env)) });   // else direct UC login, if set
+    }
     catch (e) { return json({ ok: false, notConfigured: !!e.notConfigured, error: e.message }); }
   }
   if (act === 'g4gpUcRecent') {
@@ -11841,7 +11845,14 @@ async function handleG4Gatepass(act, body, url, env, user) {
     if (!code) return json({ ok: false, error: 'Gatepass code required' });
     const rows = await g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code,facility,status,gp_type,to_party,sku,quantity,created_at,synced_at,raw' +
       '&gatepass_code=ilike.' + encodeURIComponent(code));
-    if (!rows.length) return json({ ok: false, error: 'Gatepass ' + code + ' not found in the UC sync yet (sync runs every ~15 min)' });
+    if (!rows.length) {
+      // Not synced yet — ask UC live through SK's endpoint (if set up)
+      try {
+        const sk = await g4gpSkFetch(env, code);
+        if (sk && sk.gatepasses && sk.gatepasses[0]) return json({ ok: true, gatepass: sk.gatepasses[0] });
+      } catch (e) { return json({ ok: false, error: e.message }); }
+      return json({ ok: false, error: 'Gatepass ' + code + ' not found in the UC sync yet (sync runs every ~15 min)' });
+    }
     const g0 = (rows[0].raw && rows[0].raw.gatepass) || {};
     const items = rows.map(r => {
       const it = (r.raw && r.raw.item) || {};
@@ -11959,7 +11970,7 @@ async function handleG4Gatepass(act, body, url, env, user) {
 // Token is cached at the edge until shortly before it expires.
 async function ucApiToken(env) {
   if (!env.UC_USERNAME || !env.UC_PASSWORD) {
-    const e = new Error('UC API login not set on the Worker yet (secrets UC_USERNAME / UC_PASSWORD)'); e.notConfigured = true; throw e;
+    const e = new Error('Live UC fetch not connected yet — waiting for the key from Shikhar (Worker secret SK_UC_GP_KEY)'); e.notConfigured = true; throw e;
   }
   const base = 'https://' + (env.UC_TENANT || 'industrialtoolsandhardware') + '.unicommerce.com';
   const cache = caches.default, key = new Request('https://cache.internal/uc-api-token-v1');
@@ -12024,4 +12035,19 @@ async function g4gpUcLatest(env) {
     };
   });
   return { today, gatepasses };
+}
+
+// SK's read-only UC gatepass lookup (team.tomahawk.tools, Nov 2026).
+// Worker secret SK_UC_GP_KEY (Bearer key from Shikhar); SK_UC_GP_URL optional.
+// Same response shape as g4gpUcLatest(). Returns null if not configured.
+async function g4gpSkFetch(env, code) {
+  if (!env.SK_UC_GP_KEY) return null;
+  const base = env.SK_UC_GP_URL || 'https://team.tomahawk.tools/uc/g4-gatepasses';
+  const r = await fetch(base + (code ? '?code=' + encodeURIComponent(code) : ''), {
+    headers: { 'Authorization': 'Bearer ' + env.SK_UC_GP_KEY, 'Accept': 'application/json' }
+  });
+  const d = await r.json().catch(() => ({ ok: false, error: 'Bad response from SK API (HTTP ' + r.status + ')' }));
+  if (!d.ok) throw new Error('SK API: ' + (d.error || ('HTTP ' + r.status)));
+  (d.gatepasses || []).forEach(g => { g.source = 'uc-live'; g.items = g.items || []; });
+  return d;
 }
