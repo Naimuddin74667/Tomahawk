@@ -11692,7 +11692,7 @@ async function g4gpLiveData(env) {
     g4gpSupabasePaged(env, 'uc_bundle_composition?select=parent_sku,child_sku,quantity_per_unit'),
     g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code,sku,quantity&facility=eq.G4&status=in.(CREATED,RETURN_AWAITED)'),
     // Inward pending = G4 purchase orders not yet received (GRN) in UC
-    g4gpSupabasePaged(env, 'uc_purchase_orders?select=po_code,sku,pending_quantity,po_created,vendor_code&facility=eq.G4&po_status=not.in.(COMPLETE,CANCELLED,CLOSED)&pending_quantity=gt.0')
+    g4gpSupabasePaged(env, 'uc_purchase_orders?select=po_code,sku,quantity,received_quantity,pending_quantity,po_created,vendor_code,po_status&facility=eq.G4&po_status=not.in.(COMPLETE,CANCELLED,CLOSED)&pending_quantity=gt.0')
       .catch(() => null)
   ]);
   let inward = null;
@@ -11703,7 +11703,17 @@ async function g4gpLiveData(env) {
       qty += Number(r.pending_quantity) || 0;
       if (r.po_created && (!oldest || r.po_created < oldest)) oldest = r.po_created;
     });
-    inward = { qty, pos: pos.size, skus: skus.size, vendors: vendors.size, oldest };
+    // Per-PO list (newest first) with its SKU lines, for the Open POs card
+    const byPo = new Map();
+    poRows.forEach(r => {
+      let p = byPo.get(r.po_code);
+      if (!p) { p = { po: r.po_code, vendor: r.vendor_code || '', created: r.po_created, status: r.po_status, ordered: 0, received: 0, pending: 0, lines: [] }; byPo.set(r.po_code, p); }
+      const o = Number(r.quantity) || 0, rc = Number(r.received_quantity) || 0, pd = Number(r.pending_quantity) || 0;
+      p.ordered += o; p.received += rc; p.pending += pd;
+      p.lines.push({ sku: r.sku, ordered: o, received: rc, pending: pd });
+    });
+    const poList = [...byPo.values()].sort((a, b) => String(b.created || '').localeCompare(String(a.created || '')));
+    inward = { qty, pos: pos.size, skus: skus.size, vendors: vendors.size, oldest, poList };
   }
   const bundles = {};
   bundleRows.forEach(b => {

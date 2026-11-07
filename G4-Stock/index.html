@@ -965,10 +965,27 @@ button[hidden] { display: none !important; }
       <div class="stat-value" id="stat-inward"><span class="sk-block" style="width:90px;height:22px"></span></div>
       <div class="stat-sub" id="stat-inward-sub"><span class="sk-block" style="width:120px"></span></div>
     </div>
-    <div class="stat-card no-click">
+    <div class="stat-card" id="card-pos" title="Show open POs">
       <div class="stat-label">Open POs</div>
       <div class="stat-value" id="stat-pos"><span class="sk-block" style="width:40px;height:22px"></span></div>
       <div class="stat-sub" id="stat-pos-sub"><span class="sk-block" style="width:120px"></span></div>
+    </div>
+  </div>
+
+  <!-- ───────────── OPEN POs (from the Open POs card) ───────────── -->
+  <div class="panel" id="po-panel" hidden>
+    <div class="panel-head">
+      <div class="panel-title">Open G4 purchase orders <span class="muted" style="font-size:12px;font-weight:500" id="po-note"></span></div>
+      <div class="actions">
+        <input class="field" id="po-search" placeholder="Search PO, vendor or SKU" style="width:240px;height:36px">
+        <button class="btn-ghost" id="po-close" style="min-height:36px">Close</button>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="gp-tbl">
+        <thead><tr><th></th><th>PO</th><th>Vendor</th><th>Created</th><th>Status</th><th class="num">SKUs</th><th class="num">Ordered</th><th class="num">Received</th><th class="num">Pending</th></tr></thead>
+        <tbody id="po-body"></tbody>
+      </table>
     </div>
   </div>
 
@@ -1025,6 +1042,13 @@ button[hidden] { display: none !important; }
 .recv-ok { color: var(--c-green); font-weight: 700; }
 .recv-bad { color: var(--c-red); font-weight: 700; }
 #gp-panel { border-color: var(--hero); }
+#card-pos { cursor: pointer; }
+#card-pos.on { border-color: var(--hero); box-shadow: inset 0 0 0 1px var(--hero); }
+.po-row { cursor: pointer; }
+.po-chev { display: inline-block; transition: transform .15s; color: var(--text-secondary); }
+.po-row.open .po-chev { transform: rotate(90deg); }
+.po-line td { background: var(--bg-raised); font-size: 13px; padding-top: 7px; padding-bottom: 7px; }
+.po-line td:nth-child(2) { padding-left: 28px; }
 .live-head { font-size: 12.5px; color: var(--text-secondary); margin-bottom: 8px; }
 .live-head b { color: var(--text-primary); }
 #live-body td { padding: 12px; }
@@ -1116,7 +1140,46 @@ button[hidden] { display: none !important; }
       }
       setStatus('UC synced ' + (D.syncedAt ? timeAgo(D.syncedAt) : '—'));
       if (cur) renderGatepass(); // refresh Qty/box once stock arrives
+      if (!$('po-panel').hidden) renderPos();
     }).catch(function (e) { setStatus('Could not load — ' + e.message, true); });
+  }
+
+  // ════════════ OPEN POs LIST ════════════
+  var openPo = {};
+  $('card-pos').addEventListener('click', function () {
+    var show = $('po-panel').hidden;
+    $('po-panel').hidden = !show; this.classList.toggle('on', show);
+    if (show) { renderPos(); $('po-panel').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  });
+  $('po-close').addEventListener('click', function () { $('po-panel').hidden = true; $('card-pos').classList.remove('on'); });
+  $('po-search').addEventListener('input', renderPos);
+  $('po-body').addEventListener('click', function (e) {
+    var tr = e.target.closest('tr[data-po]'); if (!tr) return;
+    var po = tr.getAttribute('data-po'); openPo[po] = !openPo[po]; renderPos();
+  });
+  function renderPos() {
+    var list = (D.inward && D.inward.poList) || [];
+    var q = $('po-search').value.trim().toLowerCase();
+    var rows = list.filter(function (p) {
+      return !q || (p.po + ' ' + p.vendor + ' ' + p.lines.map(function (l) { return l.sku; }).join(' ')).toLowerCase().indexOf(q) !== -1;
+    });
+    $('po-note').textContent = list.length + ' POs · ' + fmt(D.inward ? D.inward.qty : 0) + ' pcs pending';
+    $('po-body').innerHTML = rows.length ? rows.map(function (p) {
+      var open = !!openPo[p.po] || (q && p.lines.some(function (l) { return l.sku.toLowerCase().indexOf(q) !== -1; }));
+      var main = '<tr class="po-row' + (open ? ' open' : '') + '" data-po="' + esc(p.po) + '">' +
+        '<td style="width:24px"><span class="po-chev">›</span></td>' +
+        '<td><b>' + esc(p.po) + '</b></td><td>' + esc(p.vendor || '—') + '</td>' +
+        '<td class="muted" style="white-space:nowrap">' + esc(p.created ? new Date(p.created).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—') + '</td>' +
+        '<td><span class="st ' + (p.status === 'CREATED' ? 'st-draft' : 'st-discarded') + '">' + esc(p.status || '') + '</span></td>' +
+        '<td class="num">' + p.lines.length + '</td><td class="num">' + fmt(p.ordered) + '</td><td class="num">' + fmt(p.received) + '</td>' +
+        '<td class="num"><b>' + fmt(p.pending) + '</b></td></tr>';
+      if (!open) return main;
+      return main + p.lines.map(function (l) {
+        var hit = q && l.sku.toLowerCase().indexOf(q) !== -1;
+        return '<tr class="po-line"><td></td><td colspan="5"' + (hit ? ' style="font-weight:700"' : '') + '>' + esc(l.sku) + '</td>' +
+          '<td class="num">' + fmt(l.ordered) + '</td><td class="num">' + fmt(l.received) + '</td><td class="num">' + fmt(l.pending) + '</td></tr>';
+      }).join('');
+    }).join('') : '<tr class="empty-row"><td colspan="9">No open POs match.</td></tr>';
   }
 
   // ════════════ FETCH LATEST STRAIGHT FROM UC ════════════
