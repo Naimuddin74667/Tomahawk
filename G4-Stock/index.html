@@ -525,8 +525,8 @@ html .site-header [hidden] { display: none !important; }
      BLOCK 7 — G4 STOCK: TABS, FORM, ITEMS TABLE, REGISTER
 ============================================================ -->
 <style>
-.stats-row.g4-stats { grid-template-columns: repeat(4, 1fr); }
-@media (max-width: 900px) { .stats-row.g4-stats { grid-template-columns: repeat(2, 1fr); } }
+.stats-row.g4-stats { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 800px) { .stats-row.g4-stats { grid-template-columns: 1fr; } }
 
 .tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 20px; }
 .tab-btn {
@@ -952,7 +952,7 @@ button[hidden] { display: none !important; }
   <!-- Section cards — click one to open its section below (one at a time) -->
   <div class="stats-row g4-stats">
     <div class="stat-card sec-card on" data-sec="st">
-      <div class="stat-label">Stock Transfer</div>
+      <div class="stat-label">Stock Transfer · pending</div>
       <div class="stat-value accent" id="stat-st"><span class="sk-block" style="width:40px;height:22px"></span></div>
       <div class="stat-sub" id="stat-st-sub"><span class="sk-block" style="width:120px;height:12px"></span></div>
     </div>
@@ -965,11 +965,6 @@ button[hidden] { display: none !important; }
       <div class="stat-label">Open POs</div>
       <div class="stat-value" id="stat-pos"><span class="sk-block" style="width:40px;height:22px"></span></div>
       <div class="stat-sub" id="stat-pos-sub"><span class="sk-block" style="width:130px;height:12px"></span></div>
-    </div>
-    <div class="stat-card sec-card" data-sec="tr">
-      <div class="stat-label">In Transit</div>
-      <div class="stat-value" id="stat-tr"><span class="sk-block" style="width:90px;height:22px"></span></div>
-      <div class="stat-sub" id="stat-tr-sub"><span class="sk-block" style="width:120px;height:12px"></span></div>
     </div>
   </div>
 
@@ -1004,21 +999,19 @@ button[hidden] { display: none !important; }
     </div>
   </div>
 
-  <!-- ───────────── IN TRANSIT: open G4 gatepasses ───────────── -->
-  <div class="panel sec-panel" id="sec-tr" hidden>
+  <!-- ───────────── STOCK TRANSFER: print UC gatepass (our format) ───────────── -->
+  <div class="sec-panel" id="sec-st">
+  <div class="panel">
     <div class="panel-head">
-      <div class="panel-title">In transit — open G4 gatepasses <span class="muted" style="font-size:12px;font-weight:500" id="tr-note"></span></div>
+      <div class="panel-title">Pending stock transfers — created, not yet closed / putaway <span class="muted" style="font-size:12px;font-weight:500" id="tr-note"></span></div>
     </div>
     <div class="tbl-wrap">
       <table class="gp-tbl">
-        <thead><tr><th></th><th>Gatepass</th><th>Created</th><th>Age</th><th>To</th><th>Type</th><th class="num">Lines</th><th class="num">Qty</th><th></th></tr></thead>
+        <thead><tr><th></th><th>Gatepass</th><th>Created</th><th>Age</th><th class="num">Lines</th><th class="num">Qty</th><th class="num">Received</th><th class="num">Pending</th><th></th></tr></thead>
         <tbody id="tr-body"></tbody>
       </table>
     </div>
   </div>
-
-  <!-- ───────────── STOCK TRANSFER: print UC gatepass (our format) ───────────── -->
-  <div class="sec-panel" id="sec-st">
   <div class="panel">
     <div class="panel-head">
       <div class="panel-title">Print UC gatepass</div>
@@ -1160,10 +1153,11 @@ button[hidden] { display: none !important; }
       D = res; bySku = {};
       D.stock.forEach(function (s) { bySku[s.sku] = s; });
       var inG4 = D.stock.filter(function (s) { return s.g4 > 0; });
-      // Stock Transfer: gatepasses made at G4 today
-      var tg = D.todayGp || { count: 0 };
-      $('stat-st').textContent = fmt(tg.count) + ' today';
-      $('stat-st-sub').textContent = tg.last ? 'last at ' + new Date(tg.last).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) + ' · print below' : 'none yet today · print below';
+      // Stock Transfer: qty on G4 → E3 gatepasses created but not closed / putaway
+      var ol = D.openList || [];
+      $('stat-st').textContent = fmt(ol.reduce(function (a, g) { return a + g.pending; }, 0)) + ' pcs';
+      $('stat-st-sub').textContent = ol.length ? ol.length + ' open gatepass' + (ol.length === 1 ? '' : 'es') + ' · oldest ' + daysOld(ol[0].created) + 'd' +
+        ' · ' + ((D.todayGp && D.todayGp.count) || 0) + ' made today' : 'all stock transfers closed ✓';
       // G4 Stock
       $('stat-qty').textContent = fmt(inG4.reduce(function (a, s) { return a + s.g4; }, 0)) + ' pcs';
       var noPpc = inG4.filter(function (s) { return !s.ppc; }).length;
@@ -1176,11 +1170,6 @@ button[hidden] { display: none !important; }
         $('stat-pos-sub').textContent = fmt(D.inward.qty) + ' pcs pending' +
           (D.inward.oldest ? ' · oldest ' + new Date(D.inward.oldest).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '');
       } else { $('stat-pos').textContent = '—'; $('stat-pos-sub').textContent = 'PO data not available'; }
-      // In Transit: open G4 gatepasses
-      var ol = D.openList || [];
-      $('stat-tr').textContent = fmt(ol.reduce(function (a, g) { return a + g.qty; }, 0)) + ' pcs';
-      var oldest = ol[0] ? daysOld(ol[0].created) : 0;
-      $('stat-tr-sub').textContent = ol.length + ' open gatepass' + (ol.length === 1 ? '' : 'es') + (ol.length ? ' · oldest ' + oldest + 'd' : '');
       setStatus('UC synced ' + (D.syncedAt ? timeAgo(D.syncedAt) : '—'));
       if (cur) renderGatepass(); // refresh Qty/box once stock arrives
       renderSection();
@@ -1198,8 +1187,8 @@ button[hidden] { display: none !important; }
   });
   function renderSection() {
     [].forEach.call(document.querySelectorAll('.sec-card'), function (c) { c.classList.toggle('on', c.getAttribute('data-sec') === sec); });
-    ['st', 'g4', 'po', 'tr'].forEach(function (k) { $('sec-' + k).hidden = k !== sec; });
-    if (sec === 'g4') renderG4(); else if (sec === 'po') renderPos(); else if (sec === 'tr') renderTransit();
+    ['st', 'g4', 'po'].forEach(function (k) { $('sec-' + k).hidden = k !== sec; });
+    if (sec === 'g4') renderG4(); else if (sec === 'po') renderPos(); else renderTransit();
   }
 
   // ════════════ G4 STOCK LIST ════════════
@@ -1227,13 +1216,13 @@ button[hidden] { display: none !important; }
   // ════════════ IN TRANSIT ════════════
   var openTr = {};
   $('tr-body').addEventListener('click', function (e) {
-    var p = e.target.getAttribute('data-print'); if (p) { e.stopPropagation(); sec = 'st'; renderSection(); openGatepass(p, true); return; }
+    var p = e.target.getAttribute('data-print'); if (p) { e.stopPropagation(); openGatepass(p, true); return; }
     var tr = e.target.closest('tr[data-gp]'); if (!tr) return;
     var c = tr.getAttribute('data-gp'); openTr[c] = !openTr[c]; renderTransit();
   });
   function renderTransit() {
     var ol = D.openList || [];
-    $('tr-note').textContent = ol.length + ' gatepasses · ' + fmt(ol.reduce(function (a, g) { return a + g.qty; }, 0)) + ' pcs · oldest first';
+    $('tr-note').textContent = ol.length + ' gatepasses · ' + fmt(ol.reduce(function (a, g) { return a + g.pending; }, 0)) + ' pcs pending · oldest first';
     $('tr-body').innerHTML = ol.length ? ol.map(function (g) {
       var d = daysOld(g.created), open = !!openTr[g.code];
       var row = '<tr class="po-row' + (open ? ' open' : '') + '" data-gp="' + esc(g.code) + '">' +
@@ -1241,14 +1230,15 @@ button[hidden] { display: none !important; }
         '<td><b>' + esc(g.code) + '</b></td>' +
         '<td class="muted" style="white-space:nowrap">' + esc(fmtDT(g.created)) + '</td>' +
         '<td class="' + (d >= 3 ? 'age-old' : '') + '">' + d + 'd</td>' +
-        '<td>' + esc(g.to_party || '—') + '</td><td>' + esc(typeLabel(g.type)) + '</td>' +
-        '<td class="num">' + g.lines.length + '</td><td class="num"><b>' + fmt(g.qty) + '</b></td>' +
+        '<td class="num">' + g.lines.length + '</td><td class="num">' + fmt(g.qty) + '</td>' +
+        '<td class="num">' + fmt(g.received) + '</td><td class="num"><b>' + fmt(g.pending) + '</b></td>' +
         '<td><button class="link-btn" data-print="' + esc(g.code) + '">Print</button></td></tr>';
       if (!open) return row;
       return row + g.lines.map(function (l) {
-        return '<tr class="po-line"><td></td><td colspan="6">' + esc(l.sku) + '</td><td class="num">' + fmt(l.qty) + '</td><td></td></tr>';
+        return '<tr class="po-line"><td></td><td colspan="4">' + esc(l.sku) + '</td><td class="num">' + fmt(l.qty) + '</td>' +
+          '<td class="num">' + fmt(l.received) + '</td><td class="num"><b>' + fmt(l.pending) + '</b></td><td></td></tr>';
       }).join('');
-    }).join('') : '<tr class="empty-row"><td colspan="9">Nothing in transit — every G4 gatepass is closed.</td></tr>';
+    }).join('') : '<tr class="empty-row"><td colspan="9">No pending stock transfers — every G4 → E3 gatepass is closed.</td></tr>';
   }
 
   // ════════════ OPEN POs LIST ════════════
@@ -1293,10 +1283,11 @@ button[hidden] { display: none !important; }
     api('g4gpUcLive').then(function (res) {
       if (!res.ok) throw new Error(res.error);
       live = {};
+      res.gatepasses = res.gatepasses.filter(function (g) { return g.type === 'STOCK_TRANSFER'; });
       res.gatepasses.forEach(function (g) { live[g.code] = g; });
       $('live-head').innerHTML = res.gatepasses.length
-        ? (res.today ? '<b>' + res.gatepasses.length + '</b> latest from today' : 'None made today — <b>last one</b> from G4') + ' · live from UC, ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
-        : 'No gatepasses from G4 in the last 30 days.';
+        ? (res.today ? '<b>' + res.gatepasses.length + '</b> latest stock transfer' + (res.gatepasses.length === 1 ? '' : 's') + ' from today' : 'None made today — <b>last one</b> from G4') + ' · live from UC, ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+        : 'No recent stock transfer in the latest UC gatepasses — use the code box below.';
       $('live-body').innerHTML = res.gatepasses.map(function (g) {
         var qty = g.items.reduce(function (a, i) { return a + i.qty; }, 0);
         return '<tr><td><b>' + esc(g.code) + '</b><span class="live-src">UC live</span></td>' +
