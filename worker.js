@@ -759,7 +759,7 @@ const ACTION_TIERS = {
   sa_getG4BoxCounts: 'viewer_read',
   sa_loadAll: 'viewer_read',
   // G4 Stock — own gatepass module (Nov 2026)
-  g4gpLoad: 'viewer_read', g4gpGet: 'viewer_read', g4gpUcRecent: 'viewer_read', g4gpUcGet: 'viewer_read',
+  g4gpLoad: 'viewer_read', g4gpGet: 'viewer_read', g4gpUcRecent: 'viewer_read', g4gpUcGet: 'viewer_read', g4gpUcLive: 'viewer_read',
   g4gpSave: 'manager_up', g4gpDiscard: 'manager_up', g4gpPush: 'manager_up',
   sa_saveQtyOverride: 'manager_up', sa_deleteQtyOverride: 'manager_up',
   sa_bulkImportQtyOverrides: 'manager_up', sa_archiveSku: 'manager_up',
@@ -11820,6 +11820,10 @@ async function handleG4Gatepass(act, body, url, env, user) {
 
   // ── UC gatepasses created at G4 (from the Supabase mirror) — for printing in our format ──
   // g4gpUcRecent: last 45 days, one row per gatepass. g4gpUcGet: one gatepass with its lines.
+  if (act === 'g4gpUcLive') {
+    try { return json({ ok: true, ...(await g4gpUcLatest(env)) }); }
+    catch (e) { return json({ ok: false, notConfigured: !!e.notConfigured, error: e.message }); }
+  }
   if (act === 'g4gpUcRecent') {
     const since = new Date(Date.now() - 45 * 86400000).toISOString();
     const rows = await g4gpSupabasePaged(env, 'uc_gatepass?select=gatepass_code,status,gp_type,to_party,sku,quantity,created_at' +
@@ -11947,4 +11951,77 @@ async function handleG4Gatepass(act, body, url, env, user) {
   }
 
   return json({ ok: false, error: 'Unknown G4 action: ' + act }, 400);
+}
+
+// ── Direct Unicommerce API (G4 Stock "Fetch latest from UC") ──
+// Needs Worker secrets UC_USERNAME + UC_PASSWORD (a UC admin user with access
+// to TomahawkHub). Tenant defaults to industrialtoolsandhardware.unicommerce.com.
+// Token is cached at the edge until shortly before it expires.
+async function ucApiToken(env) {
+  if (!env.UC_USERNAME || !env.UC_PASSWORD) {
+    const e = new Error('UC API login not set on the Worker yet (secrets UC_USERNAME / UC_PASSWORD)'); e.notConfigured = true; throw e;
+  }
+  const base = 'https://' + (env.UC_TENANT || 'industrialtoolsandhardware') + '.unicommerce.com';
+  const cache = caches.default, key = new Request('https://cache.internal/uc-api-token-v1');
+  const hit = await cache.match(key);
+  if (hit) { const t = await hit.json(); if (t && t.token) return { base, token: t.token }; }
+  const r = await fetch(base + '/oauth/token?grant_type=password&client_id=my-trusted-client&username=' +
+    encodeURIComponent(env.UC_USERNAME) + '&password=' + encodeURIComponent(env.UC_PASSWORD));
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.access_token) throw new Error('UC login failed: ' + (d.error_description || d.error || r.status));
+  const ttl = Math.max(60, Math.min(3600, (Number(d.expires_in) || 600) - 120));
+  await cache.put(key, new Response(JSON.stringify({ token: d.access_token }), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'max-age=' + ttl } }));
+  return { base, token: d.access_token };
+}
+async function ucApiPost(env, path, facility, payload) {
+  const { base, token } = await ucApiToken(env);
+  const r = await fetch(base + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'bearer ' + token, 'Facility': facility },
+    body: JSON.stringify(payload)
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.successful === false) {
+    const msg = (d.errors && d.errors[0] && (d.errors[0].description || d.errors[0].message)) || d.message || ('HTTP ' + r.status);
+    throw new Error('UC ' + path.split('/').pop() + ': ' + msg);
+  }
+  return d;
+}
+// IST date-time string UC expects, e.g. 2026-11-07T00:00:00
+function ucIstStamp(ms) {
+  return new Date(ms + 5.5 * 3600000).toISOString().slice(0, 19);
+}
+// Latest G4 gatepasses straight from UC: up to 3 made today (IST); if none
+// today, the single most recent one from the last 30 days. With items.
+async function g4gpUcLatest(env) {
+  const now = Date.now();
+  const istMidnight = Date.parse(ucIstStamp(now).slice(0, 10) + 'T00:00:00Z') - 5.5 * 3600000;
+  const search = (fromMs) => ucApiPost(env, '/services/rest/v1/purchase/gatepass/search', G4GP_FACILITY,
+    { fromDate: ucIstStamp(fromMs), toDate: ucIstStamp(now + 3600000) });
+  let res = await search(istMidnight), today = true;
+  let els = (res.elements || []).filter(e => e.statusCode !== 'DISCARDED');
+  if (!els.length) { res = await search(now - 30 * 86400000); today = false; els = (res.elements || []).filter(e => e.statusCode !== 'DISCARDED'); }
+  els.sort((a, b) => (Number(b.created) || 0) - (Number(a.created) || 0));
+  const pick = els.slice(0, today ? 3 : 1);
+  if (!pick.length) return { today, gatepasses: [] };
+  const full = await ucApiPost(env, '/services/rest/v1/purchase/gatepass/get', G4GP_FACILITY, { gatePassCodes: pick.map(e => e.code) });
+  const byCode = new Map((full.elements || []).map(e => [e.code, e]));
+  const gatepasses = pick.map(e => {
+    const f = byCode.get(e.code) || e;
+    // UC can return one DTO per unit/shelf — merge lines by SKU
+    const items = new Map();
+    (f.gatePassItemDTOs || []).forEach(it => {
+      const sku = it.itemTypeSKU || it.itemCode; if (!sku) return;
+      const cur = items.get(sku) || { sku, name: it.itemTypeName || '', hsn: it.hsnCode || '', qty: 0, received: 0 };
+      cur.qty += Number(it.quantity) || 0; cur.received += Number(it.receivedQuantity) || 0;
+      items.set(sku, cur);
+    });
+    return {
+      code: f.code, status: f.statusCode || e.statusCode, type: f.type || e.type,
+      to_party: f.toPartyName || e.toParty || '', to_party_code: '', reference: f.reference || e.reference || '',
+      created: f.created ? new Date(Number(f.created)).toISOString() : null, username: f.username || e.username || '',
+      source: 'uc-live', items: [...items.values()]
+    };
+  });
+  return { today, gatepasses };
 }

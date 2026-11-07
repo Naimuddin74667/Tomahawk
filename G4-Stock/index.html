@@ -976,14 +976,18 @@ button[hidden] { display: none !important; }
   <div class="panel">
     <div class="panel-head">
       <div class="panel-title">Print UC gatepass</div>
-      <span class="muted" style="font-size:12px" id="recent-note"></span>
+      <button class="btn-primary" id="btn-live" title="Asks Unicommerce directly — today's latest 3, or the last one if none today">⟳ Fetch latest from UC</button>
+    </div>
+    <div id="live-box" hidden style="margin-bottom:16px">
+      <div class="live-head" id="live-head"></div>
+      <div class="tbl-wrap"><table class="gp-tbl"><tbody id="live-body"></tbody></table></div>
     </div>
     <div class="add-bar" style="grid-template-columns: 1fr auto">
       <div>
         <label class="field-label" for="f-code">Gatepass code</label>
         <input class="field" id="f-code" placeholder="e.g. GP8601TOMAHAWKHUB0271 — or pick one below" autocomplete="off">
       </div>
-      <button class="btn-primary" id="btn-load">Open</button>
+      <button class="btn-ghost" id="btn-load">Open</button>
     </div>
     <div class="err-box" id="err-box" hidden></div>
   </div>
@@ -1014,7 +1018,7 @@ button[hidden] { display: none !important; }
   <!-- Recent G4 gatepasses from UC -->
   <div class="panel">
     <div class="panel-head">
-      <div class="panel-title">Recent G4 gatepasses</div>
+      <div class="panel-title">Recent G4 gatepasses <span class="muted" style="font-size:12px;font-weight:500" id="recent-note"></span></div>
       <div class="reg-toolbar" style="margin:0">
         <button class="chip-filter active" data-f="all">All</button>
         <button class="chip-filter" data-f="STOCK_TRANSFER">To E3</button>
@@ -1042,6 +1046,10 @@ button[hidden] { display: none !important; }
 .recv-ok { color: var(--c-green); font-weight: 700; }
 .recv-bad { color: var(--c-red); font-weight: 700; }
 #gp-panel { border-color: var(--hero); }
+.live-head { font-size: 12.5px; color: var(--text-secondary); margin-bottom: 8px; }
+.live-head b { color: var(--text-primary); }
+#live-body td { padding: 12px; }
+.live-src { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--hero-soft); color: var(--hero-deep); margin-left: 6px; }
 .panel-head .reg-toolbar { flex-wrap: nowrap; }
 .panel-head .reg-search { width: 220px; height: 36px; margin-left: 6px; }
 @media (max-width: 720px) { .panel-head .reg-toolbar { flex-wrap: wrap; } }
@@ -1177,6 +1185,46 @@ button[hidden] { display: none !important; }
     renderRecent();
   });
 
+  // ════════════ FETCH LATEST STRAIGHT FROM UC ════════════
+  var live = {}; // code → gatepass from the UC API
+  $('btn-live').addEventListener('click', function () {
+    var b = this; b.disabled = true; b.textContent = 'Asking UC…';
+    $('live-box').hidden = false;
+    $('live-head').textContent = 'Fetching from Unicommerce…';
+    $('live-body').innerHTML = '<tr class="sk-row"><td><span class="sk-block" style="width:100%"></span></td></tr>';
+    api('g4gpUcLive').then(function (res) {
+      if (!res.ok) throw new Error(res.error);
+      live = {};
+      res.gatepasses.forEach(function (g) { live[g.code] = g; });
+      $('live-head').innerHTML = res.gatepasses.length
+        ? (res.today ? '<b>' + res.gatepasses.length + '</b> latest from today' : 'None made today — <b>last one</b> from G4') + ' · live from UC, ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+        : 'No gatepasses from G4 in the last 30 days.';
+      $('live-body').innerHTML = res.gatepasses.map(function (g) {
+        var qty = g.items.reduce(function (a, i) { return a + i.qty; }, 0);
+        return '<tr><td><b>' + esc(g.code) + '</b><span class="live-src">UC live</span></td>' +
+          '<td class="muted" style="white-space:nowrap">' + esc(fmtDT(g.created)) + '</td>' +
+          '<td>' + esc(g.to_party || '—') + '</td><td>' + esc(typeLabel(g.type)) + '</td>' +
+          '<td class="num">' + g.items.length + ' lines</td><td class="num"><b>' + fmt(qty) + '</b> pcs</td>' +
+          '<td><span class="st ' + stClass(g.status) + '">' + esc(g.status) + '</span></td>' +
+          '<td style="white-space:nowrap"><button class="link-btn" data-lopen="' + esc(g.code) + '">Open</button> ' +
+          '<button class="btn-primary" style="min-height:34px;padding:0 14px;font-size:13px" data-lprint="' + esc(g.code) + '">Print</button></td></tr>';
+      }).join('');
+    }).catch(function (e) {
+      $('live-head').innerHTML = '<span style="color:var(--c-red)">' + esc(e.message) + '</span>';
+      $('live-body').innerHTML = '';
+    }).then(function () { b.disabled = false; b.textContent = '⟳ Fetch latest from UC'; });
+  });
+  $('live-body').addEventListener('click', function (e) {
+    var o = e.target.getAttribute('data-lopen'), p = e.target.getAttribute('data-lprint');
+    var g = live[o || p]; if (!g) return;
+    showGatepass(g, !!p);
+  });
+  function showGatepass(g, andPrint) {
+    cur = g; $('f-code').value = g.code; $('err-box').hidden = true;
+    renderGatepass(); $('gp-panel').hidden = false;
+    if (andPrint) printPdf(); else $('gp-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   // ════════════ OPEN ONE GATEPASS ════════════
   $('btn-load').addEventListener('click', function () { openGatepass($('f-code').value, false); });
   $('f-code').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); openGatepass($('f-code').value, false); } });
@@ -1191,11 +1239,7 @@ button[hidden] { display: none !important; }
     $('err-box').hidden = true; $('btn-load').disabled = true;
     api('g4gpUcGet', { code: code }).then(function (res) {
       if (!res.ok) throw new Error(res.error);
-      cur = res.gatepass; $('f-code').value = cur.code;
-      renderGatepass();
-      $('gp-panel').hidden = false;
-      $('gp-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
-      if (andPrint) printPdf();
+      showGatepass(res.gatepass, andPrint);
     }).catch(function (e) {
       $('err-box').textContent = e.message; $('err-box').hidden = false;
     }).then(function () { $('btn-load').disabled = false; });
@@ -1207,7 +1251,7 @@ button[hidden] { display: none !important; }
     $('gp-status').textContent = g.status; $('gp-status').className = 'st ' + stClass(g.status);
     $('gp-meta').innerHTML = [
       ['From', 'G4 · TomahawkHub'], ['To', destLabel(g)], ['Type', typeLabel(g.type)], ['Created', fmtDT(g.created)],
-      ['Reference', g.reference || '—'], ['Lines', g.items.length], ['UC sync', g.synced ? timeAgo(g.synced) : '—'], ['UC party code', g.to_party_code || '—']
+      ['Reference', g.reference || '—'], ['Lines', g.items.length], ['Source', g.source === 'uc-live' ? 'UC live' + (g.username ? ' · ' + g.username : '') : 'UC sync ' + (g.synced ? timeAgo(g.synced) : '—')], ['UC party code', g.to_party_code || '—']
     ].map(function (x) { return '<div><span>' + x[0] + '</span><b>' + esc(x[1]) + '</b></div>'; }).join('');
     $('gp-items').innerHTML = g.items.map(function (it, n) {
       var s = bySku[it.sku] || {}, ppc = s.ppc;
