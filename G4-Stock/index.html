@@ -974,6 +974,7 @@ button[hidden] { display: none !important; }
       <div class="panel-title">G4 stock <span class="muted" style="font-size:12px;font-weight:500" id="g4-note"></span></div>
       <div class="actions">
         <button class="chip-filter" id="g4-noppc">⚠ No Qty/box only</button>
+        <button class="chip-filter" id="g4-loose">Loose qty only</button>
         <input class="field" id="g4-search" placeholder="Search SKU or name" style="width:240px;height:36px">
       </div>
     </div>
@@ -1072,6 +1073,9 @@ button[hidden] { display: none !important; }
 .age-old { color: var(--c-red); font-weight: 700; }
 .noppc-row td { background: var(--c-orange-dim) !important; }
 .noppc-tag { color: var(--c-orange); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
+.loose-tag { color: var(--c-red); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
+.loose-row td { background: var(--c-red-dim) !important; }
+.loose-flag { color: var(--c-red); background: var(--surface, var(--bg-surface)); border: 1px solid var(--c-red-border) !important; font-size: 10.5px; padding: 1px 6px; margin-left: 4px; }
 .po-row { cursor: pointer; }
 .po-chev { display: inline-block; transition: transform .15s; color: var(--text-secondary); }
 .po-row.open .po-chev { transform: rotate(90deg); }
@@ -1161,9 +1165,11 @@ button[hidden] { display: none !important; }
       // G4 Stock
       $('stat-qty').textContent = fmt(inG4.reduce(function (a, s) { return a + s.g4; }, 0)) + ' pcs';
       var noPpc = inG4.filter(function (s) { return !s.ppc; }).length;
-      $('stat-skus').innerHTML = fmt(inG4.length) + ' SKUs · ' + (noPpc
-        ? '<span class="noppc-tag">⚠ ' + noPpc + ' without Qty/box</span>'
-        : 'UC sync ' + (D.syncedAt ? timeAgo(D.syncedAt) : '—'));
+      var loose = inG4.filter(isLoose).length;
+      var tags = [];
+      if (noPpc) tags.push('<span class="noppc-tag" data-f="noppc">⚠ ' + noPpc + ' without Qty/box</span>');
+      if (loose) tags.push('<span class="loose-tag" data-f="loose">' + loose + ' with loose qty</span>');
+      $('stat-skus').innerHTML = fmt(inG4.length) + ' SKUs · ' + (tags.length ? tags.join(' · ') : 'UC sync ' + (D.syncedAt ? timeAgo(D.syncedAt) : '—'));
       // Open POs (+ inward pending)
       if (D.inward) {
         $('stat-pos').textContent = fmt(D.inward.pos);
@@ -1175,6 +1181,8 @@ button[hidden] { display: none !important; }
       renderSection();
     }).catch(function (e) { setStatus('Could not load — ' + e.message, true); });
   }
+  // Loose = G4 qty isn't a whole number of boxes
+  function isLoose(s) { return !!s.ppc && s.g4 > 0 && s.g4 % s.ppc !== 0; }
   function daysOld(iso) { return iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)) : 0; }
 
   // ════════════ SECTION CARDS (one section open at a time) ════════════
@@ -1182,7 +1190,11 @@ button[hidden] { display: none !important; }
   document.querySelector('.g4-stats').addEventListener('click', function (e) {
     var c = e.target.closest('.sec-card'); if (!c) return;
     sec = c.getAttribute('data-sec');
-    if (e.target.closest('.noppc-tag')) { g4NoPpcOnly = true; $('g4-noppc').classList.add('active'); }
+    var tag = e.target.closest('[data-f]');
+    if (tag) {
+      g4NoPpcOnly = tag.getAttribute('data-f') === 'noppc'; g4LooseOnly = tag.getAttribute('data-f') === 'loose';
+      $('g4-noppc').classList.toggle('active', g4NoPpcOnly); $('g4-loose').classList.toggle('active', g4LooseOnly);
+    }
     renderSection();
   });
   function renderSection() {
@@ -1195,18 +1207,22 @@ button[hidden] { display: none !important; }
   $('g4-search').addEventListener('input', renderG4);
   var g4NoPpcOnly = false;
   $('g4-noppc').addEventListener('click', function () { g4NoPpcOnly = !g4NoPpcOnly; this.classList.toggle('active', g4NoPpcOnly); renderG4(); });
+  var g4LooseOnly = false;
+  $('g4-loose').addEventListener('click', function () { g4LooseOnly = !g4LooseOnly; this.classList.toggle('active', g4LooseOnly); renderG4(); });
   function renderG4() {
     var q = $('g4-search').value.trim().toLowerCase();
     var rows = D.stock.filter(function (s) { return s.g4 > 0; })
       .filter(function (s) { return !g4NoPpcOnly || !s.ppc; })
+      .filter(function (s) { return !g4LooseOnly || isLoose(s); })
       .filter(function (s) { return !q || (s.sku + ' ' + (s.name || '')).toLowerCase().indexOf(q) !== -1; })
       .sort(function (a, b) { return b.g4 - a.g4; });
     $('g4-note').textContent = rows.length + ' SKUs · ' + fmt(rows.reduce(function (a, s) { return a + s.g4; }, 0)) + ' pcs';
     $('g4-body').innerHTML = rows.length ? rows.map(function (s, n) {
-      return '<tr' + (s.ppc ? '' : ' class="noppc-row"') + '><td class="muted">' + (n + 1) + '</td>' +
+      var lz = isLoose(s);
+      return '<tr' + (!s.ppc ? ' class="noppc-row"' : lz ? ' class="loose-row"' : '') + '><td class="muted">' + (n + 1) + '</td>' +
         '<td><span class="sku-code">' + esc(s.sku) + '</span>' + (s.name && s.name !== s.sku ? '<span class="sku-name">' + esc(s.name) + '</span>' : '') + '</td>' +
         '<td class="num">' + (s.ppc || '<span class="flag warn">No Qty/box</span>') + '</td>' +
-        '<td class="num"><b>' + boxesText(s.g4, s.ppc) + '</b></td>' +
+        '<td class="num"><b>' + boxesText(s.g4, s.ppc) + '</b>' + (lz ? ' <span class="flag loose-flag">' + (s.g4 % s.ppc) + ' loose</span>' : '') + '</td>' +
         '<td class="num"><b>' + fmt(s.g4) + '</b></td>' +
         '<td class="num">' + fmt(s.e3) + '</td>' +
         '<td class="num">' + (D.openGp[s.sku] ? fmt(D.openGp[s.sku]) : '<span class="muted">0</span>') + '</td></tr>';
