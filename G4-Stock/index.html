@@ -985,7 +985,7 @@ button[hidden] { display: none !important; }
     <div class="add-bar" style="grid-template-columns: 1fr auto">
       <div>
         <label class="field-label" for="f-code">Gatepass code</label>
-        <input class="field" id="f-code" placeholder="e.g. GP8601TOMAHAWKHUB0271 — or pick one below" autocomplete="off">
+        <input class="field" id="f-code" placeholder="e.g. GP8601TOMAHAWKHUB0271 or paste the UC gatepass link" autocomplete="off">
       </div>
       <button class="btn-ghost" id="btn-load">Open</button>
     </div>
@@ -1012,27 +1012,6 @@ button[hidden] { display: none !important; }
     </div>
     <div class="summary-bar">
       <div class="summary-stats" id="gp-sum"></div>
-    </div>
-  </div>
-
-  <!-- Recent G4 gatepasses from UC -->
-  <div class="panel">
-    <div class="panel-head">
-      <div class="panel-title">Recent G4 gatepasses <span class="muted" style="font-size:12px;font-weight:500" id="recent-note"></span></div>
-      <div class="reg-toolbar" style="margin:0">
-        <button class="chip-filter active" data-f="all">All</button>
-        <button class="chip-filter" data-f="STOCK_TRANSFER">To E3</button>
-        <button class="chip-filter" data-f="CREATED">Open</button>
-        <input class="field reg-search" id="reg-search" placeholder="Search code or party" style="margin-left:6px">
-      </div>
-    </div>
-    <div class="tbl-wrap">
-      <table class="gp-tbl">
-        <thead><tr>
-          <th>Gatepass</th><th>Created</th><th>To</th><th>Type</th><th class="num">Lines</th><th class="num">Qty</th><th>UC status</th><th></th>
-        </tr></thead>
-        <tbody id="recent-body"></tbody>
-      </table>
     </div>
   </div>
 
@@ -1139,51 +1118,6 @@ button[hidden] { display: none !important; }
       if (cur) renderGatepass(); // refresh Qty/box once stock arrives
     }).catch(function (e) { setStatus('Could not load — ' + e.message, true); });
   }
-
-  // ════════════ RECENT LIST ════════════
-  function loadRecent() {
-    return api('g4gpUcRecent').then(function (res) {
-      if (!res.ok) throw new Error(res.error);
-      recent = res.gatepasses || [];
-      $('recent-note').textContent = recent.length + ' gatepasses from G4 · last 45 days';
-      renderRecent();
-    }).catch(function (e) {
-      $('recent-body').innerHTML = '<tr class="empty-row"><td colspan="8">Could not load — ' + esc(e.message) + '</td></tr>';
-    });
-  }
-  function renderRecent() {
-    var q = $('reg-search').value.trim().toLowerCase();
-    var rows = recent.filter(function (g) {
-      if (recentFilter === 'STOCK_TRANSFER' && g.type !== 'STOCK_TRANSFER') return false;
-      if (recentFilter === 'CREATED' && g.status === 'CLOSED') return false;
-      return !q || (g.code + ' ' + (g.to_party || '')).toLowerCase().indexOf(q) !== -1;
-    });
-    $('recent-body').innerHTML = rows.length ? rows.slice(0, 200).map(function (g) {
-      return '<tr>' +
-        '<td><b>' + esc(g.code) + '</b></td>' +
-        '<td class="muted" style="white-space:nowrap">' + esc(fmtDT(g.created)) + '</td>' +
-        '<td>' + esc(g.to_party || '—') + '</td>' +
-        '<td>' + esc(typeLabel(g.type)) + '</td>' +
-        '<td class="num">' + g.lines + '</td>' +
-        '<td class="num"><b>' + fmt(g.qty) + '</b></td>' +
-        '<td><span class="st ' + stClass(g.status) + '">' + esc(g.status) + '</span></td>' +
-        '<td><button class="link-btn" data-code="' + esc(g.code) + '">Open</button> ' +
-            '<button class="link-btn" data-print="' + esc(g.code) + '">Print</button></td>' +
-      '</tr>';
-    }).join('') : '<tr class="empty-row"><td colspan="8">No gatepasses match.</td></tr>';
-  }
-  $('recent-body').addEventListener('click', function (e) {
-    var c = e.target.getAttribute('data-code'), p = e.target.getAttribute('data-print');
-    if (c) openGatepass(c, false);
-    if (p) openGatepass(p, true);
-  });
-  $('reg-search').addEventListener('input', renderRecent);
-  document.querySelector('.reg-toolbar').addEventListener('click', function (e) {
-    var f = e.target.getAttribute('data-f'); if (!f) return;
-    recentFilter = f;
-    [].forEach.call(this.querySelectorAll('.chip-filter'), function (c) { c.classList.toggle('active', c === e.target); });
-    renderRecent();
-  });
 
   // ════════════ FETCH LATEST STRAIGHT FROM UC ════════════
   var live = {}; // code → gatepass from the UC API
@@ -1440,15 +1374,9 @@ button[hidden] { display: none !important; }
     doc.save(g.code + '.pdf');
   }
 
-  // Skeleton rows until data arrives
-  $('recent-body').innerHTML = [1, 2, 3, 4].map(function () {
-    return '<tr class="sk-row">' + [150, 110, 120, 90, 30, 40, 60, 60].map(function (w) { return '<td><span class="sk-block" style="width:' + w + 'px"></span></td>'; }).join('') + '</tr>';
-  }).join('');
-
   // ?gp=CODE in the URL opens that gatepass straight away
   var qs = new URLSearchParams(location.search).get('gp');
   loadCards();
-  loadRecent();
   if (qs) openGatepass(qs, false);
 })();
 </script>
