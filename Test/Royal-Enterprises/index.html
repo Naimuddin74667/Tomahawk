@@ -951,7 +951,7 @@ function uploadPhoto(cb) {
    off-white / light-grey background → pure white, then trim empty margins
    so the product fills ~88% of a square white canvas. Runs on the phone, free.
    Skipped if the photo's edges are not a light, plain background. */
-function catalogueClean(dataUrl, out = 1024) {
+function catalogueClean(dataUrl, out = 1024, onlyIfGrey = false) {
   return new Promise(res => {
     const img = new Image();
     img.onload = () => {
@@ -967,7 +967,8 @@ function catalogueClean(dataUrl, out = 1024) {
       const lum = edge.map(p => (p[0] + p[1] + p[2]) / 3).sort((a, b) => a - b);
       const bg = lum[Math.floor(lum.length / 2)];
       const sat = edge.reduce((m, p) => m + Math.max(...p) - Math.min(...p), 0) / edge.length;
-      if (bg < 200 || sat > 25) return res(dataUrl);          // not a plain light background — leave as is
+      if (bg < 200 || sat > 25) return res(onlyIfGrey ? null : dataUrl);   // not a plain light background — leave as is
+      if (onlyIfGrey && bg >= 252) return res(null);          // already white (e.g. brand-website photo) — nothing to fix
       // 2. lift the background to pure white (gentle gain, then snap near-white to 255)
       const gain = Math.min(1.15, 255 / Math.max(bg - 4, 1));
       let x0 = w, y0 = h, x1 = -1, y1 = -1;
@@ -982,7 +983,7 @@ function catalogueClean(dataUrl, out = 1024) {
         d[i] = r; d[i + 1] = gg; d[i + 2] = b;
       }
       g.putImageData(id, 0, 0);
-      if (x1 < 0) return res(c.toDataURL('image/jpeg', .88));
+      if (x1 < 0) return res(onlyIfGrey ? null : c.toDataURL('image/jpeg', .88));
       // 3. trim + centre on a square white canvas, product ≈ 88% of the frame
       const bw = x1 - x0 + 1, bh = y1 - y0 + 1, side = Math.max(bw, bh) / .88;
       const o = document.createElement('canvas'); o.width = o.height = out;
@@ -991,8 +992,31 @@ function catalogueClean(dataUrl, out = 1024) {
       og.drawImage(c, x0, y0, bw, bh, (out - bw * k) / 2, (out - bh * k) / 2, bw * k, bh * k);
       res(o.toDataURL('image/jpeg', .88));
     };
-    img.onerror = () => res(dataUrl); img.src = dataUrl;
+    img.onerror = () => res(onlyIfGrey ? null : dataUrl);
+    if (!dataUrl.startsWith('data:')) { img.crossOrigin = 'anonymous'; dataUrl += (dataUrl.includes('?') ? '&' : '?') + 'cors=1'; }
+    img.src = dataUrl;
   });
+}
+
+// More → "Fix photo backgrounds": runs catalogueClean on every saved photo that has a grey /
+// off-white background, uploads the cleaned copy and swaps it in. White photos are skipped.
+async function fixAllPhotos() {
+  if (!cloud.key) return toast('Connect to cloud first');
+  const urls = [...new Set(S.products.flatMap(p => [...(p.photos || []), p.photo, ...p.variants.map(v => v.photo)]).filter(Boolean))];
+  if (!confirm(`Check ${urls.length} photos and make grey backgrounds pure white?`)) return;
+  const map = {}; let done = 0;
+  for (const u of urls) {
+    toast(`Checking photos… ${++done}/${urls.length}`);
+    try {
+      const data = await catalogueClean(u, 1024, true);
+      if (data) map[u] = (await api('savePhoto', { data })).url;
+    } catch (e) { /* skip this one, keep the old photo */ }
+  }
+  const n = Object.keys(map).length;
+  if (!n) return toast('All photos already have a white background');
+  const sw = u => map[u] || u;
+  S.products.forEach(p => { if (p.photos) p.photos = p.photos.map(sw); if (p.photo) p.photo = sw(p.photo); p.variants.forEach(v => { if (v.photo) v.photo = sw(v.photo); }); });
+  save(); render(); toast(`Fixed ${n} photo${n > 1 ? 's' : ''}`);
 }
 // Prompt for the Gemini app: clean e-commerce image of the product itself (not the box), pure white, no added text
 function geminiPrompt() {
@@ -1138,6 +1162,7 @@ function renderMore() {
       ${cloud.key
         ? `<button class="row" onclick="cloudPush();cloudLoad()"><span class="adj">${ic('sync')}</span><div class="grow" style="text-align:left"><b>Sync now</b><div class="sub">Owner phone · changes save to the cloud automatically</div></div></button>
            <button class="row" onclick="openImport()"><span class="adj" style="color:var(--accent-txt)">${ic('in')}</span><div class="grow" style="text-align:left"><b>Import from brand websites</b><div class="sub">Sarju & Ticon — photos, specs & variants come in automatically</div></div></button>
+           <button class="row" onclick="fixAllPhotos()"><span class="adj" style="color:var(--accent-txt)">${ic('sync')}</span><div class="grow" style="text-align:left"><b>Fix photo backgrounds</b><div class="sub">Makes grey / off-white photo backgrounds pure white, like the brand websites</div></div></button>
            <button class="row" onclick="disconnectCloud()"><span class="adj">${ic('cloud')}</span><div class="grow" style="text-align:left"><b>Disconnect this phone</b><div class="sub">Removes the owner key from this phone</div></div></button>`
         : `<button class="row" onclick="connectCloud()"><span class="adj" style="color:var(--accent-txt)">${ic('cloud')}</span><div class="grow" style="text-align:left"><b>Connect to cloud (owner)</b><div class="sub">Enter the owner key once — catalogue and photos sync to every phone</div></div></button>
            <button class="row" onclick="cloudLoad()"><span class="adj">${ic('sync')}</span><div class="grow" style="text-align:left"><b>Refresh from cloud</b><div class="sub">Get the latest catalogue (view only)</div></div></button>`}
