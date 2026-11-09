@@ -939,7 +939,8 @@ function uploadPhoto(cb) {
   fi.onchange = async () => {
     const f = fi.files[0]; if (!f) return;
     let data;
-    try { data = await catalogueClean(await compressImage(f, 1024, .9)); } catch (e) { return toast('Could not read that photo'); }
+    // read the original file once and encode once at high quality (no double JPEG compression)
+    try { data = await catalogueClean(await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(f); }), 1600); } catch (e) { return toast('Could not read that photo'); }
     if (!cloud.key) return cb(data);
     toast('Uploading photo…');
     try { cb((await api('savePhoto', { data })).url); toast('Photo saved'); }
@@ -951,13 +952,25 @@ function uploadPhoto(cb) {
    off-white / light-grey background → pure white, then trim empty margins
    so the product fills ~88% of a square white canvas. Runs on the phone, free.
    Skipped if the photo's edges are not a light, plain background. */
-function catalogueClean(dataUrl, out = 1024, onlyIfGrey = false) {
+// Encode a canvas as JPEG at the best quality that still fits the cloud's ~1 MB photo limit.
+function encodeFit(c) {
+  for (const q of [.95, .92, .88, .84, .8]) { const u = c.toDataURL('image/jpeg', q); if (u.length < 1_350_000) return u; }
+  const s = document.createElement('canvas'); s.width = Math.round(c.width * .75); s.height = Math.round(c.height * .75);
+  s.getContext('2d').drawImage(c, 0, 0, s.width, s.height); return encodeFit(s);
+}
+// Scale a canvas down so its longest side is at most `max` (never up).
+function fitCanvas(c, max) {
+  const k = Math.min(1, max / Math.max(c.width, c.height)); if (k === 1) return c;
+  const s = document.createElement('canvas'); s.width = Math.round(c.width * k); s.height = Math.round(c.height * k);
+  const g = s.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(c, 0, 0, s.width, s.height); return s;
+}
+function catalogueClean(dataUrl, out = 1600, onlyIfGrey = false) {
   return new Promise(res => {
     const img = new Image();
     img.onload = () => {
       const w = img.width, h = img.height;
       const c = document.createElement('canvas'); c.width = w; c.height = h;
-      const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, w, h); g.drawImage(img, 0, 0);   // transparent PNG → white
       const id = g.getImageData(0, 0, w, h), d = id.data;
       // 1. background level = median brightness of the border pixels
       // Sample rings at several insets: older photos have a white frame around a grey
@@ -974,7 +987,7 @@ function catalogueClean(dataUrl, out = 1024, onlyIfGrey = false) {
         if (med >= 200 && rs <= 25 && med < bg) { bg = med; sat = rs; }   // darkest plain light ring = real background
       }
       if (bg === 999) { bg = 0; sat = 99; }
-      if (bg < 200 || sat > 25) return res(onlyIfGrey ? null : dataUrl);   // not a plain light background — leave as is
+      if (bg < 200 || sat > 25) return res(onlyIfGrey ? null : encodeFit(fitCanvas(c, out)));   // not a plain light background — leave as is
       if (onlyIfGrey && bg >= 252) return res(null);          // already white (e.g. brand-website photo) — nothing to fix
       // 2. lift the background to pure white (gentle gain, then snap near-white to 255)
       const gain = Math.min(1.15, 255 / Math.max(bg - 4, 1));
@@ -983,21 +996,25 @@ function catalogueClean(dataUrl, out = 1024, onlyIfGrey = false) {
         const i = (y * w + x) * 4;
         let r = Math.min(255, d[i] * gain), gg = Math.min(255, d[i + 1] * gain), b = Math.min(255, d[i + 2] * gain);
         const mn = Math.min(r, gg, b), mx = Math.max(r, gg, b);
-        if (mn > 246 && mx - mn < 12) { r = gg = b = 255; }    // near-white, colourless → pure white
+        if (mx - mn < 12 && mn > 236) {                        // near-white, colourless → fade smoothly to pure white
+          const t = Math.min(1, (mn - 236) / 14), k = t * t * (3 - 2 * t);   // smoothstep: no hard edges
+          r += (255 - r) * k; gg += (255 - gg) * k; b += (255 - b) * k;
+        }
         else if (mn < 240 || mx - mn > 18) {                    // real product pixel → grow bounding box
           if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
         }
         d[i] = r; d[i + 1] = gg; d[i + 2] = b;
       }
       g.putImageData(id, 0, 0);
-      if (x1 < 0) return res(onlyIfGrey ? null : c.toDataURL('image/jpeg', .88));
+      if (x1 < 0) return res(onlyIfGrey ? null : encodeFit(fitCanvas(c, out)));
       // 3. trim + centre on a square white canvas, product ≈ 88% of the frame
       const bw = x1 - x0 + 1, bh = y1 - y0 + 1, side = Math.max(bw, bh) / .88;
+      out = Math.min(out, Math.round(side));                 // never upscale (keeps it sharp)
       const o = document.createElement('canvas'); o.width = o.height = out;
       const og = o.getContext('2d'); og.fillStyle = '#fff'; og.fillRect(0, 0, out, out);
       const k = out / side; og.imageSmoothingQuality = 'high';
       og.drawImage(c, x0, y0, bw, bh, (out - bw * k) / 2, (out - bh * k) / 2, bw * k, bh * k);
-      res(o.toDataURL('image/jpeg', .88));
+      res(encodeFit(o));
     };
     img.onerror = () => res(onlyIfGrey ? null : dataUrl);
     if (!dataUrl.startsWith('data:')) { img.crossOrigin = 'anonymous'; dataUrl += (dataUrl.includes('?') ? '&' : '?') + 'cors=1'; }
@@ -1015,7 +1032,7 @@ async function fixAllPhotos() {
   for (const u of urls) {
     toast(`Checking photos… ${++done}/${urls.length}`);
     try {
-      const data = await catalogueClean(u, 1024, true);
+      const data = await catalogueClean(u, 1600, true);
       if (data) map[u] = (await api('savePhoto', { data })).url;
     } catch (e) { /* skip this one, keep the old photo */ }
   }
