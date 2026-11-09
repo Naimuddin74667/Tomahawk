@@ -19,6 +19,7 @@
      POST studioPhoto    { image: base64 JPEG }  → Gemini image response (studio packshot of the box)  [owner key]
      POST listSource     { src: 'sarju'|'ticon' } → { items }   whole brand-website catalogue, cleaned  [owner key]
      POST importPhoto    { url }  → { id, url }      copy a brand-website photo into D1  [owner key]
+     POST sourceImages   { src, id } → { images }   ALL photos of one brand-website product (gallery + variations + description)  [owner key]
    Shops (owner key):
      POST shopsList / shopSave {shop} / shopToggle {id,active} / shopResetLink {id}
      POST ordersList {} / orderSetStatus {id,status}
@@ -130,6 +131,7 @@ export default {
         return json({ id, url: `${url.origin}/?action=photo&id=${id}` });
       }
 
+      if (action === 'sourceImages') return json({ images: await sourceImages(env, body.src || 'sarju', parseInt(body.id)) });
       if (action === 'listSource' || action === 'listSarju') return json({ items: await listSource(env, body.src || 'sarju') });
 
       // ---------- shops & shop orders (owner) ----------
@@ -289,6 +291,39 @@ function tidyName(n) {
   if (n !== n.toUpperCase()) return n;
   const cap = w => /\d/.test(w) || KEEP_CAPS.test(w) || w.length === 1 ? w : w.charAt(0) + w.slice(1).toLowerCase();
   return n.split(/\s+/).map(w => /^(TO|AND|FOR|WITH|OF)$/.test(w) ? w.toLowerCase() : w.split('-').map(cap).join('-')).join(' ');
+}
+// Every photo of a brand-website product: its gallery + each variation's photo (Type-C / Micro…) + photos inside the description.
+// Same file from different sizes (-600x600, -scaled) counts once. Only photos on the brand's own site are kept.
+function galleryFrom(base, p, variations) {
+  const host = new URL(base).host.replace(/^www\./, ''), seen = new Set(), out = [];
+  const norm = u => {
+    try {
+      let x = new URL(u, base);
+      if (/^i\d\.wp\.com$/.test(x.host)) x = new URL('https://' + x.pathname.slice(1));   // Jetpack CDN copy → original
+      x.search = '';
+      return x.host.replace(/^www\./, '') === host && /\.(jpe?g|png|webp)$/i.test(x.pathname) ? x.toString() : '';
+    } catch (e) { return ''; }
+  };
+  const add = u => {
+    u = norm(u); if (!u) return;
+    const k = new URL(u).pathname.replace(/-\d+x\d+(?=\.\w+$)/, '').replace(/-scaled(?=\.\w+$)/, '').toLowerCase();
+    if (!seen.has(k)) { seen.add(k); out.push(u); }
+  };
+  (p.images || []).forEach(im => add(pickImg(im)));
+  (variations || []).forEach(v => (v.images || []).forEach(im => add(pickImg(im))));
+  for (const tag of String(p.description || '').match(/<img[^>]+>/gi) || []) {
+    if (/logo|icon|badge|whatsapp|payment/i.test(tag)) continue;
+    for (const m of tag.matchAll(/(?:data-lazy-src|data-src|src)=["']([^"']+)["']/gi)) if (!/-(?:\d{1,2}|1[0-4]\d)x\d+\./.test(m[1])) add(m[1]);
+  }
+  return out.slice(0, 12);
+}
+async function sourceImages(env, src, id) {
+  if (!SOURCES[src]) throw new Error('unknown source ' + src);
+  const base = sourceBase(env, src);
+  const get = async pid => { const r = await fetch(`${base}/wp-json/wc/store/v1/products/${pid}`, { headers: { Accept: 'application/json' } }); if (!r.ok) throw new Error(SOURCES[src].brand + ' site: HTTP ' + r.status); return r.json(); };
+  const p = await get(id);
+  const variations = await Promise.all((p.variations || []).slice(0, 8).map(v => get(v.id).catch(() => null)));
+  return galleryFrom(base, p, variations.filter(Boolean));
 }
 async function listSource(env, src) {
   if (!SOURCES[src]) throw new Error('unknown source ' + src);

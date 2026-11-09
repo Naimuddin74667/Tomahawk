@@ -1039,6 +1039,51 @@ function deleteProduct(id) {
    photos are copied into our own cloud storage.
    ========================================================= */
 const IMP_SOURCES = { sarju: { brand: 'Sarju', site: 'sarjuworld.com', sku: 'SJ' }, ticon: { brand: 'Ticon', site: 'ticon.in', sku: 'TC' } };
+// medium-size photo (~600–800 px) from the srcset, else the full one (same rule as the Worker)
+function impPick(img) {
+  const set = String(img.srcset || '').split(',').map(x => x.trim().split(/\s+/)).filter(x => x[0]).map(([u, w]) => [u, parseInt(w) || 0]);
+  const good = set.filter(x => x[1] >= 600).sort((a, b) => a[1] - b[1])[0];
+  return good ? good[0] : img.src;
+}
+// Every photo of a brand-website product: its gallery + each variation's photo (Type-C / Micro…) + photos inside the description.
+// Same file from different sizes (-600x600, -scaled) counts once. Only photos on the brand's own site are kept.
+function galleryFrom(base, p, variations) {
+  const host = new URL(base).host.replace(/^www\./, ''), seen = new Set(), out = [];
+  const norm = u => {
+    try {
+      let x = new URL(u, base);
+      if (/^i\d\.wp\.com$/.test(x.host)) x = new URL('https://' + x.pathname.slice(1));   // Jetpack CDN copy → original
+      x.search = '';
+      return x.host.replace(/^www\./, '') === host && /\.(jpe?g|png|webp)$/i.test(x.pathname) ? x.toString() : '';
+    } catch (e) { return ''; }
+  };
+  const add = u => {
+    u = norm(u); if (!u) return;
+    const k = new URL(u).pathname.replace(/-\d+x\d+(?=\.\w+$)/, '').replace(/-scaled(?=\.\w+$)/, '').toLowerCase();
+    if (!seen.has(k)) { seen.add(k); out.push(u); }
+  };
+  (p.images || []).forEach(im => add(impPick(im)));
+  (variations || []).forEach(v => (v.images || []).forEach(im => add(impPick(im))));
+  for (const tag of String(p.description || '').match(/<img[^>]+>/gi) || []) {
+    if (/logo|icon|badge|whatsapp|payment/i.test(tag)) continue;
+    for (const m of tag.matchAll(/(?:data-lazy-src|data-src|src)=["']([^"']+)["']/gi)) if (!/-(?:\d{1,2}|1[0-4]\d)x\d+\./.test(m[1])) add(m[1]);
+  }
+  return out.slice(0, 12);
+}
+// All photos for one product. The phone asks the brand site directly; if the site blocks that,
+// the Worker asks for it (needs the latest worker.js); if both fail, the photos from the catalogue list are used.
+async function impAllImages(it) {
+  const base = 'https://' + IMP_SOURCES[it.src].site;
+  try {
+    const get = async id => { const r = await fetch(`${base}/wp-json/wc/store/v1/products/${id}`); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); };
+    const p = await get(it.id);
+    const vars = await Promise.all((p.variations || []).slice(0, 8).map(v => get(v.id).catch(() => null)));
+    const list = galleryFrom(base, p, vars.filter(Boolean));
+    if (list.length) return list;
+  } catch (e) { /* site blocked the phone → try the Worker */ }
+  try { const r = await api('sourceImages', { src: it.src, id: it.id }); if (r.images && r.images.length) return r.images; } catch (e) {}
+  return it.images;
+}
 let IMP = { src: 'sarju', data: {}, items: null, sel: new Set(), q: '', cat: 'all', busy: false };
 const IMP_CAT = [[/cable/i, 'Cables'], [/charger|adapter/i, 'Chargers'], [/ear|neckband|headphone|bud|tws/i, 'Earphones'], [/power ?bank/i, 'Power Banks'],
   [/speaker/i, 'Speakers'], [/cover|case/i, 'Covers'], [/glass|guard/i, 'Tempered Glass'],
@@ -1090,7 +1135,7 @@ function renderImport() {
         <span class="ck">${IMP.sel.has(it.id) ? ic('check', 'style="width:14px;height:14px"') : ''}</span>
         <img src="${esc(it.thumb)}" alt="" loading="lazy">
         <div class="grow"><b>${esc(it.name)}</b><small>${esc(impCategory(it.cats, it.name))} · ${vs.length > 1 ? vs.join(' + ') : '1 variant'}</small>
-          ${ex ? `<div><span class="pill inapp">In app — will update photo</span></div>` : ''}</div></div>`;
+          ${ex ? `<div><span class="pill inapp">In app — adds any missing photos</span></div>` : ''}</div></div>`;
     }).join('') || '<div class="empty">No matching products</div>'}</div>
     <div style="position:sticky;bottom:0;padding-top:8px;background:var(--bg2)">
       <button class="btn gold block" id="impGo" ${IMP.sel.size && !IMP.busy ? '' : 'disabled'} onclick="runImport()">${ic('in')} Import ${IMP.sel.size || ''} selected</button>
@@ -1105,19 +1150,25 @@ async function runImport() {
   for (const it of picks) {
     ++done;
     try {
+      if (btn()) btn().textContent = `Importing ${done} of ${picks.length} · finding photos…`;
+      const urls = await impAllImages(it);
+      const ex = impExisting(it);
+      // srcMap = website photo → our copy, so importing again only adds photos we don't have yet
+      const srcMap = Object.assign({}, ex && ex.srcMap);
+      // imported before this tracking existed → its first website photo is already in the app
+      if (ex && ex.ext && !ex.srcMap && urls[0]) srcMap[urls[0]] = ex.photo || 'had';
       const photos = [];
-      for (let k = 0; k < it.images.length; k++) {
-        if (btn()) btn().textContent = `Importing ${done} of ${picks.length} · photo ${k + 1}/${it.images.length}…`;
-        try { photos.push((await api('importPhoto', { url: it.images[k] })).url); } catch (e) { /* skip a bad photo, keep the rest */ }
+      for (let k = 0; k < urls.length; k++) {
+        if (srcMap[urls[k]]) continue;
+        if (btn()) btn().textContent = `Importing ${done} of ${picks.length} · photo ${k + 1}/${urls.length}…`;
+        try { const u = (await api('importPhoto', { url: urls[k] })).url; photos.push(u); srcMap[urls[k]] = u; } catch (e) { /* skip a bad photo, keep the rest */ }
       }
       const photo = photos[0] || '';
-      const ex = impExisting(it);
-      if (ex) {                                   // already stocked → studio photos become the gallery
-        if (photo) ex.photo = photo;
-        ex.photos = [...new Set([...photos, ...(ex.photos || [])])];
-        ex.ext = { src: it.src, id: it.id, url: it.url };
-        ex.variants.forEach(v => { if (!v.photo) v.photo = photo; });
-        updated++;
+      if (ex) {                                   // already in the app → keep its main photo, add the missing website photos
+        ex.photos = [...new Set([...(ex.photos || []), ...photos])];
+        if (!ex.photo) ex.photo = ex.photos[0] || '';
+        ex.ext = { src: it.src, id: it.id, url: it.url }; ex.srcMap = srcMap;
+        updated += photos.length ? 1 : 0; ex._added = photos.length;
       } else {
         const cat = findOrAdd(S.cats, impCategory(it.cats, it.name));
         const desc = [it.specs['Watt/Amp'], it.specs['Length'], it.specs['Cable Material']].filter(Boolean).join(' · ');
@@ -1127,13 +1178,14 @@ async function runImport() {
           let sku = `${SRC.sku}-${(it.model || String(it.id)).replace(/-/g, '')}-${abbr}`; if (allVariants().some(x => x.v.sku === sku)) sku = autoSku(it.name, label);
           return { id: uid(), label, sku, weight: 0, purchase: 0, dist: 0, retail: 0, stock: 0, lowAt: 5, photo };
         });
-        S.products.push({ id: pid, name: it.name, brandId: brand.id, catId: cat.id, desc, photo, photos, variants, ext: { src: it.src, id: it.id, url: it.url }, created: Date.now() });
+        S.products.push({ id: pid, name: it.name, brandId: brand.id, catId: cat.id, desc, photo, photos, variants, ext: { src: it.src, id: it.id, url: it.url }, srcMap, created: Date.now() });
         added++;
       }
     } catch (e) { failed++; }
   }
+  const extra = S.products.reduce((a, p) => a + (p._added || 0), 0); S.products.forEach(p => delete p._added);
   IMP.busy = false; IMP.sel.clear(); save(); render(); renderImport();
-  toast(`Imported ${added} new · updated ${updated}` + (failed ? ` · ${failed} failed` : '') + ' — add rates to make them orderable');
+  toast(`Imported ${added} new` + (picks.length > added ? ` · ${extra} new photo${extra === 1 ? '' : 's'} added to existing` : '') + (failed ? ` · ${failed} failed` : ''));
 }
 // find a brand/category by name, or add it
 function findOrAdd(list, name) {
