@@ -20,7 +20,8 @@
      POST importPhoto    { url }  → { id, url }      copy a sarjuworld.com photo into D1  [owner key]
    ========================================================= */
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
+// Tried in order; if Google retires one, the next is used. Override with a GEMINI_MODEL variable in Cloudflare if needed.
+const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash'];
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -134,15 +135,22 @@ Return ONLY JSON with these fields:
 If there is no product box, return {"corners":null,"box_2d":null}.`;
 
 async function analyzeWithGemini(env, base64Jpeg) {
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-    body: JSON.stringify({
-      contents: [{ parts: [{ inline_data: { mime_type: 'image/jpeg', data: base64Jpeg } }, { text: PROMPT }] }],
-      generationConfig: { responseMimeType: 'application/json', temperature: 0 }
-    })
-  });
-  const data = await res.json();
+  const models = env.GEMINI_MODEL ? [env.GEMINI_MODEL, ...GEMINI_MODELS] : GEMINI_MODELS;
+  let res, data;
+  for (const model of models) {
+    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+      body: JSON.stringify({
+        contents: [{ parts: [{ inline_data: { mime_type: 'image/jpeg', data: base64Jpeg } }, { text: PROMPT }] }],
+        generationConfig: { responseMimeType: 'application/json' }   // no temperature: not allowed on Gemini 3.8+
+      })
+    });
+    data = await res.json();
+    // retired / unknown model → try the next one; any other error → stop
+    const msg = (data.error && data.error.message) || '';
+    if (res.ok || !(res.status === 404 || /no longer available|not found|not supported/i.test(msg))) break;
+  }
   if (!res.ok) throw new Error('Gemini: ' + (data.error && data.error.message || res.status));
   const text = data.candidates && data.candidates[0] && data.candidates[0].content.parts.map(p => p.text || '').join('') || '{}';
   let out;
