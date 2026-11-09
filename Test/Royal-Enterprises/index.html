@@ -830,13 +830,15 @@ function deleteProduct(id) {
   save(); closeSheet(); render(); toast('Product deleted');
 }
 /* =========================================================
-   IMPORT FROM SARJU WEBSITE (owner + cloud)
-   Worker reads sarjuworld.com's public catalogue; owner ticks products;
+   IMPORT FROM BRAND WEBSITES (owner + cloud) — sarjuworld.com, ticon.in
+   Worker reads each site's public catalogue; owner ticks products;
    photos are copied into our own cloud storage.
    ========================================================= */
-let IMP = { items: null, sel: new Set(), q: '', cat: 'all', busy: false };
+const IMP_SOURCES = { sarju: { brand: 'Sarju', site: 'sarjuworld.com', sku: 'SJ' }, ticon: { brand: 'Ticon', site: 'ticon.in', sku: 'TC' } };
+let IMP = { src: 'sarju', data: {}, items: null, sel: new Set(), q: '', cat: 'all', busy: false };
 const IMP_CAT = [[/cable/i, 'Cables'], [/charger|adapter/i, 'Chargers'], [/ear|neckband|headphone|bud|tws/i, 'Earphones'], [/power ?bank/i, 'Power Banks'],
-  [/speaker/i, 'Speakers'], [/cover|case/i, 'Covers'], [/glass|guard/i, 'Tempered Glass']];
+  [/speaker/i, 'Speakers'], [/cover|case/i, 'Covers'], [/glass|guard/i, 'Tempered Glass'],
+  [/selfie|tripod|monopod/i, 'Selfie Sticks & Tripods'], [/holder|stand|mount/i, 'Holders & Stands']];
 function impCategory(cats, name) {
   const txt = (cats || []).join(' ') + ' ' + name;
   for (const [re, c] of IMP_CAT) if (re.test(txt)) return c;
@@ -850,17 +852,23 @@ function impVariants(it) {
   return parts.length > 1 ? [...new Set(parts)] : [parts[0] || 'Standard'];
 }
 function impExisting(it) {
-  if (!it.model) return S.products.find(p => p.ext && p.ext.id === it.id) || null;
-  const re = new RegExp('\\b' + it.model + '\\b', 'i');
-  return S.products.find(p => (p.ext && p.ext.id === it.id) || re.test(p.name)) || null;
+  const same = p => p.ext && p.ext.id === it.id && (p.ext.src || 'sarju') === it.src;
+  if (!it.model) return S.products.find(same) || null;
+  const brand = S.brands.find(b => b.name === IMP_SOURCES[it.src].brand);
+  const re = new RegExp('\\b' + it.model.replace(/-/g, '').split('').join('-?') + '\\b', 'i');   // TP-4200 = TP4200
+  return S.products.find(p => same(p) || ((!brand || p.brandId === brand.id) && re.test(p.name))) || null;
 }
-async function openImport() {
+async function openImport(src) {
   if (!cloud.key) return toast('Connect to cloud first');
-  openSheet(sheetHead('Import from Sarju', 'sarjuworld.com catalogue') + '<div id="impBody"><div class="empty">Loading Sarju catalogue…</div></div>');
-  if (!IMP.items) {
-    try { IMP.items = (await api('listSarju', {})).items; }
-    catch (e) { $('#impBody').innerHTML = `<div class="empty">Could not load the Sarju website (${esc(e.message)})</div>`; return; }
+  if (src && src !== IMP.src) { IMP.src = src; IMP.sel.clear(); IMP.q = ''; IMP.cat = 'all'; }
+  const S0 = IMP_SOURCES[IMP.src];
+  const tabs = Object.entries(IMP_SOURCES).map(([k, v]) => `<button class="chip ${IMP.src === k ? 'on' : ''}" onclick="openImport('${k}')">${v.brand}</button>`).join('');
+  openSheet(sheetHead('Import from brand website', S0.site) + `<div class="chips" style="margin-bottom:6px">${tabs}</div><div id="impBody"><div class="empty">Loading ${S0.brand} catalogue…</div></div>`);
+  if (!IMP.data[IMP.src]) {
+    try { IMP.data[IMP.src] = (await api('listSource', { src: IMP.src })).items; }
+    catch (e) { $('#impBody').innerHTML = `<div class="empty">Could not load the ${S0.brand} website (${esc(e.message)})</div>`; return; }
   }
+  IMP.items = IMP.data[IMP.src];
   renderImport();
 }
 function renderImport() {
@@ -889,7 +897,7 @@ async function runImport() {
   const picks = IMP.items.filter(it => IMP.sel.has(it.id)); if (!picks.length) return;
   IMP.busy = true; let done = 0, added = 0, updated = 0, failed = 0;
   const btn = () => $('#impGo');
-  const sarju = findOrAdd(S.brands, 'Sarju');
+  const SRC = IMP_SOURCES[IMP.src], brand = findOrAdd(S.brands, SRC.brand);
   for (const it of picks) {
     ++done;
     try {
@@ -903,7 +911,7 @@ async function runImport() {
       if (ex) {                                   // already stocked → studio photos become the gallery
         if (photo) ex.photo = photo;
         ex.photos = [...new Set([...photos, ...(ex.photos || [])])];
-        ex.ext = { src: 'sarju', id: it.id, url: it.url };
+        ex.ext = { src: it.src, id: it.id, url: it.url };
         ex.variants.forEach(v => { if (!v.photo) v.photo = photo; });
         updated++;
       } else {
@@ -912,10 +920,10 @@ async function runImport() {
         const pid = uid();
         const variants = impVariants(it).map(label => {
           const abbr = { 'Micro USB': 'MC', 'Type-C': 'TC', 'Lightning': 'LT', 'Standard': 'STD' }[label] || label.replace(/[^A-Za-z0-9]/g, '').slice(0, 4).toUpperCase();
-          let sku = `SJ-${it.model || it.id}-${abbr}`; if (allVariants().some(x => x.v.sku === sku)) sku = autoSku(it.name, label);
+          let sku = `${SRC.sku}-${(it.model || String(it.id)).replace(/-/g, '')}-${abbr}`; if (allVariants().some(x => x.v.sku === sku)) sku = autoSku(it.name, label);
           return { id: uid(), label, sku, weight: 0, purchase: 0, dist: 0, retail: 0, stock: 0, lowAt: 5, photo };
         });
-        S.products.push({ id: pid, name: it.name, brandId: sarju.id, catId: cat.id, desc, photo, photos, variants, ext: { src: 'sarju', id: it.id, url: it.url }, created: Date.now() });
+        S.products.push({ id: pid, name: it.name, brandId: brand.id, catId: cat.id, desc, photo, photos, variants, ext: { src: it.src, id: it.id, url: it.url }, created: Date.now() });
         added++;
       }
     } catch (e) { failed++; }
@@ -1242,7 +1250,7 @@ function renderMore() {
     <div class="list">
       ${cloud.key
         ? `<button class="row" onclick="cloudPush();cloudLoad()"><span class="adj">${ic('sync')}</span><div class="grow" style="text-align:left"><b>Sync now</b><div class="sub">Owner phone · changes save to the cloud automatically</div></div></button>
-           <button class="row" onclick="openImport()"><span class="adj" style="color:var(--accent-txt)">${ic('in')}</span><div class="grow" style="text-align:left"><b>Import from Sarju website</b><div class="sub">Pick products — photos, specs & variants come in automatically</div></div></button>
+           <button class="row" onclick="openImport()"><span class="adj" style="color:var(--accent-txt)">${ic('in')}</span><div class="grow" style="text-align:left"><b>Import from brand websites</b><div class="sub">Sarju & Ticon — photos, specs & variants come in automatically</div></div></button>
            <button class="row" onclick="disconnectCloud()"><span class="adj">${ic('cloud')}</span><div class="grow" style="text-align:left"><b>Disconnect this phone</b><div class="sub">Removes the owner key from this phone</div></div></button>`
         : `<button class="row" onclick="connectCloud()"><span class="adj" style="color:var(--accent-txt)">${ic('cloud')}</span><div class="grow" style="text-align:left"><b>Connect to cloud (owner)</b><div class="sub">Enter the owner key once — catalogue and photos sync to every phone</div></div></button>
            <button class="row" onclick="cloudLoad()"><span class="adj">${ic('sync')}</span><div class="grow" style="text-align:left"><b>Refresh from cloud</b><div class="sub">Get the latest catalogue (view only)</div></div></button>`}

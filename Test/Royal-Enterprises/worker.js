@@ -16,8 +16,8 @@
      GET  photo&id=      → image bytes               public, cached (shop screens use it)
      POST savePhoto      { data: dataURL }  → { id, url }      [owner key]
      POST analyzePhoto   { image: base64 JPEG }  → { corners, box, brand, model, ... }  [owner key]
-     POST listSarju      {}  → { items: [...] }      whole sarjuworld.com catalogue, cleaned  [owner key]
-     POST importPhoto    { url }  → { id, url }      copy a sarjuworld.com photo into D1  [owner key]
+     POST listSource     { src: 'sarju'|'ticon' } → { items }   whole brand-website catalogue, cleaned  [owner key]
+     POST importPhoto    { url }  → { id, url }      copy a brand-website photo into D1  [owner key]
    Shops (owner key):
      POST shopsList / shopSave {shop} / shopToggle {id,active} / shopResetLink {id}
      POST ordersList {} / orderSetStatus {id,status}
@@ -127,7 +127,7 @@ export default {
         return json({ id, url: `${url.origin}/?action=photo&id=${id}` });
       }
 
-      if (action === 'listSarju') return json({ items: await listSarju(env) });
+      if (action === 'listSource' || action === 'listSarju') return json({ items: await listSource(env, body.src || 'sarju') });
 
       // ---------- shops & shop orders (owner) ----------
       if (action === 'shopsList') {
@@ -160,9 +160,9 @@ export default {
       }
 
       if (action === 'importPhoto') {
-        const base = new URL(env.SARJU_BASE || SARJU_BASE);
         let u; try { u = new URL(body.url); } catch (e) { return json({ error: 'bad url' }, 400); }
-        if (u.host !== base.host) return json({ error: 'only ' + base.host + ' photos can be imported' }, 400);
+        const hosts = Object.keys(SOURCES).map(k => new URL(sourceBase(env, k)).host);
+        if (!hosts.includes(u.host)) return json({ error: 'only ' + hosts.join(' / ') + ' photos can be imported' }, 400);
         const r = await fetch(u.toString());
         const mime = (r.headers.get('content-type') || '').split(';')[0];
         if (!r.ok || !/^image\/(jpeg|png|webp)$/.test(mime)) return json({ error: 'not a photo (' + r.status + ' ' + mime + ')' }, 400);
@@ -240,8 +240,9 @@ async function analyzeWithGemini(env, base64Jpeg) {
   return out;
 }
 
-/* ---------- Sarju website catalogue (WooCommerce Store API, public) ---------- */
-const SARJU_BASE = 'https://sarjuworld.com';
+/* ---------- Brand websites (both run WooCommerce → public Store API) ---------- */
+const SOURCES = { sarju: { base: 'https://sarjuworld.com', brand: 'Sarju' }, ticon: { base: 'https://ticon.in', brand: 'Ticon' } };
+const sourceBase = (env, k) => env[k.toUpperCase() + '_BASE'] || SOURCES[k].base;   // e.g. SARJU_BASE override for testing
 const decode = t => String(t || '')
   .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n)).replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
   .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#039;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ');
@@ -249,6 +250,10 @@ const strip = h => decode(String(h || '').replace(/<[^>]+>/g, ' ')).replace(/\s+
 // specs table rows <tr><td>Key</td><td>Value</td></tr> → { Key: Value }
 function parseSpecs(html) {
   const out = {};
+  for (const li of String(html || '').match(/<li[^>]*>[\s\S]*?<\/li>/gi) || []) {
+    const t = strip(li), m = t.match(/^([A-Za-z][\w /&()-]{1,30}?)\s*:\s*(.{1,120})$/);
+    if (m && !out[m[1].trim()]) out[m[1].trim()] = m[2].trim();
+  }
   for (const row of String(html || '').match(/<tr[\s\S]*?<\/tr>/gi) || []) {
     const cells = (row.match(/<t[dh][^>]*>[\s\S]*?<\/t[dh]>/gi) || []).map(strip);
     if (cells.length >= 2 && cells[0] && cells[1] && !/^feature$/i.test(cells[0])) out[cells[0]] = cells[1];
@@ -268,20 +273,21 @@ function tidyName(n) {
   const cap = w => /\d/.test(w) || KEEP_CAPS.test(w) || w.length === 1 ? w : w.charAt(0) + w.slice(1).toLowerCase();
   return n.split(/\s+/).map(w => /^(TO|AND|FOR|WITH|OF)$/.test(w) ? w.toLowerCase() : w.split('-').map(cap).join('-')).join(' ');
 }
-async function listSarju(env) {
-  const base = env.SARJU_BASE || SARJU_BASE, items = [];
+async function listSource(env, src) {
+  if (!SOURCES[src]) throw new Error('unknown source ' + src);
+  const base = sourceBase(env, src), items = [];
   for (let page = 1, pages = 1; page <= pages && page <= 20; page++) {
     const r = await fetch(`${base}/wp-json/wc/store/v1/products?per_page=100&page=${page}`, { headers: { Accept: 'application/json' } });
-    if (!r.ok) throw new Error('Sarju site: HTTP ' + r.status);
+    if (!r.ok) throw new Error(SOURCES[src].brand + ' site: HTTP ' + r.status);
     pages = parseInt(r.headers.get('X-WP-TotalPages') || '1') || 1;
     for (const p of await r.json()) {
-      const name = tidyName(decode(p.name).replace(/^\s*sarju\s*[–—-]\s*/i, '').trim());
+      const name = tidyName(decode(p.name).replace(/^\s*(sarju|ticon)\b\s*[–—-]?\s*/i, '').trim());
       const specs = parseSpecs(p.short_description + (p.description || ''));
-      const model = ((specs['Model Number'] || '') + ' ' + name).match(/\b([A-Z]{1,4}-?\d{1,4}[A-Z]?)\b/i);
+      const model = ((specs['Model Number'] || specs['Model'] || specs['Model No'] || '') + ' ' + name).match(/\b([A-Z]{1,4}-?\d{1,5}[A-Z]?)\b/i);
       items.push({
-        id: p.id, name, url: p.permalink,
-        model: model ? model[1].toUpperCase().replace('-', '') : '',
-        cats: (p.categories || []).map(c => decode(c.name)).filter(c => !/^(popular|uncategori[sz]ed|new arrivals?|best sellers?)$/i.test(c)),
+        src, id: p.id, name, url: p.permalink,
+        model: model ? model[1].toUpperCase() : '',
+        cats: (p.categories || []).map(c => decode(c.name)).filter(c => !/^(popular|uncategori[sz]ed|new arrivals?|best sellers?|featured)$/i.test(c)),
         specs,
         thumb: (p.images && p.images[0] && (p.images[0].thumbnail || p.images[0].src)) || '',
         images: (p.images || []).slice(0, 10).map(pickImg)
