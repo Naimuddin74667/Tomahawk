@@ -946,7 +946,15 @@ function smartPhoto(cb) {
     crop = { src, cb, info: null, pts: [[w * m, h * m], [w * (1 - m), h * m], [w * (1 - m), h * (1 - m)], [w * m, h * (1 - m)]] };
     openCropper();
     if (!cloud.key) { $('#cropInfo').textContent = 'Not connected to cloud — adjust the corners yourself. (Connect in More for automatic box detection.)'; return; }
-    $('#cropBusy').classList.add('on');
+    await analyzeCrop();
+  };
+  fi.click();
+}
+async function analyzeCrop() {
+  if (!crop) return;
+  const src = crop.src, w = src.width, h = src.height;
+  $('#cropBusy').textContent = 'Reading the box…'; $('#cropBusy').classList.add('on');
+  {
     try {
       const small = scaleCanvas(src, 1024);
       let info = await api('analyzePhoto', { image: small.toDataURL('image/jpeg', .82).split(',')[1] });
@@ -957,24 +965,41 @@ function smartPhoto(cb) {
       const bits = [info.brand, info.model, info.variant, info.category, info.watts].filter(Boolean);
       $('#cropInfo').innerHTML = bits.length ? `${ic('wand', 'style="width:15px;height:15px;vertical-align:-3px;color:#E2B04F"')} Read from box: <b>${esc(bits.join(' · '))}</b>` : 'Could not read the box text — fill details yourself.';
     } catch (e) {
-      $('#cropInfo').textContent = 'Auto-detect failed (' + e.message + ') — drag the corners yourself.';
+      $('#cropInfo').innerHTML = `Couldn't read the box (${esc(e.message)}). <button class="btn ghost" style="padding:6px 12px;margin-left:6px" onclick="analyzeCrop()">${ic('sync', 'style="width:15px;height:15px"')} Try again</button> or drag the corners yourself.`;
     }
     $('#cropBusy').classList.remove('on');
     drawCropper();
-  };
-  fi.click();
+  }
 }
 // Cloudflare ran the Worker from a Google-blocked region → this phone (India) asks Gemini directly.
 // The key comes from the Worker (owner-only) for this one call and is never stored on the phone.
 async function geminiFromPhone({ clientCall, key }) {
-  const r = await fetch(clientCall.url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(clientCall.body) });
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error((d.error && d.error.message) || 'HTTP ' + r.status);
-  const text = (d.candidates && d.candidates[0] && d.candidates[0].content.parts.map(p => p.text || '').join('')) || '{}';
-  const out = JSON.parse(text);
-  const ok = Array.isArray(out.corners) && out.corners.length === 4 && out.corners.every(p => Array.isArray(p) && p.length === 2 && p.every(v => v >= 0 && v <= 1000));
-  if (!ok) out.corners = null;
-  return out;
+  const busy = (st, m) => [429, 500, 502, 503, 504].includes(st) || /high demand|overloaded|unavailable|resource.?exhausted|quota|try again/i.test(m);
+  const gone = (st, m) => st === 404 || /no longer available|not found|is not supported/i.test(m);
+  let last = '';
+  for (const model of clientCall.models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let r, d;
+      try {
+        r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(clientCall.body) });
+        d = await r.json().catch(() => ({}));
+      } catch (e) { last = e.message; break; }
+      const m = (d.error && d.error.message) || '';
+      if (r.ok) {
+        const text = (d.candidates && d.candidates[0] && d.candidates[0].content.parts.map(p => p.text || '').join('')) || '{}';
+        const out = JSON.parse(text);
+        const ok = Array.isArray(out.corners) && out.corners.length === 4 && out.corners.every(p => Array.isArray(p) && p.length === 2 && p.every(v => v >= 0 && v <= 1000));
+        if (!ok) out.corners = null;
+        return out;
+      }
+      last = m || 'HTTP ' + r.status;
+      if (gone(r.status, m)) break;
+      if (busy(r.status, m) && attempt === 0) { await new Promise(res => setTimeout(res, 1500)); continue; }
+      if (busy(r.status, m)) break;
+      throw new Error(last);
+    }
+  }
+  throw new Error('Gemini busy — ' + last);
 }
 function fileToCanvas(file, max) {
   return new Promise((res, rej) => {

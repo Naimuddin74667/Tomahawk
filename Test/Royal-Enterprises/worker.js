@@ -29,8 +29,10 @@
      GET  shopMyOrders              → this shop's orders
    ========================================================= */
 
-// Tried in order; if Google retires one, the next is used. Override with a GEMINI_MODEL variable in Cloudflare if needed.
-const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash'];
+// Tried in order. A model that is busy, over quota, retired or unknown is skipped and the next one is used.
+// Each model has its own free quota, so a busy spell on one rarely blocks all of them.
+// Override/prepend with a GEMINI_MODEL variable in Cloudflare if needed.
+const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.8-flash-lite'];
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -200,37 +202,45 @@ Return ONLY JSON with these fields:
 - "watts": wattage printed (e.g. "65W"), or "".
 If there is no product box, return {"corners":null,"box_2d":null}.`;
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+// busy / over quota / temporary server trouble → worth retrying or moving to the next model
+const isTransient = (status, msg) => [429, 500, 502, 503, 504].includes(status) || /high demand|overloaded|unavailable|resource.?exhausted|quota|try again/i.test(msg);
+const isGone = (status, msg) => status === 404 || /no longer available|not found|not supported for generatecontent|is not supported/i.test(msg);
+
 async function analyzeWithGemini(env, base64Jpeg) {
-  const models = env.GEMINI_MODEL ? [env.GEMINI_MODEL, ...GEMINI_MODELS] : GEMINI_MODELS;
-  let res, data;
-  const call = (model, thinking) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-    signal: AbortSignal.timeout(45000),       // fail cleanly instead of hanging until Cloudflare's 100 s cut-off
-    body: JSON.stringify({
-      contents: [{ parts: [{ inline_data: { mime_type: 'image/jpeg', data: base64Jpeg } }, { text: PROMPT }] }],
-      // no temperature (not allowed on Gemini 3.8+); low thinking = fast answer, plenty for box + label reading
-      generationConfig: thinking ? { responseMimeType: 'application/json', thinkingConfig: { thinkingLevel: 'low' } } : { responseMimeType: 'application/json' }
-    })
-  });
+  const models = [...new Set(env.GEMINI_MODEL ? [env.GEMINI_MODEL, ...GEMINI_MODELS] : GEMINI_MODELS)];
+  const body = { contents: [{ parts: [{ inline_data: { mime_type: 'image/jpeg', data: base64Jpeg } }, { text: PROMPT }] }],
+    // no temperature (not allowed on Gemini 3.8+); low thinking = fast answer, plenty for box + label reading
+    generationConfig: { responseMimeType: 'application/json', thinkingConfig: { thinkingLevel: 'low' } } };
   const readJson = async r => { const t = await r.text(); try { return JSON.parse(t); } catch (e) { return { error: { message: 'HTTP ' + r.status + ' ' + t.slice(0, 80) } }; } };
-  const bodyFor = () => ({ contents: [{ parts: [{ inline_data: { mime_type: 'image/jpeg', data: base64Jpeg } }, { text: PROMPT }] }],
-    generationConfig: { responseMimeType: 'application/json', thinkingConfig: { thinkingLevel: 'low' } } });
-  for (const model of models) {
-    try { res = await call(model, true); }
-    catch (e) { throw new Error(e.name === 'TimeoutError' ? 'Gemini took too long — try again or adjust corners yourself' : 'Gemini: ' + e.message); }
-    data = await readJson(res);
-    let msg = (data.error && data.error.message) || '';
-    if (res.status === 400 && /thinking/i.test(msg)) { res = await call(model, false); data = await readJson(res); msg = (data.error && data.error.message) || ''; }
-    // Cloudflare sometimes runs this Worker from a data centre Google blocks (e.g. Hong Kong).
-    // Then the owner's phone (in India) makes the call itself: hand it the request + key for this one call.
-    if (/location is not supported/i.test(msg)) {
-      return { clientCall: { url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, body: bodyFor() }, key: env.GEMINI_API_KEY };
+  let res, data, lastMsg = '';
+  outer: for (const model of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let b = body;
+      try {
+        res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+          signal: AbortSignal.timeout(40000), body: JSON.stringify(b) });
+      } catch (e) { lastMsg = e.name === 'TimeoutError' ? 'took too long' : e.message; continue; }
+      data = await readJson(res);
+      let msg = (data.error && data.error.message) || '';
+      if (res.status === 400 && /thinking/i.test(msg)) {          // model without thinking settings → plain request
+        b = { ...body, generationConfig: { responseMimeType: 'application/json' } };
+        res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify(b) });
+        data = await readJson(res); msg = (data.error && data.error.message) || '';
+      }
+      if (res.ok) break outer;
+      lastMsg = msg || ('HTTP ' + res.status);
+      // Cloudflare ran this Worker from a data centre Google blocks (e.g. Hong Kong) → the owner's phone (India)
+      // makes the call itself, with the same model list and retry rules. Key is handed over for this call only.
+      if (/location is not supported/i.test(msg)) return { clientCall: { models, body }, key: env.GEMINI_API_KEY };
+      if (isGone(res.status, msg)) continue outer;                 // retired / unknown → next model
+      if (isTransient(res.status, msg)) { if (attempt === 0) { await sleep(1500); continue; } continue outer; }
+      break outer;                                                 // real error (bad key etc.) → stop
     }
-    // retired / unknown model → try the next one; any other error → stop
-    if (res.ok || !(res.status === 404 || /no longer available|not found|not supported/i.test(msg))) break;
   }
-  if (!res.ok) throw new Error('Gemini: ' + (data.error && data.error.message || res.status));
+  if (!res || !res.ok) throw new Error('Gemini busy — ' + lastMsg);
   const text = data.candidates && data.candidates[0] && data.candidates[0].content.parts.map(p => p.text || '').join('') || '{}';
   let out;
   try { out = JSON.parse(text); } catch (e) { throw new Error('Gemini returned non-JSON'); }
