@@ -11,13 +11,22 @@
 
    Endpoints (all via ?action=...):
      GET  ping           → { ok, gemini, db }        health check, no key needed
-     GET  getAll         → { state, updated }        catalogue/stock/orders JSON
+     GET  getAll         → { state, updated }        full catalogue/stock/orders JSON   [owner key]
      POST saveAll        { state }                   [owner key]
      GET  photo&id=      → image bytes               public, cached (shop screens use it)
      POST savePhoto      { data: dataURL }  → { id, url }      [owner key]
      POST analyzePhoto   { image: base64 JPEG }  → { corners, box, brand, model, ... }  [owner key]
      POST listSarju      {}  → { items: [...] }      whole sarjuworld.com catalogue, cleaned  [owner key]
      POST importPhoto    { url }  → { id, url }      copy a sarjuworld.com photo into D1  [owner key]
+   Shops (owner key):
+     POST shopsList / shopSave {shop} / shopToggle {id,active} / shopResetLink {id}
+     POST ordersList {} / orderSetStatus {id,status}
+   Shopkeeper (private link token → session in X-Shop-Session header):
+     GET  shopInfo&s=TOKEN          → { name }            for the login screen
+     POST shopLogin {token,mobile}  → { sess, shop }      5 wrong tries = 15 min lock
+     GET  shopCatalog               → catalogue WITHOUT purchase prices
+     POST shopPlaceOrder {items,note} → { no, total }     prices taken from the server copy
+     GET  shopMyOrders              → this shop's orders
    ========================================================= */
 
 // Tried in order; if Google retires one, the next is used. Override with a GEMINI_MODEL variable in Cloudflare if needed.
@@ -26,7 +35,7 @@ const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash'];
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type,X-Owner-Key'
+  'Access-Control-Allow-Headers': 'Content-Type,X-Owner-Key,X-Shop-Session'
 };
 const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
 
@@ -34,7 +43,11 @@ const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, 
 async function ensureTables(env) {
   await env.DB.batch([
     env.DB.prepare('CREATE TABLE IF NOT EXISTS app_state (k TEXT PRIMARY KEY, json TEXT NOT NULL, updated INTEGER NOT NULL)'),
-    env.DB.prepare('CREATE TABLE IF NOT EXISTS photos (id TEXT PRIMARY KEY, mime TEXT NOT NULL, data TEXT NOT NULL, created INTEGER NOT NULL)')
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS photos (id TEXT PRIMARY KEY, mime TEXT NOT NULL, data TEXT NOT NULL, created INTEGER NOT NULL)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS shops (id TEXT PRIMARY KEY, name TEXT NOT NULL, owner TEXT, mobile TEXT NOT NULL UNIQUE, area TEXT, address TEXT, map TEXT, credit_limit REAL, token TEXT NOT NULL UNIQUE, active INTEGER NOT NULL DEFAULT 1, created INTEGER NOT NULL, last_order INTEGER)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS shop_sessions (sess TEXT PRIMARY KEY, shop_id TEXT NOT NULL, created INTEGER NOT NULL, last_seen INTEGER)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS login_fails (token TEXT PRIMARY KEY, count INTEGER NOT NULL, until INTEGER)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS shop_orders (id INTEGER PRIMARY KEY AUTOINCREMENT, shop_id TEXT NOT NULL, json TEXT NOT NULL, status TEXT NOT NULL, ts INTEGER NOT NULL, updated INTEGER)')
   ]);
 }
 
@@ -55,7 +68,30 @@ export default {
       if (!env.DB) return json({ error: 'D1 binding "DB" missing' }, 500);
       await ensureTables(env);
 
+      // ---------- shopkeeper routes (link token / session) ----------
+      if (action === 'shopInfo') {
+        const sh = await env.DB.prepare('SELECT name FROM shops WHERE token = ? AND active = 1').bind(url.searchParams.get('s') || '').first();
+        return sh ? json({ name: sh.name }) : json({ error: 'This link is not active. Ask Royal Enterprises for a new link.' }, 404);
+      }
+      if (action === 'shopLogin') {
+        if (req.method !== 'POST') return json({ error: 'POST required' }, 405);
+        const b = await req.json();
+        return shopLogin(env, String(b.token || ''), String(b.mobile || ''));
+      }
+      if (action === 'shopCatalog' || action === 'shopPlaceOrder' || action === 'shopMyOrders') {
+        const shop = await shopFromSession(req, env);
+        if (!shop) return json({ error: 'Please log in again with your shop link' }, 401);
+        if (action === 'shopCatalog') return json(await shopCatalog(env));
+        if (action === 'shopMyOrders') {
+          const rs = await env.DB.prepare('SELECT id, json, status, ts FROM shop_orders WHERE shop_id = ? ORDER BY id DESC LIMIT 50').bind(shop.id).all();
+          return json({ orders: rs.results.map(orderOut) });
+        }
+        if (req.method !== 'POST') return json({ error: 'POST required' }, 405);
+        return shopPlaceOrder(env, shop, await req.json());
+      }
+
       if (action === 'getAll') {
+        if (!isOwner(req, env)) return json({ error: 'Owner key wrong or missing' }, 401);
         const row = await env.DB.prepare('SELECT json, updated FROM app_state WHERE k = ?').bind('main').first();
         return json({ state: row ? JSON.parse(row.json) : null, updated: row ? row.updated : 0 });
       }
@@ -92,6 +128,36 @@ export default {
       }
 
       if (action === 'listSarju') return json({ items: await listSarju(env) });
+
+      // ---------- shops & shop orders (owner) ----------
+      if (action === 'shopsList') {
+        const rs = await env.DB.prepare('SELECT * FROM shops ORDER BY id').all();
+        return json({ shops: rs.results });
+      }
+      if (action === 'shopSave') return shopSave(env, body.shop || {});
+      if (action === 'shopToggle') {
+        await env.DB.prepare('UPDATE shops SET active = ? WHERE id = ?').bind(body.active ? 1 : 0, String(body.id)).run();
+        if (!body.active) await env.DB.prepare('DELETE FROM shop_sessions WHERE shop_id = ?').bind(String(body.id)).run();
+        return json({ ok: true });
+      }
+      if (action === 'shopResetLink') {
+        const token = randomId(10);
+        await env.DB.batch([
+          env.DB.prepare('UPDATE shops SET token = ? WHERE id = ?').bind(token, String(body.id)),
+          env.DB.prepare('DELETE FROM shop_sessions WHERE shop_id = ?').bind(String(body.id))   // logs out the old phone
+        ]);
+        return json({ ok: true, token });
+      }
+      if (action === 'ordersList') {
+        const rs = await env.DB.prepare('SELECT id, shop_id, json, status, ts FROM shop_orders ORDER BY id DESC LIMIT 300').all();
+        return json({ orders: rs.results.map(orderOut) });
+      }
+      if (action === 'orderSetStatus') {
+        const id = parseInt(String(body.id).replace(/\D/g, ''));
+        if (!['new', 'confirmed', 'cancelled', 'delivered'].includes(body.status)) return json({ error: 'bad status' }, 400);
+        await env.DB.prepare('UPDATE shop_orders SET status = ?, updated = ? WHERE id = ?').bind(body.status, Date.now(), id).run();
+        return json({ ok: true });
+      }
 
       if (action === 'importPhoto') {
         const base = new URL(env.SARJU_BASE || SARJU_BASE);
@@ -148,12 +214,19 @@ async function analyzeWithGemini(env, base64Jpeg) {
     })
   });
   const readJson = async r => { const t = await r.text(); try { return JSON.parse(t); } catch (e) { return { error: { message: 'HTTP ' + r.status + ' ' + t.slice(0, 80) } }; } };
+  const bodyFor = () => ({ contents: [{ parts: [{ inline_data: { mime_type: 'image/jpeg', data: base64Jpeg } }, { text: PROMPT }] }],
+    generationConfig: { responseMimeType: 'application/json', thinkingConfig: { thinkingLevel: 'low' } } });
   for (const model of models) {
     try { res = await call(model, true); }
     catch (e) { throw new Error(e.name === 'TimeoutError' ? 'Gemini took too long — try again or adjust corners yourself' : 'Gemini: ' + e.message); }
     data = await readJson(res);
     let msg = (data.error && data.error.message) || '';
     if (res.status === 400 && /thinking/i.test(msg)) { res = await call(model, false); data = await readJson(res); msg = (data.error && data.error.message) || ''; }
+    // Cloudflare sometimes runs this Worker from a data centre Google blocks (e.g. Hong Kong).
+    // Then the owner's phone (in India) makes the call itself: hand it the request + key for this one call.
+    if (/location is not supported/i.test(msg)) {
+      return { clientCall: { url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, body: bodyFor() }, key: env.GEMINI_API_KEY };
+    }
     // retired / unknown model → try the next one; any other error → stop
     if (res.ok || !(res.status === 404 || /no longer available|not found|not supported/i.test(msg))) break;
   }
@@ -216,4 +289,86 @@ async function listSarju(env) {
     }
   }
   return items;
+}
+
+/* ---------- shops: login, catalogue for shops, orders ---------- */
+function randomId(n) {
+  const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789', b = crypto.getRandomValues(new Uint8Array(n));
+  return Array.from(b, x => abc[x % abc.length]).join('');
+}
+const cleanMobile = m => String(m || '').replace(/\D/g, '').slice(-10);
+const orderNo = id => 'SO-' + String(id).padStart(4, '0');
+function orderOut(r) { const o = JSON.parse(r.json); return { ...o, id: 'so' + r.id, no: orderNo(r.id), status: r.status, ts: r.ts, shopId: r.shop_id || o.shopId }; }
+
+async function shopSave(env, sh) {
+  const name = String(sh.name || '').trim(), mobile = cleanMobile(sh.mobile);
+  if (!name) return json({ error: 'Shop name is required' }, 400);
+  if (mobile.length !== 10) return json({ error: 'Enter a 10-digit mobile number' }, 400);
+  const dup = await env.DB.prepare('SELECT id, name FROM shops WHERE mobile = ? AND id != ?').bind(mobile, String(sh.id || '')).first();
+  if (dup) return json({ error: `This mobile is already used by ${dup.name} (${dup.id})` }, 409);
+  const f = [name, String(sh.owner || '').trim(), mobile, String(sh.area || '').trim(), String(sh.address || '').trim(), String(sh.map || '').trim(), sh.credit_limit === '' || sh.credit_limit == null ? null : Number(sh.credit_limit) || 0];
+  if (sh.id) {
+    await env.DB.prepare('UPDATE shops SET name=?, owner=?, mobile=?, area=?, address=?, map=?, credit_limit=? WHERE id=?').bind(...f, String(sh.id)).run();
+    return json({ shop: await env.DB.prepare('SELECT * FROM shops WHERE id = ?').bind(String(sh.id)).first() });
+  }
+  const last = await env.DB.prepare("SELECT id FROM shops ORDER BY CAST(SUBSTR(id, 4) AS INTEGER) DESC LIMIT 1").first();
+  const id = 'SH-' + String((last ? parseInt(last.id.slice(3)) : 0) + 1).padStart(4, '0');
+  await env.DB.prepare('INSERT INTO shops (id, name, owner, mobile, area, address, map, credit_limit, token, active, created) VALUES (?,?,?,?,?,?,?,?,?,1,?)').bind(id, ...f, randomId(10), Date.now()).run();
+  return json({ shop: await env.DB.prepare('SELECT * FROM shops WHERE id = ?').bind(id).first() });
+}
+
+async function shopLogin(env, token, mobile) {
+  const now = Date.now();
+  const fail = await env.DB.prepare('SELECT count, until FROM login_fails WHERE token = ?').bind(token).first();
+  if (fail && fail.until && fail.until > now) return json({ error: `Too many wrong tries. Try again in ${Math.ceil((fail.until - now) / 60000)} min.` }, 429);
+  const sh = await env.DB.prepare('SELECT * FROM shops WHERE token = ? AND active = 1').bind(token).first();
+  if (!sh) return json({ error: 'This link is not active. Ask Royal Enterprises for a new link.' }, 404);
+  if (cleanMobile(mobile) !== sh.mobile) {
+    const count = (fail && (!fail.until || fail.until <= now) ? fail.count : 0) + 1;
+    const until = count >= 5 ? now + 15 * 60000 : null;
+    await env.DB.prepare('INSERT INTO login_fails (token, count, until) VALUES (?,?,?) ON CONFLICT(token) DO UPDATE SET count = excluded.count, until = excluded.until').bind(token, until ? 0 : count, until).run();
+    return json({ error: until ? 'Too many wrong tries. Try again in 15 min.' : `Number does not match this shop. ${5 - count} tries left.` }, 401);
+  }
+  await env.DB.prepare('DELETE FROM login_fails WHERE token = ?').bind(token).run();
+  const sess = randomId(32);
+  await env.DB.prepare('INSERT INTO shop_sessions (sess, shop_id, created, last_seen) VALUES (?,?,?,?)').bind(sess, sh.id, now, now).run();
+  return json({ sess, shop: { id: sh.id, name: sh.name, owner: sh.owner, area: sh.area } });
+}
+
+async function shopFromSession(req, env) {
+  const sess = req.headers.get('X-Shop-Session') || '';
+  if (!sess) return null;
+  const sh = await env.DB.prepare('SELECT s.* FROM shop_sessions x JOIN shops s ON s.id = x.shop_id WHERE x.sess = ? AND s.active = 1').bind(sess).first();
+  if (sh) await env.DB.prepare('UPDATE shop_sessions SET last_seen = ? WHERE sess = ?').bind(Date.now(), sess).run();
+  return sh;
+}
+
+// What a shop may see: no purchase price, stock capped (shows "in stock / only N left")
+async function shopCatalog(env) {
+  const row = await env.DB.prepare('SELECT json, updated FROM app_state WHERE k = ?').bind('main').first();
+  const S = row ? JSON.parse(row.json) : { brands: [], cats: [], products: [] };
+  const products = (S.products || []).map(p => ({
+    id: p.id, name: p.name, brandId: p.brandId, catId: p.catId, desc: p.desc || '', photo: p.photo || '', photos: p.photos || [],
+    variants: (p.variants || []).map(v => ({ id: v.id, label: v.label, sku: v.sku, dist: Number(v.dist) || 0, retail: Number(v.retail) || 0,
+      stock: Math.max(0, Math.min(Number(v.stock) || 0, 999)), lowAt: Number(v.lowAt) || 0, photo: v.photo || '' }))
+  }));
+  return { state: { brands: S.brands || [], cats: S.cats || [], products, log: [], orders: [], meta: {} }, updated: row ? row.updated : 0 };
+}
+
+async function shopPlaceOrder(env, shop, body) {
+  const row = await env.DB.prepare('SELECT json FROM app_state WHERE k = ?').bind('main').first();
+  const S = row ? JSON.parse(row.json) : { products: [] };
+  const byV = {}; (S.products || []).forEach(p => (p.variants || []).forEach(v => { byV[v.id] = { p, v }; }));
+  const items = [];
+  for (const it of (body.items || []).slice(0, 200)) {
+    const f = byV[it.vid], qty = Math.round(Number(it.qty) || 0);
+    if (!f || qty <= 0 || qty > 9999 || !(Number(f.v.dist) > 0)) continue;
+    items.push({ pid: f.p.id, vid: f.v.id, name: f.p.name, label: f.v.label, sku: f.v.sku, qty, rate: Number(f.v.dist) });   // server price, not the phone's
+  }
+  if (!items.length) return json({ error: 'No valid items in the order (rates may have changed — refresh)' }, 400);
+  const o = { shopId: shop.id, shopName: shop.name, source: 'shop', items, total: items.reduce((a, x) => a + x.qty * x.rate, 0), note: String(body.note || '').slice(0, 300) };
+  const now = Date.now();
+  const r = await env.DB.prepare('INSERT INTO shop_orders (shop_id, json, status, ts) VALUES (?, ?, ?, ?) RETURNING id').bind(shop.id, JSON.stringify(o), 'new', now).first();
+  await env.DB.prepare('UPDATE shops SET last_order = ? WHERE id = ?').bind(now, shop.id).run();
+  return json({ id: 'so' + r.id, no: orderNo(r.id), total: o.total });
 }

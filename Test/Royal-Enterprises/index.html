@@ -18,7 +18,7 @@
 /* =========================================================
    Royal Enterprises — Phase 1 frontend
    Owner catalogue + stock, Staff view-only, Shopkeeper ordering preview
-   Data: localStorage (re_data_v1) until backend is connected
+   Data: cloud only (Cloudflare Worker + D1). The phone keeps settings only (owner key, theme, cart).
    Look: clean, static business app — light default, minimal motion
    ========================================================= */
 :root{
@@ -411,43 +411,13 @@ function art(kind) {
 /* =========================================================
    DATA
    ========================================================= */
-// Real Sarju products (photos in img/, cropped from box photos). Prices/pack size pending from owner → 0 = "Rate soon"
-const REAL_PRODUCTS = [
-  { key: 'sarju-c48', name: 'C48 Metal Anti-Bending Data Cable 65W', desc: 'Metal anti-bending braided cable · 65W output',
-    variants: [['Type-C', 'SJ-C48-TC', 'img/c48-typec.jpg'], ['Micro USB', 'SJ-C48-MC', 'img/c48-micro.jpg']] },
-  { key: 'sarju-c71', name: 'C71 65W Flash Cable', desc: '65W flash charging cable',
-    variants: [['Type-C', 'SJ-C71-TC', 'img/c71-typec.jpg'], ['Micro USB', 'SJ-C71-MC', 'img/c71-micro.jpg']] },
-  { key: 'sarju-c57', name: 'C57 48W Fast Charging Cable', desc: '48W fast charging cable',
-    variants: [['Type-C', 'SJ-C57-TC', 'img/c57-typec.jpg']] }
-];
-function makeRealProduct(def, brandId, catId) {
-  const variants = def.variants.map(([label, sku, photo]) => ({ id: uid(), label, sku, weight: 0, purchase: 0, dist: 0, retail: 0, stock: 0, lowAt: 5, photo }));
-  return { id: uid(), key: def.key, name: def.name, brandId, catId, desc: def.desc, photo: def.variants[0][2], variants, created: Date.now() };
-}
-let S = loadJSON(KEY, null) || seed();
-// One-time switch of the old demo brands (Royal Gold / VoltX / Generic) to the real brands Ticon and Sarju
-(function migrateBrands() {
-  const names = S.brands.map(b => b.name);
-  if (!names.includes('Royal Gold') && !names.includes('VoltX')) return;
-  const ticon = S.brands.find(b => b.id === 'b1'), sarju = S.brands.find(b => b.id === 'b2');
-  if (ticon) ticon.name = 'Ticon';
-  if (sarju) sarju.name = 'Sarju';
-  S.products.forEach(p => { if (p.brandId === 'b3') p.brandId = 'b1'; });
-  S.brands = S.brands.filter(b => b.id !== 'b3' || b.name !== 'Generic');
-  const pre = { 'VX-': 'SJ-', 'RG-': 'TC-', 'GN-': 'TC-' };
-  S.products.forEach(p => p.variants.forEach(v => { const k = (v.sku || '').slice(0, 3); if (pre[k]) v.sku = pre[k] + v.sku.slice(3); }));
-  localStorage.setItem(KEY, JSON.stringify(S));
-})();
-// One-time: add the real Sarju cables, remove the demo "Type-C Cable 1m"
-(function addRealProducts() {
-  const sarju = S.brands.find(b => b.name === 'Sarju'), cables = S.cats.find(c => c.name === 'Cables');
-  if (!sarju || !cables) return;
-  let changed = false;
-  REAL_PRODUCTS.forEach(d => { if (!S.products.some(p => p.key === d.key)) { S.products.push(makeRealProduct(d, sarju.id, cables.id)); changed = true; } });
-  const demo = S.products.findIndex(p => p.name === 'Type-C Cable 1m' && !p.key);
-  if (demo >= 0) { S.products.splice(demo, 1); changed = true; }
-  if (changed) localStorage.setItem(KEY, JSON.stringify(S));
-})();
+// The catalogue lives ONLY in the cloud. Nothing is kept on the phone except settings,
+// so every phone always shows exactly what is in the cloud.
+const DEFAULT_CATS = ['Chargers', 'Cables', 'Earphones', 'Power Banks', 'Covers', 'Tempered Glass'];
+const emptyState = () => ({ brands: [], cats: [], products: [], log: [], orders: [], meta: { nextOrder: 1001 } });
+let S = emptyState();
+let loaded = false;                                    // true once the cloud copy has arrived
+try { localStorage.removeItem(KEY); } catch (e) {}     // remove the old on-phone copy from earlier versions
 let cart = loadJSON(CART_KEY, {});            // { variantId: qty }
 let ui = Object.assign({ role: 'owner', tab: 'home', theme: 'light' }, loadJSON(UI_KEY, {}));
 const view = { q: '', brand: 'all', cat: 'all', stock: 'all' };
@@ -456,8 +426,7 @@ let saveTimer;
 function save() {                              // 400ms debounce, same pattern as other apps
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    try { localStorage.setItem(KEY, JSON.stringify(S)); }
-    catch (e) { toast('Phone storage full — use smaller photos'); }
+    if (!cloud.key) return toast('Not connected to cloud — this change was not saved');
     cloudPush();
   }, 400);
 }
@@ -474,7 +443,10 @@ let cloud = Object.assign({ key: '', updated: 0 }, loadJSON(CLOUD_KEY, {}));
 let cloudStatus = 'idle';       // idle | syncing | ok | error | offline
 const saveCloud = () => localStorage.setItem(CLOUD_KEY, JSON.stringify(cloud));
 async function api(action, body) {
-  const opt = body ? { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Owner-Key': cloud.key }, body: JSON.stringify(body) } : {};
+  const headers = {};
+  if (cloud.key) headers['X-Owner-Key'] = cloud.key;
+  if (typeof SHOP !== 'undefined' && SHOP && SHOP.sess) headers['X-Shop-Session'] = SHOP.sess;
+  const opt = body ? { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : { headers };
   const r = await fetch(API + '?action=' + action, opt);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) { const e = new Error(j.error || ('HTTP ' + r.status)); e.status = r.status; throw e; }
@@ -487,18 +459,19 @@ function cloudPill() {
 }
 // Load the shared catalogue; replaces this phone's copy when the cloud has newer data
 async function cloudLoad(quiet) {
+  if (!cloud.key) { setCloudStatus('idle'); render(); return null; }
   setCloudStatus('syncing');
   try {
     const r = await api('getAll');
-    if (r.state && r.updated !== cloud.updated) {
-      S = r.state; cloud.updated = r.updated; saveCloud();
-      localStorage.setItem(KEY, JSON.stringify(S));
-      render();
-      if (!quiet) toast('Catalogue updated from cloud');
-    }
+    S = Object.assign(emptyState(), r.state || {}); cloud.updated = r.updated; saveCloud();
+    loaded = true; render();
+    if (!quiet) toast('Catalogue refreshed');
     setCloudStatus('ok');
     return r;
-  } catch (e) { setCloudStatus(navigator.onLine ? 'error' : 'offline'); return null; }
+  } catch (e) {
+    if (e.status === 401) { cloud.key = ''; saveCloud(); toast('Owner key rejected — connect again'); }
+    setCloudStatus(navigator.onLine ? 'error' : 'offline'); render(); return null;
+  }
 }
 let pushTimer, pushing = false;
 function cloudPush() {
@@ -518,26 +491,19 @@ function cloudPush() {
 async function connectCloud() {
   const key = (prompt('Enter the owner key (OWNER_KEY password)') || '').trim(); if (!key) return;
   toast('Connecting…');
-  let r;
-  try { r = await api('getAll'); } catch (e) { return toast('Cannot reach the cloud — check internet'); }
   cloud.key = key;
-  if (r.state) {
-    // cloud already has a catalogue → this phone takes it (after a key check)
-    try { const w = await api('saveAll', { state: r.state }); S = r.state; cloud.updated = w.updated; }
-    catch (e) { cloud.key = ''; return toast(e.status === 401 ? 'Wrong owner key' : 'Could not connect'); }
-    localStorage.setItem(KEY, JSON.stringify(S)); saveCloud(); render(); setCloudStatus('ok');
-    return toast('Connected — catalogue loaded from cloud');
+  let r;
+  try { r = await api('getAll'); }
+  catch (e) { cloud.key = ''; return toast(e.status === 401 ? 'Wrong owner key' : 'Cannot reach the cloud — check internet'); }
+  if (r.state) S = Object.assign(emptyState(), r.state);
+  else {                                   // brand-new cloud → start with your brands + standard categories
+    S = emptyState();
+    S.brands = ['Ticon', 'Sarju'].map(name => ({ id: uid(), name }));
+    S.cats = DEFAULT_CATS.map(name => ({ id: uid(), name }));
+    try { const w = await api('saveAll', { state: S }); r.updated = w.updated; } catch (e) { cloud.key = ''; return toast('Could not set up the cloud'); }
   }
-  // first owner connect: upload this phone's catalogue
-  if (S.meta && S.meta.demo && confirm('Upload only your real products? (removes the demo items before uploading)')) {
-    const keep = new Set(S.products.filter(p => p.key).map(p => p.id));
-    S.products = S.products.filter(p => keep.has(p.id)); S.log = S.log.filter(l => keep.has(l.pid)); S.orders = [];
-    S.meta.demo = false; cart = {}; saveCart();
-  }
-  try { const w = await api('saveAll', { state: S }); cloud.updated = w.updated; }
-  catch (e) { cloud.key = ''; return toast(e.status === 401 ? 'Wrong owner key' : 'Upload failed'); }
-  localStorage.setItem(KEY, JSON.stringify(S)); saveCloud(); render(); setCloudStatus('ok');
-  toast('Connected — catalogue uploaded ☁️');
+  cloud.updated = r.updated; saveCloud(); loaded = true; render(); setCloudStatus('ok');
+  toast('Connected ☁️');
 }
 function disconnectCloud() {
   if (!confirm('Remove the owner key from this phone? It will become view-only.')) return;
@@ -546,25 +512,6 @@ function disconnectCloud() {
 
 const saveUI = () => localStorage.setItem(UI_KEY, JSON.stringify(ui));
 
-function seed() {
-  const b = [{ id:'b1', name:'Ticon' }, { id:'b2', name:'Sarju' }];
-  const c = ['Chargers','Cables','Earphones','Power Banks','Covers','Tempered Glass'].map((n, i) => ({ id:'c' + (i + 1), name:n }));
-  const V = (label, sku, purchase, dist, retail, stock, weight = 50) => ({ id: uid(), label, sku, weight, purchase, dist, retail, stock, lowAt: 5, photo: '' });
-  const P = (name, brandId, catId, variants, desc = '') => ({ id: uid(), name, brandId, catId, desc, photo: '', variants, created: Date.now() });
-  const products = [
-    P('Fast Charger', 'b2', 'c1', [V('20W White','SJ-FC20-W',120,180,299,40,80), V('20W Black','SJ-FC20-B',120,180,299,25,80), V('33W White','SJ-FC33-W',190,260,449,12,95)], 'Type-C PD fast charger'),
-    P('Wired Earphones Bass+', 'b1', 'c3', [V('Black','TC-EP-B',45,75,199,60,25), V('White','TC-EP-W',45,75,199,0,25)]),
-    P('10000mAh Power Bank', 'b2', 'c4', [V('Black','SJ-PB10-B',450,620,999,10,230), V('Blue','SJ-PB10-BL',450,620,999,6,230)]),
-    P('Silicone Back Cover', 'b1', 'c5', [V('Redmi 13C','TC-CV-R13C',25,45,149,50,20), V('Samsung A15','TC-CV-A15',25,45,149,35,20), V('Vivo Y28','TC-CV-Y28',25,45,149,3,20)]),
-    P('9H Tempered Glass', 'b1', 'c6', [V('Redmi Note 13','TC-TG-RN13',8,18,99,200,10), V('Samsung A15','TC-TG-A15',8,18,99,150,10)]),
-    P('Car Charger Dual USB', 'b2', 'c1', [V('12V','SJ-CC-12',95,140,299,20,40), V('24V','SJ-CC-24',110,160,349,8,40)]),
-    P('Wireless Neckband', 'b1', 'c3', [V('Black','TC-NB-B',320,450,899,15,45), V('Green','TC-NB-G',320,450,899,9,45)])
-  ];
-  REAL_PRODUCTS.forEach(d => products.push(makeRealProduct(d, 'b2', 'c2')));
-  const log = [];
-  products.forEach(p => p.variants.forEach(v => log.push({ id: uid(), ts: Date.now(), pid: p.id, vid: v.id, qty: v.stock, type: 'opening', note: 'Opening stock', by: 'owner' })));
-  return { brands: b, cats: c, products, log, orders: [], meta: { nextOrder: 1001, demo: true } };
-}
 
 /* ---------- lookups ---------- */
 const brandName = id => (S.brands.find(b => b.id === id) || {}).name || '—';
@@ -602,7 +549,7 @@ function renderNav() {
   $('#bnav').innerHTML = TABS.map(([k, l, i]) => `<button class="${ui.tab === k ? 'on' : ''}" onclick="goTab('${k}')">${ic(i)}${l}</button>`).join('');
   $('#roleLbl').textContent = { owner: 'Owner', staff: 'Staff · view only', shop: DEMO_SHOP.name + ' · ' + DEMO_SHOP.id }[ui.role];
   $('#roleBtn').innerHTML = ic(shop ? 'store' : 'user');
-  $('#fab').style.display = (isOwner() && ui.tab === 'products') ? 'grid' : 'none';
+  $('#fab').style.display = (isOwner() && cloud.key && loaded && ui.tab === 'products') ? 'grid' : 'none';
   $('#fab').innerHTML = ic('plus');
   updateCartBar();
 }
@@ -613,9 +560,18 @@ function goTab(t) {
 function render() {
   renderNav();
   if (ui.role === 'shop') return renderShop();
+  if (!cloud.key) return renderConnect();
+  if (!loaded) { main.innerHTML = '<div class="empty card" style="margin-top:30px">Loading catalogue from cloud…</div>'; return; }
   ({ home: renderHome, products: renderProducts, stock: renderStock, more: renderMore }[ui.tab] || renderHome)();
 }
 
+function renderConnect() {
+  main.innerHTML = `<div class="card" style="margin-top:28px;padding:26px 20px;text-align:center">
+    <div style="width:84px;height:84px;margin:0 auto 14px;border-radius:22px;background:#0a0907;display:grid;place-items:center">${CROWN.replace('<svg ', '<svg style="height:62px;width:auto" ')}</div>
+    <h2 style="margin:0 0 6px">Connect to Royal cloud</h2>
+    <p class="muted" style="margin:0 0 18px">Your catalogue, stock and orders live in the cloud. Enter the owner key once on this phone to open them.</p>
+    <button class="btn gold block" onclick="connectCloud()">${ic('cloud')} Enter owner key</button></div>`;
+}
 function openSheet(html, opts = {}) {
   const w = $('#sheetWrap');
   $('#sheet').innerHTML = '<div class="grab"></div>' + html;
@@ -985,7 +941,8 @@ function smartPhoto(cb) {
     $('#cropBusy').classList.add('on');
     try {
       const small = scaleCanvas(src, 1024);
-      const info = await api('analyzePhoto', { image: small.toDataURL('image/jpeg', .82).split(',')[1] });
+      let info = await api('analyzePhoto', { image: small.toDataURL('image/jpeg', .82).split(',')[1] });
+      if (info.clientCall) info = await geminiFromPhone(info);
       crop.info = info;
       if (info.corners) crop.pts = info.corners.map(([x, y]) => [x / 1000 * w, y / 1000 * h]);
       else if (info.box_2d) { const [y0, x0, y1, x1] = info.box_2d.map(v => v / 1000); crop.pts = [[x0 * w, y0 * h], [x1 * w, y0 * h], [x1 * w, y1 * h], [x0 * w, y1 * h]]; }
@@ -998,6 +955,18 @@ function smartPhoto(cb) {
     drawCropper();
   };
   fi.click();
+}
+// Cloudflare ran the Worker from a Google-blocked region → this phone (India) asks Gemini directly.
+// The key comes from the Worker (owner-only) for this one call and is never stored on the phone.
+async function geminiFromPhone({ clientCall, key }) {
+  const r = await fetch(clientCall.url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(clientCall.body) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((d.error && d.error.message) || 'HTTP ' + r.status);
+  const text = (d.candidates && d.candidates[0] && d.candidates[0].content.parts.map(p => p.text || '').join('')) || '{}';
+  const out = JSON.parse(text);
+  const ok = Array.isArray(out.corners) && out.corners.length === 4 && out.corners.every(p => Array.isArray(p) && p.length === 2 && p.every(v => v >= 0 && v <= 1000));
+  if (!ok) out.corners = null;
+  return out;
 }
 function fileToCanvas(file, max) {
   return new Promise((res, rej) => {
@@ -1283,9 +1252,8 @@ function renderMore() {
       ${installRow()}
       <button class="row" onclick="toggleTheme()"><span class="adj">${ic(ui.theme === 'dark' ? 'sun' : 'moon')}</span><div class="grow" style="text-align:left"><b>${ui.theme === 'dark' ? 'Light' : 'Dark'} mode</b></div></button>
       <button class="row" onclick="exportData()"><span class="adj">${ic('download')}</span><div class="grow" style="text-align:left"><b>Download backup</b><div class="sub">All products, stock & orders as JSON</div></div></button>
-      ${isOwner() ? `<button class="row" onclick="resetData()"><span class="adj" style="color:var(--bad)">${ic('trash')}</span><div class="grow" style="text-align:left"><b>${S.meta.demo ? 'Clear demo data & start fresh' : 'Reset all data'}</b><div class="sub">Removes everything on this phone</div></div></button>` : ''}
     </div>
-    <div class="note" style="margin-top:16px">${cloud.key ? 'Catalogue, stock and photos sync to the cloud.' : 'This phone is not connected as owner — changes stay on this phone.'} Shop logins, delivery, khata and reports come in the next phases.</div>`;
+    <div class="note" style="margin-top:16px">${cloud.key ? 'Catalogue, stock and photos sync to the cloud.' : 'This phone is not connected — enter the owner key to open the catalogue.'} Shop logins, delivery, khata and reports come in the next phases.</div>`;
 }
 function addItem(kind) {
   const name = (prompt(kind === 'brand' ? 'Brand name' : 'Category name') || '').trim(); if (!name) return;
@@ -1309,11 +1277,6 @@ function exportData() {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }));
   a.download = 'royal-enterprises-backup-' + new Date().toISOString().slice(0, 10) + '.json'; a.click();
-}
-function resetData() {
-  if (!confirm('This deletes all products, stock and orders on this phone. Continue?')) return;
-  S = { brands: [], cats: [], products: [], log: [], orders: [], meta: { nextOrder: 1001, demo: false } };
-  cart = {}; saveCart(); localStorage.setItem(KEY, JSON.stringify(S)); render(); toast('Fresh start — add your first brand');
 }
 
 /* =========================================================
