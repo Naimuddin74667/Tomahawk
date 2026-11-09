@@ -242,6 +242,7 @@ body.shop main{padding-top:0}
 .gstrip .g{position:relative;flex:none;width:64px;height:64px;border-radius:10px;overflow:hidden;border:1px solid var(--line);background:#fff}
 .gstrip .g img{width:100%;height:100%;object-fit:cover}
 .gstrip .g button{position:absolute;top:2px;right:2px;width:20px;height:20px;border-radius:50%;background:rgba(10,9,7,.75);color:#fff;font-size:13px;line-height:20px;padding:0}
+.gstrip .g.main{border:2px solid var(--accent)}
 .gstrip .add{display:grid;place-items:center;color:var(--muted);border-style:dashed;cursor:pointer}
 .sp-img{display:block;height:210px;width:210px;max-width:100%;margin:0 auto 14px;border-radius:20px;object-fit:cover}
 .sp-title{font-size:20px;font-weight:800}
@@ -688,7 +689,9 @@ function openProduct(id) {
 
 /* ---------- Photo gallery (product photos + variant photos, swipeable) ---------- */
 function galleryOf(p) {
-  const list = [...(p.photos || []), p.photo, ...p.variants.map(v => v.photo)].filter(Boolean);
+  // product photos (main first); variant photos only if the product has none of its own
+  let list = [p.photo, ...(p.photos || [])].filter(Boolean);
+  if (!list.length) list = p.variants.map(v => v.photo).filter(Boolean);
   const out = [...new Set(list)];
   return out.length ? out : [imgP(p)];
 }
@@ -723,7 +726,7 @@ function openProductForm(id) {
   F = p ? JSON.parse(JSON.stringify(p)) : { id: null, name: '', brandId: S.brands[0]?.id || '', catId: S.cats[0]?.id || '', desc: '', photo: '', variants: [blankVariant()] };
   const opts = (list, cur, kind) => list.map(x => `<option value="${x.id}" ${x.id === cur ? 'selected' : ''}>${esc(x.name)}</option>`).join('') + `<option value="__new">+ Add new ${kind}…</option>`;
   openSheet(sheetHead(p ? 'Edit product' : 'Add product', 'Photo → details → variants') + `
-    <div class="photo-pick" id="fPhoto" onclick="uploadPhoto(url=>{F.photo=url;if(F.variants[0]&&!F.variants[0].photo)F.variants[0].photo=url;showFormPhoto();renderFormVariants()})"></div>
+    <div class="photo-pick" id="fPhoto" onclick="uploadPhoto(url=>{if(F.photos.length)F.photos[0]=url;else F.photos.push(url);F.photo=url;if(F.variants[0]&&!F.variants[0].photo)F.variants[0].photo=url;showFormPhoto();renderFormVariants()})"></div>
     <div class="grid2" style="margin:-4px 0 12px"><button class="btn ghost" onclick="copyGeminiPrompt()">${ic('wand')} Copy Gemini prompt</button><a class="btn ghost" href="https://gemini.google.com/app" target="_blank" rel="noopener" style="text-align:center;text-decoration:none">Open Gemini ↗</a></div>
     <div class="gstrip" id="fGal"></div>
     <div class="field"><label>Product name *</label><input id="fName" value="${esc(F.name)}" placeholder="e.g. Fast Charger" oninput="F.name=this.value"></div>
@@ -741,8 +744,11 @@ function openProductForm(id) {
 }
 function showFormPhoto() {
   if (!F || !$('#fPhoto')) return;   // form may have closed (photo went to an existing product)
-  F.photos = F.photos || [];
-  $('#fGal').innerHTML = F.photos.map((u, i) => `<div class="g"><img src="${u}" alt="" onclick="F.photo=F.photos[${i}];showFormPhoto()"><button onclick="F.photos.splice(${i},1);showFormPhoto()" aria-label="Remove photo">×</button></div>`).join('')
+  // One photo list: the strip shows every product photo, the first one is the main (big) photo.
+  // Exactly these photos appear in the product gallery — nothing hidden.
+  F.photos = [...new Set([F.photo, ...(F.photos || [])].filter(Boolean))];
+  F.photo = F.photos[0] || '';
+  $('#fGal').innerHTML = F.photos.map((u, i) => `<div class="g${i ? '' : ' main'}"><img src="${u}" alt="" title="${i ? 'Tap to make main photo' : 'Main photo'}" onclick="F.photos.unshift(...F.photos.splice(${i},1));F.photo='';showFormPhoto()"><button onclick="F.photos.splice(${i},1);F.photo='';showFormPhoto()" aria-label="Remove photo">×</button></div>`).join('')
     + `<div class="g add" onclick="uploadPhoto(u=>{F.photos.push(u);showFormPhoto()})" title="Add gallery photo">${ic('plus')}</div>`;
   $('#fPhoto').innerHTML = F.photo ? `<img src="${F.photo}" alt="">` : `<div>${ic('camera', 'style="width:34px;height:34px"')}<br>Tap to choose photo<br><small style="opacity:.75">Make it in Gemini first (Copy prompt below), then upload it here</small></div>`;
 }
