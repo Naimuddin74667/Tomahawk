@@ -178,7 +178,8 @@ function pickImg(img) {
 const KEEP_CAPS = /^(USB|TWS|LED|BT|PD|AUX|OTG|HD|LCD|ANC|ENC|RGB|QC|FM|TF|SD|PC|IOS)$/;
 function tidyName(n) {
   if (n !== n.toUpperCase()) return n;
-  return n.split(/\s+/).map(w => /\d/.test(w) || KEEP_CAPS.test(w) ? w : w.charAt(0) + w.slice(1).toLowerCase()).join(' ');
+  const cap = w => /\d/.test(w) || KEEP_CAPS.test(w) || w.length === 1 ? w : w.charAt(0) + w.slice(1).toLowerCase();
+  return n.split(/\s+/).map(w => /^(TO|AND|FOR|WITH|OF)$/.test(w) ? w.toLowerCase() : w.split('-').map(cap).join('-')).join(' ');
 }
 async function listSarju(env) {
   const base = env.SARJU_BASE || SARJU_BASE, items = [];
