@@ -268,23 +268,6 @@ body.shop main{padding-top:0}
 .success .tick{width:64px;height:64px;margin:8px auto 14px;border-radius:50%;display:grid;place-items:center;background:var(--ok-soft);color:var(--ok)}
 .success .tick svg{width:32px;height:32px;stroke-width:2.6}
 
-.cropper{position:fixed;inset:0;z-index:3000;background:#0a0907;display:none;flex-direction:column;color:#fff}
-.cropper.open{display:flex}
-.crop-top{padding:calc(12px + env(safe-area-inset-top)) 16px 10px;display:flex;align-items:center;justify-content:space-between;gap:10px}
-.crop-top b{font-size:16px}.crop-top small{display:block;color:#bfb6a3;font-size:12.5px;margin-top:2px}
-.crop-stage{flex:1;position:relative;display:grid;place-items:center;overflow:hidden;touch-action:none}
-.crop-box{position:relative}
-.crop-box img{display:block;max-width:100%;max-height:100%;user-select:none;-webkit-user-drag:none}
-.crop-box svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-.crop-h{position:absolute;width:34px;height:34px;margin:-17px 0 0 -17px;border-radius:50%;background:rgba(226,176,79,.25);border:3px solid #E2B04F;touch-action:none;cursor:grab}
-.crop-info{margin:0 16px 8px;padding:10px 12px;border-radius:12px;background:#1a1814;border:1px solid #302b22;font-size:13px;color:#e9e1cf;min-height:20px}
-.crop-btns{display:flex;gap:10px;padding:8px 16px calc(14px + env(safe-area-inset-bottom))}
-.crop-btns .btn{flex:1}
-.cropper.gen .crop-h,.cropper.gen #cropSvg{display:none}
-.crop-box img.genimg{background:#fff;border-radius:12px}
-.cropper .btn.ghost{background:#1f1c16;color:#f3eee3;border:1px solid #3a342a}
-.crop-busy{position:absolute;inset:0;display:none;place-items:center;background:rgba(10,9,7,.7);font-weight:600}
-.crop-busy.on{display:grid}
 .imp-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:12px;background:var(--card);margin-bottom:8px;cursor:pointer}
 .imp-row.on{border-color:var(--accent);background:var(--accent-soft)}
 .imp-row img{width:52px;height:52px;border-radius:8px;object-fit:cover;background:#fff;flex:none}
@@ -329,12 +312,6 @@ body.shop .toast{bottom:calc(84px + env(safe-area-inset-bottom))}
 <div class="sheet-wrap" id="sheetWrap" onclick="if(event.target===this)closeSheet()"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
 <input type="file" id="fileIn" accept="image/*" hidden>
-<div class="cropper" id="cropper">
-  <div class="crop-top"><div><b id="cropTitle">Adjust photo</b><small id="cropSub">Drag the 4 gold corners to the box edges</small></div><button class="btn ghost" onclick="cropCancel()">Cancel</button></div>
-  <div class="crop-stage" id="cropStage"><div class="crop-box" id="cropBox"><img id="cropImg" alt=""><svg id="cropSvg"><polygon id="cropPoly" fill="rgba(226,176,79,.12)" stroke="#E2B04F" stroke-width="2"/></svg></div><div class="crop-busy" id="cropBusy">Reading the box…</div></div>
-  <div class="crop-info" id="cropInfo"></div>
-  <div class="crop-btns" id="cropBtns"></div>
-</div>
 
 <script>
 /* =========================================================
@@ -734,7 +711,8 @@ function openProductForm(id) {
   F = p ? JSON.parse(JSON.stringify(p)) : { id: null, name: '', brandId: S.brands[0]?.id || '', catId: S.cats[0]?.id || '', desc: '', photo: '', variants: [blankVariant()] };
   const opts = (list, cur, kind) => list.map(x => `<option value="${x.id}" ${x.id === cur ? 'selected' : ''}>${esc(x.name)}</option>`).join('') + `<option value="__new">+ Add new ${kind}…</option>`;
   openSheet(sheetHead(p ? 'Edit product' : 'Add product', 'Photo → details → variants') + `
-    <div class="photo-pick" id="fPhoto" onclick="smartPhoto((url,info)=>{F.photo=url;applyBoxInfo(info,-1,url);showFormPhoto()})"></div>
+    <div class="photo-pick" id="fPhoto" onclick="uploadPhoto(url=>{F.photo=url;if(F.variants[0]&&!F.variants[0].photo)F.variants[0].photo=url;showFormPhoto();renderFormVariants()})"></div>
+    <div class="grid2" style="margin:-4px 0 12px"><button class="btn ghost" onclick="copyGeminiPrompt()">${ic('wand')} Copy Gemini prompt</button><a class="btn ghost" href="https://gemini.google.com/app" target="_blank" rel="noopener" style="text-align:center;text-decoration:none">Open Gemini ↗</a></div>
     <div class="gstrip" id="fGal"></div>
     <div class="field"><label>Product name *</label><input id="fName" value="${esc(F.name)}" placeholder="e.g. Fast Charger" oninput="F.name=this.value"></div>
     <div class="grid2">
@@ -753,15 +731,15 @@ function showFormPhoto() {
   if (!F || !$('#fPhoto')) return;   // form may have closed (photo went to an existing product)
   F.photos = F.photos || [];
   $('#fGal').innerHTML = F.photos.map((u, i) => `<div class="g"><img src="${u}" alt="" onclick="F.photo=F.photos[${i}];showFormPhoto()"><button onclick="F.photos.splice(${i},1);showFormPhoto()" aria-label="Remove photo">×</button></div>`).join('')
-    + `<div class="g add" onclick="smartPhoto(u=>{F.photos.push(u);showFormPhoto()})" title="Add gallery photo">${ic('plus')}</div>`;
-  $('#fPhoto').innerHTML = F.photo ? `<img src="${F.photo}" alt="">` : `<div>${ic('camera', 'style="width:34px;height:34px"')}<br>Tap to take / choose photo${cloud.key ? '<br><small style="opacity:.75">Box is cut out and details filled in automatically<br>Tip: front of box, held flat, near a window, no flash</small>' : ''}</div>`;
+    + `<div class="g add" onclick="uploadPhoto(u=>{F.photos.push(u);showFormPhoto()})" title="Add gallery photo">${ic('plus')}</div>`;
+  $('#fPhoto').innerHTML = F.photo ? `<img src="${F.photo}" alt="">` : `<div>${ic('camera', 'style="width:34px;height:34px"')}<br>Tap to choose photo<br><small style="opacity:.75">Make it in Gemini first (Copy prompt below), then upload it here</small></div>`;
 }
 function renderFormVariants() {
   if (!F || !$('#fVars')) return;
   $('#fVars').innerHTML = F.variants.map((v, i) => `
     <div class="vblock"><div class="vblock-h"><span>Variant ${i + 1}</span>${F.variants.length > 1 ? `<button class="iconbtn" style="width:34px;height:34px" onclick="F.variants.splice(${i},1);renderFormVariants()">${ic('trash')}</button>` : ''}</div>
       <div style="display:flex;gap:10px;align-items:flex-end">
-        <div class="vphoto" onclick="smartPhoto((url,info)=>{F.variants[${i}].photo=url;applyBoxInfo(info,${i},url);renderFormVariants()})">${v.photo ? `<img src="${v.photo}">` : ic('camera')}</div>
+        <div class="vphoto" onclick="uploadPhoto(url=>{F.variants[${i}].photo=url;renderFormVariants()})">${v.photo ? `<img src="${v.photo}">` : ic('camera')}</div>
         <div class="field" style="flex:1;margin:0"><label>Variant name *</label><input value="${esc(v.label)}" placeholder="e.g. 20W White" oninput="F.variants[${i}].label=this.value"></div>
       </div>
       <div class="grid2" style="margin-top:10px">
@@ -933,402 +911,55 @@ async function runImport() {
   IMP.busy = false; IMP.sel.clear(); save(); render(); renderImport();
   toast(`Imported ${added} new · updated ${updated}` + (failed ? ` · ${failed} failed` : '') + ' — add rates to make them orderable');
 }
-/* =========================================================
-   SMART PHOTO — pick photo → Gemini finds the box + reads it → owner
-   adjusts 4 corners → app straightens, brightens, squares it → cloud
-   ========================================================= */
-let crop = null;   // { src: canvas, pts: [[x,y]x4] in src pixels, info, cb }
-function smartPhoto(cb) {
-  const fi = $('#fileIn'); fi.value = '';
-  fi.onchange = async () => {
-    const f = fi.files[0]; if (!f) return;
-    let src;
-    try { src = await fileToCanvas(f, 1600); } catch (e) { return toast('Could not read that photo'); }
-    const w = src.width, h = src.height, m = 0.06;
-    crop = { src, cb, info: null, pts: [[w * m, h * m], [w * (1 - m), h * m], [w * (1 - m), h * (1 - m)], [w * m, h * (1 - m)]] };
-    const aiOff = Date.now() - (+loadJSON('re_noai_v1', 0) || 0) < 864e5;    // billing not on → don't ask Google again for 24 h
-    crop.mode = cloud.key && !aiOff ? 'gen' : 'corners';
-    openCropper();
-    if (!cloud.key) { $('#cropInfo').textContent = 'Not connected to cloud — adjust the corners yourself.'; return; }
-    crop.readP = analyzeCrop();   // reads brand / model / variant + exact box corners (free)
-    if (crop.mode === 'gen') studioCrop();   // AI packshot only when billing is on
-  };
-  fi.click();
-}
-async function analyzeCrop() {
-  if (!crop) return;
-  const src = crop.src, w = src.width, h = src.height;
-  const quiet = crop.mode === 'gen';
-  if (!quiet) { $('#cropBusy').textContent = 'Reading the box…'; $('#cropBusy').classList.add('on'); }
-  {
-    try {
-      const small = scaleCanvas(src, 1024);
-      let info = await api('analyzePhoto', { image: small.toDataURL('image/jpeg', .82).split(',')[1] });
-      if (info.clientCall) info = await geminiFromPhone(info);
-      crop.info = info;
-      let pts = null;
-      if (info.corners) pts = info.corners.map(([x, y]) => [x / 1000 * w, y / 1000 * h]);
-      else if (info.box_2d) { const [y0, x0, y1, x1] = info.box_2d.map(v => v / 1000); pts = [[x0 * w, y0 * h], [x1 * w, y0 * h], [x1 * w, y1 * h], [x0 * w, y1 * h]]; }
-      if (pts) {
-        crop.pts = pts;
-        if (!quiet) $('#cropBusy').textContent = 'Finding exact edges…';
-        try { pts = await refineCorners(src, pts); } catch (e) { /* keep first-pass corners */ }
-        crop.pts = snapCorners(src, pts);            // fine-tune each edge to the real box edge
-      }
-      const bits = [info.brand, info.model, info.variant, info.category, info.watts].filter(Boolean);
-      $('#cropInfo').innerHTML = bits.length ? `${ic('wand', 'style="width:15px;height:15px;vertical-align:-3px;color:#E2B04F"')} Read from box: <b>${esc(bits.join(' · '))}</b>` : 'Could not read the box text — fill details yourself.';
-    } catch (e) {
-      if (!quiet) $('#cropInfo').innerHTML = `Couldn't read the box (${esc(e.message)}). <button class="btn ghost" style="padding:6px 12px;margin-left:6px" onclick="analyzeCrop()">${ic('sync', 'style="width:15px;height:15px"')} Try again</button> or drag the corners yourself.`;
-    }
-    if (!quiet) $('#cropBusy').classList.remove('on');
-    if (crop && crop.mode !== 'gen') drawCropper();   // studio image failed/declined meanwhile → show the detected corners
-  }
-}
-// Pass 2: zoom into the box area and ask again — corners come back much more exact
-async function refineCorners(src, pts) {
-  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
-  const bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys), m = Math.max(bw, bh) * .1;
-  const x0 = Math.max(0, Math.min(...xs) - m), y0 = Math.max(0, Math.min(...ys) - m);
-  const x1 = Math.min(src.width, Math.max(...xs) + m), y1 = Math.min(src.height, Math.max(...ys) + m), rw = x1 - x0, rh = y1 - y0;
-  const k = Math.min(1, 1024 / Math.max(rw, rh)), c = document.createElement('canvas');
-  c.width = Math.round(rw * k); c.height = Math.round(rh * k);
-  c.getContext('2d').drawImage(src, x0, y0, rw, rh, 0, 0, c.width, c.height);
-  let r = await api('analyzePhoto', { image: c.toDataURL('image/jpeg', .85).split(',')[1] });
-  if (r.clientCall) r = await geminiFromPhone(r);
-  if (!r.corners) return pts;
-  const np = r.corners.map(([x, y]) => [x0 + x / 1000 * rw, y0 + y / 1000 * rh]);
-  const area = q => Math.abs(q.reduce((a, p, i) => a + p[0] * q[(i + 1) % 4][1] - q[(i + 1) % 4][0] * p[1], 0)) / 2;
-  const ratio = area(np) / area(pts);
-  return ratio > .6 && ratio < 1.5 ? np : pts;          // ignore a second answer that disagrees wildly
-}
-// Edge snap: move each side of the box (within ±2.5%) onto the strongest straight edge in the photo
-function snapCorners(src, pts) {
-  const W = src.width, H = src.height, d = src.getContext('2d').getImageData(0, 0, W, H).data;
-  const gray = (x, y) => { x = Math.round(x); y = Math.round(y); if (x < 0 || y < 0 || x >= W || y >= H) return 0; const i = (y * W + x) * 4; return d[i] * .3 + d[i + 1] * .59 + d[i + 2] * .11; };
-  const R = Math.round(.025 * Math.max(W, H)), lines = [];
-  for (let i = 0; i < 4; i++) {
-    const a = pts[i], b = pts[(i + 1) % 4], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    const u = [(b[0] - a[0]) / L, (b[1] - a[1]) / L], n = [-u[1], u[0]];
-    const at = (t, off) => [a[0] + u[0] * L * t + n[0] * off, a[1] + u[1] * L * t + n[1] * off];
-    const best = (t0, t1) => {                        // offset with the strongest edge along this part of the side
-      let bd = 0, bv = -1;
-      for (let off = -R; off <= R; off++) {
-        let sum = 0;
-        for (let k = 0; k < 24; k++) { const p = at(t0 + (t1 - t0) * k / 23, off); sum += Math.abs(gray(p[0] + n[0] * 2, p[1] + n[1] * 2) - gray(p[0] - n[0] * 2, p[1] - n[1] * 2)); }
-        if (sum / 24 > bv) { bv = sum / 24; bd = off; }
-      }
-      return [bd, bv];
-    };
-    const [d1, v1] = best(.12, .42), [d2, v2] = best(.58, .88);
-    // both halves clear → follow both; only one clear → shift the whole side by it; neither → keep Gemini's line
-    const sd = v1 > 8 && v2 > 8 ? [d1, d2] : v1 > 8 ? [d1, d1] : v2 > 8 ? [d2, d2] : [0, 0];
-    lines.push([at(.27, sd[0]), at(.73, sd[1])]);
-  }
-  const meet = (l1, l2) => {                            // intersection of two lines
-    const [p, q] = l1, [r, s] = l2, d1 = [q[0] - p[0], q[1] - p[1]], d2 = [s[0] - r[0], s[1] - r[1]], den = d1[0] * d2[1] - d1[1] * d2[0];
-    if (Math.abs(den) < 1e-6) return null;
-    const t = ((r[0] - p[0]) * d2[1] - (r[1] - p[1]) * d2[0]) / den; return [p[0] + d1[0] * t, p[1] + d1[1] * t];
-  };
-  return pts.map((old, i) => { const c = meet(lines[(i + 3) % 4], lines[i]); return c && Math.hypot(c[0] - old[0], c[1] - old[1]) < R * 1.6 ? c : old; });
-}
-/* ---------- Studio packshot: Gemini image model makes an e-commerce image of the SAME box ---------- */
-async function studioCrop() {
-  if (!crop) return;
-  const c = crop; c.mode = 'gen'; c.gen = null; setCropMode();
-  $('#cropBusy').textContent = 'Creating e-com image… (10–30 sec)'; $('#cropBusy').classList.add('on');
-  try {
-    const img64 = scaleCanvas(c.src, 1536).toDataURL('image/jpeg', .85).split(',')[1];
-    let r = await api('studioPhoto', { image: img64 });
-    if (r.clientCall) r = await studioFromPhone(r);
-    const part = ((r.candidates && r.candidates[0] && r.candidates[0].content && r.candidates[0].content.parts) || []).find(p => p.inlineData || p.inline_data);
-    if (!part) throw new Error('no image came back — try Regenerate');
-    const d = part.inlineData || part.inline_data;
-    const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = `data:${d.mimeType || d.mime_type || 'image/png'};base64,${d.data}`; });
-    if (crop !== c) return;                                  // user cancelled meanwhile
-    c.gen = squarePad(scaleCanvas(im, 1024), 0);             // white square, as made by Gemini
-    setCropMode();
-  } catch (e) {
-    if (crop !== c) return;
-    c.mode = 'corners'; setCropMode();
-    if (/free Gemini key|billing/i.test(e.message)) {     // expected without billing → quietly use the free studio crop
-      try { localStorage.setItem('re_noai_v1', JSON.stringify(Date.now())); } catch (x) {}
-      $('#cropBusy').classList.remove('on'); return;
-    }
-    $('#cropInfo').innerHTML = `E-com image not made: ${esc(e.message)} <button class="btn ghost" style="padding:6px 12px;margin-top:6px" onclick="studioCrop()">${ic('sync', 'style="width:15px;height:15px"')} Try again</button><br>Or adjust the corners and use the original.`;
-  }
-  $('#cropBusy').classList.remove('on');
-}
-async function studioFromPhone({ clientCall, key }) {        // Worker region blocked by Google → this phone (India) calls
-  let last = '';
-  for (const model of clientCall.models) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(clientCall.body) });
-      const d = await r.json().catch(() => ({}));
-      if (r.ok) return d;
-      const m = (d.error && d.error.message) || ''; last = m || 'HTTP ' + r.status;
-      if (/limit:\s*0|free tier|billing|paid tier/i.test(m)) throw new Error('Image generation is not included in the free Gemini key. Turn on billing for this key in Google AI Studio.');
-      if (r.status === 404 || /not found|no longer available|is not supported/i.test(m)) break;
-      if ([429, 500, 502, 503, 504].includes(r.status) || /high demand|overloaded|unavailable|try again/i.test(m)) { if (attempt === 0) { await new Promise(x => setTimeout(x, 2000)); continue; } break; }
-      throw new Error(last);
-    }
-  }
-  throw new Error('Gemini busy — ' + last);
-}
-// Switch the photo screen between "generated image" and "adjust corners on the original"
-function setCropMode() {
-  if (!crop) return;
-  const gen = crop.mode === 'gen', img = $('#cropImg');
-  $('#cropper').classList.toggle('gen', gen);
-  $('#cropTitle').textContent = gen ? (crop.gen ? 'E-com image ready' : 'Making e-com image') : 'Adjust photo';
-  $('#cropSub').textContent = gen ? 'Same box, studio look · check the text before using' : 'Check the gold corners sit on the box edges · drag to fix';
-  if (gen && crop.gen) { img.classList.add('genimg'); img.onload = () => fitCropImg(); img.src = crop.gen.toDataURL('image/jpeg', .9); }
-  else if (!gen) { img.classList.remove('genimg'); img.onload = () => drawCropper(); img.src = crop.src.toDataURL('image/jpeg', .85); }
-  $('#cropBtns').innerHTML = gen
-    ? `<button class="btn ghost" onclick="crop.mode='corners';setCropMode()">Original</button><button class="btn ghost" onclick="studioCrop()" ${crop.gen ? '' : 'disabled'}>${ic('sync', 'style="width:16px;height:16px"')} Redo</button><button class="btn gold" onclick="cropUse()" ${crop.gen ? '' : 'disabled'}>Use photo</button>`
-    : `<button class="btn ghost" onclick="cropUseOriginal()">Keep as is</button>${crop.gen ? `<button class="btn ghost" onclick="crop.mode='gen';setCropMode()">E-com image</button>` : ''}<button class="btn gold" onclick="cropUse()">Use photo</button>`;
-}
-function fitCropImg() {
-  const img = $('#cropImg'), st = $('#cropStage'), w = img.naturalWidth, h = img.naturalHeight;
-  const k = Math.min(st.clientWidth / w, st.clientHeight / h);
-  img.style.width = Math.round(w * k) + 'px'; img.style.height = Math.round(h * k) + 'px';
-}
-// Cloudflare ran the Worker from a Google-blocked region → this phone (India) asks Gemini directly.
-// The key comes from the Worker (owner-only) for this one call and is never stored on the phone.
-async function geminiFromPhone({ clientCall, key }) {
-  const busy = (st, m) => [429, 500, 502, 503, 504].includes(st) || /high demand|overloaded|unavailable|resource.?exhausted|quota|try again/i.test(m);
-  const gone = (st, m) => st === 404 || /no longer available|not found|is not supported/i.test(m);
-  let last = '';
-  for (const model of clientCall.models) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      let r, d;
-      try {
-        r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(clientCall.body) });
-        d = await r.json().catch(() => ({}));
-      } catch (e) { last = e.message; break; }
-      const m = (d.error && d.error.message) || '';
-      if (r.ok) {
-        const text = (d.candidates && d.candidates[0] && d.candidates[0].content.parts.map(p => p.text || '').join('')) || '{}';
-        const out = JSON.parse(text);
-        const ok = Array.isArray(out.corners) && out.corners.length === 4 && out.corners.every(p => Array.isArray(p) && p.length === 2 && p.every(v => v >= 0 && v <= 1000));
-        if (!ok) out.corners = null;
-        return out;
-      }
-      last = m || 'HTTP ' + r.status;
-      if (gone(r.status, m)) break;
-      if (busy(r.status, m) && attempt === 0) { await new Promise(res => setTimeout(res, 1500)); continue; }
-      if (busy(r.status, m)) break;
-      throw new Error(last);
-    }
-  }
-  throw new Error('Gemini busy — ' + last);
-}
-function fileToCanvas(file, max) {
-  return new Promise((res, rej) => {
-    const img = new Image(); const u = URL.createObjectURL(file);
-    img.onload = () => { URL.revokeObjectURL(u); const c = document.createElement('canvas'); const s = Math.min(1, max / Math.max(img.width, img.height));
-      c.width = Math.round(img.width * s); c.height = Math.round(img.height * s); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); res(c); };
-    img.onerror = rej; img.src = u;
-  });
-}
-function scaleCanvas(src, max) {
-  const s = Math.min(1, max / Math.max(src.width, src.height)); const c = document.createElement('canvas');
-  c.width = Math.round(src.width * s); c.height = Math.round(src.height * s); c.getContext('2d').drawImage(src, 0, 0, c.width, c.height); return c;
-}
-function openCropper() {
-  $('#cropInfo').textContent = '';
-  const img = $('#cropImg'); img.classList.remove('genimg'); img.onload = () => crop.mode === 'gen' ? fitCropImg() : drawCropper(); img.src = crop.src.toDataURL('image/jpeg', .85);
-  $('#cropper').classList.add('open');
-  setCropMode();
-}
-function cropScale() { const img = $('#cropImg'); return img.clientWidth / crop.src.width; }
-function drawCropper() {
-  if (!crop) return;
-  const box = $('#cropBox'), img = $('#cropImg'), st = $('#cropStage');
-  // fit image inside the stage
-  const k = Math.min(st.clientWidth / crop.src.width, st.clientHeight / crop.src.height);
-  img.style.width = Math.round(crop.src.width * k) + 'px'; img.style.height = Math.round(crop.src.height * k) + 'px';
-  box.querySelectorAll('.crop-h').forEach(n => n.remove());
-  const s = cropScale();
-  $('#cropPoly').setAttribute('points', crop.pts.map(([x, y]) => `${x * s},${y * s}`).join(' '));
-  crop.pts.forEach((p, i) => {
-    const h = document.createElement('div'); h.className = 'crop-h'; h.style.left = p[0] * s + 'px'; h.style.top = p[1] * s + 'px';
-    h.onpointerdown = ev => {
-      ev.preventDefault(); h.setPointerCapture(ev.pointerId);
-      const r = img.getBoundingClientRect();
-      h.onpointermove = e => {
-        const sc = cropScale();
-        crop.pts[i] = [Math.max(0, Math.min(crop.src.width, (e.clientX - r.left) / sc)), Math.max(0, Math.min(crop.src.height, (e.clientY - r.top) / sc))];
-        h.style.left = crop.pts[i][0] * sc + 'px'; h.style.top = crop.pts[i][1] * sc + 'px';
-        $('#cropPoly').setAttribute('points', crop.pts.map(([x, y]) => `${x * sc},${y * sc}`).join(' '));
-      };
-      h.onpointerup = () => { h.onpointermove = null; };
-    };
-    box.appendChild(h);
-  });
-}
-window.addEventListener('resize', () => { if ($('#cropper').classList.contains('open')) (crop && crop.mode === 'gen' ? fitCropImg() : drawCropper()); });
-function cropCancel() { $('#cropper').classList.remove('open'); crop = null; }
-async function cropUse() { await finishPhoto(crop.mode === 'gen' && crop.gen ? crop.gen : warpAndEnhance(crop.src, crop.pts)); }
-async function cropUseOriginal() { await finishPhoto(squarePad(scaleCanvas(crop.src, 728))); }
-async function finishPhoto(canvas) {
-  const c = crop; if (!c) return;
-  if (c.readP) { $('#cropBusy').textContent = 'Reading the box…'; $('#cropBusy').classList.add('on'); await Promise.race([c.readP, new Promise(r => setTimeout(r, 8000))]); }
-  const dataUrl = canvas.toDataURL('image/jpeg', .86);
-  let url = dataUrl;
-  if (cloud.key) {
-    $('#cropBusy').textContent = 'Saving photo…'; $('#cropBusy').classList.add('on');
-    try { url = (await api('savePhoto', { data: dataUrl })).url; }
-    catch (e) { toast('Photo kept on this phone only (' + e.message + ')'); }
-    $('#cropBusy').classList.remove('on'); $('#cropBusy').textContent = 'Reading the box…';
-  }
-  $('#cropper').classList.remove('open'); crop = null;
-  c.cb(url, c.info || {});
-}
-// --- perspective warp: map the 4 corners to a flat rectangle (bilinear sampling) ---
-function homography(from, to) {   // solves H so that to = H·from, for 4 point pairs
-  const A = [], b = [];
-  for (let i = 0; i < 4; i++) {
-    const [x, y] = from[i], [u, v] = to[i];
-    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
-    A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
-  }
-  for (let c = 0; c < 8; c++) {                       // Gaussian elimination
-    let m = c; for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[m][c])) m = r;
-    [A[c], A[m]] = [A[m], A[c]]; [b[c], b[m]] = [b[m], b[c]];
-    for (let r = c + 1; r < 8; r++) { const f = A[r][c] / A[c][c]; for (let k = c; k < 8; k++) A[r][k] -= f * A[c][k]; b[r] -= f * b[c]; }
-  }
-  const h = Array(8).fill(0);
-  for (let r = 7; r >= 0; r--) { let s = b[r]; for (let k = r + 1; k < 8; k++) s -= A[r][k] * h[k]; h[r] = s / A[r][r]; }
-  return [...h, 1];
-}
-function warpAndEnhance(src, pts) {
-  const d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
-  let W = Math.max(d(pts[0], pts[1]), d(pts[3], pts[2])), H = Math.max(d(pts[0], pts[3]), d(pts[1], pts[2]));
-  const k = Math.min(1, 728 / Math.max(W, H)); W = Math.max(8, Math.round(W * k)); H = Math.max(8, Math.round(H * k));
-  const Hm = homography([[0, 0], [W, 0], [W, H], [0, H]], pts);   // output pixel → source pixel
-  const sd = src.getContext('2d').getImageData(0, 0, src.width, src.height).data, sw = src.width, sh = src.height;
-  const out = document.createElement('canvas'); out.width = W; out.height = H;
-  const od = out.getContext('2d').createImageData(W, H), o = od.data;
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    const z = Hm[6] * x + Hm[7] * y + 1, sx = (Hm[0] * x + Hm[1] * y + Hm[2]) / z, sy = (Hm[3] * x + Hm[4] * y + Hm[5]) / z;
-    const x0 = Math.max(0, Math.min(sw - 2, Math.floor(sx))), y0 = Math.max(0, Math.min(sh - 2, Math.floor(sy))), fx = sx - x0, fy = sy - y0;
-    const i00 = (y0 * sw + x0) * 4, i10 = i00 + 4, i01 = i00 + sw * 4, i11 = i01 + 4, oi = (y * W + x) * 4;
-    for (let c = 0; c < 3; c++) o[oi + c] = (sd[i00 + c] * (1 - fx) + sd[i10 + c] * fx) * (1 - fy) + (sd[i01 + c] * (1 - fx) + sd[i11 + c] * fx) * fy;
-    o[oi + 3] = 255;
-  }
-  // brighten: stretch each colour channel so the box's white reads as white
-  const hist = [0, 1, 2].map(() => new Uint32Array(256)), n = W * H;
-  for (let i = 0; i < o.length; i += 4) { hist[0][o[i]]++; hist[1][o[i + 1]]++; hist[2][o[i + 2]]++; }
-  const p = (hh, q) => { let acc = 0; for (let v = 0; v < 256; v++) { acc += hh[v]; if (acc >= n * q) return v; } return 255; };
-  const hi = hist.map(hh => Math.max(60, p(hh, .96))), lo = hist.map(hh => p(hh, .01));
-  for (let i = 0; i < o.length; i += 4) for (let c = 0; c < 3; c++) {
-    const v = (o[i + c] - lo[c] * .6) * 248 / (hi[c] - lo[c] * .6);
-    o[i + c] = v < 0 ? 0 : v > 255 ? 255 : v;
-  }
-  deglare(o, W, H);
-  finishColour(o, W, H);
-  out.getContext('2d').putImageData(od, 0, 0);
-  // trim a thin strip on every side so no background sliver survives
-  const tx = Math.round(W * .022), ty = Math.round(H * .012), t = document.createElement('canvas');
-  t.width = W - 2 * tx; t.height = H - 2 * ty; t.getContext('2d').drawImage(out, tx, ty, t.width, t.height, 0, 0, t.width, t.height);
-  return catalogueFrame(t);
-}
-// Soften shine: pixels much brighter than their surroundings and colourless (glare) are pulled back toward them
-function deglare(o, W, H) {
-  const Y = new Float32Array(W * H);
-  for (let i = 0, j = 0; j < W * H; i += 4, j++) Y[j] = o[i] * .3 + o[i + 1] * .59 + o[i + 2] * .11;
-  const r = Math.max(4, Math.round(Math.max(W, H) * .04)), I = new Float64Array((W + 1) * (H + 1));
-  for (let y = 0; y < H; y++) { let row = 0; for (let x = 0; x < W; x++) { row += Y[y * W + x]; I[(y + 1) * (W + 1) + x + 1] = I[y * (W + 1) + x + 1] + row; } }
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    const j = y * W + x, i = j * 4, y0 = Math.max(0, y - r), y1 = Math.min(H, y + r + 1), x0 = Math.max(0, x - r), x1 = Math.min(W, x + r + 1);
-    const mean = (I[y1 * (W + 1) + x1] - I[y0 * (W + 1) + x1] - I[y1 * (W + 1) + x0] + I[y0 * (W + 1) + x0]) / ((y1 - y0) * (x1 - x0));
-    const ex = Y[j] - mean - 28;
-    if (ex <= 0 || Y[j] < 150) continue;
-    const mx = Math.max(o[i], o[i + 1], o[i + 2]), mn = Math.min(o[i], o[i + 1], o[i + 2]);
-    if (mx - mn > 40) continue;                        // coloured detail, not glare
-    const pull = Math.min(1, ex / 45) * .55 * ex;
-    for (let c = 0; c < 3; c++) o[i + c] = Math.max(0, o[i + c] - pull);
-  }
-}
-// Slight colour boost + gentle sharpen (unsharp mask on a 3×3 blur)
-function finishColour(o, W, H) {
-  const src = new Uint8ClampedArray(o);
-  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
-    const i = (y * W + x) * 4, lum = src[i] * .3 + src[i + 1] * .59 + src[i + 2] * .11;
-    for (let c = 0; c < 3; c++) {
-      let b = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) b += src[i + (dy * W + dx) * 4 + c];
-      const v = src[i + c], sharp = v + .55 * (v - b / 9), sat = lum + (sharp - lum) * 1.08;
-      o[i + c] = sat < 0 ? 0 : sat > 255 ? 255 : sat;
-    }
-  }
-}
-// Catalogue look: 1024 white square, box upright at ~84% height, soft drop shadow + floor shadow
-function catalogueFrame(box) {
-  const S = 1024, k = Math.min(S * .84 / box.height, S * .8 / box.width), bw = Math.round(box.width * k), bh = Math.round(box.height * k);
-  const bx = Math.round((S - bw) / 2), by = Math.round((S - bh) / 2) - 14;
-  const c = document.createElement('canvas'); c.width = c.height = S; const g = c.getContext('2d');
-  g.fillStyle = '#fff'; g.fillRect(0, 0, S, S);
-  g.save(); g.translate(S / 2, by + bh + 6); g.scale(1, .14);                 // floor shadow
-  const rg = g.createRadialGradient(0, 0, 0, 0, 0, bw * .62); rg.addColorStop(0, 'rgba(0,0,0,.30)'); rg.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = rg; g.fillRect(-bw, -bw, bw * 2, bw * 2); g.restore();
-  g.save(); g.shadowColor = 'rgba(0,0,0,.22)'; g.shadowBlur = 34; g.shadowOffsetX = 6; g.shadowOffsetY = 14;   // drop shadow
-  g.fillStyle = '#fff'; g.fillRect(bx, by, bw, bh); g.restore();
-  g.imageSmoothingQuality = 'high'; g.drawImage(box, bx, by, bw, bh);
-  return c;
-}
-function squarePad(c, padding = 36) {   // centre on an 800×800 white square, like every other product card
-  const S8 = 800, pad = padding, k = (S8 - 2 * pad) / Math.max(c.width, c.height);
-  const sq = document.createElement('canvas'); sq.width = sq.height = S8; const g = sq.getContext('2d');
-  g.fillStyle = '#fff'; g.fillRect(0, 0, S8, S8); g.imageSmoothingQuality = 'high';
-  const w = c.width * k, h = c.height * k; g.drawImage(c, (S8 - w) / 2, (S8 - h) / 2, w, h);
-  return sq;
-}
-// --- fill the form from what Gemini read on the box (never overwrites what the owner typed) ---
+// find a brand/category by name, or add it
 function findOrAdd(list, name) {
   if (!name) return null;
   let it = list.find(x => x.name.toLowerCase() === name.toLowerCase());
   if (!it) { it = { id: uid(), name }; list.push(it); save(); }
   return it;
 }
-function applyBoxInfo(info, vi, url) {
-  if (!info || !F) return;
-  // same model already in the catalogue? offer to add this box as a new variant there
-  if (!F.id && info.model) {
-    const re = new RegExp('\\b' + info.model.replace(/[^A-Za-z0-9]/g, '') + '\\b', 'i');
-    const ex = S.products.find(p => re.test(p.name));
-    // same model AND same variant (e.g. C48 · Micro USB) → just refresh that variant's photo
-    const exV = ex && info.variant && ex.variants.find(v => v.label.toLowerCase() === info.variant.toLowerCase());
-    if (exV) {
-      if (confirm(`"${ex.name} · ${exV.label}" already exists.\n\nReplace its photo with this one?`)) {
-        exV.photo = url; if (!ex.photo || ex.photo === ex.variants[0].photo) ex.photo = ex.variants[0].photo;
-        save(); closeSheet(); F = null; render(); toast('Photo updated for ' + exV.label);
-      }
-      return;
-    }
-    if (ex && confirm(`"${ex.name}" is already in the catalogue.\n\nAdd this photo as a new variant (${info.variant || 'new variant'}) of it instead?`)) {
-      closeSheet(); openProductForm(ex.id);
-      const nv = blankVariant(); nv.label = info.variant || ''; nv.photo = url; F.variants.push(nv);
-      renderFormVariants(); toast('Added as a new variant — set rates & stock, then Save'); return;
-    }
-  }
-  if (vi === -1) {
-    if (!F.name && info.product_name) { F.name = info.product_name; $('#fName') && ($('#fName').value = F.name); }
-    if (!F.desc && info.watts) { F.desc = info.watts; $('#fDesc') && ($('#fDesc').value = F.desc); }
-    const b = findOrAdd(S.brands, info.brand), c = findOrAdd(S.cats, info.category && info.category !== 'Other' ? info.category : '');
-    const isFresh = !F.id;
-    if (b && isFresh) F.brandId = b.id;
-    if (c && isFresh) F.catId = c.id;
-    if (isFresh && (b || c)) {   // refresh the two dropdowns
-      const opts = (list, cur, kind) => list.map(x => `<option value="${x.id}" ${x.id === cur ? 'selected' : ''}>${esc(x.name)}</option>`).join('') + `<option value="__new">+ Add new ${kind}…</option>`;
-      $('#fBrand') && ($('#fBrand').innerHTML = opts(S.brands, F.brandId, 'brand'));
-      $('#fCat') && ($('#fCat').innerHTML = opts(S.cats, F.catId, 'category'));
-    }
-    vi = 0;   // the product photo is also the first variant's photo
-    if (F.variants[0] && !F.variants[0].photo) F.variants[0].photo = url;
-  }
-  const v = F.variants[vi];
-  if (v && !v.label && info.variant) v.label = info.variant;
-  renderFormVariants();
+/* =========================================================
+   PRODUCT PHOTOS — made in the Gemini app (Copy prompt → Gemini → save),
+   then uploaded here as-is: shrunk to max 1024 px and saved to the cloud.
+   ========================================================= */
+function uploadPhoto(cb) {
+  const fi = $('#fileIn'); fi.value = '';
+  fi.onchange = async () => {
+    const f = fi.files[0]; if (!f) return;
+    let data;
+    try { data = await compressImage(f, 1024, .86); } catch (e) { return toast('Could not read that photo'); }
+    if (!cloud.key) return cb(data);
+    toast('Uploading photo…');
+    try { cb((await api('savePhoto', { data })).url); toast('Photo saved'); }
+    catch (e) { toast('Upload failed — ' + e.message); }
+  };
+  fi.click();
+}
+// Prompt for the Gemini app: clean e-commerce image of the product itself (not the box), pure white, no added text
+function geminiPrompt() {
+  const v = F && F.variants && F.variants.map(x => x.label).filter(Boolean).join(' / ');
+  const known = F && F.name ? `\nProduct: ${F.name}${v ? ' · Variant: ' + v : ''}\n` : '';
+  return `Using the product shown in this photo (on its retail box or packaging) as the exact reference, create a professional e-commerce product photo of the PRODUCT ITSELF — do NOT show the box, packaging, ribbon or any printed box text.
+${known}
+Match the real product exactly as pictured:
+- Same colour, size, shape, material and finish.
+- Same connectors / ports and details (e.g. USB-A, Type-C, Micro-USB, Lightning), with the same shape, grip texture and colour details.
+- Keep the small brand logo on the product exactly as it appears. Do not add any other text, labels, badges, model numbers or logos.
+
+Styling:
+- Product arranged neatly and angled towards the camera so its key details are clearly visible (cables: loosely coiled with both connectors in front; chargers: standing upright at a slight angle).
+- Clean, bright studio lighting, true colours, crisp focus, high detail.
+- Background: completely pure white (#FFFFFF) from edge to edge — no grey gradient, no vignette, no floor tone, no border.
+- Only a very soft, light shadow directly under the product.
+- Product centred, filling about 80% of the frame.
+
+Output: square 1:1 image. No box, no props, no hands, no text, no watermark.`;
+}
+async function copyGeminiPrompt() {
+  const t = geminiPrompt();
+  try { await navigator.clipboard.writeText(t); }
+  catch (e) { const a = document.createElement('textarea'); a.value = t; document.body.appendChild(a); a.select(); document.execCommand('copy'); a.remove(); }
+  toast('Prompt copied — paste it in Gemini with the box photo');
 }
 function pickPhoto(cb) {
   const fi = $('#fileIn'); fi.value = '';
@@ -1339,7 +970,7 @@ function pickPhoto(cb) {
   fi.click();
 }
 // Shrinks phone photos (often 3–5 MB) to ~60 KB so storage stays small
-function compressImage(file, max = 720) {
+function compressImage(file, max = 720, quality = .72) {
   return new Promise((res, rej) => {
     const fr = new FileReader();
     fr.onload = () => {
@@ -1348,7 +979,8 @@ function compressImage(file, max = 720) {
         const s = Math.min(1, max / Math.max(img.width, img.height));
         const c = document.createElement('canvas'); c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
         c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-        res(c.toDataURL('image/jpeg', .72));
+        const g = c.getContext('2d'); g.globalCompositeOperation = 'destination-over'; g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);   // transparent PNG → white
+        res(c.toDataURL('image/jpeg', quality));
       };
       img.onerror = rej; img.src = fr.result;
     };
