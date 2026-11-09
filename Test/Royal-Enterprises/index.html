@@ -927,13 +927,60 @@ function uploadPhoto(cb) {
   fi.onchange = async () => {
     const f = fi.files[0]; if (!f) return;
     let data;
-    try { data = await compressImage(f, 1024, .86); } catch (e) { return toast('Could not read that photo'); }
+    try { data = await catalogueClean(await compressImage(f, 1024, .9)); } catch (e) { return toast('Could not read that photo'); }
     if (!cloud.key) return cb(data);
     toast('Uploading photo…');
     try { cb((await api('savePhoto', { data })).url); toast('Photo saved'); }
     catch (e) { toast('Upload failed — ' + e.message); }
   };
   fi.click();
+}
+/* Make an uploaded product photo look like the brand-website images:
+   off-white / light-grey background → pure white, then trim empty margins
+   so the product fills ~88% of a square white canvas. Runs on the phone, free.
+   Skipped if the photo's edges are not a light, plain background. */
+function catalogueClean(dataUrl, out = 1024) {
+  return new Promise(res => {
+    const img = new Image();
+    img.onload = () => {
+      const w = img.width, h = img.height;
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+      const id = g.getImageData(0, 0, w, h), d = id.data;
+      // 1. background level = median brightness of the border pixels
+      const edge = [];
+      const at = (x, y) => { const i = (y * w + x) * 4; return [d[i], d[i + 1], d[i + 2]]; };
+      for (let x = 0; x < w; x += 2) { edge.push(at(x, 0), at(x, h - 1)); }
+      for (let y = 0; y < h; y += 2) { edge.push(at(0, y), at(w - 1, y)); }
+      const lum = edge.map(p => (p[0] + p[1] + p[2]) / 3).sort((a, b) => a - b);
+      const bg = lum[Math.floor(lum.length / 2)];
+      const sat = edge.reduce((m, p) => m + Math.max(...p) - Math.min(...p), 0) / edge.length;
+      if (bg < 200 || sat > 25) return res(dataUrl);          // not a plain light background — leave as is
+      // 2. lift the background to pure white (gentle gain, then snap near-white to 255)
+      const gain = Math.min(1.15, 255 / Math.max(bg - 4, 1));
+      let x0 = w, y0 = h, x1 = -1, y1 = -1;
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        let r = Math.min(255, d[i] * gain), gg = Math.min(255, d[i + 1] * gain), b = Math.min(255, d[i + 2] * gain);
+        const mn = Math.min(r, gg, b), mx = Math.max(r, gg, b);
+        if (mn > 246 && mx - mn < 12) { r = gg = b = 255; }    // near-white, colourless → pure white
+        else if (mn < 240 || mx - mn > 18) {                    // real product pixel → grow bounding box
+          if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+        d[i] = r; d[i + 1] = gg; d[i + 2] = b;
+      }
+      g.putImageData(id, 0, 0);
+      if (x1 < 0) return res(c.toDataURL('image/jpeg', .88));
+      // 3. trim + centre on a square white canvas, product ≈ 88% of the frame
+      const bw = x1 - x0 + 1, bh = y1 - y0 + 1, side = Math.max(bw, bh) / .88;
+      const o = document.createElement('canvas'); o.width = o.height = out;
+      const og = o.getContext('2d'); og.fillStyle = '#fff'; og.fillRect(0, 0, out, out);
+      const k = out / side; og.imageSmoothingQuality = 'high';
+      og.drawImage(c, x0, y0, bw, bh, (out - bw * k) / 2, (out - bh * k) / 2, bw * k, bh * k);
+      res(o.toDataURL('image/jpeg', .88));
+    };
+    img.onerror = () => res(dataUrl); img.src = dataUrl;
+  });
 }
 // Prompt for the Gemini app: clean e-commerce image of the product itself (not the box), pure white, no added text
 function geminiPrompt() {
@@ -948,10 +995,10 @@ Match the real product exactly as pictured:
 
 Styling:
 - Product arranged neatly and angled towards the camera so its key details are clearly visible (cables: loosely coiled with both connectors in front; chargers: standing upright at a slight angle).
-- Clean, bright studio lighting, true colours, crisp focus, high detail.
-- Background: completely pure white (#FFFFFF) from edge to edge — no grey gradient, no vignette, no floor tone, no border.
-- Only a very soft, light shadow directly under the product.
-- Product centred, filling about 80% of the frame.
+- Bright, even, flat studio lighting like an Amazon / Flipkart main image; true colours, crisp focus, high detail.
+- Background: 100% pure white (#FFFFFF, RGB 255,255,255) from edge to edge — NOT off-white, NOT light grey. No gradient, no vignette, no floor, no border, no reflection.
+- No shadow at all (at most a barely visible contact shadow).
+- Product centred and large, filling about 85–90% of the frame with only a small white margin.
 
 Output: square 1:1 image. No box, no props, no hands, no text, no watermark.`;
 }
