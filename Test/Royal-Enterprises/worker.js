@@ -16,6 +16,8 @@
      GET  photo&id=      → image bytes               public, cached (shop screens use it)
      POST savePhoto      { data: dataURL }  → { id, url }      [owner key]
      POST analyzePhoto   { image: base64 JPEG }  → { corners, box, brand, model, ... }  [owner key]
+     POST listSarju      {}  → { items: [...] }      whole sarjuworld.com catalogue, cleaned  [owner key]
+     POST importPhoto    { url }  → { id, url }      copy a sarjuworld.com photo into D1  [owner key]
    ========================================================= */
 
 const GEMINI_MODEL = 'gemini-2.5-flash';
@@ -88,6 +90,23 @@ export default {
         return json({ id, url: `${url.origin}/?action=photo&id=${id}` });
       }
 
+      if (action === 'listSarju') return json({ items: await listSarju(env) });
+
+      if (action === 'importPhoto') {
+        const base = new URL(env.SARJU_BASE || SARJU_BASE);
+        let u; try { u = new URL(body.url); } catch (e) { return json({ error: 'bad url' }, 400); }
+        if (u.host !== base.host) return json({ error: 'only ' + base.host + ' photos can be imported' }, 400);
+        const r = await fetch(u.toString());
+        const mime = (r.headers.get('content-type') || '').split(';')[0];
+        if (!r.ok || !/^image\/(jpeg|png|webp)$/.test(mime)) return json({ error: 'not a photo (' + r.status + ' ' + mime + ')' }, 400);
+        const buf = new Uint8Array(await r.arrayBuffer());
+        if (buf.length > 1_000_000) return json({ error: 'photo too large' }, 413);
+        let bin = ''; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+        const id = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+        await env.DB.prepare('INSERT INTO photos (id, mime, data, created) VALUES (?, ?, ?, ?)').bind(id, mime, btoa(bin), Date.now()).run();
+        return json({ id, url: `${url.origin}/?action=photo&id=${id}` });
+      }
+
       if (action === 'analyzePhoto') {
         if (!env.GEMINI_API_KEY) return json({ error: 'GEMINI_API_KEY secret not set' }, 500);
         if (!body.image) return json({ error: 'image missing' }, 400);
@@ -132,4 +151,54 @@ async function analyzeWithGemini(env, base64Jpeg) {
   const ok = Array.isArray(out.corners) && out.corners.length === 4 && out.corners.every(p => Array.isArray(p) && p.length === 2 && p.every(v => v >= 0 && v <= 1000));
   if (!ok) out.corners = null;
   return out;
+}
+
+/* ---------- Sarju website catalogue (WooCommerce Store API, public) ---------- */
+const SARJU_BASE = 'https://sarjuworld.com';
+const decode = t => String(t || '')
+  .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n)).replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+  .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#039;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ');
+const strip = h => decode(String(h || '').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+// specs table rows <tr><td>Key</td><td>Value</td></tr> → { Key: Value }
+function parseSpecs(html) {
+  const out = {};
+  for (const row of String(html || '').match(/<tr[\s\S]*?<\/tr>/gi) || []) {
+    const cells = (row.match(/<t[dh][^>]*>[\s\S]*?<\/t[dh]>/gi) || []).map(strip);
+    if (cells.length >= 2 && cells[0] && cells[1] && !/^feature$/i.test(cells[0])) out[cells[0]] = cells[1];
+  }
+  return out;
+}
+// medium-size photo (~600–800 px) from the srcset, else the full one
+function pickImg(img) {
+  const set = String(img.srcset || '').split(',').map(x => x.trim().split(/\s+/)).filter(x => x[0]).map(([u, w]) => [u, parseInt(w) || 0]);
+  const good = set.filter(x => x[1] >= 600).sort((a, b) => a[1] - b[1])[0];
+  return good ? good[0] : img.src;
+}
+// "C90 SUPER FAST CABLE" → "C90 Super Fast Cable" (model codes and USB/TWS-style words stay capitals)
+const KEEP_CAPS = /^(USB|TWS|LED|BT|PD|AUX|OTG|HD|LCD|ANC|ENC|RGB|QC|FM|TF|SD|PC|IOS)$/;
+function tidyName(n) {
+  if (n !== n.toUpperCase()) return n;
+  return n.split(/\s+/).map(w => /\d/.test(w) || KEEP_CAPS.test(w) ? w : w.charAt(0) + w.slice(1).toLowerCase()).join(' ');
+}
+async function listSarju(env) {
+  const base = env.SARJU_BASE || SARJU_BASE, items = [];
+  for (let page = 1, pages = 1; page <= pages && page <= 20; page++) {
+    const r = await fetch(`${base}/wp-json/wc/store/v1/products?per_page=100&page=${page}`, { headers: { Accept: 'application/json' } });
+    if (!r.ok) throw new Error('Sarju site: HTTP ' + r.status);
+    pages = parseInt(r.headers.get('X-WP-TotalPages') || '1') || 1;
+    for (const p of await r.json()) {
+      const name = tidyName(decode(p.name).replace(/^\s*sarju\s*[–—-]\s*/i, '').trim());
+      const specs = parseSpecs(p.short_description + (p.description || ''));
+      const model = ((specs['Model Number'] || '') + ' ' + name).match(/\b([A-Z]{1,4}-?\d{1,4}[A-Z]?)\b/i);
+      items.push({
+        id: p.id, name, url: p.permalink,
+        model: model ? model[1].toUpperCase().replace('-', '') : '',
+        cats: (p.categories || []).map(c => decode(c.name)).filter(c => !/^(popular|uncategori[sz]ed|new arrivals?|best sellers?)$/i.test(c)),
+        specs,
+        thumb: (p.images && p.images[0] && (p.images[0].thumbnail || p.images[0].src)) || '',
+        images: (p.images || []).slice(0, 4).map(pickImg)
+      });
+    }
+  }
+  return items;
 }

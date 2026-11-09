@@ -272,6 +272,13 @@ body.shop main{padding-top:0}
 .cropper .btn.ghost{background:#1f1c16;color:#f3eee3;border:1px solid #3a342a}
 .crop-busy{position:absolute;inset:0;display:none;place-items:center;background:rgba(10,9,7,.7);font-weight:600}
 .crop-busy.on{display:grid}
+.imp-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:12px;background:var(--card);margin-bottom:8px;cursor:pointer}
+.imp-row.on{border-color:var(--accent);background:var(--accent-soft)}
+.imp-row img{width:52px;height:52px;border-radius:8px;object-fit:cover;background:#fff;flex:none}
+.imp-row .ck{width:22px;height:22px;border-radius:6px;border:2px solid var(--line);flex:none;display:grid;place-items:center}
+.imp-row.on .ck{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.imp-row b{font-size:13.5px;display:block;line-height:1.25}.imp-row small{color:var(--muted);font-size:12px}
+.pill.inapp{background:var(--ok-soft);color:var(--ok)}
 .cloudpill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;padding:3px 8px;border-radius:999px;background:var(--card2);color:var(--muted)}
 .cloudpill.ok{color:var(--ok);background:var(--ok-soft)}.cloudpill.err{color:var(--bad);background:var(--bad-soft)}
 .toast{position:fixed;left:50%;bottom:calc(var(--nav-h) + 24px);transform:translateX(-50%);opacity:0;z-index:4000;background:#1b1f2e;color:#fff;padding:10px 16px;border-radius:10px;font-weight:500;font-size:14px;transition:opacity .2s;pointer-events:none;max-width:88vw;text-align:center}
@@ -831,6 +838,94 @@ function deleteProduct(id) {
   save(); closeSheet(); render(); toast('Product deleted');
 }
 /* =========================================================
+   IMPORT FROM SARJU WEBSITE (owner + cloud)
+   Worker reads sarjuworld.com's public catalogue; owner ticks products;
+   photos are copied into our own cloud storage.
+   ========================================================= */
+let IMP = { items: null, sel: new Set(), q: '', cat: 'all', busy: false };
+const IMP_CAT = [[/cable/i, 'Cables'], [/charger|adapter/i, 'Chargers'], [/ear|neckband|headphone|bud|tws/i, 'Earphones'], [/power ?bank/i, 'Power Banks'],
+  [/speaker/i, 'Speakers'], [/cover|case/i, 'Covers'], [/glass|guard/i, 'Tempered Glass']];
+function impCategory(cats, name) {
+  const txt = (cats || []).join(' ') + ' ' + name;
+  for (const [re, c] of IMP_CAT) if (re.test(txt)) return c;
+  return (cats && cats[0]) || 'Other';
+}
+// "MICRO / TYPE-C" → ['Micro USB', 'Type-C']
+function impVariants(it) {
+  const raw = it.specs['Connector Type'] || it.specs['Connector'] || it.specs['Output Port'] || '';
+  const map = s => /micro/i.test(s) ? 'Micro USB' : /type[\s-]?c/i.test(s) ? 'Type-C' : /lightning|iphone|ios/i.test(s) ? 'Lightning' : s.replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w/g, c => c.toLowerCase());
+  const parts = raw.split(/\s*(?:\/|,|&|\band\b)\s*/i).map(x => x.trim()).filter(Boolean).map(map);
+  return parts.length > 1 ? [...new Set(parts)] : [parts[0] || 'Standard'];
+}
+function impExisting(it) {
+  if (!it.model) return S.products.find(p => p.ext && p.ext.id === it.id) || null;
+  const re = new RegExp('\\b' + it.model + '\\b', 'i');
+  return S.products.find(p => (p.ext && p.ext.id === it.id) || re.test(p.name)) || null;
+}
+async function openImport() {
+  if (!cloud.key) return toast('Connect to cloud first');
+  openSheet(sheetHead('Import from Sarju', 'sarjuworld.com catalogue') + '<div id="impBody"><div class="empty">Loading Sarju catalogue…</div></div>');
+  if (!IMP.items) {
+    try { IMP.items = (await api('listSarju', {})).items; }
+    catch (e) { $('#impBody').innerHTML = `<div class="empty">Could not load the Sarju website (${esc(e.message)})</div>`; return; }
+  }
+  renderImport();
+}
+function renderImport() {
+  const b = $('#impBody'); if (!b || !IMP.items) return;
+  const cats = [...new Set(IMP.items.map(it => impCategory(it.cats, it.name)))].sort();
+  const q = IMP.q.toLowerCase();
+  const list = IMP.items.filter(it => (IMP.cat === 'all' || impCategory(it.cats, it.name) === IMP.cat) && (!q || (it.name + ' ' + it.model).toLowerCase().includes(q)));
+  const chip = (v, t) => `<button class="chip ${IMP.cat === v ? 'on' : ''}" onclick="IMP.cat='${v}';renderImport()">${esc(t)}</button>`;
+  b.innerHTML = `
+    <div class="search" style="margin-bottom:10px">${ic('search')}<input id="impQ" placeholder="Search name or model (e.g. C71)" value="${esc(IMP.q)}" oninput="IMP.q=this.value;renderImport();setTimeout(()=>{const i=$('#impQ');i.focus();i.setSelectionRange(i.value.length,i.value.length)})"></div>
+    <div class="chips" style="margin-bottom:10px;display:flex;gap:8px;overflow-x:auto">${chip('all', 'All ' + IMP.items.length)}${cats.map(c => chip(c, c)).join('')}</div>
+    <div>${list.map(it => {
+      const ex = impExisting(it), vs = impVariants(it);
+      return `<div class="imp-row ${IMP.sel.has(it.id) ? 'on' : ''}" onclick="impToggle(${it.id})">
+        <span class="ck">${IMP.sel.has(it.id) ? ic('check', 'style="width:14px;height:14px"') : ''}</span>
+        <img src="${esc(it.thumb)}" alt="" loading="lazy">
+        <div class="grow"><b>${esc(it.name)}</b><small>${esc(impCategory(it.cats, it.name))} · ${vs.length > 1 ? vs.join(' + ') : '1 variant'}</small>
+          ${ex ? `<div><span class="pill inapp">In app — will update photo</span></div>` : ''}</div></div>`;
+    }).join('') || '<div class="empty">No matching products</div>'}</div>
+    <div style="position:sticky;bottom:0;padding-top:8px;background:var(--bg2)">
+      <button class="btn gold block" id="impGo" ${IMP.sel.size && !IMP.busy ? '' : 'disabled'} onclick="runImport()">${ic('in')} Import ${IMP.sel.size || ''} selected</button>
+    </div>`;
+}
+function impToggle(id) { if (IMP.busy) return; IMP.sel.has(id) ? IMP.sel.delete(id) : IMP.sel.add(id); renderImport(); }
+async function runImport() {
+  const picks = IMP.items.filter(it => IMP.sel.has(it.id)); if (!picks.length) return;
+  IMP.busy = true; let done = 0, added = 0, updated = 0, failed = 0;
+  const btn = () => $('#impGo');
+  const sarju = findOrAdd(S.brands, 'Sarju');
+  for (const it of picks) {
+    if (btn()) btn().textContent = `Importing ${++done} of ${picks.length}…`;
+    try {
+      const photo = it.images[0] ? (await api('importPhoto', { url: it.images[0] })).url : '';
+      const ex = impExisting(it);
+      if (ex) {                                   // already stocked → studio photo becomes the main picture
+        if (photo) ex.photo = photo;
+        ex.ext = { src: 'sarju', id: it.id, url: it.url };
+        ex.variants.forEach(v => { if (!v.photo) v.photo = photo; });
+        updated++;
+      } else {
+        const cat = findOrAdd(S.cats, impCategory(it.cats, it.name));
+        const desc = [it.specs['Watt/Amp'], it.specs['Length'], it.specs['Cable Material']].filter(Boolean).join(' · ');
+        const pid = uid();
+        const variants = impVariants(it).map(label => {
+          const abbr = { 'Micro USB': 'MC', 'Type-C': 'TC', 'Lightning': 'LT', 'Standard': 'STD' }[label] || label.replace(/[^A-Za-z0-9]/g, '').slice(0, 4).toUpperCase();
+          let sku = `SJ-${it.model || it.id}-${abbr}`; if (allVariants().some(x => x.v.sku === sku)) sku = autoSku(it.name, label);
+          return { id: uid(), label, sku, weight: 0, purchase: 0, dist: 0, retail: 0, stock: 0, lowAt: 5, photo };
+        });
+        S.products.push({ id: pid, name: it.name, brandId: sarju.id, catId: cat.id, desc, photo, variants, ext: { src: 'sarju', id: it.id, url: it.url }, created: Date.now() });
+        added++;
+      }
+    } catch (e) { failed++; }
+  }
+  IMP.busy = false; IMP.sel.clear(); save(); render(); renderImport();
+  toast(`Imported ${added} new · updated ${updated}` + (failed ? ` · ${failed} failed` : '') + ' — add rates to make them orderable');
+}
+/* =========================================================
    SMART PHOTO — pick photo → Gemini finds the box + reads it → owner
    adjusts 4 corners → app straightens, brightens, squares it → cloud
    ========================================================= */
@@ -1136,6 +1231,7 @@ function renderMore() {
     <div class="list">
       ${cloud.key
         ? `<button class="row" onclick="cloudPush();cloudLoad()"><span class="adj">${ic('sync')}</span><div class="grow" style="text-align:left"><b>Sync now</b><div class="sub">Owner phone · changes save to the cloud automatically</div></div></button>
+           <button class="row" onclick="openImport()"><span class="adj" style="color:var(--accent-txt)">${ic('in')}</span><div class="grow" style="text-align:left"><b>Import from Sarju website</b><div class="sub">Pick products — photos, specs & variants come in automatically</div></div></button>
            <button class="row" onclick="disconnectCloud()"><span class="adj">${ic('cloud')}</span><div class="grow" style="text-align:left"><b>Disconnect this phone</b><div class="sub">Removes the owner key from this phone</div></div></button>`
         : `<button class="row" onclick="connectCloud()"><span class="adj" style="color:var(--accent-txt)">${ic('cloud')}</span><div class="grow" style="text-align:left"><b>Connect to cloud (owner)</b><div class="sub">Enter the owner key once — catalogue and photos sync to every phone</div></div></button>
            <button class="row" onclick="cloudLoad()"><span class="adj">${ic('sync')}</span><div class="grow" style="text-align:left"><b>Refresh from cloud</b><div class="sub">Get the latest catalogue (view only)</div></div></button>`}
