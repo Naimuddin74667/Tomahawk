@@ -233,6 +233,9 @@ body.shop main{padding-top:0}
 .gal-track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;border-radius:20px;background:#fff;scrollbar-width:none}
 .gal-track::-webkit-scrollbar{display:none}
 .gal-track img{flex:0 0 100%;width:100%;aspect-ratio:1/1;object-fit:contain;scroll-snap-align:center;background:#fff}
+.gal-btn{position:absolute;top:50%;transform:translateY(-50%);width:36px;height:36px;border-radius:50%;border:0;background:rgba(10,9,7,.55);color:#fff;font-size:24px;line-height:1;display:grid;place-items:center;cursor:pointer;padding:0 0 3px}
+.gal-btn:hover{background:rgba(10,9,7,.8)}.gal-btn.prev{left:8px}.gal-btn.next{right:8px}
+.gal-dots i{cursor:pointer}
 .gal-n{position:absolute;right:10px;bottom:10px;background:rgba(10,9,7,.7);color:#fff;font-size:11.5px;font-weight:700;padding:3px 8px;border-radius:999px}
 .gal-dots{display:flex;justify-content:center;gap:5px;margin-top:8px}.gal-dots i{width:6px;height:6px;border-radius:50%;background:var(--line)}.gal-dots i.on{background:var(--accent);width:16px;border-radius:3px}
 .gstrip{display:flex;gap:8px;overflow-x:auto;padding:2px 0 12px}
@@ -693,8 +696,17 @@ function galleryHTML(p) {
   const imgs = galleryOf(p), gid = 'g' + p.id;
   if (imgs.length === 1) return `<div class="gal"><div class="gal-track"><img src="${imgs[0]}" alt=""></div></div>`;
   return `<div class="gal"><div class="gal-track" id="${gid}" onscroll="galScroll(this,${imgs.length})">${imgs.map(u => `<img src="${u}" alt="" loading="lazy">`).join('')}</div>
+    <button class="gal-btn prev" onclick="galGo('${gid}',-1)" aria-label="Previous photo">&#8249;</button>
+    <button class="gal-btn next" onclick="galGo('${gid}',1)" aria-label="Next photo">&#8250;</button>
     <span class="gal-n" id="${gid}-n">1/${imgs.length}</span></div>
-    <div class="gal-dots" id="${gid}-d">${imgs.map((_, i) => `<i class="${i ? '' : 'on'}"></i>`).join('')}</div>`;
+    <div class="gal-dots" id="${gid}-d">${imgs.map((_, i) => `<i class="${i ? '' : 'on'}" onclick="galGo('${gid}',0,${i})"></i>`).join('')}</div>`;
+}
+// Arrow / dot navigation (desktop has no swipe). step = ±1, or jump to index `to`; wraps around.
+function galGo(gid, step, to) {
+  const el = $('#' + gid); if (!el) return;
+  const n = el.children.length, cur = Math.round(el.scrollLeft / el.clientWidth);
+  const i = to != null ? to : (cur + step + n) % n;
+  el.scrollTo({ left: i * el.clientWidth, behavior: 'smooth' });
 }
 function galScroll(el, n) {
   const i = Math.round(el.scrollLeft / el.clientWidth);
