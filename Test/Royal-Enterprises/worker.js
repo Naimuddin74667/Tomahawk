@@ -16,6 +16,7 @@
      GET  photo&id=      → image bytes               public, cached (shop screens use it)
      POST savePhoto      { data: dataURL }  → { id, url }      [owner key]
      POST analyzePhoto   { image: base64 JPEG }  → { corners, box, brand, model, ... }  [owner key]
+     POST studioPhoto    { image: base64 JPEG }  → Gemini image response (studio packshot of the box)  [owner key]
      POST listSource     { src: 'sarju'|'ticon' } → { items }   whole brand-website catalogue, cleaned  [owner key]
      POST importPhoto    { url }  → { id, url }      copy a brand-website photo into D1  [owner key]
    Shops (owner key):
@@ -174,6 +175,12 @@ export default {
         const id = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
         await env.DB.prepare('INSERT INTO photos (id, mime, data, created) VALUES (?, ?, ?, ?)').bind(id, mime, btoa(bin), Date.now()).run();
         return json({ id, url: `${url.origin}/?action=photo&id=${id}` });
+      }
+
+      if (action === 'studioPhoto') {
+        if (!env.GEMINI_API_KEY) return json({ error: 'GEMINI_API_KEY secret not set' }, 500);
+        if (!body.image) return json({ error: 'image missing' }, 400);
+        return studioWithGemini(env, body.image);
       }
 
       if (action === 'analyzePhoto') {
@@ -387,4 +394,48 @@ async function shopPlaceOrder(env, shop, body) {
   const r = await env.DB.prepare('INSERT INTO shop_orders (shop_id, json, status, ts) VALUES (?, ?, ?, ?) RETURNING id').bind(shop.id, JSON.stringify(o), 'new', now).first();
   await env.DB.prepare('UPDATE shops SET last_order = ? WHERE id = ?').bind(now, shop.id).run();
   return json({ id: 'so' + r.id, no: orderNo(r.id), total: o.total });
+}
+
+/* ---------- Gemini image model: phone photo → clean e-commerce packshot of the SAME box ---------- */
+const IMAGE_MODELS = ['gemini-nano-banana-2.1', 'gemini-3.1-flash-lite-image', 'gemini-3.1-flash-image'];
+const STUDIO_PROMPT = `Turn this phone photo into a professional e-commerce product packshot of the SAME retail box.
+STRICT RULES — the box must stay exactly as it is:
+- same shape, proportions, colours, logo, product artwork and every printed word and number (brand, model code, wattage, connector type) — unchanged, sharp and readable;
+- do not redraw, translate, add or remove any text or graphics; do not open the box; do not show the product outside the box.
+Fix only the photography:
+- remove the background, table, hands and anything else around the box;
+- straighten the box so it faces the camera front-on and upright;
+- remove glare, reflections and room shadows; even, bright studio lighting; true colours; crisp focus.
+Output: square 1:1 image, pure white background (#FFFFFF), box centred, filling about 85% of the height, with a soft natural shadow under it. No props, no extra text, no watermark, no border.`;
+
+async function studioWithGemini(env, base64Jpeg) {
+  const models = [...new Set(env.GEMINI_IMAGE_MODEL ? [env.GEMINI_IMAGE_MODEL, ...IMAGE_MODELS] : IMAGE_MODELS)];
+  const body = { contents: [{ parts: [{ inline_data: { mime_type: 'image/jpeg', data: base64Jpeg } }, { text: STUDIO_PROMPT }] }],
+    generationConfig: { responseModalities: ['IMAGE'], imageConfig: { aspectRatio: '1:1' } } };
+  let lastMsg = '';
+  outer: for (const model of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let b = body, res;
+      const send = bb => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+        signal: AbortSignal.timeout(75000), body: JSON.stringify(bb) });
+      try { res = await send(b); } catch (e) { lastMsg = e.name === 'TimeoutError' ? 'took too long' : e.message; continue; }
+      // success → pass Google's answer straight through (no parsing here: the image is big and Workers have little CPU time)
+      if (res.ok) return new Response(res.body, { headers: { ...CORS, 'Content-Type': 'application/json', 'X-Model': model } });
+      let msg = ''; try { msg = ((await res.json()).error || {}).message || ''; } catch (e) {}
+      if (res.status === 400 && /imageConfig|aspect/i.test(msg)) {          // model without aspect-ratio setting → plain request
+        b = { ...body, generationConfig: { responseModalities: ['IMAGE'] } };
+        res = await send(b);
+        if (res.ok) return new Response(res.body, { headers: { ...CORS, 'Content-Type': 'application/json', 'X-Model': model } });
+        try { msg = ((await res.json()).error || {}).message || ''; } catch (e) {}
+      }
+      lastMsg = msg || ('HTTP ' + res.status);
+      if (/location is not supported/i.test(msg)) return json({ clientCall: { models, body }, key: env.GEMINI_API_KEY });
+      if (/limit:\s*0|free tier|billing|paid tier/i.test(msg)) return json({ error: 'Image generation is not included in the free Gemini key. Turn on billing for this key in Google AI Studio to use it.', billing: true }, 402);
+      if (isGone(res.status, msg)) continue outer;
+      if (isTransient(res.status, msg)) { if (attempt === 0) { await sleep(2000); continue; } continue outer; }
+      break outer;
+    }
+  }
+  return json({ error: 'Image generation failed — ' + lastMsg }, 502);
 }

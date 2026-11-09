@@ -280,6 +280,8 @@ body.shop main{padding-top:0}
 .crop-info{margin:0 16px 8px;padding:10px 12px;border-radius:12px;background:#1a1814;border:1px solid #302b22;font-size:13px;color:#e9e1cf;min-height:20px}
 .crop-btns{display:flex;gap:10px;padding:8px 16px calc(14px + env(safe-area-inset-bottom))}
 .crop-btns .btn{flex:1}
+.cropper.gen .crop-h,.cropper.gen #cropSvg{display:none}
+.crop-box img.genimg{background:#fff;border-radius:12px}
 .cropper .btn.ghost{background:#1f1c16;color:#f3eee3;border:1px solid #3a342a}
 .crop-busy{position:absolute;inset:0;display:none;place-items:center;background:rgba(10,9,7,.7);font-weight:600}
 .crop-busy.on{display:grid}
@@ -328,10 +330,10 @@ body.shop .toast{bottom:calc(84px + env(safe-area-inset-bottom))}
 <div class="toast" id="toast"></div>
 <input type="file" id="fileIn" accept="image/*" hidden>
 <div class="cropper" id="cropper">
-  <div class="crop-top"><div><b>Adjust photo</b><small>Drag the 4 gold corners to the box edges</small></div><button class="btn ghost" onclick="cropCancel()">Cancel</button></div>
+  <div class="crop-top"><div><b id="cropTitle">Adjust photo</b><small id="cropSub">Drag the 4 gold corners to the box edges</small></div><button class="btn ghost" onclick="cropCancel()">Cancel</button></div>
   <div class="crop-stage" id="cropStage"><div class="crop-box" id="cropBox"><img id="cropImg" alt=""><svg id="cropSvg"><polygon id="cropPoly" fill="rgba(226,176,79,.12)" stroke="#E2B04F" stroke-width="2"/></svg></div><div class="crop-busy" id="cropBusy">Reading the box…</div></div>
   <div class="crop-info" id="cropInfo"></div>
-  <div class="crop-btns"><button class="btn ghost" onclick="cropUseOriginal()">Keep as is</button><button class="btn gold" onclick="cropUse()">Use photo</button></div>
+  <div class="crop-btns" id="cropBtns"></div>
 </div>
 
 <script>
@@ -944,16 +946,19 @@ function smartPhoto(cb) {
     try { src = await fileToCanvas(f, 1600); } catch (e) { return toast('Could not read that photo'); }
     const w = src.width, h = src.height, m = 0.06;
     crop = { src, cb, info: null, pts: [[w * m, h * m], [w * (1 - m), h * m], [w * (1 - m), h * (1 - m)], [w * m, h * (1 - m)]] };
+    crop.mode = cloud.key ? 'gen' : 'corners';
     openCropper();
-    if (!cloud.key) { $('#cropInfo').textContent = 'Not connected to cloud — adjust the corners yourself. (Connect in More for automatic box detection.)'; return; }
-    await analyzeCrop();
+    if (!cloud.key) { $('#cropInfo').textContent = 'Not connected to cloud — adjust the corners yourself.'; return; }
+    crop.readP = analyzeCrop();   // reads brand / model / variant from the box (fills the form)
+    studioCrop();           // makes the clean e-commerce packshot
   };
   fi.click();
 }
 async function analyzeCrop() {
   if (!crop) return;
   const src = crop.src, w = src.width, h = src.height;
-  $('#cropBusy').textContent = 'Reading the box…'; $('#cropBusy').classList.add('on');
+  const quiet = crop.mode === 'gen';
+  if (!quiet) { $('#cropBusy').textContent = 'Reading the box…'; $('#cropBusy').classList.add('on'); }
   {
     try {
       const small = scaleCanvas(src, 1024);
@@ -965,11 +970,67 @@ async function analyzeCrop() {
       const bits = [info.brand, info.model, info.variant, info.category, info.watts].filter(Boolean);
       $('#cropInfo').innerHTML = bits.length ? `${ic('wand', 'style="width:15px;height:15px;vertical-align:-3px;color:#E2B04F"')} Read from box: <b>${esc(bits.join(' · '))}</b>` : 'Could not read the box text — fill details yourself.';
     } catch (e) {
-      $('#cropInfo').innerHTML = `Couldn't read the box (${esc(e.message)}). <button class="btn ghost" style="padding:6px 12px;margin-left:6px" onclick="analyzeCrop()">${ic('sync', 'style="width:15px;height:15px"')} Try again</button> or drag the corners yourself.`;
+      if (!quiet) $('#cropInfo').innerHTML = `Couldn't read the box (${esc(e.message)}). <button class="btn ghost" style="padding:6px 12px;margin-left:6px" onclick="analyzeCrop()">${ic('sync', 'style="width:15px;height:15px"')} Try again</button> or drag the corners yourself.`;
     }
-    $('#cropBusy').classList.remove('on');
-    drawCropper();
+    if (!quiet) { $('#cropBusy').classList.remove('on'); drawCropper(); }
   }
+}
+/* ---------- Studio packshot: Gemini image model makes an e-commerce image of the SAME box ---------- */
+async function studioCrop() {
+  if (!crop) return;
+  const c = crop; c.mode = 'gen'; c.gen = null; setCropMode();
+  $('#cropBusy').textContent = 'Creating e-com image… (10–30 sec)'; $('#cropBusy').classList.add('on');
+  try {
+    const img64 = scaleCanvas(c.src, 1536).toDataURL('image/jpeg', .85).split(',')[1];
+    let r = await api('studioPhoto', { image: img64 });
+    if (r.clientCall) r = await studioFromPhone(r);
+    const part = ((r.candidates && r.candidates[0] && r.candidates[0].content && r.candidates[0].content.parts) || []).find(p => p.inlineData || p.inline_data);
+    if (!part) throw new Error('no image came back — try Regenerate');
+    const d = part.inlineData || part.inline_data;
+    const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = `data:${d.mimeType || d.mime_type || 'image/png'};base64,${d.data}`; });
+    if (crop !== c) return;                                  // user cancelled meanwhile
+    c.gen = squarePad(scaleCanvas(im, 1024), 0);             // white square, as made by Gemini
+    setCropMode();
+  } catch (e) {
+    if (crop !== c) return;
+    c.mode = 'corners'; setCropMode();
+    $('#cropInfo').innerHTML = `E-com image not made: ${esc(e.message)} <button class="btn ghost" style="padding:6px 12px;margin-top:6px" onclick="studioCrop()">${ic('sync', 'style="width:15px;height:15px"')} Try again</button><br>Or adjust the corners and use the original.`;
+  }
+  $('#cropBusy').classList.remove('on');
+}
+async function studioFromPhone({ clientCall, key }) {        // Worker region blocked by Google → this phone (India) calls
+  let last = '';
+  for (const model of clientCall.models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(clientCall.body) });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) return d;
+      const m = (d.error && d.error.message) || ''; last = m || 'HTTP ' + r.status;
+      if (/limit:\s*0|free tier|billing|paid tier/i.test(m)) throw new Error('Image generation is not included in the free Gemini key. Turn on billing for this key in Google AI Studio.');
+      if (r.status === 404 || /not found|no longer available|is not supported/i.test(m)) break;
+      if ([429, 500, 502, 503, 504].includes(r.status) || /high demand|overloaded|unavailable|try again/i.test(m)) { if (attempt === 0) { await new Promise(x => setTimeout(x, 2000)); continue; } break; }
+      throw new Error(last);
+    }
+  }
+  throw new Error('Gemini busy — ' + last);
+}
+// Switch the photo screen between "generated image" and "adjust corners on the original"
+function setCropMode() {
+  if (!crop) return;
+  const gen = crop.mode === 'gen', img = $('#cropImg');
+  $('#cropper').classList.toggle('gen', gen);
+  $('#cropTitle').textContent = gen ? (crop.gen ? 'E-com image ready' : 'Making e-com image') : 'Adjust photo';
+  $('#cropSub').textContent = gen ? 'Same box, studio look · check the text before using' : 'Drag the 4 gold corners to the box edges';
+  if (gen && crop.gen) { img.classList.add('genimg'); img.onload = () => fitCropImg(); img.src = crop.gen.toDataURL('image/jpeg', .9); }
+  else if (!gen) { img.classList.remove('genimg'); img.onload = () => drawCropper(); img.src = crop.src.toDataURL('image/jpeg', .85); }
+  $('#cropBtns').innerHTML = gen
+    ? `<button class="btn ghost" onclick="crop.mode='corners';setCropMode()">Original</button><button class="btn ghost" onclick="studioCrop()" ${crop.gen ? '' : 'disabled'}>${ic('sync', 'style="width:16px;height:16px"')} Redo</button><button class="btn gold" onclick="cropUse()" ${crop.gen ? '' : 'disabled'}>Use photo</button>`
+    : `<button class="btn ghost" onclick="cropUseOriginal()">Keep as is</button>${crop.gen ? `<button class="btn ghost" onclick="crop.mode='gen';setCropMode()">E-com image</button>` : ''}<button class="btn gold" onclick="cropUse()">Use photo</button>`;
+}
+function fitCropImg() {
+  const img = $('#cropImg'), st = $('#cropStage'), w = img.naturalWidth, h = img.naturalHeight;
+  const k = Math.min(st.clientWidth / w, st.clientHeight / h);
+  img.style.width = Math.round(w * k) + 'px'; img.style.height = Math.round(h * k) + 'px';
 }
 // Cloudflare ran the Worker from a Google-blocked region → this phone (India) asks Gemini directly.
 // The key comes from the Worker (owner-only) for this one call and is never stored on the phone.
@@ -1015,8 +1076,9 @@ function scaleCanvas(src, max) {
 }
 function openCropper() {
   $('#cropInfo').textContent = '';
-  const img = $('#cropImg'); img.onload = () => drawCropper(); img.src = crop.src.toDataURL('image/jpeg', .85);
+  const img = $('#cropImg'); img.classList.remove('genimg'); img.onload = () => crop.mode === 'gen' ? fitCropImg() : drawCropper(); img.src = crop.src.toDataURL('image/jpeg', .85);
   $('#cropper').classList.add('open');
+  setCropMode();
 }
 function cropScale() { const img = $('#cropImg'); return img.clientWidth / crop.src.width; }
 function drawCropper() {
@@ -1044,12 +1106,13 @@ function drawCropper() {
     box.appendChild(h);
   });
 }
-window.addEventListener('resize', () => { if ($('#cropper').classList.contains('open')) drawCropper(); });
+window.addEventListener('resize', () => { if ($('#cropper').classList.contains('open')) (crop && crop.mode === 'gen' ? fitCropImg() : drawCropper()); });
 function cropCancel() { $('#cropper').classList.remove('open'); crop = null; }
-async function cropUse() { await finishPhoto(warpAndEnhance(crop.src, crop.pts)); }
+async function cropUse() { await finishPhoto(crop.mode === 'gen' && crop.gen ? crop.gen : warpAndEnhance(crop.src, crop.pts)); }
 async function cropUseOriginal() { await finishPhoto(squarePad(scaleCanvas(crop.src, 728))); }
 async function finishPhoto(canvas) {
   const c = crop; if (!c) return;
+  if (c.readP) { $('#cropBusy').textContent = 'Reading the box…'; $('#cropBusy').classList.add('on'); await Promise.race([c.readP, new Promise(r => setTimeout(r, 8000))]); }
   const dataUrl = canvas.toDataURL('image/jpeg', .8);
   let url = dataUrl;
   if (cloud.key) {
@@ -1105,8 +1168,8 @@ function warpAndEnhance(src, pts) {
   out.getContext('2d').putImageData(od, 0, 0);
   return squarePad(out);
 }
-function squarePad(c) {   // centre on an 800×800 white square, like every other product card
-  const S8 = 800, pad = 36, k = (S8 - 2 * pad) / Math.max(c.width, c.height);
+function squarePad(c, padding = 36) {   // centre on an 800×800 white square, like every other product card
+  const S8 = 800, pad = padding, k = (S8 - 2 * pad) / Math.max(c.width, c.height);
   const sq = document.createElement('canvas'); sq.width = sq.height = S8; const g = sq.getContext('2d');
   g.fillStyle = '#fff'; g.fillRect(0, 0, S8, S8); g.imageSmoothingQuality = 'high';
   const w = c.width * k, h = c.height * k; g.drawImage(c, (S8 - w) / 2, (S8 - h) / 2, w, h);
