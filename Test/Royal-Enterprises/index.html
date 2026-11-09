@@ -960,13 +960,20 @@ function catalogueClean(dataUrl, out = 1024, onlyIfGrey = false) {
       const g = c.getContext('2d'); g.drawImage(img, 0, 0);
       const id = g.getImageData(0, 0, w, h), d = id.data;
       // 1. background level = median brightness of the border pixels
-      const edge = [];
+      // Sample rings at several insets: older photos have a white frame around a grey
+      // inner background, so the outermost ring alone would look "already white".
       const at = (x, y) => { const i = (y * w + x) * 4; return [d[i], d[i + 1], d[i + 2]]; };
-      for (let x = 0; x < w; x += 2) { edge.push(at(x, 0), at(x, h - 1)); }
-      for (let y = 0; y < h; y += 2) { edge.push(at(0, y), at(w - 1, y)); }
-      const lum = edge.map(p => (p[0] + p[1] + p[2]) / 3).sort((a, b) => a - b);
-      const bg = lum[Math.floor(lum.length / 2)];
-      const sat = edge.reduce((m, p) => m + Math.max(...p) - Math.min(...p), 0) / edge.length;
+      let bg = 999, sat = 0;
+      for (const f of [0, .03, .06, .09, .12]) {
+        const ix = Math.round(w * f), iy = Math.round(h * f), ring = [];
+        for (let x = ix; x < w - ix; x += 2) ring.push(at(x, iy), at(x, h - 1 - iy));
+        for (let y = iy; y < h - iy; y += 2) ring.push(at(ix, y), at(w - 1 - ix, y));
+        const lum = ring.map(p => (p[0] + p[1] + p[2]) / 3).sort((a, b) => a - b);
+        const med = lum[Math.floor(lum.length / 2)];
+        const rs = ring.reduce((m, p) => m + Math.max(...p) - Math.min(...p), 0) / ring.length;
+        if (med >= 200 && rs <= 25 && med < bg) { bg = med; sat = rs; }   // darkest plain light ring = real background
+      }
+      if (bg === 999) { bg = 0; sat = 99; }
       if (bg < 200 || sat > 25) return res(onlyIfGrey ? null : dataUrl);   // not a plain light background — leave as is
       if (onlyIfGrey && bg >= 252) return res(null);          // already white (e.g. brand-website photo) — nothing to fix
       // 2. lift the background to pure white (gentle gain, then snap near-white to 255)
