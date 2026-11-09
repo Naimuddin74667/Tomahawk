@@ -197,7 +197,7 @@ async function listSarju(env) {
         cats: (p.categories || []).map(c => decode(c.name)).filter(c => !/^(popular|uncategori[sz]ed|new arrivals?|best sellers?)$/i.test(c)),
         specs,
         thumb: (p.images && p.images[0] && (p.images[0].thumbnail || p.images[0].src)) || '',
-        images: (p.images || []).slice(0, 4).map(pickImg)
+        images: (p.images || []).slice(0, 10).map(pickImg)
       });
     }
   }

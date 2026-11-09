@@ -229,6 +229,17 @@ body.shop main{padding-top:0}
 .ps-nm{font-size:12px;font-weight:600;line-height:1.25;margin:2px 2px 0;min-height:30px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .ps-op{font-size:10.5px;color:var(--muted);margin:2px 2px 2px}
 
+.gal{position:relative;margin:0 auto 14px;max-width:320px}
+.gal-track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;border-radius:20px;background:#fff;scrollbar-width:none}
+.gal-track::-webkit-scrollbar{display:none}
+.gal-track img{flex:0 0 100%;width:100%;aspect-ratio:1/1;object-fit:contain;scroll-snap-align:center;background:#fff}
+.gal-n{position:absolute;right:10px;bottom:10px;background:rgba(10,9,7,.7);color:#fff;font-size:11.5px;font-weight:700;padding:3px 8px;border-radius:999px}
+.gal-dots{display:flex;justify-content:center;gap:5px;margin-top:8px}.gal-dots i{width:6px;height:6px;border-radius:50%;background:var(--line)}.gal-dots i.on{background:var(--accent);width:16px;border-radius:3px}
+.gstrip{display:flex;gap:8px;overflow-x:auto;padding:2px 0 12px}
+.gstrip .g{position:relative;flex:none;width:64px;height:64px;border-radius:10px;overflow:hidden;border:1px solid var(--line);background:#fff}
+.gstrip .g img{width:100%;height:100%;object-fit:cover}
+.gstrip .g button{position:absolute;top:2px;right:2px;width:20px;height:20px;border-radius:50%;background:rgba(10,9,7,.75);color:#fff;font-size:13px;line-height:20px;padding:0}
+.gstrip .add{display:grid;place-items:center;color:var(--muted);border-style:dashed;cursor:pointer}
 .sp-img{display:block;height:210px;width:210px;max-width:100%;margin:0 auto 14px;border-radius:20px;object-fit:cover}
 .sp-title{font-size:20px;font-weight:800}
 .sp-sub{color:var(--muted);font-size:13px;margin:3px 0 14px}
@@ -732,9 +743,28 @@ function openProduct(id) {
       <div class="prices">${isOwner() ? `<div><small>Purchase</small><b>${inr(v.purchase)}</b></div>` : ''}<div><small>Distributor</small><b>${inr(v.dist)}</b></div><div><small>Retail</small><b>${inr(v.retail)}</b></div>${isOwner() ? `<div><small>Margin</small><b style="color:var(--ok)">${margin}%</b></div>` : ''}</div></div>`;
   }).join('');
   openSheet(sheetHead(esc(p.name), `${esc(brandName(p.brandId))} · ${esc(catName(p.catId))}`) +
-    `<img class="pd-img" src="${imgP(p)}" alt="">${p.desc ? `<p class="muted" style="margin:12px 2px 0">${esc(p.desc)}</p>` : ''}
+    galleryHTML(p) + `${p.desc ? `<p class="muted" style="margin:12px 2px 0">${esc(p.desc)}</p>` : ''}
      <h3 class="sec">Variants <small>${p.variants.length} · ${totalStock(p)} pcs total</small></h3>${vcards}
      ${isOwner() ? `<button class="btn gold block" style="margin-top:8px" onclick="openProductForm('${p.id}')">${ic('edit')} Edit product</button>` : ''}`);
+}
+
+/* ---------- Photo gallery (product photos + variant photos, swipeable) ---------- */
+function galleryOf(p) {
+  const list = [...(p.photos || []), p.photo, ...p.variants.map(v => v.photo)].filter(Boolean);
+  const out = [...new Set(list)];
+  return out.length ? out : [imgP(p)];
+}
+function galleryHTML(p) {
+  const imgs = galleryOf(p), gid = 'g' + p.id;
+  if (imgs.length === 1) return `<div class="gal"><div class="gal-track"><img src="${imgs[0]}" alt=""></div></div>`;
+  return `<div class="gal"><div class="gal-track" id="${gid}" onscroll="galScroll(this,${imgs.length})">${imgs.map(u => `<img src="${u}" alt="" loading="lazy">`).join('')}</div>
+    <span class="gal-n" id="${gid}-n">1/${imgs.length}</span></div>
+    <div class="gal-dots" id="${gid}-d">${imgs.map((_, i) => `<i class="${i ? '' : 'on'}"></i>`).join('')}</div>`;
+}
+function galScroll(el, n) {
+  const i = Math.round(el.scrollLeft / el.clientWidth);
+  const c = $('#' + el.id + '-n'); if (c) c.textContent = (i + 1) + '/' + n;
+  $('#' + el.id + '-d')?.querySelectorAll('i').forEach((d, k) => d.classList.toggle('on', k === i));
 }
 
 /* ---------- Add / Edit product form ---------- */
@@ -747,6 +777,7 @@ function openProductForm(id) {
   const opts = (list, cur, kind) => list.map(x => `<option value="${x.id}" ${x.id === cur ? 'selected' : ''}>${esc(x.name)}</option>`).join('') + `<option value="__new">+ Add new ${kind}…</option>`;
   openSheet(sheetHead(p ? 'Edit product' : 'Add product', 'Photo → details → variants') + `
     <div class="photo-pick" id="fPhoto" onclick="smartPhoto((url,info)=>{F.photo=url;applyBoxInfo(info,-1,url);showFormPhoto()})"></div>
+    <div class="gstrip" id="fGal"></div>
     <div class="field"><label>Product name *</label><input id="fName" value="${esc(F.name)}" placeholder="e.g. Fast Charger" oninput="F.name=this.value"></div>
     <div class="grid2">
       <div class="field"><label>Brand *</label><select id="fBrand" onchange="pickOrAdd(this,'brand')">${opts(S.brands, F.brandId, 'brand')}</select></div>
@@ -762,6 +793,9 @@ function openProductForm(id) {
 }
 function showFormPhoto() {
   if (!F || !$('#fPhoto')) return;   // form may have closed (photo went to an existing product)
+  F.photos = F.photos || [];
+  $('#fGal').innerHTML = F.photos.map((u, i) => `<div class="g"><img src="${u}" alt="" onclick="F.photo=F.photos[${i}];showFormPhoto()"><button onclick="F.photos.splice(${i},1);showFormPhoto()" aria-label="Remove photo">×</button></div>`).join('')
+    + `<div class="g add" onclick="smartPhoto(u=>{F.photos.push(u);showFormPhoto()})" title="Add gallery photo">${ic('plus')}</div>`;
   $('#fPhoto').innerHTML = F.photo ? `<img src="${F.photo}" alt="">` : `<div>${ic('camera', 'style="width:34px;height:34px"')}<br>Tap to take / choose photo${cloud.key ? '<br><small style="opacity:.75">Box is cut out and details filled in automatically</small>' : ''}</div>`;
 }
 function renderFormVariants() {
@@ -826,7 +860,9 @@ function saveProduct() {
   const clean = vs.map(v => ({ id: v.id, label: v.label, sku: v.sku, weight: num(v.weight), purchase: num(v.purchase), dist: num(v.dist), retail: num(v.retail),
     stock: v.isNew ? Math.max(0, Math.round(num(v.stock))) : v.stock, lowAt: Math.max(0, Math.round(num(v.lowAt))), photo: v.photo || '' }));
   vs.filter(v => v.isNew && num(v.stock) > 0).forEach(v => S.log.push({ id: uid(), ts: Date.now(), pid, vid: v.id, qty: Math.round(num(v.stock)), type: 'opening', note: 'Opening stock', by: 'owner' }));
-  const obj = { id: pid, name, brandId: F.brandId, catId: F.catId, desc: F.desc.trim(), photo: F.photo, variants: clean, created: F.created || Date.now(), updated: Date.now() };
+  const obj = { id: pid, name, brandId: F.brandId, catId: F.catId, desc: F.desc.trim(), photo: F.photo, photos: F.photos || [], variants: clean, created: F.created || Date.now(), updated: Date.now() };
+  if (F.key) obj.key = F.key;     // links to built-in product list (prevents re-adding)
+  if (F.ext) obj.ext = F.ext;     // links to the brand website product
   if (isNewP) S.products.unshift(obj); else S.products[S.products.findIndex(p => p.id === pid)] = obj;
   save(); closeSheet(); F = null;
   if (ui.tab !== 'products') ui.tab = 'products';
@@ -899,12 +935,18 @@ async function runImport() {
   const btn = () => $('#impGo');
   const sarju = findOrAdd(S.brands, 'Sarju');
   for (const it of picks) {
-    if (btn()) btn().textContent = `Importing ${++done} of ${picks.length}…`;
+    ++done;
     try {
-      const photo = it.images[0] ? (await api('importPhoto', { url: it.images[0] })).url : '';
+      const photos = [];
+      for (let k = 0; k < it.images.length; k++) {
+        if (btn()) btn().textContent = `Importing ${done} of ${picks.length} · photo ${k + 1}/${it.images.length}…`;
+        try { photos.push((await api('importPhoto', { url: it.images[k] })).url); } catch (e) { /* skip a bad photo, keep the rest */ }
+      }
+      const photo = photos[0] || '';
       const ex = impExisting(it);
-      if (ex) {                                   // already stocked → studio photo becomes the main picture
+      if (ex) {                                   // already stocked → studio photos become the gallery
         if (photo) ex.photo = photo;
+        ex.photos = [...new Set([...photos, ...(ex.photos || [])])];
         ex.ext = { src: 'sarju', id: it.id, url: it.url };
         ex.variants.forEach(v => { if (!v.photo) v.photo = photo; });
         updated++;
@@ -917,7 +959,7 @@ async function runImport() {
           let sku = `SJ-${it.model || it.id}-${abbr}`; if (allVariants().some(x => x.v.sku === sku)) sku = autoSku(it.name, label);
           return { id: uid(), label, sku, weight: 0, purchase: 0, dist: 0, retail: 0, stock: 0, lowAt: 5, photo };
         });
-        S.products.push({ id: pid, name: it.name, brandId: sarju.id, catId: cat.id, desc, photo, variants, ext: { src: 'sarju', id: it.id, url: it.url }, created: Date.now() });
+        S.products.push({ id: pid, name: it.name, brandId: sarju.id, catId: cat.id, desc, photo, photos, variants, ext: { src: 'sarju', id: it.id, url: it.url }, created: Date.now() });
         added++;
       }
     } catch (e) { failed++; }
@@ -1352,7 +1394,7 @@ function openShopProduct(pid) {
   tmpPid = pid; tmp = {};
   p.variants.forEach(v => { if (cart[v.id]) tmp[v.id] = cart[v.id]; });
   const avail = v => num(v.dist) <= 0 ? '<span class="pill low">Rate coming soon</span>' : v.stock <= 0 ? '<span class="pill out">Out of stock</span>' : v.stock <= v.lowAt ? `<span class="pill low">Only ${v.stock} left</span>` : '<span class="pill ok">In stock</span>';
-  openSheet(`<img class="sp-img" src="${imgP(p)}" alt="">
+  openSheet(galleryHTML(p) + `
     <div class="sp-title">${esc(p.name)}</div><div class="sp-sub">${esc(brandName(p.brandId))} · ${esc(catName(p.catId))}${p.desc ? ' · ' + esc(p.desc) : ''}</div>
     <h3 class="sec" style="margin-top:0">Choose variants <small>enter quantity</small></h3>
     ${p.variants.map(v => `<div class="vopt ${v.stock <= 0 || num(v.dist) <= 0 ? 'dis' : ''} ${tmp[v.id] ? 'sel' : ''}" id="vo-${v.id}">
