@@ -137,18 +137,24 @@ If there is no product box, return {"corners":null,"box_2d":null}.`;
 async function analyzeWithGemini(env, base64Jpeg) {
   const models = env.GEMINI_MODEL ? [env.GEMINI_MODEL, ...GEMINI_MODELS] : GEMINI_MODELS;
   let res, data;
+  const call = (model, thinking) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+    signal: AbortSignal.timeout(45000),       // fail cleanly instead of hanging until Cloudflare's 100 s cut-off
+    body: JSON.stringify({
+      contents: [{ parts: [{ inline_data: { mime_type: 'image/jpeg', data: base64Jpeg } }, { text: PROMPT }] }],
+      // no temperature (not allowed on Gemini 3.8+); low thinking = fast answer, plenty for box + label reading
+      generationConfig: thinking ? { responseMimeType: 'application/json', thinkingConfig: { thinkingLevel: 'low' } } : { responseMimeType: 'application/json' }
+    })
+  });
+  const readJson = async r => { const t = await r.text(); try { return JSON.parse(t); } catch (e) { return { error: { message: 'HTTP ' + r.status + ' ' + t.slice(0, 80) } }; } };
   for (const model of models) {
-    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-      body: JSON.stringify({
-        contents: [{ parts: [{ inline_data: { mime_type: 'image/jpeg', data: base64Jpeg } }, { text: PROMPT }] }],
-        generationConfig: { responseMimeType: 'application/json' }   // no temperature: not allowed on Gemini 3.8+
-      })
-    });
-    data = await res.json();
+    try { res = await call(model, true); }
+    catch (e) { throw new Error(e.name === 'TimeoutError' ? 'Gemini took too long — try again or adjust corners yourself' : 'Gemini: ' + e.message); }
+    data = await readJson(res);
+    let msg = (data.error && data.error.message) || '';
+    if (res.status === 400 && /thinking/i.test(msg)) { res = await call(model, false); data = await readJson(res); msg = (data.error && data.error.message) || ''; }
     // retired / unknown model → try the next one; any other error → stop
-    const msg = (data.error && data.error.message) || '';
     if (res.ok || !(res.status === 404 || /no longer available|not found|not supported/i.test(msg))) break;
   }
   if (!res.ok) throw new Error('Gemini: ' + (data.error && data.error.message || res.status));
