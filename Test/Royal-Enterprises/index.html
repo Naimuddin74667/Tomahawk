@@ -363,6 +363,19 @@ function art(kind) {
 /* =========================================================
    DATA
    ========================================================= */
+// Real Sarju products (photos in img/, cropped from box photos). Prices/pack size pending from owner → 0 = "Rate soon"
+const REAL_PRODUCTS = [
+  { key: 'sarju-c48', name: 'C48 Metal Anti-Bending Data Cable 65W', desc: 'Metal anti-bending braided cable · 65W output',
+    variants: [['Type-C', 'SJ-C48-TC', 'img/c48-typec.jpg'], ['Micro USB', 'SJ-C48-MC', 'img/c48-micro.jpg']] },
+  { key: 'sarju-c71', name: 'C71 65W Flash Cable', desc: '65W flash charging cable',
+    variants: [['Type-C', 'SJ-C71-TC', 'img/c71-typec.jpg'], ['Micro USB', 'SJ-C71-MC', 'img/c71-micro.jpg']] },
+  { key: 'sarju-c57', name: 'C57 48W Fast Charging Cable', desc: '48W fast charging cable',
+    variants: [['Type-C', 'SJ-C57-TC', 'img/c57-typec.jpg']] }
+];
+function makeRealProduct(def, brandId, catId) {
+  const variants = def.variants.map(([label, sku, photo]) => ({ id: uid(), label, sku, weight: 0, purchase: 0, dist: 0, retail: 0, stock: 0, lowAt: 5, photo }));
+  return { id: uid(), key: def.key, name: def.name, brandId, catId, desc: def.desc, photo: def.variants[0][2], variants, created: Date.now() };
+}
 let S = loadJSON(KEY, null) || seed();
 // One-time switch of the old demo brands (Royal Gold / VoltX / Generic) to the real brands Ticon and Sarju
 (function migrateBrands() {
@@ -376,6 +389,16 @@ let S = loadJSON(KEY, null) || seed();
   const pre = { 'VX-': 'SJ-', 'RG-': 'TC-', 'GN-': 'TC-' };
   S.products.forEach(p => p.variants.forEach(v => { const k = (v.sku || '').slice(0, 3); if (pre[k]) v.sku = pre[k] + v.sku.slice(3); }));
   localStorage.setItem(KEY, JSON.stringify(S));
+})();
+// One-time: add the real Sarju cables, remove the demo "Type-C Cable 1m"
+(function addRealProducts() {
+  const sarju = S.brands.find(b => b.name === 'Sarju'), cables = S.cats.find(c => c.name === 'Cables');
+  if (!sarju || !cables) return;
+  let changed = false;
+  REAL_PRODUCTS.forEach(d => { if (!S.products.some(p => p.key === d.key)) { S.products.push(makeRealProduct(d, sarju.id, cables.id)); changed = true; } });
+  const demo = S.products.findIndex(p => p.name === 'Type-C Cable 1m' && !p.key);
+  if (demo >= 0) { S.products.splice(demo, 1); changed = true; }
+  if (changed) localStorage.setItem(KEY, JSON.stringify(S));
 })();
 let cart = loadJSON(CART_KEY, {});            // { variantId: qty }
 let ui = Object.assign({ role: 'owner', tab: 'home', theme: 'light' }, loadJSON(UI_KEY, {}));
@@ -399,7 +422,6 @@ function seed() {
   const P = (name, brandId, catId, variants, desc = '') => ({ id: uid(), name, brandId, catId, desc, photo: '', variants, created: Date.now() });
   const products = [
     P('Fast Charger', 'b2', 'c1', [V('20W White','SJ-FC20-W',120,180,299,40,80), V('20W Black','SJ-FC20-B',120,180,299,25,80), V('33W White','SJ-FC33-W',190,260,449,12,95)], 'Type-C PD fast charger'),
-    P('Type-C Cable 1m', 'b1', 'c2', [V('Type-C White','TC-TC1-W',35,60,149,120,30), V('Type-C Black','TC-TC1-B',35,60,149,80,30), V('Lightning 1m','TC-LT1-W',55,90,199,4,30)]),
     P('Wired Earphones Bass+', 'b1', 'c3', [V('Black','TC-EP-B',45,75,199,60,25), V('White','TC-EP-W',45,75,199,0,25)]),
     P('10000mAh Power Bank', 'b2', 'c4', [V('Black','SJ-PB10-B',450,620,999,10,230), V('Blue','SJ-PB10-BL',450,620,999,6,230)]),
     P('Silicone Back Cover', 'b1', 'c5', [V('Redmi 13C','TC-CV-R13C',25,45,149,50,20), V('Samsung A15','TC-CV-A15',25,45,149,35,20), V('Vivo Y28','TC-CV-Y28',25,45,149,3,20)]),
@@ -407,6 +429,7 @@ function seed() {
     P('Car Charger Dual USB', 'b2', 'c1', [V('12V','SJ-CC-12',95,140,299,20,40), V('24V','SJ-CC-24',110,160,349,8,40)]),
     P('Wireless Neckband', 'b1', 'c3', [V('Black','TC-NB-B',320,450,899,15,45), V('Green','TC-NB-G',320,450,899,9,45)])
   ];
+  REAL_PRODUCTS.forEach(d => products.push(makeRealProduct(d, 'b2', 'c2')));
   const log = [];
   products.forEach(p => p.variants.forEach(v => log.push({ id: uid(), ts: Date.now(), pid: p.id, vid: v.id, qty: v.stock, type: 'opening', note: 'Opening stock', by: 'owner' })));
   return { brands: b, cats: c, products, log, orders: [], meta: { nextOrder: 1001, demo: true } };
@@ -894,16 +917,17 @@ function renderShopGrid() {
     const lo = Math.min(...p.variants.map(v => num(v.dist)));
     const mrp = Math.max(...p.variants.map(v => num(v.retail)));
     const single = p.variants.length === 1;
+    const rated = lo > 0;   // owner hasn't set the distributor rate yet → show "Rate soon", no ADD
     // single-variant products get an inline stepper; multi-variant products open the variant sheet
     let btn = '';
-    if (live.length) {
+    if (live.length && rated) {
       if (!inCart) btn = `<button class="ps-add" onclick="event.stopPropagation();${single ? `quickAdd('${p.variants[0].id}',1)` : `openShopProduct('${p.id}')`}">ADD</button>`;
       else if (single) btn = `<div class="ps-step" onclick="event.stopPropagation()"><button onclick="quickAdd('${p.variants[0].id}',-1)">−</button>${inCart}<button onclick="quickAdd('${p.variants[0].id}',1)">+</button></div>`;
       else btn = `<div class="ps-step" style="padding:0 8px" onclick="event.stopPropagation();openShopProduct('${p.id}')"><span>${inCart} in cart</span>${ic('edit', 'style="width:14px;height:14px"')}</div>`;
     }
     return `<div class="ps-card" onclick="openShopProduct('${p.id}')">
-      <div class="ps-img"><img src="${imgP(p)}" alt="" loading="lazy">${live.length ? '' : '<div class="ps-oos">OUT OF STOCK</div>'}<div class="ps-addw">${btn}</div></div>
-      <div class="ps-pr">${inr(lo)}${mrp > lo ? `<s>${inr(mrp)}</s>` : ''}</div>
+      <div class="ps-img"><img src="${imgP(p)}" alt="" loading="lazy">${live.length || !rated ? '' : '<div class="ps-oos">OUT OF STOCK</div>'}<div class="ps-addw">${btn}</div></div>
+      <div class="ps-pr">${rated ? inr(lo) + (mrp > lo ? `<s>${inr(mrp)}</s>` : '') : '<span class="muted" style="font-size:12px">Rate soon</span>'}</div>
       <div class="ps-nm">${esc(p.name)}</div><div class="ps-op">${single ? esc(p.variants[0].label) : p.variants.length + ' options'}</div></div>`;
   }).join('') : '<div class="empty card" style="grid-column:1/-1">No products found</div>';
 }
@@ -919,13 +943,13 @@ function openShopProduct(pid) {
   const p = getP(pid); if (!p) return;
   tmpPid = pid; tmp = {};
   p.variants.forEach(v => { if (cart[v.id]) tmp[v.id] = cart[v.id]; });
-  const avail = v => v.stock <= 0 ? '<span class="pill out">Out of stock</span>' : v.stock <= v.lowAt ? `<span class="pill low">Only ${v.stock} left</span>` : '<span class="pill ok">In stock</span>';
+  const avail = v => num(v.dist) <= 0 ? '<span class="pill low">Rate coming soon</span>' : v.stock <= 0 ? '<span class="pill out">Out of stock</span>' : v.stock <= v.lowAt ? `<span class="pill low">Only ${v.stock} left</span>` : '<span class="pill ok">In stock</span>';
   openSheet(`<img class="sp-img" src="${imgP(p)}" alt="">
     <div class="sp-title">${esc(p.name)}</div><div class="sp-sub">${esc(brandName(p.brandId))} · ${esc(catName(p.catId))}${p.desc ? ' · ' + esc(p.desc) : ''}</div>
     <h3 class="sec" style="margin-top:0">Choose variants <small>enter quantity</small></h3>
-    ${p.variants.map(v => `<div class="vopt ${v.stock <= 0 ? 'dis' : ''} ${tmp[v.id] ? 'sel' : ''}" id="vo-${v.id}">
-      <img src="${imgV(p, v)}" alt=""><div class="grow"><b>${esc(v.label)}</b><div class="price">${inr(v.dist)}</div>${avail(v)}</div>
-      ${v.stock > 0 ? `<div class="stepper ${tmp[v.id] ? '' : 'zero'}" id="st-${v.id}"><button onclick="stepTmp('${v.id}',-1)">−</button><input id="tq-${v.id}" type="number" inputmode="numeric" value="${tmp[v.id] || 0}" oninput="setTmp('${v.id}',this.value)"><button onclick="stepTmp('${v.id}',1)">+</button></div>` : ''}</div>`).join('')}
+    ${p.variants.map(v => `<div class="vopt ${v.stock <= 0 || num(v.dist) <= 0 ? 'dis' : ''} ${tmp[v.id] ? 'sel' : ''}" id="vo-${v.id}">
+      <img src="${imgV(p, v)}" alt=""><div class="grow"><b>${esc(v.label)}</b><div class="price">${num(v.dist) > 0 ? inr(v.dist) : '—'}</div>${avail(v)}</div>
+      ${v.stock > 0 && num(v.dist) > 0 ? `<div class="stepper ${tmp[v.id] ? '' : 'zero'}" id="st-${v.id}"><button onclick="stepTmp('${v.id}',-1)">−</button><input id="tq-${v.id}" type="number" inputmode="numeric" value="${tmp[v.id] || 0}" oninput="setTmp('${v.id}',this.value)"><button onclick="stepTmp('${v.id}',1)">+</button></div>` : ''}</div>`).join('')}
     <button class="btn gold block" id="addBtn" style="margin-top:8px" onclick="commitTmp()"></button>`);
   updateAddBtn();
 }
