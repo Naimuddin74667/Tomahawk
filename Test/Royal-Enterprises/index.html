@@ -505,7 +505,8 @@ function findV(vid) { for (const p of S.products) { const v = p.variants.find(x 
 const allVariants = () => S.products.flatMap(p => p.variants.map(v => ({ p, v })));
 const stState = v => v.stock <= 0 ? 'out' : v.stock <= (v.lowAt || 0) ? 'low' : 'ok';
 const imgP = p => p.photo || art(artKind(catName(p.catId)));
-const imgV = (p, v) => v.photo || imgP(p);
+// Single-variant product: the variant IS the product, so always show the product's main photo
+const imgV = (p, v) => (p.variants.length === 1 && p.photo) ? p.photo : (v.photo || imgP(p));
 const totalStock = p => p.variants.reduce((a, v) => a + num(v.stock), 0);
 const isOwner = () => ui.role === 'owner';
 function priceRange(p, key = 'dist') {
@@ -751,13 +752,14 @@ function showFormPhoto() {
   $('#fGal').innerHTML = F.photos.map((u, i) => `<div class="g${i ? '' : ' main'}"><img src="${u}" alt="" title="${i ? 'Tap to make main photo' : 'Main photo'}" onclick="F.photos.unshift(...F.photos.splice(${i},1));F.photo='';showFormPhoto()"><button onclick="F.photos.splice(${i},1);F.photo='';showFormPhoto()" aria-label="Remove photo">×</button></div>`).join('')
     + `<div class="g add" onclick="uploadPhoto(u=>{F.photos.push(u);showFormPhoto()})" title="Add gallery photo">${ic('plus')}</div>`;
   $('#fPhoto').innerHTML = F.photo ? `<img src="${F.photo}" alt="">` : `<div>${ic('camera', 'style="width:34px;height:34px"')}<br>Tap to choose photo<br><small style="opacity:.75">Make it in Gemini first (Copy prompt below), then upload it here</small></div>`;
+  if (F.variants && F.variants.length === 1 && $('#fVars')) renderFormVariants();   // keep the single variant's thumbnail in step
 }
 function renderFormVariants() {
   if (!F || !$('#fVars')) return;
   $('#fVars').innerHTML = F.variants.map((v, i) => `
     <div class="vblock"><div class="vblock-h"><span>Variant ${i + 1}</span>${F.variants.length > 1 ? `<button class="iconbtn" style="width:34px;height:34px" onclick="F.variants.splice(${i},1);renderFormVariants()">${ic('trash')}</button>` : ''}</div>
       <div style="display:flex;gap:10px;align-items:flex-end">
-        <div class="vphoto" onclick="uploadPhoto(url=>{F.variants[${i}].photo=url;renderFormVariants()})">${v.photo ? `<img src="${v.photo}">` : ic('camera')}</div>
+        <div class="vphoto" onclick="uploadPhoto(url=>{F.variants[${i}].photo=url;if(F.variants.length===1){if(F.photos.length)F.photos[0]=url;else F.photos.push(url);F.photo=url;showFormPhoto()}renderFormVariants()})">${(F.variants.length === 1 && F.photo ? F.photo : v.photo) ? `<img src="${F.variants.length === 1 && F.photo ? F.photo : v.photo}">` : ic('camera')}</div>
         <div class="field" style="flex:1;margin:0"><label>Variant name *</label><input value="${esc(v.label)}" placeholder="e.g. 20W White" oninput="F.variants[${i}].label=this.value"></div>
       </div>
       <div class="grid2" style="margin-top:10px">
@@ -812,7 +814,7 @@ function saveProduct() {
   const isNewP = !F.id;
   const pid = F.id || uid();
   const clean = vs.map(v => ({ id: v.id, label: v.label, sku: v.sku, weight: num(v.weight), purchase: num(v.purchase), dist: num(v.dist), retail: num(v.retail),
-    stock: v.isNew ? Math.max(0, Math.round(num(v.stock))) : v.stock, lowAt: Math.max(0, Math.round(num(v.lowAt))), photo: v.photo || '' }));
+    stock: v.isNew ? Math.max(0, Math.round(num(v.stock))) : v.stock, lowAt: Math.max(0, Math.round(num(v.lowAt))), photo: (vs.length === 1 && F.photo) ? F.photo : (v.photo || '') }));   // single variant → same photo as the product
   vs.filter(v => v.isNew && num(v.stock) > 0).forEach(v => S.log.push({ id: uid(), ts: Date.now(), pid, vid: v.id, qty: Math.round(num(v.stock)), type: 'opening', note: 'Opening stock', by: 'owner' }));
   const obj = { id: pid, name, brandId: F.brandId, catId: F.catId, desc: F.desc.trim(), photo: F.photo, photos: F.photos || [], variants: clean, created: F.created || Date.now(), updated: Date.now() };
   if (F.key) obj.key = F.key;     // links to built-in product list (prevents re-adding)
