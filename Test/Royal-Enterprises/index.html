@@ -246,6 +246,15 @@ body.shop main{padding-top:0}
 .gstrip .add{display:grid;place-items:center;color:var(--muted);border-style:dashed;cursor:pointer}
 .sp-img{display:block;height:210px;width:210px;max-width:100%;margin:0 auto 14px;border-radius:20px;object-fit:cover}
 .sp-title{font-size:20px;font-weight:800}
+/* Product sheets on a desktop/tablet screen: photos left, variants right — everything in one view.
+   Phones keep the single column (same order: photos first, then variants). */
+@media(min-width:900px){
+  .sheet.wide{max-width:1120px}
+  .pd2{display:grid;grid-template-columns:minmax(0,440px) minmax(0,1fr);gap:28px;align-items:start}
+  .pd2-l{position:sticky;top:0}
+  .pd2 .gal{max-width:none;margin:0 0 10px}
+  .pd2-r>.sec:first-child,.pd2-r>.sp-title:first-child{margin-top:0}
+}
 .sp-sub{color:var(--muted);font-size:13px;margin:3px 0 14px}
 .vopt{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);margin-bottom:8px}
 .vopt.sel{border-color:var(--accent);background:var(--accent-soft)}
@@ -603,6 +612,7 @@ function renderConnect() {
 }
 function openSheet(html, opts = {}) {
   const w = $('#sheetWrap');
+  $('#sheet').classList.toggle('wide', !!opts.wide);   // wide = two-column product sheet on desktop
   $('#sheet').innerHTML = '<div class="grab"></div>' + html;
   $('#sheet').scrollTop = 0;
   requestAnimationFrame(() => w.classList.add('open'));
@@ -902,9 +912,9 @@ function openProduct(id) {
       <div class="prices">${isOwner() ? `<div><small>Purchase</small><b>${inr(v.purchase)}</b></div>` : ''}<div><small>Distributor</small><b>${inr(v.dist)}</b>${perBox(v) > 1 ? `<small>${inr(num(v.dist) * perBox(v))}/box</small>` : ''}</div><div><small>Retail</small><b>${inr(v.retail)}</b></div>${isOwner() ? `<div><small>Margin</small><b style="color:var(--ok)">${margin}%</b></div>` : ''}</div></div>`;
   }).join('');
   openSheet(sheetHead(esc(p.name), `${esc(brandName(p.brandId))} · ${esc(catName(p.catId))}`) +
-    galleryHTML(p) + `${p.desc ? `<p class="muted" style="margin:12px 2px 0">${esc(p.desc)}</p>` : ''}
-     <h3 class="sec">Variants <small>${p.variants.length} · ${totalStock(p)} pcs total</small></h3>${vcards}
-     ${isOwner() ? `<button class="btn gold block" style="margin-top:8px" onclick="openProductForm('${p.id}')">${ic('edit')} Edit product</button>` : ''}`);
+    `<div class="pd2"><div class="pd2-l">${galleryHTML(p)}${p.desc ? `<p class="muted" style="margin:12px 2px 0">${esc(p.desc)}</p>` : ''}</div>
+     <div class="pd2-r"><h3 class="sec">Variants <small>${p.variants.length} · ${totalStock(p)} pcs total</small></h3>${vcards}
+     ${isOwner() ? `<button class="btn gold block" style="margin-top:8px" onclick="openProductForm('${p.id}')">${ic('edit')} Edit product</button>` : ''}</div></div>`, { wide: true });
 }
 
 /* ---------- Photo gallery (product photos + variant photos, swipeable) ---------- */
@@ -1640,13 +1650,13 @@ function openShopProduct(pid) {
   p.variants.forEach(v => { if (cart[v.id]) tmp[v.id] = cart[v.id]; });
   const avail = v => num(v.dist) <= 0 ? '<span class="pill low">Rate coming soon</span>' : shopMax(v) <= 0 ? '<span class="pill out">Out of stock</span>' : v.stock <= v.lowAt ? `<span class="pill low">Only ${qtyTxt(v, shopMax(v))} left</span>` : '<span class="pill ok">In stock</span>';
   const unit = v => perBox(v) > 1 ? `<div class="muted" style="font-size:12px">Box of ${perBox(v)} · ${inr(num(v.dist) * perBox(v))}/box</div>` : '';
-  openSheet(galleryHTML(p) + `
+  openSheet(`<div class="pd2"><div class="pd2-l">${galleryHTML(p)}</div><div class="pd2-r">
     <div class="sp-title">${esc(p.name)}</div><div class="sp-sub">${esc(brandName(p.brandId))} · ${esc(catName(p.catId))}${p.desc ? ' · ' + esc(p.desc) : ''}</div>
     <h3 class="sec" style="margin-top:0">Choose variants <small>${p.variants.some(v => perBox(v) > 1) ? 'quantity in boxes' : 'enter quantity'}</small></h3>
     ${p.variants.map(v => `<div class="vopt ${shopMax(v) <= 0 || num(v.dist) <= 0 ? 'dis' : ''} ${tmp[v.id] ? 'sel' : ''}" id="vo-${v.id}">
       <img src="${imgV(p, v)}" alt=""><div class="grow"><b>${esc(v.label)}</b><div class="price">${num(v.dist) > 0 ? inr(v.dist) + (perBox(v) > 1 ? '<small class="muted" style="font-weight:500">/pc</small>' : '') : '—'}</div>${num(v.dist) > 0 ? unit(v) : ''}${avail(v)}</div>
       ${shopMax(v) > 0 && num(v.dist) > 0 ? `<div class="stepper ${tmp[v.id] ? '' : 'zero'}" id="st-${v.id}"><button onclick="stepTmp('${v.id}',-1)">−</button><input id="tq-${v.id}" type="number" inputmode="numeric" value="${(tmp[v.id] || 0) / perBox(v)}" oninput="setTmp('${v.id}',this.value)"><button onclick="stepTmp('${v.id}',1)">+</button></div>` : ''}</div>`).join('')}
-    <button class="btn gold block" id="addBtn" style="margin-top:8px" onclick="commitTmp()"></button>`);
+    <button class="btn gold block" id="addBtn" style="margin-top:8px" onclick="commitTmp()"></button></div></div>`, { wide: true });
   updateAddBtn();
 }
 function setTmp(vid, val, fromStep) {           // val = boxes (or pieces when sold loose); tmp/cart keep pieces
