@@ -949,7 +949,9 @@ function openProductForm(id) {
     <div class="photo-pick" id="fPhoto" onclick="uploadPhoto(url=>{if(F.photos.length)F.photos[0]=url;else F.photos.push(url);F.photo=url;if(F.variants[0]&&!F.variants[0].photo)F.variants[0].photo=url;showFormPhoto();renderFormVariants()})"></div>
     <div class="grid2" style="margin:-4px 0 12px"><button class="btn ghost" onclick="copyGeminiPrompt()">${ic('wand')} Copy Gemini prompt</button><a class="btn ghost" href="https://gemini.google.com/app" target="_blank" rel="noopener" style="text-align:center;text-decoration:none;color:var(--text)">Open Gemini ↗</a></div>
     <div class="gstrip" id="fGal"></div>
-    <div class="field"><label>Product name *</label><input id="fName" value="${esc(F.name)}" placeholder="e.g. Fast Charger" oninput="F.name=this.value"></div>
+    <div class="field"><label>Product name *</label><input id="fName" value="${esc(F.name)}" placeholder="e.g. Fast Charger" oninput="F.name=this.value">
+      <button class="btn ghost block" id="nameBtn" style="margin-top:8px" onclick="nameFromBox()">${ic('wand')} Name from box photo</button>
+      <div class="chips" id="nameOpts" style="margin-top:8px;flex-wrap:wrap"></div></div>
     <div class="grid2">
       <div class="field"><label>Brand *</label><select id="fBrand" onchange="pickOrAdd(this,'brand')">${opts(S.brands, F.brandId, 'brand')}</select></div>
       <div class="field"><label>Category *</label><select id="fCat" onchange="pickOrAdd(this,'cat')">${opts(S.cats, F.catId, 'category')}</select></div>
@@ -1374,6 +1376,54 @@ function compressImage(file, max = 720, quality = .72) {
     };
     fr.onerror = rej; fr.readAsDataURL(file);
   });
+}
+
+/* ---------- Product name from a box photo (Gemini reads the box) ----------
+   The Worker asks Gemini. If Google blocks the Worker's location, it hands back the request
+   and this phone (India) makes the same call itself. */
+async function readBox(base64) {
+  const r = await api('analyzePhoto', { image: base64 });
+  if (!r.clientCall) return r;
+  let last = '';
+  for (const model of r.clientCall.models) {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': r.key }, body: JSON.stringify(r.clientCall.body) });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { last = (j.error && j.error.message) || 'HTTP ' + res.status; continue; }   // busy / retired → next model
+    const text = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
+    try { return JSON.parse(text); } catch (e) { last = 'unreadable answer'; }
+  }
+  throw new Error('Gemini busy — ' + last);
+}
+function nameFromBox() {
+  const fi = $('#fileIn'); fi.value = '';
+  fi.onchange = async () => {
+    const f = fi.files[0]; if (!f) return;
+    const btn = $('#nameBtn'); if (btn) { btn.disabled = true; btn.textContent = 'Reading the box…'; }
+    try {
+      const img = await compressImage(f, 1280, .85);              // big enough for small print on the box
+      const r = await readBox(img.split(',')[1]);
+      const names = [...new Set([r.product_name, ...(r.name_options || [])].map(x => String(x || '').trim()).filter(Boolean))];
+      if (!names.length) throw new Error('No product name found — try a clearer, front-on photo of the box');
+      if (!F) return;
+      setFormName(names[0]);
+      // brand / category / variant only fill in when they match something you already have, or are still empty
+      const br = S.brands.find(b => r.brand && b.name.toLowerCase() === String(r.brand).toLowerCase());
+      if (br) { F.brandId = br.id; const s = $('#fBrand'); if (s) s.value = br.id; }
+      const ct = S.cats.find(c => r.category && c.name.toLowerCase() === String(r.category).toLowerCase());
+      if (ct) { F.catId = ct.id; const s = $('#fCat'); if (s) s.value = ct.id; }
+      if (r.variant && F.variants.length === 1 && !F.variants[0].label.trim()) { F.variants[0].label = r.variant; renderFormVariants(); }
+      $('#nameOpts').innerHTML = names.length > 1 ? names.map(n => `<button class="chip" onclick="setFormName(this.textContent)">${esc(n)}</button>`).join('') : '';
+      setFormName(names[0]);                          // highlights the option in use
+      toast(names.length > 1 ? 'Name filled — tap another option to switch' : 'Name filled from the box');
+    } catch (e) { toast(e.message || 'Could not read the box'); }
+    finally { const b = $('#nameBtn'); if (b) { b.disabled = false; b.innerHTML = `${ic('wand')} Name from box photo`; } }
+  };
+  fi.click();
+}
+function setFormName(n) {
+  F.name = n; const i = $('#fName'); if (i) i.value = n;
+  document.querySelectorAll('#nameOpts .chip').forEach(c => c.classList.toggle('on', c.textContent === n));
 }
 
 /* =========================================================
