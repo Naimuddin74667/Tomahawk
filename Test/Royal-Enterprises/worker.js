@@ -205,7 +205,7 @@ Return ONLY JSON with these fields:
 - "box_2d": [ymin, xmin, ymax, xmax] of the same box, normalised 0-1000.
 - "brand": brand printed on the box (e.g. "Sarju", "Ticon"), or "".
 - "model": model code printed on the box (e.g. "C48"), or "".
-- "product_name": the best sellable product name built ONLY from the box text: model code first, then the key feature, product type and wattage/length. Title Case. No brand name, no marketing fluff, max 60 characters. e.g. "C48 Metal Anti-Bending Data Cable 65W".
+- "product_name": the sellable product name built ONLY from the box text, ALWAYS in this format: "<MODEL> - <WATTS>W <other details>" — model code, space-hyphen-space, wattage, then key feature and product type. Title Case. No brand name, no marketing fluff, max 60 characters. e.g. "C48 - 65W Metal Anti-Bending Data Cable", "C57 - 48W Fast Charging Cable". If no wattage is printed: "<MODEL> - <other details>".
 - "name_options": 2 more good alternative names in the same style (array of strings).
 - "variant": the connector/type/colour this box is for (e.g. "Type-C", "Micro USB", "Lightning", "Black"), or "".
 - "category": one of "Cables","Chargers","Earphones","Power Banks","Covers","Tempered Glass","Other".
