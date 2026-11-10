@@ -156,7 +156,7 @@ main{padding:14px 16px calc(var(--nav-h) + 30px + env(safe-area-inset-bottom));m
 .field input:disabled{background:var(--card2);color:var(--muted)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
-.photo-pick{display:grid;place-items:center;height:160px;border-radius:var(--r);border:1.5px dashed var(--line);background:var(--card);margin-bottom:14px;overflow:hidden;cursor:pointer;color:var(--muted);font-weight:500;text-align:center}
+.photo-pick{display:grid;place-items:center;height:130px;border-radius:var(--r);border:1.5px dashed var(--line);background:var(--card);margin-bottom:14px;overflow:hidden;cursor:pointer;color:var(--muted);font-weight:500;text-align:center}
 .photo-pick img{width:100%;height:100%;object-fit:contain;background:var(--card2)}
 .vblock{padding:14px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);margin-bottom:10px}
 .vblock-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-weight:600}
@@ -246,6 +246,10 @@ body.shop main{padding-top:0}
 .gstrip .add{display:grid;place-items:center;color:var(--muted);border-style:dashed;cursor:pointer}
 .sp-img{display:block;height:210px;width:210px;max-width:100%;margin:0 auto 14px;border-radius:20px;object-fit:cover}
 .sp-title{font-size:20px;font-weight:800}
+.namerow{display:flex;gap:8px}.namerow input{flex:1;min-width:0}.namerow .btn{flex:none;padding:0 12px;font-size:13px;white-space:nowrap}
+.gem2{display:flex;gap:8px;margin:-6px 0 10px}.gem2 .btn{flex:1;padding:8px 10px;font-size:13px;text-align:center;text-decoration:none;color:var(--text)}
+.vblock .field{margin-bottom:8px}.vblock{padding:12px}
+.addres .row{cursor:pointer;padding:8px 10px}.addres .row img{width:44px;height:44px;background:#fff;object-fit:contain}
 /* Product sheets on a desktop/tablet screen: photos left, variants right — everything in one view.
    Phones keep the single column (same order: photos first, then variants). */
 @media(min-width:900px){
@@ -253,6 +257,7 @@ body.shop main{padding-top:0}
   .pd2{display:grid;grid-template-columns:minmax(0,440px) minmax(0,1fr);gap:28px;align-items:start}
   .pd2-l{position:sticky;top:0}
   .pd2 .gal{max-width:none;margin:0 0 10px}
+  .pd2 .photo-pick{height:300px}
   .pd2-r>.sec:first-child,.pd2-r>.sp-title:first-child{margin-top:0}
 }
 .sp-sub{color:var(--muted);font-size:13px;margin:3px 0 14px}
@@ -327,7 +332,7 @@ body.shop .toast{bottom:calc(84px + env(safe-area-inset-bottom))}
 <main id="main"></main>
 
 <nav class="bnav" id="bnav"></nav>
-<button class="fab" id="fab" onclick="openProductForm()" aria-label="Add product" style="display:none"></button>
+<button class="fab" id="fab" onclick="openAddProduct()" aria-label="Add product" style="display:none"></button>
 <div class="cartbar" id="cartbar" onclick="openCart()"></div>
 
 <div class="sheet-wrap" id="sheetWrap" onclick="if(event.target===this)closeSheet()"><div class="sheet" id="sheet"></div></div>
@@ -441,6 +446,29 @@ const saveCart = () => localStorage.setItem(CART_KEY, JSON.stringify(cart));
 const API = 'https://royal-enterprises.naimuddinshaikh74667.workers.dev/';
 const CLOUD_KEY = 're_cloud_v1';
 let cloud = Object.assign({ key: '', updated: 0 }, loadJSON(CLOUD_KEY, {}));
+let BASE = null;     // the cloud copy this screen last loaded or saved (JSON) — used to merge with other phones/tabs
+/* Merge three copies by record id: base = what we started from, mine = this screen, theirs = cloud now.
+   A record I changed keeps my version; anything I did not touch takes the cloud's version,
+   so an older tab or phone can never wipe edits made somewhere else. */
+function mergeList(b = [], m = [], t = [], newFirst = true) {
+  const B = new Map(b.map(x => [x.id, JSON.stringify(x)])), M = new Map(m.map(x => [x.id, x])), out = [], seen = new Set();
+  for (const x of t) {
+    seen.add(x.id);
+    if (M.has(x.id)) { const mine = M.get(x.id); out.push(JSON.stringify(mine) !== B.get(x.id) ? mine : x); }
+    else if (!B.has(x.id) || JSON.stringify(x) !== B.get(x.id)) out.push(x);   // added there, or changed there after I deleted it
+  }
+  const mineNew = m.filter(x => !seen.has(x.id) && !B.has(x.id));            // added on this screen
+  return newFirst ? [...mineNew, ...out] : [...out, ...mineNew];
+}
+function mergeStates(base, mine, theirs) {
+  return Object.assign({}, theirs, {
+    brands: mergeList(base.brands, mine.brands, theirs.brands, false), cats: mergeList(base.cats, mine.cats, theirs.cats, false),
+    products: mergeList(base.products, mine.products, theirs.products, true),
+    log: mergeList(base.log, mine.log, theirs.log, false).sort((a, b) => a.ts - b.ts),
+    orders: mergeList(base.orders, mine.orders, theirs.orders, false),
+    meta: Object.assign({}, theirs.meta, { nextOrder: Math.max(num(mine.meta?.nextOrder), num(theirs.meta?.nextOrder)) || 1001 })
+  });
+}
 let cloudStatus = 'idle';       // idle | syncing | ok | error | offline
 const saveCloud = () => localStorage.setItem(CLOUD_KEY, JSON.stringify(cloud));
 
@@ -478,7 +506,7 @@ async function cloudLoad(quiet) {
   setCloudStatus('syncing');
   try {
     const r = await api('getAll');
-    S = Object.assign(emptyState(), r.state || {}); cloud.updated = r.updated; saveCloud();
+    S = Object.assign(emptyState(), r.state || {}); cloud.updated = r.updated; saveCloud(); BASE = JSON.stringify(S);
     loaded = true; render();
     if (!quiet) toast('Catalogue refreshed');
     setCloudStatus('ok');
@@ -488,14 +516,21 @@ async function cloudLoad(quiet) {
     setCloudStatus(navigator.onLine ? 'error' : 'offline'); render(); return null;
   }
 }
-let pushTimer, pushing = false;
+let pushTimer, pushing = false, pendingPush = false;
 function cloudPush() {
   if (!cloud.key) return;
-  clearTimeout(pushTimer);
+  clearTimeout(pushTimer); pendingPush = true;
   pushTimer = setTimeout(async () => {
     if (pushing) return cloudPush();
-    pushing = true; setCloudStatus('syncing');
-    try { const r = await api('saveAll', { state: S }); cloud.updated = r.updated; saveCloud(); setCloudStatus('ok'); }
+    pushing = true; pendingPush = false; setCloudStatus('syncing');
+    try {
+      // someone saved from another phone/tab since we loaded → merge instead of overwriting their edits
+      const cur = await api('getAll');
+      let merged = false;
+      if (cur.state && cur.updated !== cloud.updated && BASE) { S = mergeStates(JSON.parse(BASE), S, Object.assign(emptyState(), cur.state)); merged = true; }
+      const r = await api('saveAll', { state: S }); cloud.updated = r.updated; saveCloud(); BASE = JSON.stringify(S); setCloudStatus('ok');
+      if (merged) { render(); toast('Saved · merged with changes from another phone/tab'); }
+    }
     catch (e) {
       setCloudStatus('error');
       if (e.status === 401) { cloud.key = ''; saveCloud(); toast('Owner key rejected — connect again in More'); }
@@ -517,7 +552,7 @@ async function connectCloud() {
     S.cats = DEFAULT_CATS.map(name => ({ id: uid(), name }));
     try { const w = await api('saveAll', { state: S }); r.updated = w.updated; } catch (e) { cloud.key = ''; return toast('Could not set up the cloud'); }
   }
-  cloud.updated = r.updated; saveCloud(); loaded = true; render(); setCloudStatus('ok');
+  cloud.updated = r.updated; saveCloud(); BASE = JSON.stringify(S); loaded = true; render(); setCloudStatus('ok');
   toast('Connected ☁️'); loadOrders();
 }
 function disconnectCloud() {
@@ -654,7 +689,7 @@ function renderHome() {
       ${stat(3, 'alert', 'Low / out of stock', low.length)}
     </div>
     ${isOwner() ? `<div class="quick">
-      <button class="qa" onclick="openProductForm()"><span>${ic('plus')}</span>Add product</button>
+      <button class="qa" onclick="openAddProduct()"><span>${ic('plus')}</span>Add product</button>
       <button class="qa" onclick="goTab('shops');openShopForm()"><span>${ic('store')}</span>Add shop</button>
       <button class="qa" onclick="setRole('shop')"><span>${ic('eye')}</span>Shop view</button></div>` : ''}
     <h3 class="sec">Orders from shops ${newCount ? `<span class="pill gold">${newCount} new</span>` : `<small>${ORD.loaded ? (all.length ? 'nothing new' : 'none yet') : 'loading…'}</small>`}
@@ -899,7 +934,7 @@ function renderProductList() {
       <div class="grow"><b>${esc(p.name)}</b><span class="muted" style="font-size:12.5px">${esc(brandName(p.brandId))} · ${esc(catName(p.catId))}</span>
         <div class="meta"><span class="pill">${p.variants.length} variants</span><span class="pill gold">${priceRange(p)}</span>${anyLow ? '<span class="pill low">restock</span>' : ''}</div></div>
       <div class="stockn ${t <= 0 ? 'out' : anyLow ? 'low' : 'ok'}">${t}<small>in stock</small></div></div>`;
-  }).join('') : `<div class="empty card">No products match.${isOwner() ? `<br><br><button class="btn gold" onclick="openProductForm()">${ic('plus')} Add product</button>` : ''}</div>`;
+  }).join('') : `<div class="empty card">No products match.${isOwner() ? `<br><br><button class="btn gold" onclick="openAddProduct()">${ic('plus')} Add product</button>` : ''}</div>`;
 }
 function openProduct(id) {
   const p = getP(id); if (!p) return;
@@ -950,28 +985,32 @@ function galScroll(el, n) {
 /* ---------- Add / Edit product form ---------- */
 let F = null; // draft while the form is open
 function blankVariant() { return { id: uid(), label: '', sku: '', weight: '', purchase: '', dist: '', retail: '', stock: '', lowAt: 5, box: '', photo: '', isNew: true }; }
-function openProductForm(id) {
+function openProductForm(id, pre) {          // pre = details fetched from the brand website (not saved yet)
   if (!isOwner()) return;
   const p = id && getP(id);
-  F = p ? JSON.parse(JSON.stringify(p)) : { id: null, name: '', brandId: S.brands[0]?.id || '', catId: S.cats[0]?.id || '', desc: '', photo: '', variants: [blankVariant()] };
+  F = p ? JSON.parse(JSON.stringify(p)) : pre || { id: null, name: '', brandId: S.brands[0]?.id || '', catId: S.cats[0]?.id || '', desc: '', photo: '', variants: [blankVariant()] };
   const opts = (list, cur, kind) => list.map(x => `<option value="${x.id}" ${x.id === cur ? 'selected' : ''}>${esc(x.name)}</option>`).join('') + `<option value="__new">+ Add new ${kind}…</option>`;
-  openSheet(sheetHead(p ? 'Edit product' : 'Add product', 'Photo → details → variants') + `
-    <div class="photo-pick" id="fPhoto" onclick="uploadPhoto(url=>{if(F.photos.length)F.photos[0]=url;else F.photos.push(url);F.photo=url;if(F.variants[0]&&!F.variants[0].photo)F.variants[0].photo=url;showFormPhoto();renderFormVariants()})"></div>
-    <div class="grid2" style="margin:-4px 0 12px"><button class="btn ghost" onclick="copyGeminiPrompt()">${ic('wand')} Copy Gemini prompt</button><a class="btn ghost" href="https://gemini.google.com/app" target="_blank" rel="noopener" style="text-align:center;text-decoration:none;color:var(--text)">Open Gemini ↗</a></div>
+  const sub = p ? esc(p.name) : pre ? `From ${esc(IMP_SOURCES[pre.ext.src].site)} — check, edit if needed, then Add` : 'Manual entry';
+  openSheet(sheetHead(p ? 'Edit product' : 'Add product', sub) + `<div class="pd2"><div class="pd2-l">
+    <div class="photo-pick" id="fPhoto" onclick="uploadPhoto(url=>{if(F.photos.length)F.photos[0]=url;else F.photos.push(url);F.photo=url;showFormPhoto()})"></div>
+    <div class="gem2"><button class="btn ghost" onclick="copyGeminiPrompt()">${ic('wand')} Gemini prompt</button><a class="btn ghost" href="https://gemini.google.com/app" target="_blank" rel="noopener">Open Gemini ↗</a></div>
     <div class="gstrip" id="fGal"></div>
-    <div class="field"><label>Product name *</label><input id="fName" value="${esc(F.name)}" placeholder="e.g. Fast Charger" oninput="F.name=this.value">
-      <button class="btn ghost block" id="nameBtn" style="margin-top:8px" onclick="nameFromBox()">${ic('wand')} Name from box photo</button>
-      <div class="chips" id="nameOpts" style="margin-top:8px;flex-wrap:wrap"></div></div>
+    ${F.ext && F.id ? `<button class="btn ghost block" id="webPhBtn" style="margin:-4px 0 12px;font-size:13px;padding:8px" onclick="formWebPhotos()">${ic('in')} Get missing photos from ${esc(IMP_SOURCES[F.ext.src || 'sarju'].site)}</button>` : ''}
+    </div><div class="pd2-r">
+    <div class="field"><label>Product name * <small class="muted">— Model - Watts details</small></label>
+      <div class="namerow"><input id="fName" value="${esc(F.name)}" placeholder="e.g. C57 - 48W Fast Charging Cable" oninput="F.name=this.value"><button class="btn ghost" id="nameBtn" onclick="nameFromBox()" title="Read the name from a box photo">${ic('camera')} From box</button></div>
+      <div class="chips" id="nameOpts" style="margin-top:6px;flex-wrap:wrap;padding:0"></div></div>
     <div class="grid2">
       <div class="field"><label>Brand *</label><select id="fBrand" onchange="pickOrAdd(this,'brand')">${opts(S.brands, F.brandId, 'brand')}</select></div>
       <div class="field"><label>Category *</label><select id="fCat" onchange="pickOrAdd(this,'cat')">${opts(S.cats, F.catId, 'category')}</select></div>
     </div>
     <div class="field"><label>Short description</label><input id="fDesc" value="${esc(F.desc)}" placeholder="Optional" oninput="F.desc=this.value"></div>
-    <h3 class="sec">Variants <small>colour / type / voltage</small></h3>
+    <h3 class="sec" style="margin-top:4px">Variants <small>colour / type / connector</small></h3>
     <div id="fVars"></div>
     <button class="btn ghost block" onclick="F.variants.push(blankVariant());renderFormVariants()">${ic('plus')} Add variant</button>
-    <button class="btn gold block" style="margin-top:12px" onclick="saveProduct()">${ic('check')} Save product</button>
-    ${p ? `<button class="btn danger block" style="margin-top:10px" onclick="deleteProduct('${p.id}')">${ic('trash')} Delete product</button>` : ''}`);
+    <button class="btn gold block" id="fSave" style="margin-top:12px" onclick="saveProduct()">${ic('check')} ${p ? 'Save product' : 'Add product'}</button>
+    ${p ? `<button class="btn danger block" style="margin-top:10px" onclick="deleteProduct('${p.id}')">${ic('trash')} Delete product</button>` : ''}
+    </div></div>`, { wide: true });
   showFormPhoto(); renderFormVariants();
 }
 function showFormPhoto() {
@@ -984,28 +1023,27 @@ function showFormPhoto() {
     + `<div class="g add" onclick="uploadPhoto(u=>{F.photos.push(u);showFormPhoto()})" title="Add gallery photo">${ic('plus')}</div>`;
   $('#fPhoto').innerHTML = F.photo ? `<img src="${F.photo}" alt="">` : `<div>${ic('camera', 'style="width:34px;height:34px"')}<br>Tap to choose photo<br><small style="opacity:.75">Make it in Gemini first (Copy prompt below), then upload it here</small></div>`;
 }
+const boxRateTxt = i => perBox(F.variants[i]) > 1 ? inr(num(F.variants[i].dist) * perBox(F.variants[i])) : '—';
 function renderFormVariants() {
   if (!F || !$('#fVars')) return;
   $('#fVars').innerHTML = F.variants.map((v, i) => `
-    <div class="vblock"><div class="vblock-h"><span>Variant ${i + 1}</span>${F.variants.length > 1 ? `<button class="iconbtn" style="width:34px;height:34px" onclick="F.variants.splice(${i},1);renderFormVariants()">${ic('trash')}</button>` : ''}</div>
-      <div style="display:flex;gap:10px;align-items:flex-end">
-        <div class="field" style="flex:1;margin:0"><label>Variant name *</label><input value="${esc(v.label)}" placeholder="e.g. 20W White" oninput="F.variants[${i}].label=this.value"></div>
-      </div>
-      <div class="grid2" style="margin-top:10px">
+    <div class="vblock"><div class="vblock-h"><span>Variant ${i + 1}</span>${F.variants.length > 1 ? `<button class="iconbtn" style="width:32px;height:32px" onclick="F.variants.splice(${i},1);renderFormVariants()">${ic('trash')}</button>` : ''}</div>
+      <div class="grid2">
+        <div class="field"><label>Variant name *</label><input value="${esc(v.label)}" placeholder="e.g. Type-C" oninput="F.variants[${i}].label=this.value"></div>
         <div class="field"><label>SKU code</label><input value="${esc(v.sku)}" placeholder="Auto if blank" oninput="F.variants[${i}].sku=this.value.toUpperCase()"></div>
-        <div class="field"><label>Weight (g)</label><input type="number" inputmode="decimal" value="${esc(v.weight)}" oninput="F.variants[${i}].weight=this.value"></div>
       </div>
       <div class="grid3">
         <div class="field"><label>Purchase ₹</label><input type="number" inputmode="decimal" value="${esc(v.purchase)}" oninput="F.variants[${i}].purchase=this.value"></div>
-        <div class="field"><label>Distributor ₹/pc</label><input type="number" inputmode="decimal" value="${esc(v.dist)}" oninput="F.variants[${i}].dist=this.value;const b=$('#bxr${i}');if(b)b.value=perBox(F.variants[${i}])>1?inr(num(this.value)*perBox(F.variants[${i}])):'—'"></div>
+        <div class="field"><label>Distributor ₹/pc</label><input type="number" inputmode="decimal" value="${esc(v.dist)}" oninput="F.variants[${i}].dist=this.value;$('#bxr${i}').value=boxRateTxt(${i})"></div>
         <div class="field"><label>Retail ₹</label><input type="number" inputmode="decimal" value="${esc(v.retail)}" oninput="F.variants[${i}].retail=this.value"></div>
       </div>
-      <div class="grid2">
-        <div class="field"><label>Pcs per box</label><input type="number" inputmode="numeric" min="1" value="${esc(v.box || '')}" placeholder="1 = sold loose" oninput="F.variants[${i}].box=this.value;$('#bxr${i}').value=perBox(F.variants[${i}])>1?inr(num(F.variants[${i}].dist)*perBox(F.variants[${i}])):'—'"></div>
-        <div class="field"><label>Box rate (distributor)</label><input id="bxr${i}" value="${perBox(v) > 1 ? inr(num(v.dist) * perBox(v)) : '—'}" disabled></div>
+      <div class="grid3">
+        <div class="field"><label>Pcs per box</label><input type="number" inputmode="numeric" min="1" value="${esc(v.box || '')}" placeholder="1 = loose" oninput="F.variants[${i}].box=this.value;$('#bxr${i}').value=boxRateTxt(${i})"></div>
+        <div class="field"><label>Box rate</label><input id="bxr${i}" value="${boxRateTxt(i)}" disabled></div>
+        <div class="field"><label>Weight (g)</label><input type="number" inputmode="decimal" value="${esc(v.weight)}" oninput="F.variants[${i}].weight=this.value"></div>
       </div>
       <div class="grid2">
-        ${v.isNew ? `<div class="field"><label>Opening stock (pcs)</label><input type="number" inputmode="numeric" value="${esc(v.stock)}" oninput="F.variants[${i}].stock=this.value"></div>` : `<div class="field"><label>Current stock</label><input value="${v.stock} pcs" disabled></div>`}
+        ${v.isNew ? `<div class="field"><label>Opening stock (pcs)</label><input type="number" inputmode="numeric" value="${esc(v.stock)}" oninput="F.variants[${i}].stock=this.value"></div>` : `<div class="field"><label>Current stock</label><input value="${qtyTxt(v, v.stock)}${perBox(v) > 1 ? ' (' + v.stock + ' pcs)' : ''}" disabled></div>`}
         <div class="field"><label>Low-stock alert at</label><input type="number" inputmode="numeric" value="${esc(v.lowAt)}" oninput="F.variants[${i}].lowAt=this.value"></div>
       </div>
     </div>`).join('');
@@ -1029,7 +1067,7 @@ function autoSku(pname, vlabel) {
   while (used.has(sku)) sku = base + '-' + n++;
   return sku;
 }
-function saveProduct() {
+async function saveProduct() {
   const name = F.name.trim();
   if (!name) return toast('Enter product name');
   if (!F.brandId || !F.catId) return toast('Select brand and category');
@@ -1044,6 +1082,21 @@ function saveProduct() {
     if (others.has(v.sku) || seen.has(v.sku)) return toast('Duplicate SKU: ' + v.sku);
     seen.add(v.sku);
   }
+  // photos still on the brand website (not yet in our cloud) are copied in now — nothing is stored if you cancel
+  const web = (F.photos || []).filter(u => /^https?:/.test(u) && !u.startsWith(API));
+  if (web.length) {
+    const btn = $('#fSave'); if (btn) btn.disabled = true;
+    F.srcMap = F.srcMap || {};
+    const map = {};
+    for (let k = 0; k < web.length; k++) {
+      if (btn) btn.textContent = `Saving photos ${k + 1}/${web.length}…`;
+      try { map[web[k]] = F.srcMap[web[k]] = (await api('importPhoto', { url: web[k] })).url; } catch (e) { map[web[k]] = ''; }
+    }
+    F.photos = F.photos.map(u => u in map ? map[u] : u).filter(Boolean);
+    F.photo = F.photos[0] || '';
+    if (btn) { btn.disabled = false; btn.innerHTML = `${ic('check')} Saving…`; }
+    if (web.some(u => !map[u])) toast('Some website photos could not be copied');
+  }
   const isNewP = !F.id;
   const pid = F.id || uid();
   const clean = vs.map(v => ({ id: v.id, label: v.label, sku: v.sku, weight: num(v.weight), purchase: num(v.purchase), dist: num(v.dist), retail: num(v.retail),
@@ -1052,6 +1105,7 @@ function saveProduct() {
   const obj = { id: pid, name, brandId: F.brandId, catId: F.catId, desc: F.desc.trim(), photo: F.photo, photos: F.photos || [], variants: clean, created: F.created || Date.now(), updated: Date.now() };
   if (F.key) obj.key = F.key;     // links to built-in product list (prevents re-adding)
   if (F.ext) obj.ext = F.ext;     // links to the brand website product
+  if (F.srcMap) obj.srcMap = F.srcMap;   // website photo → our copy (so the same photo is never added twice)
   if (isNewP) S.products.unshift(obj); else S.products[S.products.findIndex(p => p.id === pid)] = obj;
   save(); closeSheet(); F = null;
   if (ui.tab !== 'products') ui.tab = 'products';
@@ -1136,85 +1190,74 @@ function impExisting(it) {
   const re = new RegExp('\\b' + it.model.replace(/-/g, '').split('').join('-?') + '\\b', 'i');   // TP-4200 = TP4200
   return S.products.find(p => same(p) || ((!brand || p.brandId === brand.id) && re.test(p.name))) || null;
 }
-async function openImport(src) {
-  if (!cloud.key) return toast('Connect to cloud first');
-  if (src && src !== IMP.src) { IMP.src = src; IMP.sel.clear(); IMP.q = ''; IMP.cat = 'all'; }
-  const S0 = IMP_SOURCES[IMP.src];
-  const tabs = Object.entries(IMP_SOURCES).map(([k, v]) => `<button class="chip ${IMP.src === k ? 'on' : ''}" onclick="openImport('${k}')">${v.brand}</button>`).join('');
-  openSheet(sheetHead('Import from brand website', S0.site) + `<div class="chips" style="margin-bottom:6px">${tabs}</div><div id="impBody"><div class="empty">Loading ${S0.brand} catalogue…</div></div>`);
-  if (!IMP.data[IMP.src]) {
-    try { IMP.data[IMP.src] = (await api('listSource', { src: IMP.src })).items; }
-    catch (e) { $('#impBody').innerHTML = `<div class="empty">Could not load the ${S0.brand} website (${esc(e.message)})</div>`; return; }
-  }
-  IMP.items = IMP.data[IMP.src];
-  renderImport();
+/* ---------- Add product: search the brand website first, one product at a time ----------
+   Pick a product → its details and ALL photos are fetched → the form opens filled in (nothing saved yet).
+   Edit anything, then press Add. Not on the website → "Add manually". */
+let ADD = { src: 'sarju', q: '' };
+function openAddProduct() {
+  if (!isOwner() || !cloud.key) return toast('Connect to cloud first');
+  openSheet(sheetHead('Add product', 'Find it on the brand website first') + `
+    <div class="chips" id="addTabs" style="padding-top:0"></div>
+    <div class="search">${ic('search')}<input id="addQ" placeholder="Model or name, e.g. C71" value="${esc(ADD.q)}" oninput="ADD.q=this.value;renderAddList()"></div>
+    <div class="list addres" id="addList"></div>
+    <button class="btn ghost block" style="margin-top:12px" onclick="openProductForm()">${ic('edit')} Not on the website — add manually</button>`);
+  renderAddTabs(); loadAddSource();
+  setTimeout(() => $('#addQ')?.focus(), 350);
 }
-function renderImport() {
-  const b = $('#impBody'); if (!b || !IMP.items) return;
-  const cats = [...new Set(IMP.items.map(it => impCategory(it.cats, it.name)))].sort();
-  const q = IMP.q.toLowerCase();
-  const list = IMP.items.filter(it => (IMP.cat === 'all' || impCategory(it.cats, it.name) === IMP.cat) && (!q || (it.name + ' ' + it.model).toLowerCase().includes(q)));
-  const chip = (v, t) => `<button class="chip ${IMP.cat === v ? 'on' : ''}" onclick="IMP.cat='${v}';renderImport()">${esc(t)}</button>`;
-  b.innerHTML = `
-    <div class="search" style="margin-bottom:10px">${ic('search')}<input id="impQ" placeholder="Search name or model (e.g. C71)" value="${esc(IMP.q)}" oninput="IMP.q=this.value;renderImport();setTimeout(()=>{const i=$('#impQ');i.focus();i.setSelectionRange(i.value.length,i.value.length)})"></div>
-    <div class="chips" style="margin-bottom:10px;display:flex;gap:8px;overflow-x:auto">${chip('all', 'All ' + IMP.items.length)}${cats.map(c => chip(c, c)).join('')}</div>
-    <div>${list.map(it => {
-      const ex = impExisting(it), vs = impVariants(it);
-      return `<div class="imp-row ${IMP.sel.has(it.id) ? 'on' : ''}" onclick="impToggle(${it.id})">
-        <span class="ck">${IMP.sel.has(it.id) ? ic('check', 'style="width:14px;height:14px"') : ''}</span>
-        <img src="${esc(it.thumb)}" alt="" loading="lazy">
-        <div class="grow"><b>${esc(it.name)}</b><small>${esc(impCategory(it.cats, it.name))} · ${vs.length > 1 ? vs.join(' + ') : '1 variant'}</small>
-          ${ex ? `<div><span class="pill inapp">In app — adds any missing photos</span></div>` : ''}</div></div>`;
-    }).join('') || '<div class="empty">No matching products</div>'}</div>
-    <div style="position:sticky;bottom:0;padding-top:8px;background:var(--bg2)">
-      <button class="btn gold block" id="impGo" ${IMP.sel.size && !IMP.busy ? '' : 'disabled'} onclick="runImport()">${ic('in')} Import ${IMP.sel.size || ''} selected</button>
-    </div>`;
+function renderAddTabs() {
+  $('#addTabs').innerHTML = Object.entries(IMP_SOURCES).map(([k, v]) => `<button class="chip ${ADD.src === k ? 'on' : ''}" onclick="ADD.src='${k}';renderAddTabs();loadAddSource()">${v.brand} · ${v.site}</button>`).join('');
 }
-function impToggle(id) { if (IMP.busy) return; IMP.sel.has(id) ? IMP.sel.delete(id) : IMP.sel.add(id); renderImport(); }
-async function runImport() {
-  const picks = IMP.items.filter(it => IMP.sel.has(it.id)); if (!picks.length) return;
-  IMP.busy = true; let done = 0, added = 0, updated = 0, failed = 0;
-  const btn = () => $('#impGo');
-  const SRC = IMP_SOURCES[IMP.src], brand = findOrAdd(S.brands, SRC.brand);
-  for (const it of picks) {
-    ++done;
-    try {
-      if (btn()) btn().textContent = `Importing ${done} of ${picks.length} · finding photos…`;
-      const urls = await impAllImages(it);
-      const ex = impExisting(it);
-      // srcMap = website photo → our copy, so importing again only adds photos we don't have yet
-      const srcMap = Object.assign({}, ex && ex.srcMap);
-      // imported before this tracking existed → its first website photo is already in the app
-      if (ex && ex.ext && !ex.srcMap && urls[0]) srcMap[urls[0]] = ex.photo || 'had';
-      const photos = [];
-      for (let k = 0; k < urls.length; k++) {
-        if (srcMap[urls[k]]) continue;
-        if (btn()) btn().textContent = `Importing ${done} of ${picks.length} · photo ${k + 1}/${urls.length}…`;
-        try { const u = (await api('importPhoto', { url: urls[k] })).url; photos.push(u); srcMap[urls[k]] = u; } catch (e) { /* skip a bad photo, keep the rest */ }
-      }
-      const photo = photos[0] || '';
-      if (ex) {                                   // already in the app → keep its main photo, add the missing website photos
-        ex.photos = [...new Set([...(ex.photos || []), ...photos])];
-        if (!ex.photo) ex.photo = ex.photos[0] || '';
-        ex.ext = { src: it.src, id: it.id, url: it.url }; ex.srcMap = srcMap;
-        updated += photos.length ? 1 : 0; ex._added = photos.length;
-      } else {
-        const cat = findOrAdd(S.cats, impCategory(it.cats, it.name));
-        const desc = [it.specs['Watt/Amp'], it.specs['Length'], it.specs['Cable Material']].filter(Boolean).join(' · ');
-        const pid = uid();
-        const variants = impVariants(it).map(label => {
-          const abbr = { 'Micro USB': 'MC', 'Type-C': 'TC', 'Lightning': 'LT', 'Standard': 'STD' }[label] || label.replace(/[^A-Za-z0-9]/g, '').slice(0, 4).toUpperCase();
-          let sku = `${SRC.sku}-${(it.model || String(it.id)).replace(/-/g, '')}-${abbr}`; if (allVariants().some(x => x.v.sku === sku)) sku = autoSku(it.name, label);
-          return { id: uid(), label, sku, weight: 0, purchase: 0, dist: 0, retail: 0, stock: 0, lowAt: 5, photo };
-        });
-        S.products.push({ id: pid, name: formatName(it.name, it.model, it.specs['Watt/Amp'] || ''), brandId: brand.id, catId: cat.id, desc, photo, photos, variants, ext: { src: it.src, id: it.id, url: it.url }, srcMap, created: Date.now() });
-        added++;
-      }
-    } catch (e) { failed++; }
+async function loadAddSource() {
+  const src = ADD.src;
+  if (!IMP.data[src]) {
+    $('#addList').innerHTML = `<div class="empty card">Loading the ${IMP_SOURCES[src].brand} website…</div>`;
+    try { IMP.data[src] = (await api('listSource', { src })).items; }
+    catch (e) { if (ADD.src === src && $('#addList')) $('#addList').innerHTML = `<div class="empty card">Could not load ${IMP_SOURCES[src].site} (${esc(e.message)}). Use "add manually" below.</div>`; return; }
   }
-  const extra = S.products.reduce((a, p) => a + (p._added || 0), 0); S.products.forEach(p => delete p._added);
-  IMP.busy = false; IMP.sel.clear(); save(); render(); renderImport();
-  toast(`Imported ${added} new` + (picks.length > added ? ` · ${extra} new photo${extra === 1 ? '' : 's'} added to existing` : '') + (failed ? ` · ${failed} failed` : ''));
+  if (ADD.src === src) renderAddList();
+}
+function renderAddList() {
+  const el = $('#addList'), items = IMP.data[ADD.src]; if (!el || !items) return;
+  const q = ADD.q.trim().toLowerCase().replace(/\s+/g, ' ');
+  const list = q ? items.filter(it => (it.name + ' ' + it.model).toLowerCase().includes(q)).slice(0, 30) : [];
+  if (!q) { el.innerHTML = `<div class="empty card">Type the model code (e.g. C71) to search ${items.length} ${IMP_SOURCES[ADD.src].brand} products.</div>`; return; }
+  el.innerHTML = list.map(it => {
+    const ex = impExisting(it), vs = impVariants(it);
+    return `<div class="row" onclick="${ex ? `openProduct('${ex.id}')` : `addFromSite(${it.id})`}">
+      <img src="${esc(it.thumb)}" alt="" loading="lazy">
+      <div class="grow"><b>${esc(formatName(it.name, it.model))}</b><div class="sub">${esc(impCategory(it.cats, it.name))} · ${vs.length > 1 ? vs.join(' + ') : vs[0]}</div></div>
+      ${ex ? '<span class="pill ok">Already added</span>' : `<span class="pill gold">Add</span>`}</div>`;
+  }).join('') || `<div class="empty card">"${esc(ADD.q)}" is not on ${IMP_SOURCES[ADD.src].site}. Try the other brand, or add it manually below.</div>`;
+}
+async function addFromSite(id) {
+  const it = (IMP.data[ADD.src] || []).find(x => x.id === id); if (!it) return;
+  if (impExisting(it)) return openProduct(impExisting(it).id);
+  const el = $('#addList'); if (el) el.innerHTML = `<div class="empty card">Fetching ${esc(formatName(it.name, it.model))} — details and all photos…</div>`;
+  const urls = await impAllImages(it);
+  const SRC = IMP_SOURCES[it.src];
+  const brand = findOrAdd(S.brands, SRC.brand), cat = findOrAdd(S.cats, impCategory(it.cats, it.name));
+  const desc = [it.specs['Watt/Amp'], it.specs['Length'], it.specs['Cable Material']].filter(Boolean).join(' · ');
+  const variants = impVariants(it).map(label => {
+    const abbr = { 'Micro USB': 'MC', 'Type-C': 'TC', 'Lightning': 'LT', 'Standard': 'STD' }[label] || label.replace(/[^A-Za-z0-9]/g, '').slice(0, 4).toUpperCase();
+    let sku = `${SRC.sku}-${(it.model || String(it.id)).replace(/-/g, '')}-${abbr}`; if (allVariants().some(x => x.v.sku === sku)) sku = '';   // blank → made automatically on save
+    return Object.assign(blankVariant(), { label, sku });
+  });
+  // photos stay as website links until you press Add (then they are copied into the cloud)
+  openProductForm(null, { id: null, name: formatName(it.name, it.model, it.specs['Watt/Amp'] || ''), brandId: brand.id, catId: cat.id, desc,
+    photo: urls[0] || '', photos: urls, variants, ext: { src: it.src, id: it.id, url: it.url }, srcMap: {} });
+}
+// Edit form: add website photos this product does not have yet (they are copied in when you Save)
+async function formWebPhotos() {
+  if (!F || !F.ext) return;
+  const btn = $('#webPhBtn'); if (btn) { btn.disabled = true; btn.textContent = 'Checking the website…'; }
+  const src = F.ext.src || 'sarju';
+  const urls = await impAllImages({ src, id: F.ext.id, images: [] });
+  const known = Object.assign({}, F.srcMap);
+  if (!F.srcMap && urls[0]) known[urls[0]] = 'had';          // imported before tracking existed → first photo is already here
+  const add = urls.filter(u => !known[u] && !(F.photos || []).includes(u));
+  F.photos = [...(F.photos || []), ...add]; showFormPhoto();
+  if (btn) { btn.disabled = false; btn.innerHTML = `${ic('in')} Get missing photos from ${esc(IMP_SOURCES[src].site)}`; }
+  toast(add.length ? `${add.length} photo${add.length === 1 ? '' : 's'} added — press Save to keep them` : 'No new photos on the website');
 }
 // find a brand/category by name, or add it
 function findOrAdd(list, name) {
@@ -1551,7 +1594,7 @@ function renderMore() {
     <div class="list">
       ${cloud.key
         ? `<button class="row" onclick="cloudPush();cloudLoad()"><span class="adj">${ic('sync')}</span><div class="grow" style="text-align:left"><b>Sync now</b><div class="sub">Owner phone · changes save to the cloud automatically</div></div></button>
-           <button class="row" onclick="openImport()"><span class="adj" style="color:var(--accent-txt)">${ic('in')}</span><div class="grow" style="text-align:left"><b>Import from brand websites</b><div class="sub">Sarju & Ticon — photos, specs & variants come in automatically</div></div></button>
+           <button class="row" onclick="openAddProduct()"><span class="adj" style="color:var(--accent-txt)">${ic('in')}</span><div class="grow" style="text-align:left"><b>Add product from brand website</b><div class="sub">Sarju & Ticon — photos, specs & variants come in automatically</div></div></button>
            <button class="row" onclick="fixAllPhotos()"><span class="adj" style="color:var(--accent-txt)">${ic('sync')}</span><div class="grow" style="text-align:left"><b>Fix photo backgrounds</b><div class="sub">Makes grey / off-white photo backgrounds pure white, like the brand websites</div></div></button>
            <button class="row" onclick="disconnectCloud()"><span class="adj">${ic('cloud')}</span><div class="grow" style="text-align:left"><b>Disconnect this phone</b><div class="sub">Removes the owner key from this phone</div></div></button>`
         : `<button class="row" onclick="connectCloud()"><span class="adj" style="color:var(--accent-txt)">${ic('cloud')}</span><div class="grow" style="text-align:left"><b>Connect to cloud (owner)</b><div class="sub">Enter the owner key once — catalogue and photos sync to every phone</div></div></button>
@@ -1867,7 +1910,9 @@ function installRow() {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   if (SHOP_MODE) return shopLoad(true);                 // shop phone: fresh rates & stock when reopened
-  if (!cloud.key) cloudLoad(true); else loadOrders();   // owner phone: pick up new orders
+  if (!cloud.key) return cloudLoad(true);
+  loadOrders();                                          // owner phone: pick up new orders
+  if (!pushing && !pendingPush && !$('#sheetWrap').classList.contains('open')) cloudLoad(true);   // and other phones' edits
 });
 </script>
 </body>
