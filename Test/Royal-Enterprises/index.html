@@ -1000,21 +1000,23 @@ function openProductForm(id, pre) {          // pre = details fetched from the b
     <div class="gstrip" id="fGal"></div>
     ${F.ext && F.id ? `<button class="btn ghost block" id="webPhBtn" style="margin:-4px 0 12px;font-size:13px;padding:8px" onclick="formWebPhotos()">${ic('in')} Get missing photos from ${esc(IMP_SOURCES[F.ext.src || 'sarju'].site)}</button>` : ''}
     <div class="field"><label>Product name * <small class="muted">— Model - Watts details</small></label>
-      <div class="namerow"><input id="fName" value="${esc(F.name)}" placeholder="e.g. C57 - 48W Fast Charging Cable" oninput="F.name=this.value"><button class="btn ghost" id="nameBtn" onclick="nameFromBox()" title="Read the name from a box photo">${ic('camera')} From box</button></div>
+      <div class="namerow"><input id="fName" value="${esc(F.name)}" placeholder="e.g. C57 - 48W Fast Charging Cable" oninput="F.name=this.value;refreshSkus()"><button class="btn ghost" id="nameBtn" onclick="nameFromBox()" title="Read the name from a box photo">${ic('camera')} From box</button></div>
       <div class="chips" id="nameOpts" style="margin-top:6px;flex-wrap:wrap;padding:0"></div></div>
     <div class="grid2">
-      <div class="field"><label>Brand *</label><select id="fBrand" onchange="pickOrAdd(this,'brand')">${opts(S.brands, F.brandId, 'brand')}</select></div>
+      <div class="field"><label>Brand *</label><select id="fBrand" onchange="pickOrAdd(this,'brand');refreshSkus()">${opts(S.brands, F.brandId, 'brand')}</select></div>
       <div class="field"><label>Category *</label><select id="fCat" onchange="pickOrAdd(this,'cat')">${opts(S.cats, F.catId, 'category')}</select></div>
     </div>
     <div class="field"><label>Short description</label><input id="fDesc" value="${esc(F.desc)}" placeholder="Optional" oninput="F.desc=this.value"></div>
     </div><div class="pf2-r">
     <h3 class="sec" style="margin-top:0">Variants <small>colour / type / connector</small></h3>
     <div id="fVars"></div>
-    <button class="btn ghost block" onclick="F.variants.push(blankVariant());renderFormVariants()">${ic('plus')} Add variant</button>
+    <button class="btn ghost block" onclick="F.variants.push(Object.assign(blankVariant(), { skuAuto: true }));renderFormVariants();refreshSkus()">${ic('plus')} Add variant</button>
     <button class="btn gold block" id="fSave" style="margin-top:12px" onclick="saveProduct()">${ic('check')} ${p ? 'Save product' : 'Add product'}</button>
     ${p ? `<button class="btn danger block" style="margin-top:10px" onclick="deleteProduct('${p.id}')">${ic('trash')} Delete product</button>` : ''}
     </div></div>`, { wide: true });
-  showFormPhoto(); renderFormVariants();
+  // new product: SKUs follow the name automatically; existing product: only empty SKUs do (saved SKUs never change by themselves)
+  F.variants.forEach(v => { v.skuAuto = !p || !v.sku; });
+  showFormPhoto(); renderFormVariants(); refreshSkus();
 }
 function showFormPhoto() {
   if (!F || !$('#fPhoto')) return;   // form may have closed (photo went to an existing product)
@@ -1032,8 +1034,8 @@ function renderFormVariants() {
   $('#fVars').innerHTML = F.variants.map((v, i) => `
     <div class="vblock"><div class="vblock-h"><span>Variant ${i + 1}</span>${F.variants.length > 1 ? `<button class="iconbtn" style="width:32px;height:32px" onclick="F.variants.splice(${i},1);renderFormVariants()">${ic('trash')}</button>` : ''}</div>
       <div class="grid2">
-        <div class="field"><label>Variant name *</label><input value="${esc(v.label)}" placeholder="e.g. Type-C" oninput="F.variants[${i}].label=this.value"></div>
-        <div class="field"><label>SKU code</label><input value="${esc(v.sku)}" placeholder="Auto: BRAND-MODEL-TYPE" oninput="F.variants[${i}].sku=this.value.toUpperCase()"></div>
+        <div class="field"><label>Variant name *</label><input value="${esc(v.label)}" placeholder="e.g. Type-C" oninput="F.variants[${i}].label=this.value;refreshSkus()"></div>
+        <div class="field"><label>SKU code</label><input id="sku${i}" value="${esc(v.sku)}" placeholder="Auto: BRAND-MODEL-TYPE" oninput="F.variants[${i}].sku=this.value.toUpperCase();F.variants[${i}].skuAuto=!this.value.trim();if(!this.value.trim())refreshSkus()"></div>
       </div>
       <div class="grid3">
         <div class="field"><label>Purchase ₹</label><input type="number" inputmode="decimal" value="${esc(v.purchase)}" oninput="F.variants[${i}].purchase=this.value"></div>
@@ -1083,6 +1085,17 @@ function makeSku(pname, brandId, vlabel, taken) {
   while (taken.has(sku)) sku = base + '-' + n++;
   taken.add(sku);
   return sku;
+}
+/* Live SKU in the product form: variants whose SKU you have not typed yourself follow
+   name + brand + variant as you type. Typing in the SKU box takes over; clearing it hands back to auto. */
+function refreshSkus() {
+  if (!F) return;
+  const taken = new Set(S.products.filter(p => p.id !== F.id).flatMap(p => p.variants.map(v => v.sku)));
+  F.variants.forEach((v, i) => {
+    if (!v.skuAuto) { if (v.sku) taken.add(v.sku); return; }
+    v.sku = F.name.trim() ? makeSku(F.name, F.brandId, v.label, taken) : '';
+    const el = $('#sku' + i); if (el && el !== document.activeElement) el.value = v.sku;
+  });
 }
 function autoSku(pname, vlabel, brandId = F && F.brandId) {
   return makeSku(pname, brandId, vlabel, new Set(allVariants().map(x => x.v.sku)));
@@ -1521,10 +1534,10 @@ function nameFromBox() {
       setFormName(names[0]);
       // brand / category / variant only fill in when they match something you already have, or are still empty
       const br = S.brands.find(b => r.brand && b.name.toLowerCase() === String(r.brand).toLowerCase());
-      if (br) { F.brandId = br.id; const s = $('#fBrand'); if (s) s.value = br.id; }
+      if (br) { F.brandId = br.id; const s = $('#fBrand'); if (s) s.value = br.id; refreshSkus(); }
       const ct = S.cats.find(c => r.category && c.name.toLowerCase() === String(r.category).toLowerCase());
       if (ct) { F.catId = ct.id; const s = $('#fCat'); if (s) s.value = ct.id; }
-      if (r.variant && F.variants.length === 1 && !F.variants[0].label.trim()) { F.variants[0].label = r.variant; renderFormVariants(); }
+      if (r.variant && F.variants.length === 1 && !F.variants[0].label.trim()) { F.variants[0].label = r.variant; renderFormVariants(); refreshSkus(); }
       $('#nameOpts').innerHTML = names.length > 1 ? names.map(n => `<button class="chip" onclick="setFormName(this.textContent)">${esc(n)}</button>`).join('') : '';
       setFormName(names[0]);                          // highlights the option in use
       toast(names.length > 1 ? 'Name filled — tap another option to switch' : 'Name filled from the box');
@@ -1534,7 +1547,7 @@ function nameFromBox() {
   fi.click();
 }
 function setFormName(n) {
-  F.name = n; const i = $('#fName'); if (i) i.value = n;
+  F.name = n; const i = $('#fName'); if (i) i.value = n; refreshSkus();
   document.querySelectorAll('#nameOpts .chip').forEach(c => c.classList.toggle('on', c.textContent === n));
 }
 
