@@ -408,7 +408,7 @@ async function shopCatalog(env) {
   const products = (S.products || []).map(p => ({
     id: p.id, name: p.name, brandId: p.brandId, catId: p.catId, desc: p.desc || '', photo: p.photo || '', photos: p.photos || [],
     variants: (p.variants || []).map(v => ({ id: v.id, label: v.label, sku: v.sku, dist: Number(v.dist) || 0, retail: Number(v.retail) || 0,
-      stock: Math.max(0, Math.min(Number(v.stock) || 0, 999)), lowAt: Number(v.lowAt) || 0, photo: v.photo || '' }))
+      stock: Math.max(0, Math.min(Number(v.stock) || 0, 9999)), lowAt: Number(v.lowAt) || 0, box: Math.max(1, Math.round(Number(v.box)) || 1), photo: v.photo || '' }))
   }));
   return { state: { brands: S.brands || [], cats: S.cats || [], products, log: [], orders: [], meta: {} }, updated: row ? row.updated : 0 };
 }
@@ -420,8 +420,10 @@ async function shopPlaceOrder(env, shop, body) {
   const items = [];
   for (const it of (body.items || []).slice(0, 200)) {
     const f = byV[it.vid], qty = Math.round(Number(it.qty) || 0);
-    if (!f || qty <= 0 || qty > 9999 || !(Number(f.v.dist) > 0)) continue;
-    items.push({ pid: f.p.id, vid: f.v.id, name: f.p.name, label: f.v.label, sku: f.v.sku, qty, rate: Number(f.v.dist) });   // server price, not the phone's
+    if (!f || qty <= 0 || qty > 99999 || !(Number(f.v.dist) > 0)) continue;
+    const box = Math.max(1, Math.round(Number(f.v.box)) || 1);
+    if (qty % box) return json({ error: `${f.p.name} ${f.v.label} is sold in boxes of ${box} — refresh and try again` }, 400);
+    items.push({ pid: f.p.id, vid: f.v.id, name: f.p.name, label: f.v.label, sku: f.v.sku, qty, box, rate: Number(f.v.dist) });   // server price, not the phone's
   }
   if (!items.length) return json({ error: 'No valid items in the order (rates may have changed — refresh)' }, 400);
   const o = { shopId: shop.id, shopName: shop.name, source: 'shop', items, total: items.reduce((a, x) => a + x.qty * x.rate, 0), note: String(body.note || '').slice(0, 300) };

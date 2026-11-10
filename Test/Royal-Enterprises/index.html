@@ -533,6 +533,19 @@ const imgP = p => p.photo || art(artKind(catName(p.catId)));
 // Variant photos can no longer be edited, so every variant shows the product's main photo (old import box shots are ignored)
 const imgV = (p, v) => p.photo || v.photo || imgP(p);
 const totalStock = p => p.variants.reduce((a, v) => a + num(v.stock), 0);
+/* ---------- Box (pack) quantities ----------
+   v.box = pieces in one box. Stock and orders are always counted in PIECES underneath;
+   boxes are only how they are shown and how shops pick quantities (whole boxes only when box > 1). */
+const perBox = v => Math.max(1, Math.round(num(v && v.box)) || 1);
+function qtyTxt(v, pcs) {             // 25 pcs, box of 10 → "2 box + 5 pcs"
+  const b = perBox(v); pcs = Math.round(num(pcs));
+  if (b <= 1) return pcs + ' pcs';
+  const n = Math.floor(Math.abs(pcs) / b) * Math.sign(pcs || 1), r = pcs - n * b;
+  return [n ? n + ' box' : '', r ? r + ' pcs' : ''].filter(Boolean).join(' + ') || '0 box';
+}
+const boxTag = v => perBox(v) > 1 ? `Box of ${perBox(v)}` : 'Sold loose';
+const shopStep = v => perBox(v);                         // shops add/remove one box at a time
+const shopMax = v => Math.floor(num(v.stock) / perBox(v)) * perBox(v);   // only full boxes can be sold
 const isOwner = () => ui.role === 'owner';
 function priceRange(p, key = 'dist') {
   const xs = p.variants.map(v => num(v[key]));
@@ -667,7 +680,7 @@ function orderRow(o, click) {
     <div style="text-align:right"><b>${inr(o.total)}</b><span class="pill ${ORDER_PILL[o.status] || ''}" style="margin-top:4px">${lbl}</span></div></div>`;
 }
 function orderLinesHTML(o) {
-  const lines = o.items.map(x => `<div class="order-line"><div><b>${esc(x.name)}</b><div class="muted" style="font-size:12.5px">${esc(x.label)} · ${esc(x.sku)}</div></div><div style="text-align:right;white-space:nowrap">${x.qty} × ${inr(x.rate)}<div><b>${inr(x.qty * x.rate)}</b></div></div></div>`).join('');
+  const lines = o.items.map(x => `<div class="order-line"><div><b>${esc(x.name)}</b><div class="muted" style="font-size:12.5px">${esc(x.label)} · ${esc(x.sku)}</div></div><div style="text-align:right;white-space:nowrap">${x.box > 1 ? `<span class="muted" style="font-size:12.5px">${qtyTxt(x, x.qty)}</span><br>` : ''}${x.qty} × ${inr(x.rate)}<div><b>${inr(x.qty * x.rate)}</b></div></div></div>`).join('');
   return `<div class="card" style="padding:4px 14px">${lines}</div><div class="total-row"><span>Total</span><span>${inr(o.total)}</span></div>`
     + (o.note ? `<div class="note"><b>Note:</b> ${esc(o.note)}</div>` : '');
 }
@@ -883,10 +896,10 @@ function openProduct(id) {
   const vcards = p.variants.map(v => {
     const s = stState(v), margin = num(v.dist) ? Math.round((num(v.dist) - num(v.purchase)) / num(v.dist) * 100) : 0;
     return `<div class="vcard"><div class="vcard-top">
-      <div style="flex:1;min-width:0"><b>${esc(v.label)}</b><div class="muted" style="font-size:12.5px">${esc(v.sku)}${v.weight ? ' · ' + v.weight + ' g' : ''}</div></div>
+      <div style="flex:1;min-width:0"><b>${esc(v.label)}</b><div class="muted" style="font-size:12.5px">${esc(v.sku)}${v.weight ? ' · ' + v.weight + ' g' : ''} · ${boxTag(v)}</div>${perBox(v) > 1 ? `<div class="muted" style="font-size:12.5px">${qtyTxt(v, v.stock)}</div>` : ''}</div>
       <div class="stockn ${s}">${v.stock}<small>${s === 'out' ? 'out' : s === 'low' ? 'low' : 'pcs'}</small></div>
       ${isOwner() ? `<button class="adj" onclick="openAdjust('${p.id}','${v.id}')" aria-label="Adjust stock">${ic('layers')}</button>` : ''}</div>
-      <div class="prices">${isOwner() ? `<div><small>Purchase</small><b>${inr(v.purchase)}</b></div>` : ''}<div><small>Distributor</small><b>${inr(v.dist)}</b></div><div><small>Retail</small><b>${inr(v.retail)}</b></div>${isOwner() ? `<div><small>Margin</small><b style="color:var(--ok)">${margin}%</b></div>` : ''}</div></div>`;
+      <div class="prices">${isOwner() ? `<div><small>Purchase</small><b>${inr(v.purchase)}</b></div>` : ''}<div><small>Distributor</small><b>${inr(v.dist)}</b>${perBox(v) > 1 ? `<small>${inr(num(v.dist) * perBox(v))}/box</small>` : ''}</div><div><small>Retail</small><b>${inr(v.retail)}</b></div>${isOwner() ? `<div><small>Margin</small><b style="color:var(--ok)">${margin}%</b></div>` : ''}</div></div>`;
   }).join('');
   openSheet(sheetHead(esc(p.name), `${esc(brandName(p.brandId))} · ${esc(catName(p.catId))}`) +
     galleryHTML(p) + `${p.desc ? `<p class="muted" style="margin:12px 2px 0">${esc(p.desc)}</p>` : ''}
@@ -926,7 +939,7 @@ function galScroll(el, n) {
 
 /* ---------- Add / Edit product form ---------- */
 let F = null; // draft while the form is open
-function blankVariant() { return { id: uid(), label: '', sku: '', weight: '', purchase: '', dist: '', retail: '', stock: '', lowAt: 5, photo: '', isNew: true }; }
+function blankVariant() { return { id: uid(), label: '', sku: '', weight: '', purchase: '', dist: '', retail: '', stock: '', lowAt: 5, box: '', photo: '', isNew: true }; }
 function openProductForm(id) {
   if (!isOwner()) return;
   const p = id && getP(id);
@@ -934,7 +947,7 @@ function openProductForm(id) {
   const opts = (list, cur, kind) => list.map(x => `<option value="${x.id}" ${x.id === cur ? 'selected' : ''}>${esc(x.name)}</option>`).join('') + `<option value="__new">+ Add new ${kind}…</option>`;
   openSheet(sheetHead(p ? 'Edit product' : 'Add product', 'Photo → details → variants') + `
     <div class="photo-pick" id="fPhoto" onclick="uploadPhoto(url=>{if(F.photos.length)F.photos[0]=url;else F.photos.push(url);F.photo=url;if(F.variants[0]&&!F.variants[0].photo)F.variants[0].photo=url;showFormPhoto();renderFormVariants()})"></div>
-    <div class="grid2" style="margin:-4px 0 12px"><button class="btn ghost" onclick="copyGeminiPrompt()">${ic('wand')} Copy Gemini prompt</button><a class="btn ghost" href="https://gemini.google.com/app" target="_blank" rel="noopener" style="text-align:center;text-decoration:none">Open Gemini ↗</a></div>
+    <div class="grid2" style="margin:-4px 0 12px"><button class="btn ghost" onclick="copyGeminiPrompt()">${ic('wand')} Copy Gemini prompt</button><a class="btn ghost" href="https://gemini.google.com/app" target="_blank" rel="noopener" style="text-align:center;text-decoration:none;color:var(--text)">Open Gemini ↗</a></div>
     <div class="gstrip" id="fGal"></div>
     <div class="field"><label>Product name *</label><input id="fName" value="${esc(F.name)}" placeholder="e.g. Fast Charger" oninput="F.name=this.value"></div>
     <div class="grid2">
@@ -972,11 +985,15 @@ function renderFormVariants() {
       </div>
       <div class="grid3">
         <div class="field"><label>Purchase ₹</label><input type="number" inputmode="decimal" value="${esc(v.purchase)}" oninput="F.variants[${i}].purchase=this.value"></div>
-        <div class="field"><label>Distributor ₹</label><input type="number" inputmode="decimal" value="${esc(v.dist)}" oninput="F.variants[${i}].dist=this.value"></div>
+        <div class="field"><label>Distributor ₹/pc</label><input type="number" inputmode="decimal" value="${esc(v.dist)}" oninput="F.variants[${i}].dist=this.value;const b=$('#bxr${i}');if(b)b.value=perBox(F.variants[${i}])>1?inr(num(this.value)*perBox(F.variants[${i}])):'—'"></div>
         <div class="field"><label>Retail ₹</label><input type="number" inputmode="decimal" value="${esc(v.retail)}" oninput="F.variants[${i}].retail=this.value"></div>
       </div>
       <div class="grid2">
-        ${v.isNew ? `<div class="field"><label>Opening stock</label><input type="number" inputmode="numeric" value="${esc(v.stock)}" oninput="F.variants[${i}].stock=this.value"></div>` : `<div class="field"><label>Current stock</label><input value="${v.stock} pcs" disabled></div>`}
+        <div class="field"><label>Pcs per box</label><input type="number" inputmode="numeric" min="1" value="${esc(v.box || '')}" placeholder="1 = sold loose" oninput="F.variants[${i}].box=this.value;$('#bxr${i}').value=perBox(F.variants[${i}])>1?inr(num(F.variants[${i}].dist)*perBox(F.variants[${i}])):'—'"></div>
+        <div class="field"><label>Box rate (distributor)</label><input id="bxr${i}" value="${perBox(v) > 1 ? inr(num(v.dist) * perBox(v)) : '—'}" disabled></div>
+      </div>
+      <div class="grid2">
+        ${v.isNew ? `<div class="field"><label>Opening stock (pcs)</label><input type="number" inputmode="numeric" value="${esc(v.stock)}" oninput="F.variants[${i}].stock=this.value"></div>` : `<div class="field"><label>Current stock</label><input value="${v.stock} pcs" disabled></div>`}
         <div class="field"><label>Low-stock alert at</label><input type="number" inputmode="numeric" value="${esc(v.lowAt)}" oninput="F.variants[${i}].lowAt=this.value"></div>
       </div>
     </div>`).join('');
@@ -1018,7 +1035,7 @@ function saveProduct() {
   const isNewP = !F.id;
   const pid = F.id || uid();
   const clean = vs.map(v => ({ id: v.id, label: v.label, sku: v.sku, weight: num(v.weight), purchase: num(v.purchase), dist: num(v.dist), retail: num(v.retail),
-    stock: v.isNew ? Math.max(0, Math.round(num(v.stock))) : v.stock, lowAt: Math.max(0, Math.round(num(v.lowAt))), photo: (vs.length === 1 && F.photo) ? F.photo : (v.photo || '') }));   // single variant → same photo as the product
+    stock: v.isNew ? Math.max(0, Math.round(num(v.stock))) : v.stock, lowAt: Math.max(0, Math.round(num(v.lowAt))), box: perBox(v), photo: (vs.length === 1 && F.photo) ? F.photo : (v.photo || '') }));   // single variant → same photo as the product
   vs.filter(v => v.isNew && num(v.stock) > 0).forEach(v => S.log.push({ id: uid(), ts: Date.now(), pid, vid: v.id, qty: Math.round(num(v.stock)), type: 'opening', note: 'Opening stock', by: 'owner' }));
   const obj = { id: pid, name, brandId: F.brandId, catId: F.catId, desc: F.desc.trim(), photo: F.photo, photos: F.photos || [], variants: clean, created: F.created || Date.now(), updated: Date.now() };
   if (F.key) obj.key = F.key;     // links to built-in product list (prevents re-adding)
@@ -1366,7 +1383,7 @@ function stockRow(p, v, i = 0) {
   const s = stState(v);
   return `<div class="row">
     <img src="${imgV(p, v)}" alt="" loading="lazy">
-    <div class="grow" onclick="openProduct('${p.id}')" style="cursor:pointer"><b>${esc(p.name)}</b><div class="sub">${esc(v.label)} · ${esc(v.sku)}</div></div>
+    <div class="grow" onclick="openProduct('${p.id}')" style="cursor:pointer"><b>${esc(p.name)}</b><div class="sub">${esc(v.label)} · ${esc(v.sku)}</div>${perBox(v) > 1 ? `<div class="sub">Box of ${perBox(v)} · ${qtyTxt(v, v.stock)}</div>` : ''}</div>
     <div class="stockn ${s}">${v.stock}<small>${s === 'out' ? 'out' : s === 'low' ? 'low' : 'pcs'}</small></div>
     ${isOwner() ? `<button class="adj" onclick="openAdjust('${p.id}','${v.id}')" aria-label="Adjust">${ic('plus')}</button>` : ''}</div>`;
 }
@@ -1393,22 +1410,29 @@ function openAdjust(pid, vid) {
   const p = getP(pid), v = getV(p, vid); if (!v) return;
   adj = { pid, vid, mode: 'in' };
   openSheet(sheetHead('Adjust stock', `${esc(p.name)} · ${esc(v.label)}`) + `
-    <div class="card" style="padding:16px;text-align:center;margin-bottom:14px"><div class="muted" style="font-size:12.5px;font-weight:600">Current stock</div><div style="font-size:34px;font-weight:700">${v.stock}</div></div>
+    <div class="card" style="padding:16px;text-align:center;margin-bottom:14px"><div class="muted" style="font-size:12.5px;font-weight:600">Current stock</div><div style="font-size:34px;font-weight:700">${v.stock}</div>${perBox(v) > 1 ? `<div class="muted" style="font-size:13px">${qtyTxt(v, v.stock)} · box of ${perBox(v)}</div>` : ''}</div>
     <div class="seg" id="adjSeg">
       <button class="on" onclick="setAdjMode('in',this)">+ Stock in</button><button onclick="setAdjMode('out',this)">− Stock out</button><button onclick="setAdjMode('set',this)">Set count</button></div>
-    <div class="field"><label id="adjLbl">Quantity received</label><input id="adjQty" type="number" inputmode="numeric" placeholder="0"></div>
+    ${perBox(v) > 1 ? `<div class="grid2"><div class="field"><label id="adjLbl">Boxes received</label><input id="adjBox" type="number" inputmode="numeric" placeholder="0" oninput="adjShow()"></div>
+      <div class="field"><label>+ loose pcs</label><input id="adjPcs" type="number" inputmode="numeric" placeholder="0" oninput="adjShow()"></div></div>
+      <div class="muted" id="adjSum" style="font-size:12.5px;margin:-4px 0 12px">1 box = ${perBox(v)} pcs</div>`
+    : `<div class="field"><label id="adjLbl">Quantity received</label><input id="adjQty" type="number" inputmode="numeric" placeholder="0"></div>`}
     <div class="field"><label>Note</label><input id="adjNote" placeholder="e.g. Purchase from supplier / damaged / recount"></div>
     <button class="btn gold block" onclick="saveAdjust()">${ic('check')} Save</button>`);
-  setTimeout(() => $('#adjQty')?.focus(), 400);
+  setTimeout(() => ($('#adjBox') || $('#adjQty'))?.focus(), 400);
 }
 function setAdjMode(m, btn) {
   adj.mode = m;
   document.querySelectorAll('#adjSeg button').forEach(b => b.classList.toggle('on', b === btn));
-  $('#adjLbl').textContent = { in: 'Quantity received', out: 'Quantity removed', set: 'Actual count on shelf' }[m];
+  const box = !!$('#adjBox');
+  $('#adjLbl').textContent = { in: box ? 'Boxes received' : 'Quantity received', out: box ? 'Boxes removed' : 'Quantity removed', set: box ? 'Boxes on shelf' : 'Actual count on shelf' }[m];
 }
+// pieces typed in the adjust sheet (boxes × pcs-per-box + loose pieces, or plain pieces)
+function adjPieces(v) { return $('#adjBox') ? Math.round(num($('#adjBox').value)) * perBox(v) + Math.round(num($('#adjPcs').value)) : Math.round(num($('#adjQty').value)); }
+function adjShow() { const v = getV(getP(adj.pid), adj.vid), el = $('#adjSum'); if (v && el) el.textContent = `= ${adjPieces(v)} pcs (1 box = ${perBox(v)} pcs)`; }
 function saveAdjust() {
   const p = getP(adj.pid), v = getV(p, adj.vid);
-  const q = Math.round(num($('#adjQty').value));
+  const q = adjPieces(v);
   if (adj.mode !== 'set' && q <= 0) return toast('Enter a quantity');
   if (adj.mode === 'set' && q < 0) return toast('Count cannot be negative');
   const delta = adj.mode === 'in' ? q : adj.mode === 'out' ? -q : q - v.stock;
@@ -1533,7 +1557,7 @@ function renderShopGrid() {
   const ps = S.products.filter(matchP);
   $('#psCount').textContent = ps.length + ' item' + (ps.length === 1 ? '' : 's');
   $('#shopGrid').innerHTML = ps.length ? ps.map(p => {
-    const live = p.variants.filter(v => v.stock > 0);
+    const live = p.variants.filter(v => shopMax(v) > 0);   // at least one full box left
     const inCart = p.variants.reduce((a, v) => a + (cart[v.id] || 0), 0);
     const lo = Math.min(...p.variants.map(v => num(v.dist)));
     const mrp = Math.max(...p.variants.map(v => num(v.retail)));
@@ -1543,19 +1567,19 @@ function renderShopGrid() {
     let btn = '';
     if (live.length && rated) {
       if (!inCart) btn = `<button class="ps-add" onclick="event.stopPropagation();${single ? `quickAdd('${p.variants[0].id}',1)` : `openShopProduct('${p.id}')`}">ADD</button>`;
-      else if (single) btn = `<div class="ps-step" onclick="event.stopPropagation()"><button onclick="quickAdd('${p.variants[0].id}',-1)">−</button>${inCart}<button onclick="quickAdd('${p.variants[0].id}',1)">+</button></div>`;
+      else if (single) btn = `<div class="ps-step" onclick="event.stopPropagation()"><button onclick="quickAdd('${p.variants[0].id}',-1)">−</button>${perBox(p.variants[0]) > 1 ? inCart / perBox(p.variants[0]) + ' box' : inCart}<button onclick="quickAdd('${p.variants[0].id}',1)">+</button></div>`;
       else btn = `<div class="ps-step" style="padding:0 8px" onclick="event.stopPropagation();openShopProduct('${p.id}')"><span>${inCart} in cart</span>${ic('edit', 'style="width:14px;height:14px"')}</div>`;
     }
     return `<div class="ps-card" onclick="openShopProduct('${p.id}')">
       <div class="ps-img"><img src="${imgP(p)}" alt="" loading="lazy">${live.length || !rated ? '' : '<div class="ps-oos">OUT OF STOCK</div>'}<div class="ps-addw">${btn}</div></div>
       <div class="ps-pr">${rated ? inr(lo) + (mrp > lo ? `<s>${inr(mrp)}</s>` : '') : '<span class="muted" style="font-size:12px">Rate soon</span>'}</div>
-      <div class="ps-nm">${esc(p.name)}</div><div class="ps-op">${single ? esc(p.variants[0].label) : p.variants.length + ' options'}</div></div>`;
+      <div class="ps-nm">${esc(p.name)}</div><div class="ps-op">${single ? esc(p.variants[0].label) : p.variants.length + ' options'}${single && perBox(p.variants[0]) > 1 ? ' · box of ' + perBox(p.variants[0]) + (rated ? ' · ' + inr(lo * perBox(p.variants[0])) + '/box' : '') : ''}</div></div>`;
   }).join('') : '<div class="empty card" style="grid-column:1/-1">No products found</div>';
 }
 function quickAdd(vid, d) {
   const f = findV(vid); if (!f) return;
-  let q = Math.max(0, (cart[vid] || 0) + d);
-  if (q > f.v.stock) { q = f.v.stock; toast(`Only ${f.v.stock} available`); }
+  let q = Math.max(0, (cart[vid] || 0) + d * shopStep(f.v));     // d = ±1 box (or ±1 pc when sold loose)
+  if (q > shopMax(f.v)) { q = shopMax(f.v); toast(`Only ${qtyTxt(f.v, shopMax(f.v))} available`); }
   if (q) cart[vid] = q; else delete cart[vid];
   saveCart(); renderShopGrid(); updateCartBar();
 }
@@ -1564,34 +1588,38 @@ function openShopProduct(pid) {
   const p = getP(pid); if (!p) return;
   tmpPid = pid; tmp = {};
   p.variants.forEach(v => { if (cart[v.id]) tmp[v.id] = cart[v.id]; });
-  const avail = v => num(v.dist) <= 0 ? '<span class="pill low">Rate coming soon</span>' : v.stock <= 0 ? '<span class="pill out">Out of stock</span>' : v.stock <= v.lowAt ? `<span class="pill low">Only ${v.stock} left</span>` : '<span class="pill ok">In stock</span>';
+  const avail = v => num(v.dist) <= 0 ? '<span class="pill low">Rate coming soon</span>' : shopMax(v) <= 0 ? '<span class="pill out">Out of stock</span>' : v.stock <= v.lowAt ? `<span class="pill low">Only ${qtyTxt(v, shopMax(v))} left</span>` : '<span class="pill ok">In stock</span>';
+  const unit = v => perBox(v) > 1 ? `<div class="muted" style="font-size:12px">Box of ${perBox(v)} · ${inr(num(v.dist) * perBox(v))}/box</div>` : '';
   openSheet(galleryHTML(p) + `
     <div class="sp-title">${esc(p.name)}</div><div class="sp-sub">${esc(brandName(p.brandId))} · ${esc(catName(p.catId))}${p.desc ? ' · ' + esc(p.desc) : ''}</div>
-    <h3 class="sec" style="margin-top:0">Choose variants <small>enter quantity</small></h3>
-    ${p.variants.map(v => `<div class="vopt ${v.stock <= 0 || num(v.dist) <= 0 ? 'dis' : ''} ${tmp[v.id] ? 'sel' : ''}" id="vo-${v.id}">
-      <img src="${imgV(p, v)}" alt=""><div class="grow"><b>${esc(v.label)}</b><div class="price">${num(v.dist) > 0 ? inr(v.dist) : '—'}</div>${avail(v)}</div>
-      ${v.stock > 0 && num(v.dist) > 0 ? `<div class="stepper ${tmp[v.id] ? '' : 'zero'}" id="st-${v.id}"><button onclick="stepTmp('${v.id}',-1)">−</button><input id="tq-${v.id}" type="number" inputmode="numeric" value="${tmp[v.id] || 0}" oninput="setTmp('${v.id}',this.value)"><button onclick="stepTmp('${v.id}',1)">+</button></div>` : ''}</div>`).join('')}
+    <h3 class="sec" style="margin-top:0">Choose variants <small>${p.variants.some(v => perBox(v) > 1) ? 'quantity in boxes' : 'enter quantity'}</small></h3>
+    ${p.variants.map(v => `<div class="vopt ${shopMax(v) <= 0 || num(v.dist) <= 0 ? 'dis' : ''} ${tmp[v.id] ? 'sel' : ''}" id="vo-${v.id}">
+      <img src="${imgV(p, v)}" alt=""><div class="grow"><b>${esc(v.label)}</b><div class="price">${num(v.dist) > 0 ? inr(v.dist) + (perBox(v) > 1 ? '<small class="muted" style="font-weight:500">/pc</small>' : '') : '—'}</div>${num(v.dist) > 0 ? unit(v) : ''}${avail(v)}</div>
+      ${shopMax(v) > 0 && num(v.dist) > 0 ? `<div class="stepper ${tmp[v.id] ? '' : 'zero'}" id="st-${v.id}"><button onclick="stepTmp('${v.id}',-1)">−</button><input id="tq-${v.id}" type="number" inputmode="numeric" value="${(tmp[v.id] || 0) / perBox(v)}" oninput="setTmp('${v.id}',this.value)"><button onclick="stepTmp('${v.id}',1)">+</button></div>` : ''}</div>`).join('')}
     <button class="btn gold block" id="addBtn" style="margin-top:8px" onclick="commitTmp()"></button>`);
   updateAddBtn();
 }
-function setTmp(vid, val, fromStep) {
+function setTmp(vid, val, fromStep) {           // val = boxes (or pieces when sold loose); tmp/cart keep pieces
   const f = findV(vid); if (!f) return;
-  let q = Math.max(0, Math.round(num(val)));
-  if (q > f.v.stock) { q = f.v.stock; toast(`Only ${f.v.stock} available`); }
+  const b = perBox(f.v);
+  let n = Math.max(0, Math.round(num(val)));
+  if (n * b > shopMax(f.v)) { n = shopMax(f.v) / b; toast(`Only ${qtyTxt(f.v, shopMax(f.v))} available`); }
+  const q = n * b;
   if (q) tmp[vid] = q; else delete tmp[vid];
-  const inp = $('#tq-' + vid); if (inp && (fromStep || String(q) !== inp.value)) inp.value = q;
+  const inp = $('#tq-' + vid); if (inp && (fromStep || String(n) !== inp.value)) inp.value = n;
   $('#vo-' + vid)?.classList.toggle('sel', q > 0);
   $('#st-' + vid)?.classList.toggle('zero', q === 0);
   updateAddBtn();
 }
-function stepTmp(vid, d) { setTmp(vid, (tmp[vid] || 0) + d, true); }
+function stepTmp(vid, d) { const f = findV(vid); if (f) setTmp(vid, (tmp[vid] || 0) / perBox(f.v) + d, true); }
 function updateAddBtn() {
   const p = getP(tmpPid);
   const qty = Object.values(tmp).reduce((a, b) => a + b, 0);
   const amt = Object.entries(tmp).reduce((a, [vid, q]) => a + q * num(getV(p, vid)?.dist), 0);
   const hadInCart = p.variants.some(v => cart[v.id]);
   const b = $('#addBtn'); if (!b) return;
-  b.innerHTML = qty ? `${ic('cart')} ${hadInCart ? 'Update cart' : 'Add to cart'} · ${qty} pcs · ${inr(amt)}` : (hadInCart ? `${ic('trash')} Remove from cart` : 'Select a quantity');
+  const boxes = Object.entries(tmp).reduce((a, [vid, q]) => a + (perBox(getV(p, vid)) > 1 ? q / perBox(getV(p, vid)) : 0), 0);
+  b.innerHTML = qty ? `${ic('cart')} ${hadInCart ? 'Update cart' : 'Add to cart'} · ${boxes ? boxes + ' box · ' : ''}${qty} pcs · ${inr(amt)}` : (hadInCart ? `${ic('trash')} Remove from cart` : 'Select a quantity');
   b.disabled = !qty && !hadInCart;
 }
 function commitTmp() {
@@ -1620,8 +1648,9 @@ function openCart() {
   if (!t.qty) { closeSheet(); updateCartBar(); return; }
   const lines = Object.entries(cart).map(([vid, q]) => {
     const { p, v } = findV(vid);
-    return `<div class="vopt"><img src="${imgV(p, v)}" alt=""><div class="grow"><b>${esc(p.name)}</b><div class="muted" style="font-size:12.5px">${esc(v.label)} · ${inr(v.dist)}</div><div class="price">${inr(q * v.dist)}</div></div>
-      <div class="stepper"><button onclick="stepCart('${vid}',-1)">−</button><input type="number" inputmode="numeric" value="${q}" onchange="setCart('${vid}',this.value)"><button onclick="stepCart('${vid}',1)">+</button></div></div>`;
+    const b = perBox(v);
+    return `<div class="vopt"><img src="${imgV(p, v)}" alt=""><div class="grow"><b>${esc(p.name)}</b><div class="muted" style="font-size:12.5px">${esc(v.label)} · ${inr(v.dist)}/pc${b > 1 ? ` · ${q / b} box × ${b} = ${q} pcs` : ''}</div><div class="price">${inr(q * v.dist)}</div></div>
+      <div class="stepper"><button onclick="stepCart('${vid}',-1)">−</button><input type="number" inputmode="numeric" value="${q / b}" onchange="setCart('${vid}',this.value)"><button onclick="stepCart('${vid}',1)">+</button></div></div>`;
   }).join('');
   openSheet(sheetHead('Your order', `${esc(curShop().name)}${curShop().id ? ' · ' + esc(curShop().id) : ''}`) + lines + `
     <div class="total-row"><span>Total <small class="muted" style="font-size:13px;font-weight:500">${t.qty} pcs</small></span><span>${inr(t.amt)}</span></div>
@@ -1629,13 +1658,14 @@ function openCart() {
     <button class="btn gold block" id="placeBtn" onclick="submitOrder()">${ic('check')} Place order</button>`
     : `<div class="note">Preview only — orders are placed by shops from their own link (Shops tab → Send link).</div>`}`);
 }
-function setCart(vid, val) {
-  const f = findV(vid); let q = Math.max(0, Math.round(num(val)));
-  if (f && q > f.v.stock) { q = f.v.stock; toast(`Only ${f.v.stock} available`); }
+function setCart(vid, val) {                      // val = boxes (or pieces when sold loose)
+  const f = findV(vid); if (!f) return;
+  let q = Math.max(0, Math.round(num(val))) * perBox(f.v);
+  if (q > shopMax(f.v)) { q = shopMax(f.v); toast(`Only ${qtyTxt(f.v, q)} available`); }
   if (q) cart[vid] = q; else delete cart[vid];
   saveCart(); updateCartBar(); renderShopGrid(); openCart();
 }
-function stepCart(vid, d) { setCart(vid, (cart[vid] || 0) + d); }
+function stepCart(vid, d) { const f = findV(vid); if (f) setCart(vid, (cart[vid] || 0) / perBox(f.v) + d); }
 async function submitOrder() {
   if (!SHOP_MODE) return toast('Preview only');
   const items = Object.entries(cart).map(([vid, qty]) => ({ vid, qty }));
