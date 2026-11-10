@@ -157,7 +157,8 @@ main{padding:14px 16px calc(var(--nav-h) + 30px + env(safe-area-inset-bottom));m
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
 .photo-pick{display:grid;place-items:center;height:130px;border-radius:var(--r);border:1.5px dashed var(--line);background:var(--card);margin-bottom:14px;overflow:hidden;cursor:pointer;color:var(--muted);font-weight:500;text-align:center}
-.photo-pick img{width:100%;height:100%;object-fit:contain;background:var(--card2)}
+.photo-pick{grid-template:minmax(0,1fr)/minmax(0,1fr)}
+.photo-pick img{width:100%;height:100%;min-height:0;object-fit:contain;background:var(--card2)}
 .vblock{padding:14px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);margin-bottom:10px}
 .vblock-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-weight:600}
 .vphoto{width:44px;height:44px;border-radius:8px;border:1.5px dashed var(--line);display:grid;place-items:center;overflow:hidden;color:var(--muted);flex:none;cursor:pointer}
@@ -257,7 +258,9 @@ body.shop main{padding-top:0}
   .pd2{display:grid;grid-template-columns:minmax(0,440px) minmax(0,1fr);gap:28px;align-items:start}
   .pd2-l{position:sticky;top:0}
   .pd2 .gal{max-width:none;margin:0 0 10px}
-  .pd2 .photo-pick{height:300px}
+  .pf2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:28px;align-items:start}
+  .pf2-r{position:sticky;top:0}
+  .pf2 .photo-pick{height:150px}
   .pd2-r>.sec:first-child,.pd2-r>.sp-title:first-child{margin-top:0}
 }
 .sp-sub{color:var(--muted);font-size:13px;margin:3px 0 14px}
@@ -991,12 +994,11 @@ function openProductForm(id, pre) {          // pre = details fetched from the b
   F = p ? JSON.parse(JSON.stringify(p)) : pre || { id: null, name: '', brandId: S.brands[0]?.id || '', catId: S.cats[0]?.id || '', desc: '', photo: '', variants: [blankVariant()] };
   const opts = (list, cur, kind) => list.map(x => `<option value="${x.id}" ${x.id === cur ? 'selected' : ''}>${esc(x.name)}</option>`).join('') + `<option value="__new">+ Add new ${kind}…</option>`;
   const sub = p ? esc(p.name) : pre ? `From ${esc(IMP_SOURCES[pre.ext.src].site)} — check, edit if needed, then Add` : 'Manual entry';
-  openSheet(sheetHead(p ? 'Edit product' : 'Add product', sub) + `<div class="pd2"><div class="pd2-l">
+  openSheet(sheetHead(p ? 'Edit product' : 'Add product', sub) + `<div class="pf2"><div class="pf2-l">
     <div class="photo-pick" id="fPhoto" onclick="uploadPhoto(url=>{if(F.photos.length)F.photos[0]=url;else F.photos.push(url);F.photo=url;showFormPhoto()})"></div>
     <div class="gem2"><button class="btn ghost" onclick="copyGeminiPrompt()">${ic('wand')} Gemini prompt</button><a class="btn ghost" href="https://gemini.google.com/app" target="_blank" rel="noopener">Open Gemini ↗</a></div>
     <div class="gstrip" id="fGal"></div>
     ${F.ext && F.id ? `<button class="btn ghost block" id="webPhBtn" style="margin:-4px 0 12px;font-size:13px;padding:8px" onclick="formWebPhotos()">${ic('in')} Get missing photos from ${esc(IMP_SOURCES[F.ext.src || 'sarju'].site)}</button>` : ''}
-    </div><div class="pd2-r">
     <div class="field"><label>Product name * <small class="muted">— Model - Watts details</small></label>
       <div class="namerow"><input id="fName" value="${esc(F.name)}" placeholder="e.g. C57 - 48W Fast Charging Cable" oninput="F.name=this.value"><button class="btn ghost" id="nameBtn" onclick="nameFromBox()" title="Read the name from a box photo">${ic('camera')} From box</button></div>
       <div class="chips" id="nameOpts" style="margin-top:6px;flex-wrap:wrap;padding:0"></div></div>
@@ -1005,7 +1007,8 @@ function openProductForm(id, pre) {          // pre = details fetched from the b
       <div class="field"><label>Category *</label><select id="fCat" onchange="pickOrAdd(this,'cat')">${opts(S.cats, F.catId, 'category')}</select></div>
     </div>
     <div class="field"><label>Short description</label><input id="fDesc" value="${esc(F.desc)}" placeholder="Optional" oninput="F.desc=this.value"></div>
-    <h3 class="sec" style="margin-top:4px">Variants <small>colour / type / connector</small></h3>
+    </div><div class="pf2-r">
+    <h3 class="sec" style="margin-top:0">Variants <small>colour / type / connector</small></h3>
     <div id="fVars"></div>
     <button class="btn ghost block" onclick="F.variants.push(blankVariant());renderFormVariants()">${ic('plus')} Add variant</button>
     <button class="btn gold block" id="fSave" style="margin-top:12px" onclick="saveProduct()">${ic('check')} ${p ? 'Save product' : 'Add product'}</button>
@@ -1021,7 +1024,7 @@ function showFormPhoto() {
   F.photo = F.photos[0] || '';
   $('#fGal').innerHTML = F.photos.map((u, i) => `<div class="g${i ? '' : ' main'}"><img src="${u}" alt="" title="${i ? 'Tap to make main photo' : 'Main photo'}" onclick="F.photos.unshift(...F.photos.splice(${i},1));F.photo='';showFormPhoto()"><button onclick="F.photos.splice(${i},1);F.photo='';showFormPhoto()" aria-label="Remove photo">×</button></div>`).join('')
     + `<div class="g add" onclick="uploadPhoto(u=>{F.photos.push(u);showFormPhoto()})" title="Add gallery photo">${ic('plus')}</div>`;
-  $('#fPhoto').innerHTML = F.photo ? `<img src="${F.photo}" alt="">` : `<div>${ic('camera', 'style="width:34px;height:34px"')}<br>Tap to choose photo<br><small style="opacity:.75">Make it in Gemini first (Copy prompt below), then upload it here</small></div>`;
+  $('#fPhoto').innerHTML = F.photo ? `<img src="${F.photo}" alt="">` : `<div>${ic('camera', 'style="width:26px;height:26px"')}<br>Add photo<br><small style="opacity:.75">Made in Gemini (prompt below)</small></div>`;
 }
 const boxRateTxt = i => perBox(F.variants[i]) > 1 ? inr(num(F.variants[i].dist) * perBox(F.variants[i])) : '—';
 function renderFormVariants() {
