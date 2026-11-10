@@ -999,8 +999,8 @@ function openProductForm(id, pre) {          // pre = details fetched from the b
     <div class="gem2"><button class="btn ghost" onclick="copyGeminiPrompt()">${ic('wand')} Gemini prompt</button><a class="btn ghost" href="https://gemini.google.com/app" target="_blank" rel="noopener">Open Gemini ↗</a></div>
     <div class="gstrip" id="fGal"></div>
     ${F.ext && F.id ? `<button class="btn ghost block" id="webPhBtn" style="margin:-4px 0 12px;font-size:13px;padding:8px" onclick="formWebPhotos()">${ic('in')} Get missing photos from ${esc(IMP_SOURCES[F.ext.src || 'sarju'].site)}</button>` : ''}
-    <div class="field"><label>Product name * <small class="muted">— Model - Watts details</small></label>
-      <div class="namerow"><input id="fName" value="${esc(F.name)}" placeholder="e.g. C57 - 48W Fast Charging Cable" oninput="F.name=this.value;refreshSkus()"><button class="btn ghost" id="nameBtn" onclick="nameFromBox()" title="Read the name from a box photo">${ic('camera')} From box</button></div>
+    <div class="field"><label>Product name * <small class="muted">— Model - Watts Amps Connector details</small></label>
+      <div class="namerow"><input id="fName" value="${esc(F.name)}" placeholder="e.g. FC195 - 65W 4.1A Type-C Pure Silicone Data Cable" oninput="F.name=this.value;refreshSkus()"><button class="btn ghost" id="nameBtn" onclick="nameFromBox()" title="Read the name from a box photo">${ic('camera')} From box</button></div>
       <div class="chips" id="nameOpts" style="margin-top:6px;flex-wrap:wrap;padding:0"></div></div>
     <div class="grid2">
       <div class="field"><label>Brand *</label><select id="fBrand" onchange="pickOrAdd(this,'brand');refreshSkus()">${opts(S.brands, F.brandId, 'brand')}</select></div>
@@ -1485,22 +1485,30 @@ function compressImage(file, max = 720, quality = .72) {
   });
 }
 
-/* ---------- House naming rule: "MODEL - WATTS other details" ----------
-   e.g. "C48 Metal Anti-Bending Data Cable 65W" → "C48 - 65W Metal Anti-Bending Data Cable".
+/* ---------- House naming rule: "MODEL - WATTS AMPS CONNECTOR other details" ----------
+   e.g. "FC-195 Pure Silicone Data Cable 65W 4.1A Type-C" → "FC195 - 65W 4.1A Type-C Pure Silicone Data Cable".
+   Model without hyphen (matches the SKU). Watts, amps and connector only when known.
    Brand words are dropped (the brand is shown separately). No model code → name is only tidied. */
-function formatName(raw, model = '', watts = '') {
+const USBA = '(?:\\busb[\\s-]?a\\s*(?:to|-|\\/)\\s*)?';      // "USB-A to …" is dropped with the connector (it stays in the description)
+const CONN_RE = [[/\btype[\s-]?c\s*(?:to|-|\/)\s*type[\s-]?c\b/i, 'Type-C to Type-C'], [new RegExp(USBA + '\\btype[\\s-]?c\\b', 'i'), 'Type-C'],
+  [new RegExp(USBA + '\\bmicro(?:[\\s-]?usb)?\\b', 'i'), 'Micro'], [new RegExp(USBA + '\\blightning\\b', 'i'), 'Lightning']];
+function formatName(raw, model = '', watts = '', amps = '', conn = '') {
   let n = String(raw || '').replace(/\s+/g, ' ').trim();
-  const mRe = /\b([A-Z]{1,4}-?\d{1,5}[A-Z]?)\b/i, wRe = /\b(\d{1,3}(?:\.\d)?)\s?W\b/i;
+  const mRe = /\b([A-Z]{1,4}-?\d{1,5}[A-Z]?)\b/i, wRe = /\b(\d{1,3}(?:\.\d)?)\s?W\b/i, aRe = /\b(\d{1,2}(?:\.\d{1,2})?)\s?A\b/i;
   const m = (String(model || '').trim().match(mRe) || n.match(mRe) || [])[1] || '';
-  const wm = String(watts || '').match(wRe) || n.match(wRe);
-  const w = wm ? wm[1] + 'W' : '';
-  let rest = n;
-  if (m) rest = rest.replace(new RegExp('\\b' + m.replace(/-/g, '-?') + '\\b', 'ig'), ' ');
+  const wm = String(watts || '').match(wRe) || n.match(wRe), am = String(amps || '').match(aRe) || n.match(aRe);
+  const w = wm ? wm[1] + 'W' : '', a = am ? am[1] + 'A' : '';
+  let c = '', rest = n;
+  for (const [re, label] of CONN_RE) if (re.test(rest)) { c = label; rest = rest.replace(re, ' '); break; }
+  if (!c) for (const [re, label] of CONN_RE) if (re.test(String(conn || ''))) { c = label; break; }
+  if (m) rest = rest.replace(new RegExp('\\b' + m.replace(/-/g, '').split('').join('-?') + '\\b', 'ig'), ' ');
   if (w) rest = rest.replace(wRe, ' ');
+  if (a) rest = rest.replace(aRe, ' ');
   rest = rest.replace(/\b(sarju|ticon)\b/ig, ' ').replace(/\(\s*\)/g, ' ').replace(/\s+/g, ' ')
     .replace(/^[\s\-–—·|:,]+|[\s\-–—·|:,]+$/g, '').trim();
-  if (!m) return [w, rest].filter(Boolean).join(' ') || n;
-  return [m.toUpperCase(), [w, rest].filter(Boolean).join(' ')].filter(Boolean).join(' - ');
+  const tail = [w, a, c, rest].filter(Boolean).join(' ');
+  if (!m) return tail || n;
+  return [m.replace(/-/g, '').toUpperCase(), tail].filter(Boolean).join(' - ');
 }
 
 /* ---------- Product name from a box photo (Gemini reads the box) ----------
@@ -1528,7 +1536,7 @@ function nameFromBox() {
     try {
       const img = await compressImage(f, 1280, .85);              // big enough for small print on the box
       const r = await readBox(img.split(',')[1]);
-      const names = [...new Set([r.product_name, ...(r.name_options || [])].map(x => String(x || '').trim()).filter(Boolean).map(x => formatName(x, r.model, r.watts)))];
+      const names = [...new Set([r.product_name, ...(r.name_options || [])].map(x => String(x || '').trim()).filter(Boolean).map(x => formatName(x, r.model, r.watts, r.amps, r.variant)))];
       if (!names.length) throw new Error('No product name found — try a clearer, front-on photo of the box');
       if (!F) return;
       setFormName(names[0]);

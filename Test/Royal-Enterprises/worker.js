@@ -205,12 +205,13 @@ Return ONLY JSON with these fields:
 - "box_2d": [ymin, xmin, ymax, xmax] of the same box, normalised 0-1000.
 - "brand": brand printed on the box (e.g. "Sarju", "Ticon"), or "".
 - "model": model code printed on the box (e.g. "C48"), or "".
-- "product_name": a SHORT sellable name built ONLY from the box text, ALWAYS in this format: "<MODEL> - <WATTS>W <2-4 key words> <product type>". Title Case, no brand, max 50 characters. Do NOT put length, amps, connector or features in the name — those go in "description". e.g. "FC-264 - 100W Alloy Fast Charging Cable", "FC-266 - 25W Ultra Soft Silicone Cable". If no wattage is printed: "<MODEL> - <words> <product type>".
+- "product_name": a SHORT sellable name built ONLY from the box text, ALWAYS in this order: "<MODEL without hyphen> - <WATTS>W <AMPS>A <CONNECTOR> <2-4 key words> <product type>". Leave out any part that is not printed. CONNECTOR is "Type-C", "Micro", "Lightning" or "Type-C to Type-C". Title Case, no brand, max 60 characters. Do NOT put length, connector ends like "USB-A to" or features in the name — those go in "description". e.g. "FC195 - 65W 4.1A Type-C Pure Silicone Data Cable", "TT46 - 65W 5A Type-C to Type-C Cable", "FC266 - 25W Micro Ultra Soft Silicone Cable".
 - "name_options": 2 more good alternative names in the same style (array of strings).
 - "description": EVERY other detail printed on the box, as short points joined with " · ", in this order when present: wattage, current (e.g. 5A), length (convert 1000 MM to "1 m"), connector ends (e.g. "USB-A to Type-C", "Type-C to Type-C", "USB-A to Micro USB"), material/body (e.g. "Alloy braided", "Ultra soft silicone"), colour, then every printed feature (e.g. "Intelligent chip", "Fast charging", "Data transmission", "Flexible body", "Safe and fast"). Plain words only, no brand, no slogans like "100% original". e.g. "100W · 1 m · USB-A to Type-C · Alloy braided · Intelligent chip · Fast charging · Flexible body · Safe and fast".
 - "variant": the connector at the phone end, exactly one of "Type-C", "Micro USB", "Lightning" (a Type-C to Type-C cable is "Type-C"); for non-cables the colour or type printed (e.g. "Black"), or "".
 - "category": one of "Cables","Chargers","Earphones","Power Banks","Covers","Tempered Glass","Other".
 - "watts": wattage printed (e.g. "65W"), or "".
+- "amps": current printed (e.g. "4.1A"), or "".
 If there is no product box, return {"corners":null,"box_2d":null}.`;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
