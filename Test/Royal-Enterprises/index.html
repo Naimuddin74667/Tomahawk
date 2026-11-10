@@ -1033,7 +1033,7 @@ function renderFormVariants() {
     <div class="vblock"><div class="vblock-h"><span>Variant ${i + 1}</span>${F.variants.length > 1 ? `<button class="iconbtn" style="width:32px;height:32px" onclick="F.variants.splice(${i},1);renderFormVariants()">${ic('trash')}</button>` : ''}</div>
       <div class="grid2">
         <div class="field"><label>Variant name *</label><input value="${esc(v.label)}" placeholder="e.g. Type-C" oninput="F.variants[${i}].label=this.value"></div>
-        <div class="field"><label>SKU code</label><input value="${esc(v.sku)}" placeholder="Auto if blank" oninput="F.variants[${i}].sku=this.value.toUpperCase()"></div>
+        <div class="field"><label>SKU code</label><input value="${esc(v.sku)}" placeholder="Auto: BRAND-MODEL-TYPE" oninput="F.variants[${i}].sku=this.value.toUpperCase()"></div>
       </div>
       <div class="grid3">
         <div class="field"><label>Purchase ₹</label><input type="number" inputmode="decimal" value="${esc(v.purchase)}" oninput="F.variants[${i}].purchase=this.value"></div>
@@ -1062,13 +1062,51 @@ function pickOrAdd(sel, kind) {
   sel.insertAdjacentHTML('afterbegin', `<option value="${item.id}">${esc(item.name)}</option>`);
   sel.value = item.id;
 }
-function autoSku(pname, vlabel) {
-  const ini = s => s.split(/\s+/).filter(Boolean).map(w => /\d/.test(w) ? w.replace(/[^A-Za-z0-9]/g, '') : w[0]).join('').toUpperCase();
-  let base = (ini(pname).slice(0, 4) + '-' + ini(vlabel).slice(0, 6)).replace(/-$/, '') || 'SKU';
+/* ---------- SKU rule: BRAND-MODEL-TYPE, e.g. SRJ-C56-TC ----------
+   Brand: Sarju → SRJ, Ticon → TCN (other brands: first 3 letters).
+   Type: Type-C → TC, Micro USB → MICRO, Lightning → LT; any other variant name in capitals. */
+const BRAND_CODE = { sarju: 'SRJ', ticon: 'TCN' };
+const brandCode = name => BRAND_CODE[String(name || '').toLowerCase()] || String(name || 'GEN').replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase() || 'GEN';
+function typeCode(label) {
+  const l = String(label || '');
+  if (/type[\s-]?c/i.test(l)) return 'TC';
+  if (/micro/i.test(l)) return 'MICRO';
+  if (/lightning|iphone|\bios\b/i.test(l)) return 'LT';
+  return l.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 12);
+}
+const modelCode = pname => ((String(pname || '').match(/\b([A-Z]{1,4}-?\d{1,5}[A-Z]?)\b/i) || [])[1] || '').replace(/-/g, '').toUpperCase();
+// skip = variant ids whose current SKU should not count as "taken" (the variant being renamed)
+function makeSku(pname, brandId, vlabel, taken) {
+  const model = modelCode(pname);
+  const base = [brandCode(brandName(brandId)), model || pname.replace(/[^A-Za-z0-9]/g, '').slice(0, 6).toUpperCase(), typeCode(vlabel)].filter(Boolean).join('-');
   let sku = base, n = 2;
-  const used = new Set(allVariants().map(x => x.v.sku));
-  while (used.has(sku)) sku = base + '-' + n++;
+  while (taken.has(sku)) sku = base + '-' + n++;
+  taken.add(sku);
   return sku;
+}
+function autoSku(pname, vlabel, brandId = F && F.brandId) {
+  return makeSku(pname, brandId, vlabel, new Set(allVariants().map(x => x.v.sku)));
+}
+// More → Update all SKUs: shows every change first, applies only when you press Apply
+function openSkuUpdate() {
+  const taken = new Set(), rows = [];
+  S.products.forEach(p => p.variants.forEach(v => {
+    const nu = makeSku(p.name, p.brandId, v.label, taken);
+    if (nu !== v.sku) rows.push({ p, v, nu });
+  }));
+  SKU_PLAN = rows;
+  openSheet(sheetHead('Update all SKUs', 'New rule: BRAND-MODEL-TYPE, e.g. SRJ-C56-TC') + (rows.length
+    ? `<div class="card" style="padding:4px 14px">${rows.map(r => `<div class="order-line"><div style="min-width:0"><b>${esc(r.p.name)}</b><div class="muted" style="font-size:12.5px">${esc(r.v.label)}</div></div>
+        <div style="text-align:right;white-space:nowrap;font-size:13px"><span class="muted"><s>${esc(r.v.sku || '—')}</s></span><br><b>${esc(r.nu)}</b></div></div>`).join('')}</div>
+       <div class="note">Check each new SKU. A wrong type at the end (e.g. WHITE instead of TC) means the variant name is wrong — fix the variant name first, then run this again. Old orders keep the SKU they were placed with.</div>
+       <button class="btn gold block" style="margin-top:12px" onclick="applySkuUpdate()">${ic('check')} Apply ${rows.length} change${rows.length === 1 ? '' : 's'}</button>`
+    : '<div class="empty card">All SKUs already follow the rule 👌</div>'));
+}
+let SKU_PLAN = [];
+function applySkuUpdate() {
+  SKU_PLAN.forEach(r => { r.v.sku = r.nu; r.p.updated = Date.now(); });
+  const n = SKU_PLAN.length; SKU_PLAN = [];
+  save(); closeSheet(); render(); toast(`${n} SKU${n === 1 ? '' : 's'} updated`);
 }
 async function saveProduct() {
   const name = F.name.trim();
@@ -1081,7 +1119,7 @@ async function saveProduct() {
   const seen = new Set();
   for (const v of vs) {
     v.label = v.label.trim();
-    if (!v.sku) v.sku = autoSku(name, v.label);
+    if (!v.sku) v.sku = autoSku(name, v.label, F.brandId);
     if (others.has(v.sku) || seen.has(v.sku)) return toast('Duplicate SKU: ' + v.sku);
     seen.add(v.sku);
   }
@@ -1124,7 +1162,7 @@ function deleteProduct(id) {
    Worker reads each site's public catalogue; owner ticks products;
    photos are copied into our own cloud storage.
    ========================================================= */
-const IMP_SOURCES = { sarju: { brand: 'Sarju', site: 'sarjuworld.com', sku: 'SJ' }, ticon: { brand: 'Ticon', site: 'ticon.in', sku: 'TC' } };
+const IMP_SOURCES = { sarju: { brand: 'Sarju', site: 'sarjuworld.com' }, ticon: { brand: 'Ticon', site: 'ticon.in' } };
 // medium-size photo (~600–800 px) from the srcset, else the full one (same rule as the Worker)
 function impPick(img) {
   const set = String(img.srcset || '').split(',').map(x => x.trim().split(/\s+/)).filter(x => x[0]).map(([u, w]) => [u, parseInt(w) || 0]);
@@ -1240,9 +1278,9 @@ async function addFromSite(id) {
   const SRC = IMP_SOURCES[it.src];
   const brand = findOrAdd(S.brands, SRC.brand), cat = findOrAdd(S.cats, impCategory(it.cats, it.name));
   const desc = [it.specs['Watt/Amp'], it.specs['Length'], it.specs['Cable Material']].filter(Boolean).join(' · ');
+  const taken = new Set(allVariants().map(x => x.v.sku));
   const variants = impVariants(it).map(label => {
-    const abbr = { 'Micro USB': 'MC', 'Type-C': 'TC', 'Lightning': 'LT', 'Standard': 'STD' }[label] || label.replace(/[^A-Za-z0-9]/g, '').slice(0, 4).toUpperCase();
-    let sku = `${SRC.sku}-${(it.model || String(it.id)).replace(/-/g, '')}-${abbr}`; if (allVariants().some(x => x.v.sku === sku)) sku = '';   // blank → made automatically on save
+    const sku = makeSku(formatName(it.name, it.model), brand.id, label, taken);
     return Object.assign(blankVariant(), { label, sku });
   });
   // photos stay as website links until you press Add (then they are copied into the cloud)
@@ -1598,6 +1636,7 @@ function renderMore() {
       ${cloud.key
         ? `<button class="row" onclick="cloudPush();cloudLoad()"><span class="adj">${ic('sync')}</span><div class="grow" style="text-align:left"><b>Sync now</b><div class="sub">Owner phone · changes save to the cloud automatically</div></div></button>
            <button class="row" onclick="openAddProduct()"><span class="adj" style="color:var(--accent-txt)">${ic('in')}</span><div class="grow" style="text-align:left"><b>Add product from brand website</b><div class="sub">Sarju & Ticon — photos, specs & variants come in automatically</div></div></button>
+           <button class="row" onclick="openSkuUpdate()"><span class="adj" style="color:var(--accent-txt)">${ic('tag')}</span><div class="grow" style="text-align:left"><b>Update all SKUs</b><div class="sub">BRAND-MODEL-TYPE, e.g. SRJ-C56-TC · see changes before applying</div></div></button>
            <button class="row" onclick="fixAllPhotos()"><span class="adj" style="color:var(--accent-txt)">${ic('sync')}</span><div class="grow" style="text-align:left"><b>Fix photo backgrounds</b><div class="sub">Makes grey / off-white photo backgrounds pure white, like the brand websites</div></div></button>
            <button class="row" onclick="disconnectCloud()"><span class="adj">${ic('cloud')}</span><div class="grow" style="text-align:left"><b>Disconnect this phone</b><div class="sub">Removes the owner key from this phone</div></div></button>`
         : `<button class="row" onclick="connectCloud()"><span class="adj" style="color:var(--accent-txt)">${ic('cloud')}</span><div class="grow" style="text-align:left"><b>Connect to cloud (owner)</b><div class="sub">Enter the owner key once — catalogue and photos sync to every phone</div></div></button>
