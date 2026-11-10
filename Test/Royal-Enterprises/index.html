@@ -1006,7 +1006,7 @@ function openProductForm(id, pre) {          // pre = details fetched from the b
       <div class="field"><label>Brand *</label><select id="fBrand" onchange="pickOrAdd(this,'brand');refreshSkus()">${opts(S.brands, F.brandId, 'brand')}</select></div>
       <div class="field"><label>Category *</label><select id="fCat" onchange="pickOrAdd(this,'cat')">${opts(S.cats, F.catId, 'category')}</select></div>
     </div>
-    <div class="field"><label>Short description</label><input id="fDesc" value="${esc(F.desc)}" placeholder="Optional" oninput="F.desc=this.value"></div>
+    <div class="field"><label>Short description <small class="muted">— all box details (From box fills this)</small></label><textarea id="fDesc" rows="3" placeholder="e.g. 100W · 1 m · USB-A to Type-C · Alloy braided · Fast charging" oninput="F.desc=this.value">${esc(F.desc)}</textarea></div>
     </div><div class="pf2-r">
     <h3 class="sec" style="margin-top:0">Variants <small>colour / type / connector</small></h3>
     <div id="fVars"></div>
@@ -1537,12 +1537,15 @@ function nameFromBox() {
       if (br) { F.brandId = br.id; const s = $('#fBrand'); if (s) s.value = br.id; refreshSkus(); }
       const ct = S.cats.find(c => r.category && c.name.toLowerCase() === String(r.category).toLowerCase());
       if (ct) { F.catId = ct.id; const s = $('#fCat'); if (s) s.value = ct.id; }
-      if (r.variant && F.variants.length === 1 && !F.variants[0].label.trim()) { F.variants[0].label = r.variant; renderFormVariants(); refreshSkus(); }
+      // every other detail printed on the box → Short description (the name stays short)
+      const desc = String(r.description || '').replace(/\s+/g, ' ').trim();
+      if (desc) { F.desc = desc; const d = $('#fDesc'); if (d) d.value = desc; }
+      if (r.variant && F.variants.length === 1 && (!F.id || !F.variants[0].label.trim())) { F.variants[0].label = r.variant; renderFormVariants(); refreshSkus(); }
       $('#nameOpts').innerHTML = names.length > 1 ? names.map(n => `<button class="chip" onclick="setFormName(this.textContent)">${esc(n)}</button>`).join('') : '';
       setFormName(names[0]);                          // highlights the option in use
       toast(names.length > 1 ? 'Name filled — tap another option to switch' : 'Name filled from the box');
     } catch (e) { toast(e.message || 'Could not read the box'); }
-    finally { const b = $('#nameBtn'); if (b) { b.disabled = false; b.innerHTML = `${ic('wand')} Name from box photo`; } }
+    finally { const b = $('#nameBtn'); if (b) { b.disabled = false; b.innerHTML = `${ic('camera')} From box`; } }
   };
   fi.click();
 }
