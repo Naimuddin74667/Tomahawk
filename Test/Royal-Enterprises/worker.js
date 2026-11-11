@@ -188,7 +188,7 @@ export default {
       if (action === 'analyzePhoto') {
         if (!env.GEMINI_API_KEY) return json({ error: 'GEMINI_API_KEY secret not set' }, 500);
         if (!body.image) return json({ error: 'image missing' }, 400);
-        return json(await analyzeWithGemini(env, body.image));
+        return json(await analyzeWithGemini(env, body.image, body.mode));
       }
 
       return json({ error: 'unknown action ' + action }, 400);
@@ -219,11 +219,16 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const isTransient = (status, msg) => [429, 500, 502, 503, 504].includes(status) || /high demand|overloaded|unavailable|resource.?exhausted|quota|try again/i.test(msg);
 const isGone = (status, msg) => status === 404 || /no longer available|not found|not supported for generatecontent|is not supported/i.test(msg);
 
-async function analyzeWithGemini(env, base64Jpeg) {
-  const models = [...new Set(env.GEMINI_MODEL ? [env.GEMINI_MODEL, ...GEMINI_MODELS] : GEMINI_MODELS)];
-  const body = { contents: [{ parts: [{ inline_data: { mime_type: 'image/jpeg', data: base64Jpeg } }, { text: PROMPT }] }],
+// mode 'name' (product form → From box): text reading only — no box corners, fastest model first, minimal thinking
+const NAME_MODELS = ['gemini-3.8-flash-lite', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'];
+async function analyzeWithGemini(env, base64Jpeg, mode) {
+  const fast = mode === 'name';
+  const list = fast ? NAME_MODELS : GEMINI_MODELS;
+  const models = [...new Set(env.GEMINI_MODEL ? [env.GEMINI_MODEL, ...list] : list)];
+  const prompt = fast ? PROMPT.replace(/^- "corners".*\n- "box_2d".*\n/m, '').replace(/\nIf there is no product box.*$/s, '\nIf there is no product box, return {}.') : PROMPT;
+  const body = { contents: [{ parts: [{ inline_data: { mime_type: 'image/jpeg', data: base64Jpeg } }, { text: prompt }] }],
     // no temperature (not allowed on Gemini 3.8+); low thinking = fast answer, plenty for box + label reading
-    generationConfig: { responseMimeType: 'application/json', thinkingConfig: { thinkingLevel: 'low' } } };
+    generationConfig: { responseMimeType: 'application/json', thinkingConfig: { thinkingLevel: fast ? 'minimal' : 'low' } } };
   const readJson = async r => { const t = await r.text(); try { return JSON.parse(t); } catch (e) { return { error: { message: 'HTTP ' + r.status + ' ' + t.slice(0, 80) } }; } };
   let res, data, lastMsg = '';
   outer: for (const model of models) {
@@ -232,7 +237,7 @@ async function analyzeWithGemini(env, base64Jpeg) {
       try {
         res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-          signal: AbortSignal.timeout(40000), body: JSON.stringify(b) });
+          signal: AbortSignal.timeout(fast ? 20000 : 40000), body: JSON.stringify(b) });
       } catch (e) { lastMsg = e.name === 'TimeoutError' ? 'took too long' : e.message; continue; }
       data = await readJson(res);
       let msg = (data.error && data.error.message) || '';
@@ -248,7 +253,7 @@ async function analyzeWithGemini(env, base64Jpeg) {
       // makes the call itself, with the same model list and retry rules. Key is handed over for this call only.
       if (/location is not supported/i.test(msg)) return { clientCall: { models, body }, key: env.GEMINI_API_KEY };
       if (isGone(res.status, msg)) continue outer;                 // retired / unknown → next model
-      if (isTransient(res.status, msg)) { if (attempt === 0) { await sleep(1500); continue; } continue outer; }
+      if (isTransient(res.status, msg)) { if (attempt === 0 && !fast) { await sleep(1500); continue; } continue outer; }   // fast mode: busy → next model straight away
       break outer;                                                 // real error (bad key etc.) → stop
     }
   }

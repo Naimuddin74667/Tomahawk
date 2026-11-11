@@ -1514,13 +1514,25 @@ function formatName(raw, model = '', watts = '', amps = '', conn = '') {
 /* ---------- Product name from a box photo (Gemini reads the box) ----------
    The Worker asks Gemini. If Google blocks the Worker's location, it hands back the request
    and this phone (India) makes the same call itself. */
+// When Google blocks the Worker's location, the phone remembers that (for this session only) and
+// asks Gemini directly next time — saving the Worker's wasted attempt on every box.
+let directGemini = null;      // { models, body, key } from the Worker's first hand-over
 async function readBox(base64) {
-  const r = await api('analyzePhoto', { image: base64 });
-  if (!r.clientCall) return r;
+  let r;
+  if (directGemini) {
+    const body = JSON.parse(JSON.stringify(directGemini.body));
+    body.contents[0].parts[0].inline_data.data = base64;
+    r = { clientCall: { models: directGemini.models, body }, key: directGemini.key };
+  } else {
+    r = await api('analyzePhoto', { image: base64, mode: 'name' });
+    if (!r.clientCall) return r;
+    try { r.clientCall.body.contents[0].parts[0].inline_data.data = base64; } catch (e) {}
+    directGemini = { models: r.clientCall.models, body: r.clientCall.body, key: r.key };
+  }
   let last = '';
   for (const model of r.clientCall.models) {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': r.key }, body: JSON.stringify(r.clientCall.body) });
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': r.key }, body: JSON.stringify(r.clientCall.body), signal: AbortSignal.timeout(20000) }).catch(e => ({ ok: false, json: async () => ({ error: { message: 'took too long' } }) }));
     const j = await res.json().catch(() => ({}));
     if (!res.ok) { last = (j.error && j.error.message) || 'HTTP ' + res.status; continue; }   // busy / retired → next model
     const text = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
@@ -1532,9 +1544,11 @@ function nameFromBox() {
   const fi = $('#fileIn'); fi.value = '';
   fi.onchange = async () => {
     const f = fi.files[0]; if (!f) return;
-    const btn = $('#nameBtn'); if (btn) { btn.disabled = true; btn.textContent = 'Reading the box…'; }
+    const btn = $('#nameBtn'), t0 = Date.now();
+    if (btn) btn.disabled = true;
+    const tick = setInterval(() => { const b = $('#nameBtn'); if (b) b.textContent = `Reading… ${Math.round((Date.now() - t0) / 1000)}s`; }, 250);
     try {
-      const img = await compressImage(f, 1280, .85);              // big enough for small print on the box
+      const img = await compressImage(f, 1024, .8);               // enough for the print on a box, half the upload of 1280 px
       const r = await readBox(img.split(',')[1]);
       const names = [...new Set([r.product_name, ...(r.name_options || [])].map(x => String(x || '').trim()).filter(Boolean).map(x => formatName(x, r.model, r.watts, r.amps, r.variant)))];
       if (!names.length) throw new Error('No product name found — try a clearer, front-on photo of the box');
@@ -1553,7 +1567,7 @@ function nameFromBox() {
       setFormName(names[0]);                          // highlights the option in use
       toast(names.length > 1 ? 'Name filled — tap another option to switch' : 'Name filled from the box');
     } catch (e) { toast(e.message || 'Could not read the box'); }
-    finally { const b = $('#nameBtn'); if (b) { b.disabled = false; b.innerHTML = `${ic('camera')} From box`; } }
+    finally { clearInterval(tick); const b = $('#nameBtn'); if (b) { b.disabled = false; b.innerHTML = `${ic('camera')} From box`; } }
   };
   fi.click();
 }
