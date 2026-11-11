@@ -1435,28 +1435,38 @@ async function fixAllPhotos() {
 // Prompt for the Gemini app: clean e-commerce image of the product itself (not the box), pure white, no added text
 function geminiPrompt() {
   const v = F && F.variants && F.variants.map(x => x.label).filter(Boolean).join(' / ');
-  const known = F && F.name ? `\nProduct: ${F.name}${v ? ' · Variant: ' + v : ''}\n` : '';
-  return `Using the product shown in this photo (on its retail box or packaging) as the exact reference, create a professional e-commerce product photo of the PRODUCT ITSELF — do NOT show the box, packaging, ribbon or any printed box text.
-${known}
-Match the real product exactly as pictured:
-- Same colour, size, shape, material and finish.
-- Same connectors / ports and details (e.g. USB-A, Type-C, Micro-USB, Lightning), with the same shape, grip texture and colour details.
-- Keep the small brand logo on the product exactly as it appears. Do not add any other text, labels, badges, model numbers or logos.
+  const brand = F && F.brandId ? brandName(F.brandId) : '';
+  const known = F && F.name ? `\nProduct: ${F.name}${v ? ' · Variant: ' + v : ''}${brand && brand !== '—' ? ' · Brand: ' + brand : ''}` : '';
+  // the box details from "From box" — the ONLY facts Gemini may write on image 2/3 (stops it inventing numbers)
+  const facts = F && F.desc ? `\nDetails printed on the box (use ONLY these facts, word for word): ${F.desc}` : '';
+  return `Using the product shown in this photo (on its retail box or packaging) as the exact reference, create 3 SEPARATE square 1:1 e-commerce images for a product listing. Make all 3, one after another.
+${known}${facts}
 
-Styling:
-- Product arranged neatly and angled towards the camera so its key details are clearly visible (cables: loosely coiled with both connectors in front; chargers: standing upright at a slight angle).
-- Bright, even, flat studio lighting like an Amazon / Flipkart main image; true colours, crisp focus, high detail.
-- Background: 100% pure white (#FFFFFF, RGB 255,255,255) from edge to edge — NOT off-white, NOT light grey. No gradient, no vignette, no floor, no border, no reflection.
-- No shadow at all (at most a barely visible contact shadow).
-- Product centred and large, filling about 85–90% of the frame with only a small white margin.
+In ALL 3 images the product must match the real one exactly: same colour, size, shape, material, finish, connectors / ports (USB-A, Type-C, Micro-USB, Lightning) and grip details, and the small brand logo on the product exactly as it appears. Never invent specifications — if a number is not in the details above or printed on the box, do not write it.
 
-Output: square 1:1 image. No box, no props, no hands, no text, no watermark.`;
+IMAGE 1 — HERO (main listing photo)
+- The PRODUCT ONLY: no box, no packaging, no text, no badges, no props, no hands.
+- Neatly arranged and angled towards the camera so key details show (cables: loosely coiled, both connectors in front; chargers: upright at a slight angle).
+- Bright, even studio lighting like an Amazon / Flipkart main image; true colours, crisp focus, high detail.
+- Background 100% pure white (#FFFFFF) edge to edge — not off-white, not grey; no gradient, floor, border or reflection; no shadow.
+- Product centred and large, filling 85–90% of the frame.
+
+IMAGE 2 — SPECS INFOGRAPHIC
+- The product (and the retail box beside it if it helps) with its key specs written clearly: wattage, current (amps), length, connector type and material — only the facts above / printed on the box.
+- Use the box's own design style and colours (and the brand logo as on the box) so it looks official.
+- Big, bold, easy-to-read numbers (e.g. "65W", "4.1A", "1 m", "Type-C"); short labels; clean layout with plenty of space; spelling exactly as given.
+
+IMAGE 3 — FEATURE HIGHLIGHT
+- Show what makes this product good: e.g. a close-up of the connector / braided or silicone body / flexibility, or the product charging a phone, with 2–3 short feature callouts taken from the box (e.g. "Fast charging", "Ultra soft silicone", "Data sync").
+- Clean, modern, premium look; same colours as image 2; no people's faces, no other brands' logos.
+
+All images: square 1:1, highest resolution, no watermark, no Gemini logo, no extra text beyond what is asked.`;
 }
 async function copyGeminiPrompt() {
   const t = geminiPrompt();
   try { await navigator.clipboard.writeText(t); }
   catch (e) { const a = document.createElement('textarea'); a.value = t; document.body.appendChild(a); a.select(); document.execCommand('copy'); a.remove(); }
-  toast('Prompt copied — paste it in Gemini with the box photo');
+  toast('Prompt copied — paste in Gemini with the box photo; it makes 3 images (hero, specs, feature)');
 }
 function pickPhoto(cb) {
   const fi = $('#fileIn'); fi.value = '';
