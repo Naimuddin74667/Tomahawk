@@ -1445,30 +1445,36 @@ async function fixAllPhotos() {
   save(); render(); toast(`Fixed ${n} photo${n > 1 ? 's' : ''}`);
 }
 // Prompt for the Gemini app: clean e-commerce image of the product itself (not the box), pure white, no added text
-function geminiPrompt() {           // ONE hero image only — keeps Gemini's daily image limit for more products
+function geminiPrompt() {           // ONE hero image, copied from the product picture printed on the box (no re-imagining)
   const v = F && F.variants && F.variants.map(x => x.label).filter(Boolean).join(' / ');
   const known = F && F.name ? `\nProduct: ${F.name}${v ? ' · Variant: ' + v : ''}\n` : '';
-  return `Using the product shown in this photo (on its retail box or packaging) as the exact reference, create ONE professional e-commerce hero photo of the PRODUCT ITSELF — do NOT show the box, packaging, ribbon or any printed box text.
-${known}
-Match the real product exactly as pictured:
-- Same colour, size, shape, material and finish.
-- Same connectors / ports and details (e.g. USB-A, Type-C, Micro-USB, Lightning), with the same shape, grip texture and colour details.
-- Keep the small brand logo on the product exactly as it appears. Do not add any other text, labels, badges, model numbers or logos.
-
-Styling:
-- Product arranged neatly and angled towards the camera so its key details are clearly visible (cables: loosely coiled with both connectors in front; chargers: standing upright at a slight angle).
-- Bright, even, flat studio lighting like an Amazon / Flipkart main image; true colours, crisp focus, high detail.
-- Background: 100% pure white (#FFFFFF, RGB 255,255,255) from edge to edge — NOT off-white, NOT light grey. No gradient, no vignette, no floor, no border, no reflection.
-- No shadow at all (at most a barely visible contact shadow).
-- Product centred and large, filling about 85–90% of the frame with only a small white margin.
-
-Output: just 1 square 1:1 image. No box, no props, no hands, no text, no watermark.`;
+  return GEMINI_PROMPT.replace('{KNOWN}', known);
 }
+const GEMINI_PROMPT = `I am attaching photos of ONE real product: its retail box, and (if attached) the actual product from different sides.
+{KNOWN}
+Make ONE e-commerce main image of this product. Do NOT design or imagine a new product.
+
+How to make it:
+1. Use the product picture PRINTED ON THE BOX as the main image. Copy it exactly as printed — same angle, same shape, same plug pins, same port, same logo position. Only cut it out from the box design.
+2. If part of that printed picture is cut off by the box edge or hidden, complete ONLY that part, using the real product photos so it matches the actual product exactly.
+3. If the box has no product picture, use the real product photo instead — keep it exactly as it is, just cleaned and straightened.
+
+Rules — the product must stay 100% the same as the real one:
+- Same plug pins (Indian round 2-pin as shown — never change to another country's plug), same ports (USB-A / Type-C), same connectors, same colour, size, shape and finish.
+- Keep the brand logo exactly as on the product. Do not add any text, numbers, badges or logos that are not on the product itself.
+- Do not add the box, cables or anything that is not in the printed picture / real product.
+
+Clean-up only:
+- Background 100% pure white (#FFFFFF) edge to edge — no grey, no gradient, no floor, no reflection, no shadow.
+- Remove the box graphics, stripes, text and colours around the product.
+- Even, bright lighting; true colours; sharp; product centred and large, filling about 85–90% of a square frame.
+
+Output: just 1 square 1:1 image. No text, no watermark.`;
 async function copyGeminiPrompt() {
   const t = geminiPrompt();
   try { await navigator.clipboard.writeText(t); }
   catch (e) { const a = document.createElement('textarea'); a.value = t; document.body.appendChild(a); a.select(); document.execCommand('copy'); a.remove(); }
-  toast('Prompt copied — paste it in Gemini with the box photo');
+  toast('Prompt copied — paste it in Gemini with the box photo (+ real product photos)');
 }
 function pickPhoto(cb) {
   const fi = $('#fileIn'); fi.value = '';
