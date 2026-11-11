@@ -34,6 +34,8 @@
 // Tried in order. A model that is busy, over quota, retired or unknown is skipped and the next one is used.
 // Each model has its own free quota, so a busy spell on one rarely blocks all of them.
 // Override/prepend with a GEMINI_MODEL variable in Cloudflare if needed.
+// Bump when this file changes — the app warns the owner when Cloudflare still runs an older copy.
+const WORKER_VERSION = '2026-11-11';
 const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.8-flash-lite'];
 
 const CORS = {
@@ -67,7 +69,7 @@ export default {
     const action = url.searchParams.get('action') || 'ping';
     try {
       if (action === 'ping') {
-        return json({ ok: true, gemini: !!env.GEMINI_API_KEY, db: !!env.DB, ownerKeySet: !!env.OWNER_KEY });
+        return json({ ok: true, version: WORKER_VERSION, gemini: !!env.GEMINI_API_KEY, db: !!env.DB, ownerKeySet: !!env.OWNER_KEY });
       }
       if (!env.DB) return json({ error: 'D1 binding "DB" missing' }, 500);
       await ensureTables(env);
@@ -231,7 +233,9 @@ async function analyzeWithGemini(env, base64Jpeg, mode) {
     generationConfig: { responseMimeType: 'application/json', thinkingConfig: { thinkingLevel: fast ? 'minimal' : 'low' } } };
   const readJson = async r => { const t = await r.text(); try { return JSON.parse(t); } catch (e) { return { error: { message: 'HTTP ' + r.status + ' ' + t.slice(0, 80) } }; } };
   let res, data, lastMsg = '';
+  const deadline = Date.now() + (fast ? 25000 : 90000);
   outer: for (const model of models) {
+    if (Date.now() > deadline) { lastMsg = lastMsg || 'took too long'; break; }
     for (let attempt = 0; attempt < 2; attempt++) {
       let b = body;
       try {

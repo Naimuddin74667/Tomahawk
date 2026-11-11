@@ -447,6 +447,15 @@ const saveCart = () => localStorage.setItem(CART_KEY, JSON.stringify(cart));
    - Whole-state save, last write wins (fine with one owner).
    ========================================================= */
 const API = 'https://royal-enterprises.naimuddinshaikh74667.workers.dev/';
+// The Worker is pasted into Cloudflare by hand — if it is older than this, newer features (box sizes for shops,
+// fast box reading, …) silently fall back. The app checks once and warns the owner.
+const NEED_WORKER = '2026-11-11';
+let workerVersion = null;     // null = not checked yet, '' = old Worker without a version
+async function checkWorker() {
+  try { const r = await fetch(API + '?action=ping').then(x => x.json()); workerVersion = r.version || ''; } catch (e) { return; }
+  if (workerVersion < NEED_WORKER && cloud.key && !SHOP_MODE) toast('Cloudflare Worker is out of date — paste the latest worker.js (see More)');
+  if (ui.tab === 'more' && !SHOP_MODE) render();
+}
 const CLOUD_KEY = 're_cloud_v1';
 let cloud = Object.assign({ key: '', updated: 0 }, loadJSON(CLOUD_KEY, {}));
 let BASE = null;     // the cloud copy this screen last loaded or saved (JSON) — used to merge with other phones/tabs
@@ -488,12 +497,15 @@ const saveShop = () => localStorage.setItem(SHOP_KEY, JSON.stringify(SHOP));
 const SHOP_MODE = !!LINK_TOKEN || (!!(SHOP && SHOP.sess) && !cloud.key);
 const shopLoggedIn = () => !!(SHOP && SHOP.sess && SHOP.shop);
 const curShop = () => SHOP_MODE ? (SHOP && SHOP.shop) || { id: '', name: 'Shop' } : DEMO_SHOP;
-async function api(action, body) {
+async function api(action, body, timeoutMs) {
   const headers = {};
   if (SHOP_MODE) { if (SHOP && SHOP.sess) headers['X-Shop-Session'] = SHOP.sess; }   // shop phone never sends the owner key
   else if (cloud.key) headers['X-Owner-Key'] = cloud.key;
   const opt = body ? { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : { headers };
-  const r = await fetch(API + '?action=' + action, opt);
+  if (timeoutMs) opt.signal = AbortSignal.timeout(timeoutMs);
+  let r;
+  try { r = await fetch(API + '?action=' + action, opt); }
+  catch (e) { throw new Error(e.name === 'TimeoutError' ? 'took too long — try again' : 'no internet'); }
   const j = await r.json().catch(() => ({}));
   if (!r.ok) { const e = new Error(j.error || ('HTTP ' + r.status)); e.status = r.status; throw e; }
   return j;
@@ -1534,7 +1546,7 @@ async function readBox(base64) {
     body.contents[0].parts[0].inline_data.data = base64;
     r = { clientCall: { models: directGemini.models, body }, key: directGemini.key };
   } else {
-    r = await api('analyzePhoto', { image: base64, mode: 'name' });
+    r = await api('analyzePhoto', { image: base64, mode: 'name' }, 35000);   // never hang longer than this
     if (!r.clientCall) return r;
     try { r.clientCall.body.contents[0].parts[0].inline_data.data = base64; } catch (e) {}
     directGemini = { models: r.clientCall.models, body: r.clientCall.body, key: r.key };
@@ -1696,6 +1708,9 @@ function renderMore() {
       <button class="row" onclick="toggleTheme()"><span class="adj">${ic(ui.theme === 'dark' ? 'sun' : 'moon')}</span><div class="grow" style="text-align:left"><b>${ui.theme === 'dark' ? 'Light' : 'Dark'} mode</b></div></button>
       <button class="row" onclick="exportData()"><span class="adj">${ic('download')}</span><div class="grow" style="text-align:left"><b>Download backup</b><div class="sub">All products, stock & orders as JSON</div></div></button>
     </div>
+    ${cloud.key && workerVersion !== null ? (workerVersion >= NEED_WORKER
+      ? `<div class="note" style="margin-top:16px">Cloudflare Worker up to date (${esc(workerVersion)}).</div>`
+      : `<div class="note" style="margin-top:16px;border:1px solid var(--bad);color:var(--text)"><b>Cloudflare Worker is out of date</b> (${workerVersion ? esc(workerVersion) : 'old version'} — needs ${NEED_WORKER}). Box sizes for shops, fast "From box" and full descriptions will not work until you paste the latest <b>Test/Royal-Enterprises/worker.js</b> in Cloudflare → royal-enterprises → Edit code → Deploy.</div>`) : ''}
     <div class="note" style="margin-top:16px">${cloud.key ? 'Catalogue, stock and photos sync to the cloud.' : 'This phone is not connected — enter the owner key to open the catalogue.'} Delivery, khata and reports come in the next phases.</div>`;
 }
 function addItem(kind) {
@@ -1980,7 +1995,7 @@ $('#logoCrown').innerHTML = CROWN;
 applyTheme();
 render();
 if (SHOP_MODE) shopLoad(true);
-else { cloudLoad(true); loadOrders(); }
+else { cloudLoad(true); loadOrders(); checkWorker(); }
 /* ---------- Install as an app (home-screen icon) ---------- */
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 let installEvt = null;
