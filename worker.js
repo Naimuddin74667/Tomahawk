@@ -705,6 +705,11 @@ async function fbaTrackerData(env) {
 // ═══════════════════════════════════════════════════════════════════
 const FBA_GP_FACILITY = { G4: 'TomahawkHub', E3: 'industrialtoolsandhardware' };
 
+// SK's UC gatepass push URL. Lives in wrangler.toml [vars] as SK_UC_PUSH_URL
+// (not secret, survives every deploy); a Dashboard SK_UC_API_URL still wins
+// if set. The key SK_UC_API_KEY must be a Worker *Secret*.
+function skPushUrl(env) { return env.SK_UC_API_URL || env.SK_UC_PUSH_URL || ''; }
+
 async function ensureFbaGpTable(DB) {
   await DB.prepare(`CREATE TABLE IF NOT EXISTS fba_gp_push (
     shipment_id  TEXT PRIMARY KEY,
@@ -826,7 +831,7 @@ async function fbaGpBuildPlan(env, shipmentId) {
 // Returns { code } on success; throws with .halfFilled = true when SK's
 // reply shows a gatepass exists in UC (so we keep the plan and retry).
 async function fbaGpPushOne(env, facKey, shipmentId, items) {
-  const res = await fetch(env.SK_UC_API_URL, {
+  const res = await fetch(skPushUrl(env), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + env.SK_UC_API_KEY },
     body: JSON.stringify({
@@ -846,7 +851,7 @@ async function fbaGpPushOne(env, facKey, shipmentId, items) {
 async function handleFbaGatepass(act, body, url, env, user) {
   if (act !== 'fbaGpPlan' && act !== 'fbaGpCreate') return null;
   await ensureFbaGpTable(env.DB);
-  const pushReady = !!(env.SK_UC_API_URL && env.SK_UC_API_KEY);
+  const pushReady = !!(skPushUrl(env) && env.SK_UC_API_KEY);
   const shipmentId = String((body && body.shipment_id) || url.searchParams.get('shipment_id') || '').trim().toUpperCase();
   if (!/^FBA[0-9A-Z]{9}$/.test(shipmentId)) return json({ ok: false, error: 'Valid FBA shipment_id required' }, 400);
 
@@ -12281,7 +12286,7 @@ async function handleG4Gatepass(act, body, url, env, user) {
   if (!act || act.indexOf('g4gp') !== 0) return null;
   await ensureG4GpTables(env.DB);
   const who = (user && (user.display_name || user.username)) || 'unknown';
-  const pushReady = !!(env.SK_UC_API_URL && env.SK_UC_API_KEY);
+  const pushReady = !!(skPushUrl(env) && env.SK_UC_API_KEY);
 
   // ── Everything the page needs in one call ──
   if (act === 'g4gpLoad') {
@@ -12443,7 +12448,7 @@ async function handleG4Gatepass(act, body, url, env, user) {
 
     let res, data;
     try {
-      res = await fetch(env.SK_UC_API_URL, {
+      res = await fetch(skPushUrl(env), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + env.SK_UC_API_KEY },
         body: JSON.stringify({
