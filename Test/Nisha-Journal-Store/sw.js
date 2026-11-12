@@ -2,7 +2,7 @@
    Makes the app installable and lets it open without internet.
    Network-first for the app itself (so updates show straight away), cache as backup.
    Cloud API calls (workers.dev) are never cached here. */
-const CACHE = 'nj-shell-v2';   // bump to make phones fetch new files (icons, manifest)
+const CACHE = 'nj-shell-v3';   // bump to make phones fetch new files (icons, manifest)
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {
