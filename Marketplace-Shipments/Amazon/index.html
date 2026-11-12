@@ -2206,6 +2206,10 @@ function fbaGatepassHtml(s, inDetail) {
         x[0] + ' : ' + fbaHtml(fbaGpCode(x[1])) + ' <span style="color:var(--accent);font-size:10.5px">new</span></div>';
     }).join('');
   }
+  if (html && fbaIsOpen(s)) {
+    html += '<button class="btn btn-secondary btn-sm" style="width:auto;padding:3px 9px;font-size:11px;margin-top:4px" ' +
+      'onclick="event.stopPropagation();fbaPackSheet(\'' + fcEsc(s.shipment_id) + '\')" title="A4 PDF for the packers \u2014 G4 section + E3 section">&#128424; Pack Sheet</button>';
+  }
   var canCreate = window.TM_CAN_EDIT && fbaIsOpen(s) && !s.gatepasses.length &&
     (!s.auto_gp || s.auto_gp.status === 'partial');
   if (canCreate) {
@@ -2310,6 +2314,218 @@ function fbaHoldHtml(hold, run) {
         '<span style="min-width:60px;text-align:right;font-weight:700">' + fbaNum(x.qty) + '</span><span style="color:var(--muted)">' + fbaHtml(x.reason) +
         (x.sku && x.amazon_sku && x.amazon_sku !== x.sku ? ' · ' + fbaHtml(x.amazon_sku) : '') + '</span></div>';
     }).join('') + '</div>';
+}
+
+// ══════════════════════════════════════════════════════════════════
+// PACK SHEET — one A4 PDF per shipment for the packers, two sections:
+// G4 (full cartons) and E3 (loose), then the Hold list and signatures.
+// Lines come from the UC gatepasses carrying this shipment ID; if they're
+// not in the mirror yet (~15 min after creating), from the split we
+// approved (auto_gp.plan). Same jsPDF black & white style as G4 Stock's
+// gatepass print. FNSKU / Amazon SKU come from the shipment's own lines
+// (bundle children show the bundle they belong to).
+// ══════════════════════════════════════════════════════════════════
+var FBA_JSPDF_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+
+function fbaLoadScript(url, globalName) {
+  if (window[globalName]) return Promise.resolve();
+  return new Promise(function (ok, bad) {
+    var s = document.createElement('script'); s.src = url; s.onload = ok;
+    s.onerror = function () { bad(new Error('Could not load ' + globalName)); }; document.head.appendChild(s);
+  });
+}
+
+// Tomahawk logo from the page header, rendered to a black PNG
+function fbaLogoPng() {
+  return new Promise(function (ok) {
+    try {
+      var svg = document.querySelector('.logo-svg-wrap svg').cloneNode(true);
+      svg.setAttribute('fill', '#181818'); svg.style.fill = '#181818';
+      svg.setAttribute('width', '1360'); svg.setAttribute('height', '254');
+      var img = new Image();
+      img.onload = function () {
+        var c = document.createElement('canvas'); c.width = 1360; c.height = 254;
+        c.getContext('2d').drawImage(img, 0, 0, 1360, 254); ok(c.toDataURL('image/png'));
+      };
+      img.onerror = function () { ok(null); };
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(svg));
+    } catch (e) { ok(null); }
+  });
+}
+
+// UC SKU → { amazon, fnsku } from the shipment's lines (bundle children too)
+function fbaSkuLabels(s) {
+  var m = {};
+  (s.items || []).forEach(function (it) {
+    if (!it.uc_sku) return;
+    if (it.stock && it.stock.bundle && it.stock.children) {
+      it.stock.children.forEach(function (k) {
+        if (!m[k.sku]) m[k.sku] = { amazon: it.seller_sku + ' (in bundle)', fnsku: it.fnsku || '' };
+      });
+    } else if (!m[it.uc_sku]) m[it.uc_sku] = { amazon: it.seller_sku, fnsku: it.fnsku || '' };
+  });
+  return m;
+}
+
+// The two sections: [{ fac, codes: [...], lines: [{sku, name, qty, ppc}] }]
+function fbaPackSections(s) {
+  var secs = { G4: { fac: 'G4', codes: [], lines: [] }, E3: { fac: 'E3', codes: [], lines: [] } };
+  function add(fac, line) {
+    var sec = secs[fac]; if (!sec) return;
+    var ex = sec.lines.find(function (l) { return l.sku === line.sku; });
+    if (ex) ex.qty += line.qty; else sec.lines.push(Object.assign({}, line));
+  }
+  if (s.gatepasses.length) {
+    s.gatepasses.forEach(function (g) {
+      var fac = g.facility === 'E3' ? 'E3' : 'G4';
+      secs[fac].codes.push(g.code);
+      (g.items || []).forEach(function (it) { add(fac, { sku: it.sku, name: it.name, qty: Number(it.qty) || 0, ppc: it.ppc }); });
+    });
+  }
+  // Fallback / gap-fill: our approved split, for a facility the mirror doesn't show yet
+  var a = s.auto_gp;
+  if (a && a.plan) {
+    [['G4', 'g4', a.g4_code], ['E3', 'e3', a.e3_code]].forEach(function (f) {
+      var sec = secs[f[0]];
+      if (sec.lines.length || !f[2]) return;
+      sec.codes.push(f[2]);
+      a.plan.forEach(function (p) { if (p[f[1]] > 0) add(f[0], { sku: p.sku, name: p.name, qty: p[f[1]], ppc: p.ppc }); });
+    });
+  }
+  return [secs.G4, secs.E3];
+}
+
+function fbaPackSheet(shipmentId) {
+  var s = _fbaRows.find(function (r) { return r.shipment_id === shipmentId; });
+  if (!s) return;
+  var sections = fbaPackSections(s);
+  if (!sections[0].lines.length && !sections[1].lines.length) {
+    toast('No gatepass lines yet — the UC sync may still be catching up (~15 min).', 'err', 5000); return;
+  }
+  fbaLoadScript(FBA_JSPDF_URL, 'jspdf').then(fbaLogoPng).then(function (logo) { fbaBuildPackPdf(s, sections, logo); })
+    .catch(function (e) { toast(e.message, 'err'); });
+}
+
+function fbaBuildPackPdf(s, sections, logo) {
+  var doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4' });
+  var W = 210, M = 14, CW = W - 2 * M, y = 14, GREY = 236, BOTTOM = 262;
+  var labels = fbaSkuLabels(s);
+  var hold = (s.auto_gp && s.auto_gp.hold) || [];
+  var user = (function () { try { var x = JSON.parse(localStorage.getItem('tm_session_v1') || 'null'); return x && (x.display_name || x.username); } catch (e) { return ''; } })();
+  function T(t, x, yy, size, bold, align) {
+    doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(size);
+    doc.text(String(t), x, yy, align ? { align: align } : undefined);
+  }
+  function lab(t, x, yy) { T(String(t).toUpperCase(), x, yy, 7, true); }
+  function fit(t, w, size) { doc.setFont('helvetica', 'normal'); doc.setFontSize(size); return doc.splitTextToSize(String(t || ''), w)[0] || ''; }
+  function boxes(q, ppc) { if (!ppc) return '—'; if (q < ppc) return q + ' pcs'; return q % ppc === 0 ? String(q / ppc) : Math.floor(q / ppc) + ' + ' + (q % ppc); }
+  function n(v) { return Number(v).toLocaleString('en-IN'); }
+  function newPage() { doc.addPage(); y = 16; }
+  doc.setTextColor(0); doc.setDrawColor(0); doc.setLineWidth(0.25);
+
+  // ── Header ──
+  if (logo) doc.addImage(logo, 'PNG', M, y, 52, 9.7); else T('TOMAHAWK', M, y + 8, 18, true);
+  T('FBA PACK SHEET', W - M, y + 8, 18, true, 'right');
+  y += 14; doc.setLineWidth(0.9); doc.line(M, y, W - M, y); doc.setLineWidth(0.25); y += 5;
+
+  lab('FBA Shipment', M, y + 3); T(s.shipment_id, M, y + 9.5, 13, true);
+  lab('Dest. FC', M + 70, y + 3); T(s.destination_fc || '—', M + 70, y + 9.5, 13, true);
+  var totalUnits = 0, totalBoxes = 0;
+  sections.forEach(function (sec) { sec.lines.forEach(function (l) { totalUnits += l.qty; if (l.ppc) totalBoxes += Math.floor(l.qty / l.ppc); }); });
+  lab('Units on gatepass', M + 105, y + 3); T(n(totalUnits), M + 105, y + 9.5, 13, true);
+  lab('Printed', M + 145, y + 3);
+  T(fit(new Date().toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) + (user ? ' · ' + String(user).split(' ')[0] : ''), 40, 8.5), M + 145, y + 9, 8.5, false);
+  y += 13;
+  T(fit(s.shipment_name || '', CW, 8), M, y, 8, false);
+  y += 6;
+
+  // ── One section per warehouse ──
+  var cols = [
+    { h: '', w: 8, c: 1 }, { h: 'Sr', w: 8, c: 1 }, { h: 'UC SKU / Product', w: 62 },
+    { h: 'Amazon SKU / FNSKU', w: 46 }, { h: 'Qty/box', w: 15, c: 1 }, { h: 'Boxes', w: 21, c: 1 }, { h: 'Qty', w: 22, c: 1 }
+  ];
+  function headRow() {
+    doc.setFillColor(0); doc.rect(M, y, CW, 7.5, 'F'); doc.setTextColor(255);
+    var x = M; cols.forEach(function (c) { T(c.h, c.c ? x + c.w / 2 : x + 2.5, y + 5, 7.5, true, c.c ? 'center' : null); x += c.w; });
+    doc.setTextColor(0); y += 7.5;
+  }
+  sections.forEach(function (sec) {
+    if (!sec.lines.length) return;
+    if (y + 30 > BOTTOM) newPage();
+    var secUnits = 0, secBoxes = 0, secLoose = 0;
+    sec.lines.forEach(function (l) { secUnits += l.qty; if (l.ppc) { secBoxes += Math.floor(l.qty / l.ppc); secLoose += l.qty % l.ppc; } });
+    // Section title bar
+    doc.setLineWidth(0.6); doc.rect(M, y, CW, 9); doc.setLineWidth(0.25);
+    T(sec.fac === 'G4' ? 'G4 WAREHOUSE  ·  FULL CARTONS' : 'E3 WAREHOUSE  ·  LOOSE PIECES', M + 3, y + 6.2, 11, true);
+    T('Gatepass: ' + (sec.codes.join(', ') || '—'), W - M - 3, y + 6.2, 9, true, 'right');
+    y += 11;
+    headRow();
+    sec.lines.sort(function (a, b) { return a.sku.localeCompare(b.sku); }).forEach(function (l, i) {
+      var lb = labels[l.sku] || { amazon: '', fnsku: '' };
+      var nm = l.name && l.name.replace(/[\s_-]/g, '').toLowerCase() !== l.sku.replace(/[\s_-]/g, '').toLowerCase() ? l.name : '';
+      var rh = 11.5;
+      if (y + rh > BOTTOM) { newPage(); headRow(); }
+      if (i % 2 === 1) { doc.setFillColor(GREY); doc.rect(M, y, CW, rh, 'F'); }
+      var mid = y + rh / 2 + 1.5, x = M;
+      cols.forEach(function (c, ci) {
+        var cx = x + c.w / 2;
+        if (ci > 0) { doc.setDrawColor(170); doc.line(x, y, x, y + rh); doc.setDrawColor(0); }
+        if (ci === 0) { doc.setLineWidth(0.35); doc.rect(cx - 2.3, y + rh / 2 - 2.3, 4.6, 4.6); doc.setLineWidth(0.25); }
+        else if (ci === 1) T(i + 1, cx, mid, 9, false, 'center');
+        else if (ci === 2) { T(fit(l.sku, c.w - 4, 10), x + 2.5, nm ? y + 5 : mid, 10, true); if (nm) T(fit(nm, c.w - 4, 7), x + 2.5, y + 9.3, 7, false); }
+        else if (ci === 3) { T(fit(lb.fnsku || '—', c.w - 4, 9.5), x + 2.5, y + 5, 9.5, true); T(fit(lb.amazon, c.w - 4, 7), x + 2.5, y + 9.3, 7, false); }
+        else if (ci === 4) T(l.ppc || '—', cx, mid, 9.5, false, 'center');
+        else if (ci === 5) T(boxes(l.qty, l.ppc), cx, mid, 11.5, true, 'center');
+        else if (ci === 6) T(n(l.qty), cx, mid, 11.5, true, 'center');
+        x += c.w;
+      });
+      doc.setDrawColor(170); doc.line(M, y + rh, W - M, y + rh); doc.setDrawColor(0);
+      y += rh;
+    });
+    // Section total
+    doc.setLineWidth(0.7); doc.line(M, y, W - M, y); doc.setLineWidth(0.25);
+    T(sec.fac + ' TOTAL  ·  ' + sec.lines.length + ' SKU', M + 18, y + 6, 9.5, true);
+    T(n(secBoxes) + (secLoose ? ' + ' + secLoose : ''), M + 8 + 8 + 62 + 46 + 15 + 10.5, y + 6, 11.5, true, 'center');
+    T(n(secUnits), M + CW - 11, y + 6, 11.5, true, 'center');
+    doc.line(M, y + 9, W - M, y + 9);
+    y += 15;
+  });
+
+  // ── Hold: not on any gatepass ──
+  if (hold.length) {
+    if (y + 20 > BOTTOM) newPage();
+    doc.setLineWidth(0.6); doc.setLineDashPattern([1.5, 1], 0); doc.rect(M, y, CW, 8 + hold.length * 6); doc.setLineDashPattern([], 0); doc.setLineWidth(0.25);
+    T('HOLD  ·  NOT ON THIS GATEPASS — add manually in UC before packing', M + 3, y + 5.5, 9, true);
+    var hy = y + 11;
+    hold.forEach(function (x) {
+      if (hy > BOTTOM) { newPage(); hy = y + 5; }  // y was reset to the new page's top
+      T(fit(x.sku || x.amazon_sku, 80, 9), M + 3, hy, 9, true);
+      T(n(x.qty), M + 95, hy, 9, true, 'right');
+      T(fit(x.reason, CW - 105, 8), M + 100, hy, 8, false);
+      hy += 6;
+    });
+    y = hy + 4;
+  }
+  T('Tick each line when packed.  Boxes = full boxes + loose pcs.  Stick the FNSKU label on every unit.', M, Math.min(y + 2, BOTTOM), 7.5, false);
+
+  // ── Signatures ──
+  if (y > 250) newPage();
+  var sy = 270, sw = (CW - 20) / 3;
+  doc.setLineWidth(0.4);
+  ['Picked By', 'Packed By', 'Checked By'].forEach(function (t, i) {
+    var sx = M + i * (sw + 10);
+    doc.line(sx, sy, sx + sw, sy); T(t, sx + sw / 2, sy + 5, 9.5, true, 'center');
+  });
+  doc.setLineWidth(0.25);
+
+  // ── Footer ──
+  var pages = doc.getNumberOfPages();
+  for (var p = 1; p <= pages; p++) {
+    doc.setPage(p); doc.line(M, 284, W - M, 284);
+    T('Tomahawk Operations  ·  FBA Pack Sheet  ·  ' + s.shipment_id, M, 288.5, 7.5, false);
+    T('Page ' + p + ' of ' + pages, W - M, 288.5, 7.5, false, 'right');
+  }
+  doc.save(s.shipment_id + '-pack-sheet.pdf');
 }
 
 // ══════════════════════════════════════════════════════════════════

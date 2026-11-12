@@ -571,6 +571,7 @@ async function fbaTrackerData(env) {
 
   const ucSkuOf = new Map(skuMap.map(m => [m.seller_sku, m.uniware_sku]));
   const stockOf = new Map(((invData && invData.rows) || []).map(r => [r.skuCode, { g4: Number(r.G4_stock) || 0, e3: Number(r.E3_stock) || 0 }]));
+  const invRowOf = new Map(((invData && invData.rows) || []).map(r => [r.skuCode, r]));
   const bundleOf = new Map(); // parent UC SKU -> [{ sku, qty }]
   bundleRows.forEach(b => {
     if (!bundleOf.has(b.parent_sku)) bundleOf.set(b.parent_sku, []);
@@ -582,7 +583,12 @@ async function fbaTrackerData(env) {
   gatepasses.forEach(gp => {
     new Set(fbaIdsInText(gp.reference)).forEach(sid => {
       if (!gpBySid.has(sid)) gpBySid.set(sid, []);
-      gpBySid.get(sid).push({ code: gp.gatepass_code, facility: gp.facility, status: gp.status, type: gp.type, qty: gp.quantity, created: gp.created });
+      gpBySid.get(sid).push({ code: gp.gatepass_code, facility: gp.facility, status: gp.status, type: gp.type, qty: gp.quantity, created: gp.created,
+        // SKU lines with name + Qty/Box — used by the Pack Sheet print
+        items: (gp.items || []).map(it => {
+          const r = invRowOf.get(it.sku) || {};
+          return { sku: it.sku, qty: it.qty, name: r.name || '', ppc: /^\d+$/.test(String(r.piecesPerCarton || '')) ? Number(r.piecesPerCarton) : null };
+        }) });
     });
   });
 
@@ -665,7 +671,12 @@ async function fbaTrackerData(env) {
     if (!run) return;
     let hold = [];
     try { hold = JSON.parse(run.hold_json || '[]'); } catch (e) {}
-    s.auto_gp = { status: run.status, g4_code: run.g4_code, e3_code: run.e3_code, hold, by: run.created_by,
+    let plan = [];
+    try { plan = JSON.parse(run.plan_json || '[]'); } catch (e) {}
+    // Approved split (with product names) — the Pack Sheet uses it until
+    // the new gatepasses show up in the mirror (~15 min).
+    plan = plan.map(x => Object.assign({}, x, { name: (invRowOf.get(x.sku) || {}).name || '' }));
+    s.auto_gp = { status: run.status, g4_code: run.g4_code, e3_code: run.e3_code, hold, plan, by: run.created_by,
                   at: run.updated_at, error: run.last_error };
   });
 
