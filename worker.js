@@ -806,8 +806,14 @@ async function fbaGpBuildPlan(env, shipmentId) {
   };
 }
 
-// One gatepass push through SK's UC API (same contract as g4gpPush, plus
-// facility for E3). Returns the UC gatepass code or throws.
+// One gatepass push through SK's UC API (team.tomahawk.tools/uc/g4-gatepasses/push,
+// same contract as g4gpPush, plus facility for E3). SK's side (12 Nov 2026):
+//   • checks live stock first — short/unknown item → ok:false, nothing created
+//   • same externalRef twice → returns the existing gatepass, no duplicate
+//   • rare UC refusal part-way → ok:false, gatepass half-filled in UC; sending
+//     the same externalRef again adds only the missing items.
+// Returns { code } on success; throws with .halfFilled = true when SK's
+// reply shows a gatepass exists in UC (so we keep the plan and retry).
 async function fbaGpPushOne(env, facKey, shipmentId, items) {
   const res = await fetch(env.SK_UC_API_URL, {
     method: 'POST',
@@ -821,7 +827,9 @@ async function fbaGpPushOne(env, facKey, shipmentId, items) {
   const data = await res.json().catch(() => ({}));
   const code = data && (data.gatepassCode || data.gatePassCode || data.code);
   if (res.ok && data.ok !== false && code) return String(code);
-  throw new Error(facKey + ': ' + ((data && (data.error || data.message)) || ('HTTP ' + res.status)));
+  const err = new Error(facKey + ': ' + ((data && (data.error || data.message)) || ('HTTP ' + res.status)) + (code ? ' (gatepass ' + code + ' is half-filled in UC)' : ''));
+  err.halfFilled = !!code;
+  throw err;
 }
 
 async function handleFbaGatepass(act, body, url, env, user) {
@@ -831,6 +839,9 @@ async function handleFbaGatepass(act, body, url, env, user) {
   const shipmentId = String((body && body.shipment_id) || url.searchParams.get('shipment_id') || '').trim().toUpperCase();
   if (!/^FBA[0-9A-Z]{9}$/.test(shipmentId)) return json({ ok: false, error: 'Valid FBA shipment_id required' }, 400);
 
+  // A 'pushing' lock older than 5 min means the Worker died mid-push → retryable.
+  await env.DB.prepare(`UPDATE fba_gp_push SET status='partial', last_error=COALESCE(last_error,'Push interrupted — press Retry')
+    WHERE shipment_id=? AND status='pushing' AND updated_at < datetime('now','-5 minutes')`).bind(shipmentId).run();
   const existing = await env.DB.prepare('SELECT * FROM fba_gp_push WHERE shipment_id = ?').bind(shipmentId).first();
   // Gatepasses already in UC for this shipment (made by hand or by us).
   const ucGps = (await ucGatepassesLive(env, 'Amazon-FBA'))
@@ -850,8 +861,9 @@ async function handleFbaGatepass(act, body, url, env, user) {
   if (existing && existing.status === 'done') return json({ ok: false, error: 'Gatepasses already created: ' + [existing.g4_code, existing.e3_code].filter(Boolean).join(', ') });
   if (existing && existing.status === 'pushing') return json({ ok: false, error: 'A push for this shipment is already in progress' });
   // Hand-made gatepasses in UC block a fresh push (a retry of our own partial push is fine).
-  const ours = new Set([existing && existing.g4_code, existing && existing.e3_code].filter(Boolean));
-  const foreign = ucGps.filter(g => !ours.has(g.code));
+  // On a retry of our own partial push, gatepasses with this shipment ID are
+  // ours (possibly half-filled) — SK's externalRef dedupe handles them.
+  const foreign = existing && existing.status === 'partial' ? [] : ucGps;
   if (foreign.length) return json({ ok: false, error: 'UC already has gatepass(es) for this shipment: ' + foreign.map(g => g.code).join(', ') });
 
   let p;
@@ -883,11 +895,14 @@ async function handleFbaGatepass(act, body, url, env, user) {
 
   let g4Code = existing && existing.g4_code, e3Code = existing && existing.e3_code;
   const errors = [];
-  if (g4Items.length && !g4Code) { try { g4Code = await fbaGpPushOne(env, 'G4', shipmentId, g4Items); } catch (e) { errors.push(e.message); } }
-  if (e3Items.length && !e3Code) { try { e3Code = await fbaGpPushOne(env, 'E3', shipmentId, e3Items); } catch (e) { errors.push(e.message); } }
+  let halfFilled = false;
+  if (g4Items.length && !g4Code) { try { g4Code = await fbaGpPushOne(env, 'G4', shipmentId, g4Items); } catch (e) { errors.push(e.message); halfFilled = halfFilled || e.halfFilled; } }
+  if (e3Items.length && !e3Code) { try { e3Code = await fbaGpPushOne(env, 'E3', shipmentId, e3Items); } catch (e) { errors.push(e.message); halfFilled = halfFilled || e.halfFilled; } }
   const done = Boolean((!g4Items.length || g4Code) && (!e3Items.length || e3Code));
   const status = done ? 'done' : 'partial';
-  if (!done && !g4Code && !e3Code) {
+  // Nothing exists in UC at all (SK echoes the code of any half-filled one) → forget the
+  // attempt so the next try rebuilds the split from fresh stock.
+  if (!done && !g4Code && !e3Code && !halfFilled) {
     // Nothing created at all — drop the record so the shipment goes back to "no gatepass".
     await env.DB.prepare('DELETE FROM fba_gp_push WHERE shipment_id = ?').bind(shipmentId).run();
     return json({ ok: false, error: 'UC push failed: ' + errors.join(' · ') });
