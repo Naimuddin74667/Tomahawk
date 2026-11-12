@@ -2551,20 +2551,21 @@ function fbaBuildPackPdf(s, sections, logo) {
     y += 11;
   });
 
-  // ── Hold: not on any gatepass — full table; packer ticks where it was fulfilled from ──
+  // ── Hold: not on any gatepass — full table; Warehouse + Reason left blank for the packer to write
+  //    (stock may come from G4, E3 or be converted from a different product) ──
   if (hold.length) {
     cols = [{ k: 'sr', h: 'Sr', w: 9, c: 1 }, { k: 'sku', h: 'UC SKU', w: 52 }, { k: 'fnsku', h: 'FNSKU', w: 34 },
-            { k: 'qty', h: 'Qty', w: 16, c: 1 }, { k: 'reason', h: 'Reason', w: 37 }, { k: 'from', h: 'Fulfilled from', w: 34, c: 1 }];
+            { k: 'qty', h: 'Qty', w: 16, c: 1 }, { k: 'wh', h: 'Warehouse', w: 32 }, { k: 'reason', h: 'Reason', w: 39 }];
     if (y + 30 > BOTTOM) newPage();
     var holdUnits = hold.reduce(function (t, x) { return t + (Number(x.qty) || 0); }, 0);
     T('HOLD  \u00b7  NOT ON ANY GATEPASS', M, y + 4.5, 9.5, true);
-    T('Add manually in UC \u00b7 tick where it was fulfilled from', W - M, y + 4.5, 8, false, 'right');
+    T('Add manually in UC \u00b7 write Warehouse + Reason', W - M, y + 4.5, 8, false, 'right');
     doc.setLineWidth(0.4); doc.line(M, y + 6.5, W - M, y + 6.5); doc.setLineWidth(0.2);
     y += 8;
     headRow();
     hold.forEach(function (h, i) {
       var sku = h.sku || h.amazon_sku || '', lb = labels[h.sku] || labels[h.amazon_sku] || { fnsku: '' };
-      var rh = 7;
+      var rh = 9;
       if (y + rh > BOTTOM) { newPage(); headRow(); }
       if (i % 2 === 1) { doc.setFillColor(GREY); doc.rect(M, y, CW, rh, 'F'); }
       var mid = y + rh / 2 + 1.2, x = M;
@@ -2575,15 +2576,6 @@ function fbaBuildPackPdf(s, sections, logo) {
         else if (c.k === 'sku') T(fit(sku, c.w - 4, 8.5), x + 2.5, mid, 8.5, true);
         else if (c.k === 'fnsku') T(fit(lb.fnsku || '\u2014', c.w - 4, 8.5), x + 2.5, mid, 8.5, false);
         else if (c.k === 'qty') T(n(h.qty), cx, mid, 9.5, true, 'center');
-        else if (c.k === 'reason') T(fit(h.reason, c.w - 4, 7), x + 2.5, mid, 7, false);
-        else if (c.k === 'from') {
-          // ☐ G4   ☐ E3
-          doc.setDrawColor(90);
-          [['G4', x + 5], ['E3', x + 19]].forEach(function (b) {
-            doc.rect(b[1], y + rh / 2 - 1.8, 3.6, 3.6); T(b[0], b[1] + 5, mid, 8, true);
-          });
-          doc.setDrawColor(0);
-        }
         x += c.w;
       });
       doc.setDrawColor(215); doc.line(M, y + rh, W - M, y + rh); doc.setDrawColor(0);
@@ -2594,7 +2586,8 @@ function fbaBuildPackPdf(s, sections, logo) {
     T(n(holdUnits), colX('qty'), y + 5, 9.5, true, 'center');
     y += 11;
   }
-  T('Boxes = full boxes + loose pcs.  Stick the FNSKU label on every unit.', M, Math.min(y + 2, BOTTOM), 6.8, false);
+  if (y + 2 > BOTTOM) newPage();
+  T('Boxes = full boxes + loose pcs.  Stick the FNSKU label on every unit.', M, y + 2, 6.8, false);
 
   // ── Signatures (line at 270 mm) — new page only if content reaches them ──
   if (y > 262) newPage();
