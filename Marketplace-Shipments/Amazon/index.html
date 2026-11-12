@@ -956,10 +956,7 @@ html .site-header { background: var(--tmh-bg); }
         <div class="ro-stat-card" data-view="created" onclick="fbaSetView('created')" title="Amazon status WORKING / READY_TO_SHIP">
           <div class="ro-stat-label">Created</div><div class="ro-stat-value" id="fbaStat-created">&ndash;</div><div class="ro-stat-sub">not dispatched yet</div>
         </div>
-        <div class="ro-stat-card" data-view="gppending" onclick="fbaSetView('gppending')" title="Not closed or cancelled, and no UC gatepass carries this shipment ID">
-          <div class="ro-stat-label">Gatepass Pending</div><div class="ro-stat-value" id="fbaStat-gppending" style="color:var(--accent)">&ndash;</div><div class="ro-stat-sub">no UC gatepass yet</div>
-        </div>
-        <div class="ro-stat-card" data-view="notdisp" onclick="fbaSetView('notdisp')" title="Not left the warehouse: gatepass made but Amazon not shipped yet, or Amazon says In Transit but no CLOSED UC gatepass">
+        <div class="ro-stat-card" data-view="notdisp" onclick="fbaSetView('notdisp')" title="No CLOSED UC gatepass yet (gatepass pending or under packing) — whatever Amazon says. Dispatched = gatepass CLOSED.">
           <div class="ro-stat-label">Not Dispatched</div><div class="ro-stat-value" id="fbaStat-notdisp" style="color:#5b9fe3">&ndash;</div><div class="ro-stat-sub">not left warehouse</div>
         </div>
         <div class="ro-stat-card" data-view="transit" onclick="fbaSetView('transit')" title="Amazon status SHIPPED / IN_TRANSIT">
@@ -2059,6 +2056,7 @@ var FBA_LEGACY_CUTOFF = '2026-11-12 06:21:06';
 var FBA_LEGACY_NOT_DISPATCHED = ['FBA15MTYQ80F', 'FBA15MTZ7MFR', 'FBA15MTZ7MGD', 'FBA15MV78H7G', 'FBA15MV6J44C'];
 function fbaLegacyDispatched(s) {
   var st = FBA_STAGE_OF[s.status];
+  if (s.gatepasses.length || s.auto_gp) return false;   // real gatepass data always wins
   return !!s.first_seen_at && s.first_seen_at <= FBA_LEGACY_CUTOFF &&
     FBA_LEGACY_NOT_DISPATCHED.indexOf(s.shipment_id) === -1 && st !== 'cancelled';
 }
@@ -2145,6 +2143,8 @@ function fbaLoad() {
         s._stage = fbaStage(s);
         // Amazon says In Transit but no CLOSED gatepass → not really dispatched
         s._amzOnly = s._stage === 'transit' && !fbaGpClosed(s);
+        // Not Dispatched = not yet at FC and no CLOSED gatepass (one rule for all)
+        s._notDisp = (s._stage === 'created' || s._stage === 'transit') && !fbaGpClosed(s);
         s._shipped = fbaSum(s.items || [], 'shipped');
         s._received = fbaSum(s.items || [], 'received');
         s._checks = fbaChecks(s);
@@ -2171,8 +2171,7 @@ function fbaIsOpen(s) { return s._stage === 'created' || s._stage === 'transit' 
 function fbaInView(s, view) {
   if (view === 'all') return true; // the only view that shows cancelled shipments
   if (view === 'open') return fbaIsOpen(s);
-  if (view === 'gppending') return fbaIsOpen(s) && !fbaHasGp(s);
-  if (view === 'notdisp') return (s._stage === 'created' && fbaHasGp(s) && !fbaLegacyDispatched(s)) || s._amzOnly;
+  if (view === 'notdisp') return s._notDisp;
   if (view === 'transit') return s._stage === 'transit' && !s._amzOnly;
   if (view === 'attention') return s._stage !== 'cancelled' && s._checks.length > 0;
   return s._stage === view;
@@ -2182,7 +2181,7 @@ function fbaRender() {
   var q = ((document.getElementById('fbaSearch') || {}).value || '').trim().toLowerCase();
   var base = q ? _fbaRows.filter(function (s) { return s._search.indexOf(q) !== -1; }) : _fbaRows;
 
-  ['created', 'gppending', 'notdisp', 'transit', 'fc', 'attention', 'open', 'closed', 'all'].forEach(function (v) {
+  ['created', 'notdisp', 'transit', 'fc', 'attention', 'open', 'closed', 'all'].forEach(function (v) {
     var el = document.getElementById('fbaStat-' + v);
     if (el) el.textContent = base.filter(function (s) { return fbaInView(s, v); }).length;
   });
@@ -2228,10 +2227,7 @@ function fbaGpAgeDays(s) {
 }
 function fbaPackStatus(s) {
   if (fbaLegacyDispatched(s)) return null;
-  if (s._amzOnly) {
-    if (!fbaHasGp(s)) return 'Gatepass Pending';
-    if (!fbaGpClosed(s)) return 'Under Packing';
-  }
+  if (s._notDisp) return fbaHasGp(s) ? 'Under Packing' : 'Gatepass Pending';
   if (s._stage !== 'created' || !fbaHasGp(s)) return null;
   var left = s.gatepasses.length > 0 && s.gatepasses.every(function (g) { return g.status === 'CLOSED'; });
   return left ? 'Left Warehouse' : 'Under Packing';
