@@ -780,6 +780,7 @@ async function fbaGpBuildPlan(env, shipmentId) {
 
   const need = new Map();   // UC simple SKU -> { qty, from: [Amazon SKUs] }
   const hold = [];          // { amazon_sku, sku, qty, reason }
+  const blockers = [];      // SKUs with G4 stock but no Qty/Box in UC — must be fixed first
   lines.forEach(l => {
     const qty = Number(l.quantity_shipped) || 0;
     if (!qty) return;
@@ -804,8 +805,10 @@ async function fbaGpBuildPlan(env, shipmentId) {
     const ppc = /^\d+$/.test(String(st.piecesPerCarton || '')) ? Number(st.piecesPerCarton) : 0;
     const g4Free = (Number(st.G4_stock) || 0) - (reserved.G4[sku] || 0);
     const e3Free = (Number(st.E3_stock) || 0) - (reserved.E3[sku] || 0);
-    // No Qty/Box in UC → G4 can't give full cartons, so G4 is skipped and E3
-    // gives loose pieces as usual (changed 12 Nov 2026 — was: whole SKU on Hold).
+    // No Qty/Box in UC:
+    //   • G4 has stock → BLOCK: add Qty/Box in UC first (else we'd skip usable cartons)
+    //   • G4 has none  → go straight to E3 for loose pieces (rest on Hold)
+    if (!ppc && g4Free > 0) return blockers.push({ sku, from, need: n.qty, g4_free: g4Free, e3_free: e3Free });
     const sp = ppc ? fbaGpSplit(n.qty, ppc, g4Free, e3Free)
                    : { cartons: 0, g4: 0, e3: Math.min(n.qty, Math.max(e3Free, 0)), hold: n.qty - Math.min(n.qty, Math.max(e3Free, 0)) };
     plan.push({ sku, from, need: n.qty, ppc: ppc || null, g4_free: g4Free, e3_free: e3Free, cartons: sp.cartons, g4: sp.g4, e3: sp.e3, hold: sp.hold });
@@ -817,7 +820,7 @@ async function fbaGpBuildPlan(env, shipmentId) {
   const sum = k => plan.reduce((t, p) => t + p[k], 0);
   return {
     shipment: { id: ship.shipment_id, name: ship.shipment_name, status: ship.shipment_status, fc: ship.destination_fc },
-    plan, hold,
+    plan, hold, blockers,
     totals: { need: sum('need') + hold.filter(h => !plan.some(p => p.sku === h.sku)).reduce((t, h) => t + h.qty, 0),
               g4: sum('g4'), e3: sum('e3'), hold: hold.reduce((t, h) => t + h.qty, 0) },
     // Compared on Create so the push matches exactly what was reviewed.
@@ -888,6 +891,9 @@ async function handleFbaGatepass(act, body, url, env, user) {
   let p;
   try { p = await fbaGpBuildPlan(env, shipmentId); }
   catch (e) { return json({ ok: false, error: e.message }, 502); }
+  if (!existing && p.blockers.length) {
+    return json({ ok: false, error: 'Add Qty/Box (Pieces Per Carton) in UC first for: ' + p.blockers.map(b => b.sku).join(', ') });
+  }
   if (!existing && body && body.signature !== undefined && body.signature !== p.signature) {
     return json(Object.assign({ ok: false, changed: true, error: 'Stock changed since you reviewed — check the new split and approve again.' }, p));
   }

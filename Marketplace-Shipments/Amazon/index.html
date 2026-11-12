@@ -2631,6 +2631,10 @@ function fbaGpRender(d, notice) {
     d.ucGatepasses.map(function (g) { return fbaHtml(g.code); }).join(', ') + ' — Create is blocked.</div>');
   if (d.existing && d.existing.status === 'partial') warn.push('<div class="fba-chip amber" style="display:block;white-space:normal;padding:6px 10px">Partly created before (' +
     fbaHtml([d.existing.g4_code, d.existing.e3_code].filter(Boolean).join(', ')) + '). Approve retries only the missing facility, with the split approved then.</div>');
+  if (d.blockers && d.blockers.length) warn.push('<div class="fba-chip red" style="display:block;white-space:normal;padding:6px 10px">' +
+    '&#9888; Add <b>Qty/Box (Pieces Per Carton)</b> in UC first \u2014 G4 has stock but the carton size is missing, so the split can\'t be made:<br>' +
+    d.blockers.map(function (b) { return '<span class="fba-mono">' + fbaHtml(b.sku) + '</span> \u00b7 need ' + fbaNum(b.need) + ' \u00b7 G4 has ' + fbaNum(b.g4_free); }).join('<br>') +
+    '<br><span style="font-weight:400">After updating UC, wait for the sync (~15 min) and open Create Gatepass again.</span></div>');
   if (!d.pushReady) warn.push('<div class="fba-chip amber" style="display:block;white-space:normal;padding:6px 10px">UC push isn\'t connected yet (waiting for SK\'s API). Use the CSV downloads below to make the gatepasses in UC.</div>');
 
   var rows = d.plan.map(function (p) {
@@ -2665,7 +2669,7 @@ function fbaGpRender(d, notice) {
       '<button class="btn btn-secondary btn-sm" style="width:auto" onclick="fbaGpCsv(\'E3\')"' + (t.e3 ? '' : ' disabled') + '>&#11015; E3 CSV</button>' +
     '</div>';
 
-  var blocked = (d.ucGatepasses && d.ucGatepasses.length) || (!t.g4 && !t.e3);
+  var blocked = (d.ucGatepasses && d.ucGatepasses.length) || (!t.g4 && !t.e3) || (d.blockers && d.blockers.length);
   var btn = document.getElementById('fbaGpApproveBtn');
   btn.disabled = !!blocked || !window.TM_CAN_EDIT;
   btn.innerHTML = d.pushReady ? '&#10003; Approve &amp; Create in UC' : '&#10003; Approve (UC push not connected)';
