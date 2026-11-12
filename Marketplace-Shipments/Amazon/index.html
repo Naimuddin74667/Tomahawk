@@ -2437,10 +2437,15 @@ function fbaBuildPackPdf(s, sections, logo) {
   y += 4.5;
 
   // ── One section per warehouse ──
-  var cols = [
-    { h: '', w: 8, c: 1 }, { h: 'Sr', w: 8, c: 1 }, { h: 'UC SKU / Product', w: 62 },
-    { h: 'FNSKU', w: 46 }, { h: 'Qty/box', w: 15, c: 1 }, { h: 'Boxes', w: 21, c: 1 }, { h: 'Qty', w: 22, c: 1 }
-  ];
+  // Column sets: G4 = Boxes then Qty/box then Qty; E3 = no Qty/box.
+  var COLS = {
+    G4: [{ k: 'chk', h: '', w: 8, c: 1 }, { k: 'sr', h: 'Sr', w: 8, c: 1 }, { k: 'sku', h: 'UC SKU', w: 62 },
+         { k: 'fnsku', h: 'FNSKU', w: 46 }, { k: 'boxes', h: 'Boxes', w: 21, c: 1 }, { k: 'ppc', h: 'Qty/box', w: 15, c: 1 }, { k: 'qty', h: 'Qty', w: 22, c: 1 }],
+    E3: [{ k: 'chk', h: '', w: 8, c: 1 }, { k: 'sr', h: 'Sr', w: 8, c: 1 }, { k: 'sku', h: 'UC SKU', w: 70 },
+         { k: 'fnsku', h: 'FNSKU', w: 52 }, { k: 'boxes', h: 'Boxes', w: 21, c: 1 }, { k: 'qty', h: 'Qty', w: 23, c: 1 }]
+  };
+  var cols;
+  function colX(key) { var x = M; for (var i = 0; i < cols.length; i++) { if (cols[i].k === key) return x + cols[i].w / 2; x += cols[i].w; } return null; }
   function headRow() {
     doc.setFillColor(228); doc.rect(M, y, CW, 6, 'F');
     var x = M; cols.forEach(function (c) { T(c.h, c.c ? x + c.w / 2 : x + 2.5, y + 4.1, 6.8, true, c.c ? 'center' : null); x += c.w; });
@@ -2448,18 +2453,18 @@ function fbaBuildPackPdf(s, sections, logo) {
   }
   sections.forEach(function (sec) {
     if (!sec.lines.length) return;
+    cols = COLS[sec.fac];
     if (y + 30 > BOTTOM) newPage();
     var secUnits = 0, secBoxes = 0, secLoose = 0;
     sec.lines.forEach(function (l) { secUnits += l.qty; if (l.ppc) { secBoxes += Math.floor(l.qty / l.ppc); secLoose += l.qty % l.ppc; } });
-    // Section title bar
-    T(sec.fac === 'G4' ? 'G4 WAREHOUSE  \u00b7  FULL CARTONS' : 'E3 WAREHOUSE  \u00b7  LOOSE PIECES', M, y + 4.5, 9.5, true);
-    T('Gatepass: ' + (sec.codes.join(', ') || '\u2014'), W - M, y + 4.5, 8, false, 'right');
+    // Section title
+    T(sec.fac === 'G4' ? 'G4 WAREHOUSE  ·  FULL CARTONS' : 'E3 WAREHOUSE  ·  LOOSE PIECES', M, y + 4.5, 9.5, true);
+    T('Gatepass: ' + (sec.codes.join(', ') || '—'), W - M, y + 4.5, 8, false, 'right');
     doc.setLineWidth(0.4); doc.line(M, y + 6.5, W - M, y + 6.5); doc.setLineWidth(0.2);
     y += 8;
     headRow();
     sec.lines.sort(function (a, b) { return a.sku.localeCompare(b.sku); }).forEach(function (l, i) {
       var lb = labels[l.sku] || { amazon: '', fnsku: '' };
-      var nm = l.name && l.name.replace(/[\s_-]/g, '').toLowerCase() !== l.sku.replace(/[\s_-]/g, '').toLowerCase() ? l.name : '';
       var rh = 7;
       if (y + rh > BOTTOM) { newPage(); headRow(); }
       if (i % 2 === 1) { doc.setFillColor(GREY); doc.rect(M, y, CW, rh, 'F'); }
@@ -2467,13 +2472,13 @@ function fbaBuildPackPdf(s, sections, logo) {
       cols.forEach(function (c, ci) {
         var cx = x + c.w / 2;
         if (ci > 0) { doc.setDrawColor(215); doc.line(x, y, x, y + rh); doc.setDrawColor(0); }
-        if (ci === 0) { doc.setDrawColor(120); doc.rect(cx - 1.8, y + rh / 2 - 1.8, 3.6, 3.6); doc.setDrawColor(0); }
-        else if (ci === 1) T(i + 1, cx, mid, 7.5, false, 'center');
-        else if (ci === 2) T(fit(l.sku, c.w - 4, 8.5), x + 2.5, mid, 8.5, true);
-        else if (ci === 3) T(fit(lb.fnsku || '\u2014', c.w - 4, 8.5), x + 2.5, mid, 8.5, false);
-        else if (ci === 4) T(l.ppc || '\u2014', cx, mid, 8, false, 'center');
-        else if (ci === 5) T(boxes(l.qty, l.ppc), cx, mid, 9.5, true, 'center');
-        else if (ci === 6) T(n(l.qty), cx, mid, 9.5, true, 'center');
+        if (c.k === 'chk') { doc.setDrawColor(120); doc.rect(cx - 1.8, y + rh / 2 - 1.8, 3.6, 3.6); doc.setDrawColor(0); }
+        else if (c.k === 'sr') T(i + 1, cx, mid, 7.5, false, 'center');
+        else if (c.k === 'sku') T(fit(l.sku, c.w - 4, 8.5), x + 2.5, mid, 8.5, true);
+        else if (c.k === 'fnsku') T(fit(lb.fnsku || '—', c.w - 4, 8.5), x + 2.5, mid, 8.5, false);
+        else if (c.k === 'boxes') T(boxes(l.qty, l.ppc), cx, mid, 9.5, true, 'center');
+        else if (c.k === 'ppc') T(l.ppc || '—', cx, mid, 8, false, 'center');
+        else if (c.k === 'qty') T(n(l.qty), cx, mid, 9.5, true, 'center');
         x += c.w;
       });
       doc.setDrawColor(215); doc.line(M, y + rh, W - M, y + rh); doc.setDrawColor(0);
@@ -2481,9 +2486,9 @@ function fbaBuildPackPdf(s, sections, logo) {
     });
     // Section total
     doc.setLineWidth(0.4); doc.line(M, y, W - M, y); doc.setLineWidth(0.2);
-    T(sec.fac + ' TOTAL  \u00b7  ' + sec.lines.length + ' SKU', M + 18, y + 5, 8.5, true);
-    T(n(secBoxes) + (secLoose ? ' + ' + secLoose : ''), M + 8 + 8 + 62 + 46 + 15 + 10.5, y + 5, 9.5, true, 'center');
-    T(n(secUnits), M + CW - 11, y + 5, 9.5, true, 'center');
+    T(sec.fac + ' TOTAL  ·  ' + sec.lines.length + ' SKU', M + 18, y + 5, 8.5, true);
+    T(n(secBoxes) + (secLoose ? ' + ' + secLoose : ''), colX('boxes'), y + 5, 9.5, true, 'center');
+    T(n(secUnits), colX('qty'), y + 5, 9.5, true, 'center');
     y += 11;
   });
 
