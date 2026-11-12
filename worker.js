@@ -657,8 +657,245 @@ async function fbaTrackerData(env) {
     };
   });
 
+  // Our own auto-gatepass records (codes + Hold list) per shipment.
+  await ensureFbaGpTable(env.DB);
+  const gpRuns = new Map(((await env.DB.prepare('SELECT * FROM fba_gp_push').all()).results || []).map(r => [r.shipment_id, r]));
+  shipments.forEach(s => {
+    const run = gpRuns.get(s.shipment_id);
+    if (!run) return;
+    let hold = [];
+    try { hold = JSON.parse(run.hold_json || '[]'); } catch (e) {}
+    s.auto_gp = { status: run.status, g4_code: run.g4_code, e3_code: run.e3_code, hold, by: run.created_by,
+                  at: run.updated_at, error: run.last_error };
+  });
+
   const last = lastSync && lastSync[0];
   return { shipments, syncedAt: last ? last.finished_at : null, syncStatus: last ? last.status : null, changed: stmts.length };
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// FBA TRACKER — AUTO GATEPASS (Create Gatepass button)
+// Rule (agreed with Santosh, 12 Nov 2026), per UC simple SKU:
+//   1. G4 gives FULL CARTONS only (Qty/Box = UC PiecesPerCarton), as many
+//      as the shipment needs and G4 has free.
+//   2. E3 gives the remaining loose qty, up to what E3 has free.
+//   3. Whatever E3 can't cover → HOLD (no carton is opened).
+//   4. Anything not found in UC (unmapped / Block / Unlinked / unknown /
+//      disabled SKU, or no Qty/Box) → whole SKU on HOLD.
+//   Hold lines are added to the same gatepass manually in UC by the team.
+// Bundles are exploded into child SKUs first (UC gatepasses = simple SKUs).
+// "Free" stock = UC available (UC already takes stock on open gatepasses
+// out of available) minus our own pushes still in flight / not yet
+// visible in the mirror — same convention as the G4 Stock module.
+// Push: SK's UC API (Worker secrets SK_UC_API_URL + SK_UC_API_KEY), one
+// gatepass per facility, party Amazon-FBA, NON_RETURNABLE, reference =
+// FBA shipment ID. Without the secrets, Create answers notConfigured and
+// the page offers a UC CSV per facility instead.
+// ═══════════════════════════════════════════════════════════════════
+const FBA_GP_FACILITY = { G4: 'TomahawkHub', E3: 'industrialtoolsandhardware' };
+
+async function ensureFbaGpTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS fba_gp_push (
+    shipment_id  TEXT PRIMARY KEY,
+    status       TEXT,          -- pushing | done | partial
+    g4_code      TEXT,
+    e3_code      TEXT,
+    plan_json    TEXT,          -- the approved split, per SKU
+    hold_json    TEXT,          -- lines to add manually in UC
+    created_by   TEXT,
+    created_at   TEXT DEFAULT (datetime('now')),
+    updated_at   TEXT DEFAULT (datetime('now')),
+    last_error   TEXT
+  )`).run();
+}
+
+// Qty per facility+SKU from our own recent pushes that UC/the mirror may
+// not reflect yet (in flight, or pushed in the last 30 min).
+async function fbaGpRecentReserved(DB, excludeShipment) {
+  const rows = ((await DB.prepare(
+    `SELECT shipment_id, status, g4_code, e3_code, plan_json FROM fba_gp_push
+     WHERE shipment_id != ? AND (status = 'pushing' OR updated_at > datetime('now', '-30 minutes'))`
+  ).bind(excludeShipment || '').all()).results || []);
+  const res = { G4: {}, E3: {} };
+  rows.forEach(r => {
+    let plan = [];
+    try { plan = JSON.parse(r.plan_json || '[]'); } catch (e) {}
+    plan.forEach(p => {
+      if (p.g4 && (r.status === 'pushing' || r.g4_code)) res.G4[p.sku] = (res.G4[p.sku] || 0) + p.g4;
+      if (p.e3 && (r.status === 'pushing' || r.e3_code)) res.E3[p.sku] = (res.E3[p.sku] || 0) + p.e3;
+    });
+  });
+  return res;
+}
+
+// Pure split for one SKU — kept separate so it's easy to read and test.
+//   need = qty wanted, ppc = Qty/Box, g4Free / e3Free = free stock
+function fbaGpSplit(need, ppc, g4Free, e3Free) {
+  const cartons = Math.min(Math.floor(need / ppc), Math.floor(Math.max(g4Free, 0) / ppc));
+  const g4 = cartons * ppc;
+  const e3 = Math.min(need - g4, Math.max(e3Free, 0));
+  return { cartons, g4, e3, hold: need - g4 - e3 };
+}
+
+// Builds the G4 / E3 / Hold plan for one FBA shipment from live data.
+async function fbaGpBuildPlan(env, shipmentId) {
+  const sid = encodeURIComponent(shipmentId);
+  const [shipRows, lines, invData, bundleRows] = await Promise.all([
+    supabaseGetAll(env, 'amz_inbound_shipments?select=shipment_id,shipment_name,shipment_status,destination_fc&shipment_id=eq.' + sid),
+    supabaseGetAll(env, 'amz_inbound_shipment_items?select=seller_sku,quantity_shipped&shipment_id=eq.' + sid),
+    supabaseRpcJson(env, 'stock_alert_inventory'),
+    supabaseGetAll(env, 'uc_bundle_composition?select=parent_sku,child_sku,quantity_per_unit')
+  ]);
+  const ship = shipRows[0];
+  if (!ship) throw new Error('Shipment ' + shipmentId + ' not found in the Amazon mirror');
+  const sellerSkus = [...new Set(lines.map(l => l.seller_sku).filter(Boolean))];
+  const mapRows = sellerSkus.length
+    ? await supabaseGetAll(env, 'rpc/amz_uc_sku_map?select=seller_sku,uniware_sku&seller_sku=in.(' +
+        sellerSkus.map(s => '"' + encodeURIComponent(s.replace(/"/g, '\\"')) + '"').join(',') + ')')
+    : [];
+  const ucOf = new Map(mapRows.map(m => [m.seller_sku, m.uniware_sku]));
+  const stockOf = new Map(((invData && invData.rows) || []).map(r => [r.skuCode, r]));
+  const bundleOf = new Map();
+  bundleRows.forEach(b => {
+    if (!bundleOf.has(b.parent_sku)) bundleOf.set(b.parent_sku, []);
+    bundleOf.get(b.parent_sku).push({ sku: b.child_sku, qty: Number(b.quantity_per_unit) || 1 });
+  });
+  const reserved = await fbaGpRecentReserved(env.DB, shipmentId);
+
+  const need = new Map();   // UC simple SKU -> { qty, from: [Amazon SKUs] }
+  const hold = [];          // { amazon_sku, sku, qty, reason }
+  lines.forEach(l => {
+    const qty = Number(l.quantity_shipped) || 0;
+    if (!qty) return;
+    const uc = ucOf.get(l.seller_sku) || '';
+    if (!uc) return hold.push({ amazon_sku: l.seller_sku, sku: '', qty, reason: 'Not mapped to a UC SKU' });
+    if (/^(block|unlinked)/i.test(uc)) return hold.push({ amazon_sku: l.seller_sku, sku: uc, qty, reason: 'Linked to placeholder ' + uc + ' in UC' });
+    const parts = bundleOf.get(uc) ? bundleOf.get(uc).map(k => ({ sku: k.sku, qty: qty * k.qty })) : [{ sku: uc, qty }];
+    parts.forEach(p => {
+      const n = need.get(p.sku) || { qty: 0, from: [] };
+      n.qty += p.qty;
+      if (!n.from.includes(l.seller_sku)) n.from.push(l.seller_sku + (bundleOf.get(uc) ? ' (bundle ' + uc + ')' : ''));
+      need.set(p.sku, n);
+    });
+  });
+
+  const plan = [];          // one row per UC simple SKU
+  need.forEach((n, sku) => {
+    const st = stockOf.get(sku);
+    const from = n.from.join(', ');
+    if (!st) return hold.push({ amazon_sku: from, sku, qty: n.qty, reason: 'SKU not found in UC' });
+    if (st.enabled === false) return hold.push({ amazon_sku: from, sku, qty: n.qty, reason: 'SKU disabled in UC' });
+    const ppc = /^\d+$/.test(String(st.piecesPerCarton || '')) ? Number(st.piecesPerCarton) : 0;
+    if (!ppc) return hold.push({ amazon_sku: from, sku, qty: n.qty, reason: 'No Qty/Box in UC' });
+    const g4Free = (Number(st.G4_stock) || 0) - (reserved.G4[sku] || 0);
+    const e3Free = (Number(st.E3_stock) || 0) - (reserved.E3[sku] || 0);
+    const sp = fbaGpSplit(n.qty, ppc, g4Free, e3Free);
+    plan.push({ sku, from, need: n.qty, ppc, g4_free: g4Free, e3_free: e3Free, cartons: sp.cartons, g4: sp.g4, e3: sp.e3, hold: sp.hold });
+    if (sp.hold) hold.push({ amazon_sku: from, sku, qty: sp.hold, reason: 'E3 short (free ' + Math.max(e3Free, 0) + ')' });
+  });
+  plan.sort((a, b) => a.sku.localeCompare(b.sku));
+
+  const sum = k => plan.reduce((t, p) => t + p[k], 0);
+  return {
+    shipment: { id: ship.shipment_id, name: ship.shipment_name, status: ship.shipment_status, fc: ship.destination_fc },
+    plan, hold,
+    totals: { need: sum('need') + hold.filter(h => !plan.some(p => p.sku === h.sku)).reduce((t, h) => t + h.qty, 0),
+              g4: sum('g4'), e3: sum('e3'), hold: hold.reduce((t, h) => t + h.qty, 0) },
+    // Compared on Create so the push matches exactly what was reviewed.
+    signature: plan.map(p => p.sku + ':' + p.g4 + ':' + p.e3).join('|')
+  };
+}
+
+// One gatepass push through SK's UC API (same contract as g4gpPush, plus
+// facility for E3). Returns the UC gatepass code or throws.
+async function fbaGpPushOne(env, facKey, shipmentId, items) {
+  const res = await fetch(env.SK_UC_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + env.SK_UC_API_KEY },
+    body: JSON.stringify({
+      facility: FBA_GP_FACILITY[facKey], type: 'NON_RETURNABLE', toPartyCode: 'Amazon-FBA',
+      reference: shipmentId, purpose: shipmentId, externalRef: 'FBA-' + shipmentId + '-' + facKey,
+      items: items.map(i => ({ skuCode: i.sku, quantity: i.qty, inventoryType: 'GOOD_INVENTORY', unitPrice: 100 }))
+    })
+  });
+  const data = await res.json().catch(() => ({}));
+  const code = data && (data.gatepassCode || data.gatePassCode || data.code);
+  if (res.ok && data.ok !== false && code) return String(code);
+  throw new Error(facKey + ': ' + ((data && (data.error || data.message)) || ('HTTP ' + res.status)));
+}
+
+async function handleFbaGatepass(act, body, url, env, user) {
+  if (act !== 'fbaGpPlan' && act !== 'fbaGpCreate') return null;
+  await ensureFbaGpTable(env.DB);
+  const pushReady = !!(env.SK_UC_API_URL && env.SK_UC_API_KEY);
+  const shipmentId = String((body && body.shipment_id) || url.searchParams.get('shipment_id') || '').trim().toUpperCase();
+  if (!/^FBA[0-9A-Z]{9}$/.test(shipmentId)) return json({ ok: false, error: 'Valid FBA shipment_id required' }, 400);
+
+  const existing = await env.DB.prepare('SELECT * FROM fba_gp_push WHERE shipment_id = ?').bind(shipmentId).first();
+  // Gatepasses already in UC for this shipment (made by hand or by us).
+  const ucGps = (await ucGatepassesLive(env, 'Amazon-FBA'))
+    .filter(g => fbaIdsInText(g.reference).includes(shipmentId))
+    .map(g => ({ code: g.gatepass_code, facility: g.facility, status: g.status, qty: g.quantity }));
+
+  if (act === 'fbaGpPlan') {
+    try {
+      const p = await fbaGpBuildPlan(env, shipmentId);
+      return json(Object.assign({ ok: true, pushReady, existing: existing || null, ucGatepasses: ucGps }, p));
+    } catch (e) { return json({ ok: false, error: e.message }, 502); }
+  }
+
+  // ── fbaGpCreate ──
+  if (!pushReady) return json({ ok: false, notConfigured: true,
+    error: 'UC push not set up yet — waiting for SK\'s API (Worker secrets SK_UC_API_URL / SK_UC_API_KEY). Use the UC CSV download for now.' });
+  if (existing && existing.status === 'done') return json({ ok: false, error: 'Gatepasses already created: ' + [existing.g4_code, existing.e3_code].filter(Boolean).join(', ') });
+  if (existing && existing.status === 'pushing') return json({ ok: false, error: 'A push for this shipment is already in progress' });
+  // Hand-made gatepasses in UC block a fresh push (a retry of our own partial push is fine).
+  const ours = new Set([existing && existing.g4_code, existing && existing.e3_code].filter(Boolean));
+  const foreign = ucGps.filter(g => !ours.has(g.code));
+  if (foreign.length) return json({ ok: false, error: 'UC already has gatepass(es) for this shipment: ' + foreign.map(g => g.code).join(', ') });
+
+  let p;
+  try { p = await fbaGpBuildPlan(env, shipmentId); }
+  catch (e) { return json({ ok: false, error: e.message }, 502); }
+  if (!existing && body && body.signature !== undefined && body.signature !== p.signature) {
+    return json(Object.assign({ ok: false, changed: true, error: 'Stock changed since you reviewed — check the new split and approve again.' }, p));
+  }
+  // On a retry, reuse the plan that was approved the first time.
+  let plan = p.plan, hold = p.hold;
+  if (existing && existing.status === 'partial') {
+    try { plan = JSON.parse(existing.plan_json || '[]'); hold = JSON.parse(existing.hold_json || '[]'); } catch (e) {}
+  }
+  const g4Items = plan.filter(x => x.g4 > 0).map(x => ({ sku: x.sku, qty: x.g4 }));
+  const e3Items = plan.filter(x => x.e3 > 0).map(x => ({ sku: x.sku, qty: x.e3 }));
+  if (!g4Items.length && !e3Items.length) return json({ ok: false, error: 'Nothing to put on a gatepass — every line is on Hold.' });
+
+  // Lock (a double click must not create two UC gatepasses).
+  const who = (user && (user.display_name || user.username)) || 'unknown';
+  if (existing) {
+    const lock = await env.DB.prepare(`UPDATE fba_gp_push SET status='pushing', updated_at=datetime('now') WHERE shipment_id=? AND status='partial'`).bind(shipmentId).run();
+    if (!lock.meta || !lock.meta.changes) return json({ ok: false, error: 'A push for this shipment is already in progress' });
+  } else {
+    try {
+      await env.DB.prepare(`INSERT INTO fba_gp_push (shipment_id, status, plan_json, hold_json, created_by) VALUES (?, 'pushing', ?, ?, ?)`)
+        .bind(shipmentId, JSON.stringify(plan), JSON.stringify(hold), who).run();
+    } catch (e) { return json({ ok: false, error: 'A push for this shipment is already in progress' }); }
+  }
+
+  let g4Code = existing && existing.g4_code, e3Code = existing && existing.e3_code;
+  const errors = [];
+  if (g4Items.length && !g4Code) { try { g4Code = await fbaGpPushOne(env, 'G4', shipmentId, g4Items); } catch (e) { errors.push(e.message); } }
+  if (e3Items.length && !e3Code) { try { e3Code = await fbaGpPushOne(env, 'E3', shipmentId, e3Items); } catch (e) { errors.push(e.message); } }
+  const done = Boolean((!g4Items.length || g4Code) && (!e3Items.length || e3Code));
+  const status = done ? 'done' : 'partial';
+  if (!done && !g4Code && !e3Code) {
+    // Nothing created at all — drop the record so the shipment goes back to "no gatepass".
+    await env.DB.prepare('DELETE FROM fba_gp_push WHERE shipment_id = ?').bind(shipmentId).run();
+    return json({ ok: false, error: 'UC push failed: ' + errors.join(' · ') });
+  }
+  await env.DB.prepare(`UPDATE fba_gp_push SET status=?, g4_code=?, e3_code=?, last_error=?, updated_at=datetime('now') WHERE shipment_id=?`)
+    .bind(status, g4Code || null, e3Code || null, errors.length ? errors.join(' · ').slice(0, 500) : null, shipmentId).run();
+  return json({ ok: done, partial: !done, g4Code: g4Code || null, e3Code: e3Code || null, hold,
+    error: done ? null : 'Only part was created — ' + errors.join(' · ') + '. Press Create again to retry the rest.' });
 }
 
 // Bundle (parent) SKU codes from uc_bundle_composition.
@@ -1005,6 +1242,10 @@ const ACTION_TIERS = {
   //   joined in. Read-only for the user; also refreshes the D1 history
   //   copy (fba_tracker) as a side effect.
   fbaTrackerList: 'viewer_read',
+  // — FBA Tracker auto gatepass: plan = read-only preview of the G4/E3/Hold
+  //   split; create = pushes the gatepasses into UC via SK's API.
+  fbaGpPlan: 'viewer_read',
+  fbaGpCreate: 'manager_up',
 
   // — Flipkart "Successfully Received" email watcher (Gmail integration):
   //   auto-fills fk_ledger.received_qty by matching Consignment No. Same
@@ -1570,6 +1811,10 @@ export default {
       // ── G4 STOCK — own gatepass module (g4gp* actions) ──
       const g4gpResp = await handleG4Gatepass(act, body, url, env, authResult.user);
       if (g4gpResp) return g4gpResp;
+
+      // ── FBA TRACKER — auto gatepass (fbaGp* actions) ──
+      const fbaGpResp = await handleFbaGatepass(act, body, url, env, authResult.user);
+      if (fbaGpResp) return fbaGpResp;
 
       // ── AUTH ROUTES ───────────────────────────────────────
       if (request.method === 'POST' && act === 'login') {
