@@ -2197,13 +2197,13 @@ function fbaGatepassHtml(s, inDetail) {
   if (s.gatepasses.length) {
     html = s.gatepasses.map(function (g) {
       var done = g.status === 'CLOSED';
-      return '<div class="fba-mono" style="font-size:12px;white-space:nowrap">' + fbaHtml(g.facility || '?') + ' : ' + fbaHtml(fcSimplifyGatepassCode(g.code)) +
+      return '<div class="fba-mono" style="font-size:12px;white-space:nowrap">' + fbaHtml(g.facility || '?') + ' : ' + fbaHtml(fbaGpCode(g.code)) +
         ' <span style="color:' + (done ? '#6dc87a' : 'var(--accent)') + ';font-size:10.5px">' + (done ? '&#10003;' : fbaHtml(g.status)) + '</span></div>';
     }).join('');
   } else if (s.auto_gp && (s.auto_gp.g4_code || s.auto_gp.e3_code)) {
     html = [['G4', s.auto_gp.g4_code], ['E3', s.auto_gp.e3_code]].filter(function (x) { return x[1]; }).map(function (x) {
       return '<div class="fba-mono" style="font-size:12px;white-space:nowrap" title="Created from the tracker — UC sync will confirm within ~15 min">' +
-        x[0] + ' : ' + fbaHtml(fcSimplifyGatepassCode(x[1])) + ' <span style="color:var(--accent);font-size:10.5px">new</span></div>';
+        x[0] + ' : ' + fbaHtml(fbaGpCode(x[1])) + ' <span style="color:var(--accent);font-size:10.5px">new</span></div>';
     }).join('');
   }
   var canCreate = window.TM_CAN_EDIT && fbaIsOpen(s) && !s.gatepasses.length &&
@@ -2295,10 +2295,14 @@ function fbaCloseDetail() {
 
 // Hold list (lines not put on any gatepass) — shown in the detail view
 // after a push and in the review screen before it.
+// Short form only for UC's own GP… codes; anything else (e.g. SK's
+// "FBA-FBA15…-G4" codes) is shown in full so it stays recognisable.
+function fbaGpCode(code) { return /^GP/i.test(String(code || '')) ? fcSimplifyGatepassCode(code) : String(code || '\u2014'); }
+
 function fbaHoldHtml(hold, run) {
   if (!hold || !hold.length) return '';
   var who = run ? '<span style="font-weight:400;color:var(--muted)"> · add these to ' +
-    [run.g4_code, run.e3_code].filter(Boolean).map(fcSimplifyGatepassCode).join(' / ') + ' manually in UC</span>' : '';
+    [run.g4_code, run.e3_code].filter(Boolean).map(fbaGpCode).join(' / ') + ' manually in UC</span>' : '';
   return '<div style="margin-top:.7rem;border:1px solid rgba(245,168,0,.35);border-radius:6px;padding:.6rem .8rem;font-size:12px">' +
     '<div style="font-weight:700;color:var(--accent);margin-bottom:.35rem">&#9208; Hold — ' + fbaNum(hold.reduce(function (t, x) { return t + x.qty; }, 0)) + ' units' + who + '</div>' +
     hold.map(function (x) {
