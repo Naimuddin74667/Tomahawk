@@ -827,7 +827,8 @@ button[hidden] { display: none !important; }
   window.TM_ROLE = null;
 
   var ACTION_ROLE_MIN = {
-    g4gpSave: 'manager', g4gpDiscard: 'manager', g4gpPush: 'manager'
+    g4gpSave: 'manager', g4gpDiscard: 'manager', g4gpPush: 'manager',
+    g4gpLinkSave: 'manager', getNextBoxSeq: 'manager'
   };
   function actionAllowed(action, role) {
     var min = ACTION_ROLE_MIN[action];
@@ -1038,6 +1039,8 @@ button[hidden] { display: none !important; }
       <div class="panel-title"><span id="gp-title">—</span> <span class="st" id="gp-status"></span></div>
       <div class="actions">
         <button class="btn-ghost" id="btn-close-gp">Close</button>
+        <button class="btn-ghost" id="btn-links" title="Edit UC SKU → Internal SKU links for this gatepass">SKU links</button>
+        <button class="btn-ghost" id="btn-labels">Labels</button>
         <button class="btn-primary" id="btn-print">Print PDF</button>
       </div>
     </div>
@@ -1312,6 +1315,7 @@ button[hidden] { display: none !important; }
           '<td class="num">' + g.items.length + ' lines</td><td class="num"><b>' + fmt(qty) + '</b> pcs</td>' +
           '<td><span class="st ' + stClass(g.status) + '">' + esc(g.status) + '</span></td>' +
           '<td style="white-space:nowrap"><button class="link-btn" data-lopen="' + esc(g.code) + '">Open</button> ' +
+          '<button class="btn-ghost" style="min-height:34px;padding:0 14px;font-size:13px" data-llabels="' + esc(g.code) + '">Labels</button> ' +
           '<button class="btn-primary" style="min-height:34px;padding:0 14px;font-size:13px" data-lprint="' + esc(g.code) + '">Print</button></td></tr>';
       }).join('');
     }).catch(function (e) {
@@ -1320,8 +1324,9 @@ button[hidden] { display: none !important; }
     }).then(function () { b.disabled = false; b.textContent = '⟳ Fetch latest from UC'; });
   });
   $('live-body').addEventListener('click', function (e) {
-    var o = e.target.getAttribute('data-lopen'), p = e.target.getAttribute('data-lprint');
-    var g = live[o || p]; if (!g) return;
+    var o = e.target.getAttribute('data-lopen'), p = e.target.getAttribute('data-lprint'), lb = e.target.getAttribute('data-llabels');
+    var g = live[o || p || lb]; if (!g) return;
+    if (lb) { showGatepass(g, false); makeLabels(g); return; }
     showGatepass(g, !!p);
   });
   function showGatepass(g, andPrint) {
@@ -1335,6 +1340,8 @@ button[hidden] { display: none !important; }
   $('f-code').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); openGatepass($('f-code').value, false); } });
   $('btn-close-gp').addEventListener('click', function () { cur = null; $('gp-panel').hidden = true; });
   $('btn-print').addEventListener('click', function () { printPdf(); });
+  $('btn-labels').addEventListener('click', function () { makeLabels(cur); });
+  $('btn-links').addEventListener('click', function () { makeLabels(cur, true); });
 
   function openGatepass(code, andPrint) {
     code = String(code || '').trim();
@@ -1416,6 +1423,212 @@ button[hidden] { display: none !important; }
       .then(logoPng).then(buildPdf)
       .catch(function (e) { toast(e.message, 'err'); })
       .then(function () { $('btn-print').disabled = false; });
+  }
+
+  // ════════════ BOX LABELS (Inward Label Generator "Factory" label) ════════════
+  // Same 150×100 mm label + same PDF method as /Inward-Label-Generator/
+  // (buildLabelHtml + downloadAllLabelsPdf), fed only from this page:
+  //   lines + qty     → the UC gatepass
+  //   Internal SKU    → g4_sku_link (our own UC SKU → Internal SKU links;
+  //                     asked once per SKU, then reused). sku_master's
+  //                     internal_sku is NOT used — it isn't fully accurate.
+  //   Category, image → sku_master (sm_getList / sm_getBw), B&W image first
+  //   Qty/box         → UC pieces per carton, else sku_master qty_per_box
+  //   Box ID          → shared D1 counter (getNextBoxSeq, key SKU|MMYY|factory)
+  //                     so numbers continue from the Inward Label Generator.
+  var H2C_URL = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+  var LBL_LOGO = '<svg height="28" viewBox="490 530 7280 1260" xmlns="http://www.w3.org/2000/svg"><path fill="#1a1a1a" d="M796.6 803.57l625.42 0c4.17,0.55 6.71,2.65 7.48,6.14l-84.8 151.21 -181.47 0c-16.1,25.18 -100.16,178.13 -252.2,458.77l-203.52 0 -0.67 -3.08c109.72,-202.64 190.86,-354.55 243.59,-455.69l-240.46 0 -0.77 -3.7c47.6,-91.52 76.61,-142.78 87.4,-153.65zm-14.19 821.74l-287.36 153.05 187.35 -278.86 1362.49 0 -8.53 5.99 -1253.95 119.82zm6102.31 -1005.2l131.69 -113.42 0 215.51 -960.53 0 8.48 -6 820.36 -96.09zm-574.92 183.46l298.9 0 1.32 6.14c-45.66,84.33 -70.46,131.58 -74.1,141.4 160.29,-96.44 243.35,-144.55 249.31,-144.55l224.51 0 1.32 6.11c-3.09,0.39 -163.87,96.95 -482.4,289.8l215.31 314.14 -5.44 3.08 -212.81 0c-5.17,-3.62 -50.38,-70.48 -135.48,-200.49l-3.14 0c-57.01,115.32 -92.82,182.15 -107.4,200.49l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.77,-24.7l-1.96 -9.09c-2.91,-13.47 -17.46,-33.95 -43.92,-61.58l5.47 -2.99zm-900.24 0.38l295.21 0 0.67 3.13 -177.4 332.67 0.7 3.15 3.15 0 281.78 -191.3c5.47,6.84 8.72,12.09 9.42,15.42l50.56 191.26 2.97 0c-0.06,-5.07 62.84,-123.21 188.62,-354.33l199.85 0 7 3.13c-2.97,8.9 -110.79,213.14 -323.65,612.64l-212.28 0c-4.01,0 -6.55,-2.09 -7.43,-6.09l-8.67 -40.1c-6.4,-29.71 -17.38,-75.75 -32.99,-138.44l-289.68 184.63 -221.52 0 -0.69 -3.12 276.81 -529.56 -3.98 -18.37c-2.88,-13.46 -17.46,-33.93 -43.89,-61.59l5.44 -3.13zm-792.78 -0.38l758.24 0 0.66 2.99c-195.43,377.28 -303.39,581.65 -323.9,613.13l-197.37 0c-4.22,0 -6.58,-2.06 -7.45,-6.06 5.76,-4.89 46.12,-79.83 121.01,-225.06l-249.55 0c-5.54,7.52 -48.45,84.55 -128.62,231.12l-203.51 0 -0.67 -3.08c178.19,-329 269.43,-500.66 273.89,-514.68 2.75,-6.83 3.49,-17.15 2.64,-30.81 -2.41,-11.19 -17.16,-31.67 -44.05,-61.41l-1.32 -6.14zm185.18 228.04l249.02 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.73 0c-2.8,0 -16.07,23.62 -40.03,70.69zm-991.54 -228.04l298.86 0 1.32 6.14 -118.16 221.9 0.69 3.15 249.5 0c81.88,-151.73 124.55,-228.88 128.62,-231.19l191.28 0c4.13,0.55 6.7,2.65 7.45,6.14 -213.25,402.5 -322.44,606 -327.72,609.98l-196.86 0 -0.67 -3.08 112.7 -218.93 -252.85 0c-6.07,5.96 -41.47,70.68 -105.58,194.4 -11.11,18.37 -17.29,27.61 -18.72,27.61l-203.49 0 -0.68 -3.08 273.91 -514.68c2.57,-7.53 2.7,-15.77 0.79,-24.7l-1.98 -9.09c-2.9,-13.47 -17.45,-33.95 -43.92,-61.58l5.51 -2.99zm-792.75 0l758.27 0 0.64 2.99c-195.44,377.28 -303.38,581.65 -323.89,613.13l-197.37 0c-4.24,0 -6.6,-2.06 -7.45,-6.06 5.75,-4.89 46.12,-79.83 120.97,-225.06l-249.51 0c-5.56,7.52 -48.47,84.55 -128.62,231.12l-203.49 0 -0.69 -3.08c178.16,-329 269.38,-500.66 273.91,-514.68 2.71,-6.83 3.45,-17.15 2.6,-30.81 -2.39,-11.19 -17.15,-31.67 -44.05,-61.41l-1.32 -6.14zm185.2 228.04l249 0c5.96,-4.03 19.59,-27.63 40.74,-70.69l-249.72 0c-2.81,0 -16.06,23.62 -40.02,70.69zm-1103.91 -228.04l298.89 0c4.16,0.55 6.74,2.81 7.57,6.66l9.27 43.04c6.44,29.76 17.44,75.82 32.88,138.45 190.96,-123.03 291.13,-185.84 300.97,-188.15l206.5 0c4.3,0.55 6.73,2.81 7.55,6.66 -212.8,402.15 -321.84,605.48 -327.27,609.46l-203.52 0 -0.69 -3.08 175.45 -329.54 -0.68 -3.15 -2.97 0 -282.28 191.28c-5.52,-6.84 -8.76,-12.07 -9.47,-15.4l-50.55 -191.26 -2.98 0c-112.09,216.6 -175.21,333.7 -189.29,351.15l-202.99 0 -0.71 -3.08 274.04 -514.16c2.58,-7.52 2.71,-15.74 0.78,-24.65l-1.95 -9.11c-2.91,-13.47 -17.46,-33.95 -43.93,-61.59l5.38 -3.53zm-496.95 0l400.37 0c23.26,0 40.99,20.47 53.34,61.46 5.96,27.63 -9.61,69.81 -46.53,126.69 -44.77,80.33 -115.53,214.7 -211.82,403.33 -9.73,16.45 -24.43,24.64 -43.84,24.64l-517.82 0c-14.01,-8.19 -22.34,-17.45 -24.49,-27.61 -6.2,-28.7 27.81,-103.76 102.25,-225.02 91.52,-179.21 152.8,-290.15 184.01,-332.87 24.3,-20.48 59.21,-30.62 104.53,-30.62zm-137.63 461.82l203.51 0c1.89,-7.52 54.92,-107.99 159.41,-301.53l-0.63 -2.94 -196.86 0c-5.24,4 -60.32,105.51 -165.43,304.47z"/><path fill="#1a1a1a" d="M7160.73 529.99c52.95,0 95.89,42.94 95.89,95.95 0,52.95 -42.94,95.89 -95.89,95.89 -53,0 -95.97,-42.94 -95.97,-95.89 0,-53.01 42.97,-95.95 95.97,-95.95zm-42.35 149.95l0 -110.28 46.91 0c11.77,0 20.35,1.01 25.65,3.01 5.34,1.97 9.65,5.52 12.86,10.57 3.22,5.05 4.8,10.81 4.8,17.39 0,8.2 -2.44,15.09 -7.3,20.45 -4.85,5.38 -12.16,8.8 -21.83,10.2 4.84,2.81 8.84,5.9 11.95,9.27 3.13,3.36 7.34,9.3 12.66,17.89l13.46 21.5 -26.6 0 -16.09 -23.99c-5.74,-8.56 -9.67,-13.99 -11.76,-16.2 -2.1,-2.26 -4.33,-3.73 -6.7,-4.58 -2.37,-0.83 -6.08,-1.25 -11.2,-1.25l-4.5 0 0 46.02 -22.31 0zm22.31 -63.65l16.45 0c10.69,0 17.35,-0.44 20.02,-1.32 2.65,-0.87 4.74,-2.48 6.23,-4.68 1.53,-2.18 2.3,-4.96 2.3,-8.25 0,-3.76 -1.01,-6.69 -3,-8.99 -1.97,-2.32 -4.75,-3.73 -8.39,-4.34 -1.8,-0.25 -7.21,-0.37 -16.25,-0.37l-17.36 0 0 27.95zm20.04 -72.89c45.53,0 82.45,36.94 82.45,82.54 0,45.52 -36.92,82.49 -82.45,82.49 -45.59,0 -82.53,-36.97 -82.53,-82.49 0,-45.6 36.94,-82.54 82.53,-82.54z"/></svg>';
+  var LBL_CSS = '.gp-label{background:#fff;width:567px;height:378px;border-radius:4px;color:#000;font-family:Arial,Helvetica,sans-serif;box-sizing:border-box;overflow:hidden;display:grid;grid-template-columns:2fr 1fr;grid-template-rows:50px 1fr 1fr;}.lbl-header{grid-column:1/3;display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #000;padding:0 14px;}.lbl-header.centered{justify-content:center;}.lbl-header-left{display:flex;align-items:center;gap:10px;}.lbl-tag{font-size:13.2px;color:#000;border-left:1.5px solid #000;padding-left:8px;letter-spacing:1px;}.lbl-date{font-size:13.2px;color:#000;text-align:right;line-height:1.8;}.lbl-sku-box{grid-column:1/2;grid-row:2/3;padding:8px 6px 4px 14px;}.lbl-sku-inner{border:2px solid #000;border-radius:4px;height:100%;padding:8px 12px;display:flex;flex-direction:column;justify-content:center;gap:4px;}.lbl-category{font-size:18.0px;color:#555;font-weight:700;letter-spacing:2px;text-transform:uppercase;}.lbl-sku-big{font-size:28.8px;font-weight:700;color:#000;word-break:break-all;line-height:1.3;}.lbl-bid{font-size:15.6px;color:#888;letter-spacing:.5px;margin-top:2px;}.lbl-bid.manual{color:#a07000;}.lbl-qr-box{grid-column:2/3;grid-row:2/4;padding:4px 12px 4px 4px;}.lbl-qr-inner{border:2px solid #000;border-radius:4px;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:4px;}.lbl-qr-text{font-size:10.5px;color:#000;text-align:center;line-height:1.3;font-weight:600;word-break:break-all;}.lbl-seal-label{font-size:7.5px;color:#666;text-align:center;letter-spacing:.3px;font-weight:700;margin-bottom:1px;}.lbl-bottom{grid-column:1/2;grid-row:3/4;padding:4px 6px 8px 14px;display:grid;grid-template-columns:1fr 1fr;gap:6px;}.lbl-qty-inner{border:2px solid #000;border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;}.lbl-qty-label{font-size:14.4px;font-weight:700;letter-spacing:2px;color:#555;}.lbl-qty-value{font-size:69.6px;font-weight:700;line-height:1;color:#000;}.lbl-qty-unit{font-size:14.4px;font-weight:700;color:#555;margin-top:2px;letter-spacing:2px;}.lbl-img-box{border:2px solid #000;border-radius:4px;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#fafafa;height:100%;min-height:60px;}.lbl-img-box.manual{border-color:#F5A800;border-width:2.5px;}.lbl-img-box img{width:100%;height:100%;object-fit:contain;padding:4px;box-sizing:border-box;}.lbl-img-ph{font-size:9px;color:#bbb;text-align:center;font-family:monospace;line-height:1.5;}';
+  var lblMaster = null;   // { byUc: { ucSku: { category, imageUrl, bw, qpb, oldInternal } } }
+  var lblLinks = null;    // { ucSku: internalSku }
+  var lblBusy = false;
+
+  function lblLoadData() {
+    var jobs = [];
+    if (!lblMaster) jobs.push(Promise.all([api('sm_getList'), api('sm_getBw').catch(function () { return { rows: [] }; })]).then(function (r) {
+      if (!r[0].ok) throw new Error('Master Sheet: ' + (r[0].error || 'load failed'));
+      var byUc = {};
+      (r[0].rows || []).forEach(function (x) {
+        byUc[x.uc_sku] = { category: x.category && x.category !== 'Default' ? x.category : '', imageUrl: x.image_url || '',
+          bw: '', qpb: Number(x.qty_per_box) || null, oldInternal: x.internal_sku || '' };
+      });
+      (r[1].rows || []).forEach(function (x) { if (byUc[x.uc_sku]) byUc[x.uc_sku].bw = x.bw_image_url || ''; });
+      lblMaster = { byUc: byUc };
+    }));
+    jobs.push(api('g4gpLinkList').then(function (res) {
+      if (!res.ok) throw new Error('SKU links: ' + (res.error || 'load failed'));
+      lblLinks = {}; (res.rows || []).forEach(function (x) { lblLinks[x.uc_sku] = x.internal_sku; });
+    }));
+    return Promise.all(jobs);
+  }
+
+  // Gatepass lines merged per UC SKU, with everything the label needs
+  function lblLines(g) {
+    var by = {}, out = [];
+    g.items.forEach(function (it) {
+      if (!it.sku || !(it.qty > 0)) return;
+      if (!by[it.sku]) { by[it.sku] = { ucSku: it.sku, qty: 0 }; out.push(by[it.sku]); }
+      by[it.sku].qty += it.qty;
+    });
+    out.forEach(function (l) {
+      var m = lblMaster.byUc[l.ucSku] || {};
+      l.internalSku = lblLinks[l.ucSku] || '';
+      l.ppc = (bySku[l.ucSku] && bySku[l.ucSku].ppc) || m.qpb || null;
+      l.category = m.category || '';
+      l.img = m.bw || m.imageUrl || '';
+      l.oldInternal = m.oldInternal || '';
+    });
+    return out;
+  }
+
+  // Popup: Internal SKU (saved for good) + Qty/box (this print only, when UC/Master have none)
+  function lblAsk(lines, editAll) {
+    return new Promise(function (resolve) {
+      var rows = editAll ? lines : lines.filter(function (l) { return !l.internalSku || !l.ppc; });
+      if (!rows.length) return resolve(true);
+      rows.forEach(function (l) { l.askPpc = !editAll && !l.ppc; });
+      var ov = document.createElement('div');
+      ov.className = 'modal-overlay';
+      ov.innerHTML = '<div class="modal-box" style="max-width:640px">' +
+        '<div class="modal-title">' + (editAll ? 'Internal SKU links' : 'Link Internal SKU') + '</div>' +
+        '<div class="modal-sub">Asked once per UC SKU — saved and reused for every G4 label. Qty/box is only asked when UC has none, and is used for this print only.</div>' +
+        '<div style="max-height:52vh;overflow:auto"><table class="gp-tbl" style="width:100%"><thead><tr><th>UC SKU</th><th>Internal SKU</th><th class="num">Qty/box</th></tr></thead><tbody>' +
+        rows.map(function (l, i) {
+          return '<tr><td><span class="sku-code">' + esc(l.ucSku) + '</span><span class="sku-name">' + fmt(l.qty) + ' pcs</span></td>' +
+            '<td><input class="modal-input" style="margin:0;text-transform:uppercase" data-li="' + i + '" value="' + esc(l.internalSku) + '"' +
+            (l.oldInternal ? ' placeholder="old: ' + esc(l.oldInternal) + '"' : ' placeholder="e.g. TCBC-12"') + '></td>' +
+            '<td class="num">' + (!l.askPpc ? '<b>' + (l.ppc || '—') + '</b>' :
+              '<input class="modal-input" style="margin:0;width:80px" type="number" min="1" data-lp="' + i + '" value="' + (l.ppc || '') + '">') + '</td></tr>';
+        }).join('') + '</tbody></table></div>' +
+        '<div class="modal-actions" style="margin-top:16px"><button class="btn-ghost" data-x="cancel">Cancel</button><button class="btn-primary" data-x="ok">' + (editAll ? 'Save links' : 'Save &amp; make labels') + '</button></div></div>';
+      document.body.appendChild(ov);
+      var first = ov.querySelector('input[data-li]'); if (first) first.focus();
+      ov.addEventListener('click', function (e) {
+        var x = e.target.getAttribute('data-x');
+        if (x === 'cancel') { ov.remove(); resolve(false); return; }
+        if (x !== 'ok') return;
+        var save = [], bad = 0;
+        rows.forEach(function (l, i) {
+          var v = ov.querySelector('[data-li="' + i + '"]').value.trim().toUpperCase();
+          var p = ov.querySelector('[data-lp="' + i + '"]');
+          var pv = p ? parseInt(p.value, 10) : l.ppc;
+          if (!v || (!editAll && !(pv > 0))) { bad++; return; }
+          if (v !== l.internalSku) save.push({ uc_sku: l.ucSku, internal_sku: v });
+          l.internalSku = v; if (pv > 0) l.ppc = pv;
+        });
+        if (bad) { toast(bad + ' row(s) need Internal SKU and Qty/box', 'err'); return; }
+        e.target.disabled = true;
+        (save.length ? api('g4gpLinkSave', { links: save }) : Promise.resolve({ ok: true })).then(function (res) {
+          if (!res.ok) throw new Error(res.error || 'Save failed');
+          save.forEach(function (s) { lblLinks[s.uc_sku] = s.internal_sku; });
+          ov.remove(); resolve(true);
+        }).catch(function (err) { e.target.disabled = false; toast('Could not save links — ' + err.message, 'err'); });
+      });
+    });
+  }
+
+  function lblMmyy() { var d = new Date(); return String(d.getMonth() + 1).padStart(2, '0') + String(d.getFullYear()).slice(-2); }
+  function lblNextSeq(internalSku, mmyy) {
+    return api('getNextBoxSeq', { key: internalSku + '|' + mmyy + '|factory' }).then(function (res) {
+      if (!res.ok || !res.seq) throw new Error(res.error || 'Box counter save failed');
+      return res.seq;
+    });
+  }
+
+  // Same markup as Inward Label Generator buildLabelHtml(), factory type
+  function lblHtml(lbl) {
+    var qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=' + encodeURIComponent('SKU:' + lbl.internalSku + '|BOX:' + lbl.bid);
+    var sealQrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=90x90&data=' + encodeURIComponent('QTY:' + lbl.qty);
+    return '<div class="gp-label">' +
+      '<div class="lbl-header centered">' + LBL_LOGO + '</div>' +
+      '<div class="lbl-sku-box"><div class="lbl-sku-inner">' +
+        '<div class="lbl-category">' + esc(lbl.category || lbl.ucSku || '') + '</div>' +
+        '<div class="lbl-sku-big">' + esc(lbl.internalSku) + '</div>' +
+        '<div class="lbl-bid">BOX ID: ' + esc(lbl.bid) + '</div>' +
+      '</div></div>' +
+      '<div class="lbl-qr-box"><div class="lbl-qr-inner">' +
+        '<img src="' + sealQrUrl + '" width="68" height="68" alt="QTY" crossorigin="anonymous">' +
+        '<div class="lbl-seal-label">QTY — SCRATCH IF LOOSE</div>' +
+        '<img src="' + qrUrl + '" width="82" height="82" alt="QR" crossorigin="anonymous">' +
+        '<div class="lbl-qr-text">' + esc(lbl.internalSku) + ' | QTY:' + lbl.qty + '<br>BOX:' + esc(lbl.bid) + '</div>' +
+      '</div></div>' +
+      '<div class="lbl-bottom">' +
+        '<div class="lbl-qty-inner"><div class="lbl-qty-label">QTY IN BOX</div><div class="lbl-qty-value">' + lbl.qty + '</div><div class="lbl-qty-unit">PIECES</div></div>' +
+        '<div style="border:2px solid #000;border-radius:4px;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#fff;">' +
+          (lbl.img ? '<img src="' + esc(lbl.img) + '" crossorigin="anonymous" style="width:100%;height:100%;object-fit:contain;padding:4px;box-sizing:border-box;" onerror="this.style.display=\'none\'">'
+                   : '<div style="font-size:9px;color:#bbb;text-align:center;">PRODUCT<br>IMAGE</div>') +
+        '</div>' +
+      '</div></div>';
+  }
+
+  // Off-screen iframe so this page's own styles can't change the label
+  function lblFrame() {
+    var f = document.createElement('iframe');
+    f.style.cssText = 'position:fixed;left:-9999px;top:0;width:567px;height:378px;border:0;background:#fff;';
+    document.body.appendChild(f);
+    var d = f.contentDocument;
+    d.open(); d.write('<!DOCTYPE html><html><head><style>*{box-sizing:border-box;margin:0;padding:0;}html,body{background:#fff;}' + LBL_CSS + '</style></head><body><div id="box" style="width:567px;height:378px;background:#fff;"></div></body></html>'); d.close();
+    return f;
+  }
+
+  function makeLabels(g, editAll) {
+    if (!g || lblBusy) return;
+    if (window.TM_ROLE === 'viewer') { toast("View only — you don't have edit access", 'err'); return; }
+    lblBusy = true; toast('Preparing labels…');
+    var lines, mmyy = lblMmyy(), labels = [], failed = 0, frame = null;
+    Promise.all([loadScript(JSPDF_URL, 'jspdf'), loadScript(H2C_URL, 'html2canvas'), lblLoadData()])
+      .then(function () { lines = lblLines(g); return lblAsk(lines, editAll); })
+      .then(function (ok) {
+        if (!ok) throw { cancelled: true };
+        if (editAll) { toast('✓ SKU links saved'); throw { cancelled: true }; }
+        // Box IDs — one counter call per box, in order; stop on any failure
+        var total = lines.reduce(function (a, l) { return a + Math.ceil(l.qty / l.ppc); }, 0), done = 0;
+        var chain = Promise.resolve();
+        lines.forEach(function (l) {
+          var boxes = Math.ceil(l.qty / l.ppc);
+          for (var b = 1; b <= boxes; b++) (function (b) {
+            chain = chain.then(function () { return lblNextSeq(l.internalSku, mmyy); }).then(function (seq) {
+              var lastQty = l.qty - (boxes - 1) * l.ppc;
+              labels.push({ ucSku: l.ucSku, internalSku: l.internalSku, category: l.category, img: l.img,
+                qty: b === boxes ? (lastQty > 0 ? lastQty : l.ppc) : l.ppc,
+                bid: l.internalSku + '-' + mmyy + '-' + String(seq).padStart(4, '0') });
+              toast('Box IDs ' + (++done) + ' / ' + total);
+            });
+          })(b);
+        });
+        return chain;
+      })
+      .then(function () {
+        frame = lblFrame();
+        var d = frame.contentDocument, box = d.getElementById('box');
+        var pdf = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: [150, 100] });
+        var chain = Promise.resolve();
+        labels.forEach(function (lbl, i) {
+          chain = chain.then(function () {
+            box.innerHTML = lblHtml(lbl);
+            var imgs = [].slice.call(box.querySelectorAll('img'));
+            return Promise.all(imgs.map(function (img) {
+              return new Promise(function (ok) { if (img.complete) return ok(); img.onload = ok; img.onerror = ok; setTimeout(ok, 4000); });
+            }));
+          }).then(function () {
+            return window.html2canvas(box, { scale: 3, useCORS: true, backgroundColor: '#ffffff' });
+          }).then(function (canvas) {
+            if (i > 0) pdf.addPage([150, 100], 'landscape');
+            pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 150, 100);
+          }, function () {
+            failed++; if (i > 0) pdf.addPage([150, 100], 'landscape');
+          }).then(function () { toast('Rendering label ' + (i + 1) + ' / ' + labels.length); });
+        });
+        return chain.then(function () { pdf.save('Labels_' + g.code + '.pdf'); });
+      })
+      .then(function () {
+        toast(failed ? '✓ PDF downloaded — ' + failed + ' label(s) failed to render, check those pages' : '✓ ' + labels.length + ' label(s) — PDF downloaded', failed ? 'err' : '');
+      })
+      .catch(function (e) {
+        if (e && e.cancelled) return;
+        toast((labels.length ? 'Stopped after ' + labels.length + ' box ID(s) — ' : '') + (e && e.message || e), 'err');
+      })
+      .then(function () { if (frame) frame.remove(); lblBusy = false; });
   }
 
   // One A4 page per gatepass, black & white.

@@ -1162,6 +1162,7 @@ const ACTION_TIERS = {
   // G4 Stock — own gatepass module (Nov 2026)
   g4gpLoad: 'viewer_read', g4gpGet: 'viewer_read', g4gpUcRecent: 'viewer_read', g4gpUcGet: 'viewer_read', g4gpUcLive: 'viewer_read',
   g4gpSave: 'manager_up', g4gpDiscard: 'manager_up', g4gpPush: 'manager_up',
+  g4gpLinkList: 'viewer_read', g4gpLinkSave: 'manager_up',
   sa_saveQtyOverride: 'manager_up', sa_deleteQtyOverride: 'manager_up',
   sa_bulkImportQtyOverrides: 'manager_up', sa_archiveSku: 'manager_up',
   sa_unarchiveSku: 'manager_up', sa_saveRecQtyOverride: 'manager_up',
@@ -12106,7 +12107,15 @@ async function ensureG4GpTables(DB) {
       ppc       INTEGER,
       from_bundle TEXT
     )`),
-    DB.prepare(`CREATE INDEX IF NOT EXISTS idx_g4gp_items_gp ON g4_gatepass_items (gp_id)`)
+    DB.prepare(`CREATE INDEX IF NOT EXISTS idx_g4gp_items_gp ON g4_gatepass_items (gp_id)`),
+    // UC SKU -> Internal SKU links for G4 box labels. Kept separate from
+    // sku_master on purpose (its internal_sku column isn't fully accurate).
+    DB.prepare(`CREATE TABLE IF NOT EXISTS g4_sku_link (
+      uc_sku       TEXT PRIMARY KEY,
+      internal_sku TEXT NOT NULL,
+      updated_by   TEXT,
+      updated_at   TEXT DEFAULT (datetime('now'))
+    )`)
   ]);
 }
 
@@ -12269,6 +12278,23 @@ async function handleG4Gatepass(act, body, url, env, user) {
     gps.forEach(g => { g.uc_status = g.uc_code ? (ucStatus[g.uc_code] || null) : null; });
     return json({ ok: true, ...live, draftReserved: await g4gpDraftReserved(env.DB, 0),
       gatepasses: gps, destinations: G4GP_DESTINATIONS, types: G4GP_TYPES, pushReady });
+  }
+
+  // ── G4 box labels: UC SKU -> Internal SKU links (asked once per SKU, then reused) ──
+  if (act === 'g4gpLinkList') {
+    const r = await env.DB.prepare('SELECT uc_sku, internal_sku FROM g4_sku_link').all();
+    return json({ ok: true, rows: r.results || [] });
+  }
+  if (act === 'g4gpLinkSave') {
+    const links = (body && Array.isArray(body.links)) ? body.links : [];
+    const clean = links.map(l => ({ uc: String(l.uc_sku || '').trim(), sku: String(l.internal_sku || '').trim().toUpperCase() }))
+      .filter(l => l.uc && l.sku);
+    if (!clean.length) return json({ ok: false, error: 'No links to save' });
+    await env.DB.batch(clean.map(l => env.DB.prepare(
+      `INSERT INTO g4_sku_link (uc_sku, internal_sku, updated_by, updated_at) VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT(uc_sku) DO UPDATE SET internal_sku = excluded.internal_sku, updated_by = excluded.updated_by, updated_at = datetime('now')`
+    ).bind(l.uc, l.sku, who)));
+    return json({ ok: true, saved: clean.length });
   }
 
   // ── UC gatepasses created at G4 (from the Supabase mirror) — for printing in our format ──
