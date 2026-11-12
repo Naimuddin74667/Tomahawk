@@ -802,12 +802,15 @@ async function fbaGpBuildPlan(env, shipmentId) {
     if (!st) return hold.push({ amazon_sku: from, sku, qty: n.qty, reason: 'SKU not found in UC' });
     if (st.enabled === false) return hold.push({ amazon_sku: from, sku, qty: n.qty, reason: 'SKU disabled in UC' });
     const ppc = /^\d+$/.test(String(st.piecesPerCarton || '')) ? Number(st.piecesPerCarton) : 0;
-    if (!ppc) return hold.push({ amazon_sku: from, sku, qty: n.qty, reason: 'No Qty/Box in UC' });
     const g4Free = (Number(st.G4_stock) || 0) - (reserved.G4[sku] || 0);
     const e3Free = (Number(st.E3_stock) || 0) - (reserved.E3[sku] || 0);
-    const sp = fbaGpSplit(n.qty, ppc, g4Free, e3Free);
-    plan.push({ sku, from, need: n.qty, ppc, g4_free: g4Free, e3_free: e3Free, cartons: sp.cartons, g4: sp.g4, e3: sp.e3, hold: sp.hold });
-    if (sp.hold) hold.push({ amazon_sku: from, sku, qty: sp.hold, reason: 'E3 short (free ' + Math.max(e3Free, 0) + ')' });
+    // No Qty/Box in UC → G4 can't give full cartons, so G4 is skipped and E3
+    // gives loose pieces as usual (changed 12 Nov 2026 — was: whole SKU on Hold).
+    const sp = ppc ? fbaGpSplit(n.qty, ppc, g4Free, e3Free)
+                   : { cartons: 0, g4: 0, e3: Math.min(n.qty, Math.max(e3Free, 0)), hold: n.qty - Math.min(n.qty, Math.max(e3Free, 0)) };
+    plan.push({ sku, from, need: n.qty, ppc: ppc || null, g4_free: g4Free, e3_free: e3Free, cartons: sp.cartons, g4: sp.g4, e3: sp.e3, hold: sp.hold });
+    if (sp.hold) hold.push({ amazon_sku: from, sku, qty: sp.hold,
+      reason: 'E3 short (free ' + Math.max(e3Free, 0) + ')' + (ppc ? '' : ' · no Qty/Box in UC, so G4 not used') });
   });
   plan.sort((a, b) => a.sku.localeCompare(b.sku));
 
