@@ -959,6 +959,9 @@ html .site-header { background: var(--tmh-bg); }
         <div class="ro-stat-card" data-view="gppending" onclick="fbaSetView('gppending')" title="Not closed or cancelled, and no UC gatepass carries this shipment ID">
           <div class="ro-stat-label">Gatepass Pending</div><div class="ro-stat-value" id="fbaStat-gppending" style="color:var(--accent)">&ndash;</div><div class="ro-stat-sub">no UC gatepass yet</div>
         </div>
+        <div class="ro-stat-card" data-view="notdisp" onclick="fbaSetView('notdisp')" title="Gatepass created in UC, but Amazon still shows Working / Ready to ship">
+          <div class="ro-stat-label">Not Dispatched</div><div class="ro-stat-value" id="fbaStat-notdisp" style="color:#5b9fe3">&ndash;</div><div class="ro-stat-sub">gatepass done, not shipped</div>
+        </div>
         <div class="ro-stat-card" data-view="transit" onclick="fbaSetView('transit')" title="Amazon status SHIPPED / IN_TRANSIT">
           <div class="ro-stat-label">In Transit</div><div class="ro-stat-value" id="fbaStat-transit">&ndash;</div><div class="ro-stat-sub">on the way to FC</div>
         </div>
@@ -2094,6 +2097,12 @@ function fbaChecks(s) {
     out.push({ level: 'amber', text: 'Gatepass qty ' + fbaNum(fbaGpQty(s)) + ' ≠ ' + fbaNum(shipped) });
   }
 
+  var ps = fbaPackStatus(s);
+  if (ps) {
+    var age = fbaGpAgeDays(s);
+    if (age != null && age > 2) out.push({ level: 'red', text: 'Not dispatched ' + Math.floor(age) + ' days after gatepass' });
+    if (ps === 'Left Warehouse') out.push({ level: 'amber', text: 'Left warehouse \u2014 mark shipped in Seller Central' });
+  }
   var held = fbaHoldQty(s);
   if (held && stage !== 'closed') out.push({ level: 'amber', text: 'Hold ' + fbaNum(held) + ' \u2014 add to GP manually' });
   if (s.auto_gp && s.auto_gp.status === 'partial') out.push({ level: 'red', text: 'Gatepass only partly created' });
@@ -2142,6 +2151,7 @@ function fbaInView(s, view) {
   if (view === 'all') return true; // the only view that shows cancelled shipments
   if (view === 'open') return fbaIsOpen(s);
   if (view === 'gppending') return fbaIsOpen(s) && !fbaHasGp(s);
+  if (view === 'notdisp') return s._stage === 'created' && fbaHasGp(s);
   if (view === 'attention') return s._stage !== 'cancelled' && s._checks.length > 0;
   return s._stage === view;
 }
@@ -2150,7 +2160,7 @@ function fbaRender() {
   var q = ((document.getElementById('fbaSearch') || {}).value || '').trim().toLowerCase();
   var base = q ? _fbaRows.filter(function (s) { return s._search.indexOf(q) !== -1; }) : _fbaRows;
 
-  ['created', 'gppending', 'transit', 'fc', 'attention', 'open', 'closed', 'all'].forEach(function (v) {
+  ['created', 'gppending', 'notdisp', 'transit', 'fc', 'attention', 'open', 'closed', 'all'].forEach(function (v) {
     var el = document.getElementById('fbaStat-' + v);
     if (el) el.textContent = base.filter(function (s) { return fbaInView(s, v); }).length;
   });
@@ -2182,10 +2192,34 @@ function fbaRender() {
 // "since …" only once we've actually watched the status change — on the
 // first sync every shipment gets status_since = first_seen_at = that
 // moment, which says nothing about when Amazon really changed it.
+// Not-dispatched helpers. Packing status from the UC gatepass status:
+//   all CLOSED → 'Left Warehouse' (goods out — mark shipped in Seller Central)
+//   otherwise  → 'Under Packing'
+function fbaGpCreatedAt(s) {
+  var ts = s.gatepasses.map(function (g) { return g.created; }).filter(Boolean).sort()[0];
+  if (!ts && s.auto_gp && s.auto_gp.at) ts = String(s.auto_gp.at).replace(' ', 'T') + 'Z';
+  return ts || null;
+}
+function fbaGpAgeDays(s) {
+  var ts = fbaGpCreatedAt(s); if (!ts) return null;
+  var d = new Date(ts); return isNaN(d.getTime()) ? null : (Date.now() - d.getTime()) / 86400000;
+}
+function fbaPackStatus(s) {
+  if (s._stage !== 'created' || !fbaHasGp(s)) return null;
+  var left = s.gatepasses.length > 0 && s.gatepasses.every(function (g) { return g.status === 'CLOSED'; });
+  return left ? 'Left Warehouse' : 'Under Packing';
+}
+
 function fbaStatusHtml(s) {
   var sub = [];
   if (s.status_since && s.status_since !== s.first_seen_at) sub.push('since ' + fbaHtml(fbaAgo(s.status_since)));
   if (s.from_history) sub.push('<span title="No longer in the Amazon mirror — shown from our saved copy">history</span>');
+  var ps = fbaPackStatus(s);
+  if (ps) {
+    var age = fbaGpAgeDays(s);
+    sub.unshift('<span style="font-weight:700;color:' + (ps === 'Left Warehouse' ? 'var(--accent)' : '#5b9fe3') + '">' + ps + '</span>' +
+      (age != null ? ' · GP ' + fbaHtml(fbaAgo(fbaGpCreatedAt(s))) : ''));
+  }
   return '<span style="font-weight:700;color:' + FBA_STAGE_COLOR[s._stage] + '">' + fbaHtml(FBA_STATUS_LABEL[s.status] || s.status) + '</span>' +
     (sub.length ? '<div class="fba-sub">' + sub.join(' · ') + '</div>' : '');
 }
