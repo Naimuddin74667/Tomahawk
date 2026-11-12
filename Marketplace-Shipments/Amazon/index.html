@@ -169,6 +169,21 @@ try { if (localStorage.getItem('tm_theme') !== 'dark') document.documentElement.
   .empty{font-size:12px;color:var(--muted);text-align:center;padding:2rem 0;font-style:italic}
   .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s}
   .modal-bg.show{opacity:1;pointer-events:all}
+  /* FBA Tracker tab */
+  .fba-table{width:100%;border-collapse:collapse;font-size:13px}
+  .fba-table thead th{position:sticky;top:0;z-index:2;background:var(--surface);padding:.85rem 1rem;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600;white-space:nowrap}
+  .fba-table td{padding:.85rem 1rem;border-bottom:1px solid var(--border);vertical-align:top}
+  .fba-table .c{text-align:center}
+  .fba-table tbody tr.fba-row{cursor:pointer}
+  .fba-table tbody tr.fba-row:hover{background:var(--bg-hover)}
+  .fba-table-sm td{padding:.5rem .6rem}
+  .fba-table-sm thead th{padding:.5rem .6rem;font-size:10px;position:static}
+  .fba-mono{font-family:'DM Mono',monospace}
+  .fba-sub{font-size:10.5px;color:var(--muted);margin-top:2px;line-height:1.45}
+  .fba-chip{display:inline-block;font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:10px;margin:0 4px 4px 0;white-space:nowrap}
+  .fba-chip.red{color:#ff8080;background:rgba(255,128,128,.12)}
+  .fba-chip.amber{color:var(--accent);background:rgba(245,168,0,.12)}
+  .fba-chip.ok{color:#6dc87a;background:rgba(109,200,122,.12)}
   .modal{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:1.5rem;width:420px;max-height:90vh;overflow-y:auto}
   .modal-title{font-size:13px;font-weight:700;color:var(--accent);margin-bottom:1rem;letter-spacing:.04em;text-transform:uppercase}
   .field{margin-bottom:.85rem}
@@ -704,6 +719,7 @@ html .site-header { background: var(--tmh-bg); }
 
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('fc',this)">&#128230; FC Appointments</button>
+  <button class="tab-btn" onclick="switchTab('fba',this)">&#128666; FBA Tracker</button>
   <button class="tab-btn" onclick="switchTab('bulk',this)">Label Print</button>
   <button class="tab-btn" onclick="switchTab('boxlabel',this)">Box Label</button>
   <button class="tab-btn" onclick="switchTab('library',this)">SKU Library</button>
@@ -922,6 +938,58 @@ html .site-header { background: var(--tmh-bg); }
         <button class="btn btn-secondary btn-sm" id="fcPrevBtn" style="width:auto" onclick="fcGoToPage(_fcPage-1)">&#8592; Prev</button>
         <span id="fcPageIndicator" style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap"></span>
         <button class="btn btn-secondary btn-sm" id="fcNextBtn" style="width:auto" onclick="fcGoToPage(_fcPage+1)">Next &#8594;</button>
+      </div>
+    </div>
+
+    <!-- FBA TRACKER — every FBA inbound shipment straight from Amazon's API
+         (via the Supabase mirror, ~15 min). See the FBA TRACKER JS block. -->
+    <div id="tab-fba" class="tab-content" style="display:none;flex:1;flex-direction:column;min-height:0">
+      <div style="flex-shrink:0;padding:.7rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.8rem;background:var(--surface)">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128666; FBA Tracker <span id="fbaSyncInfo" style="color:var(--muted);font-weight:500;letter-spacing:.04em;text-transform:none;margin-left:.6rem"></span></div>
+        <input type="text" id="fbaSearch" placeholder="Search Shipment ID / FC / SKU / Gatepass..." oninput="_fbaPage=1;fbaRender()" style="width:280px;font-size:11px;padding:5px 10px">
+        <button class="btn btn-secondary btn-sm" onclick="fbaLoad()" style="width:auto">&#8635; Refresh</button>
+      </div>
+
+      <div class="ro-stats-row" id="fbaCards">
+        <div class="ro-stat-card is-active-view" data-view="open" onclick="fbaSetView('open')" title="Created + In transit + At FC">
+          <div class="ro-stat-label">Open</div><div class="ro-stat-value accent" id="fbaStat-open">&ndash;</div><div class="ro-stat-sub">not yet closed</div>
+        </div>
+        <div class="ro-stat-card" data-view="created" onclick="fbaSetView('created')" title="Amazon status WORKING / READY_TO_SHIP">
+          <div class="ro-stat-label">Created</div><div class="ro-stat-value" id="fbaStat-created">&ndash;</div><div class="ro-stat-sub">not dispatched yet</div>
+        </div>
+        <div class="ro-stat-card" data-view="transit" onclick="fbaSetView('transit')" title="Amazon status SHIPPED / IN_TRANSIT / DELIVERED">
+          <div class="ro-stat-label">In Transit</div><div class="ro-stat-value" id="fbaStat-transit">&ndash;</div><div class="ro-stat-sub">on the way to FC</div>
+        </div>
+        <div class="ro-stat-card" data-view="fc" onclick="fbaSetView('fc')" title="Amazon status CHECKED_IN / RECEIVING">
+          <div class="ro-stat-label">At FC</div><div class="ro-stat-value" id="fbaStat-fc">&ndash;</div><div class="ro-stat-sub">checked in / receiving</div>
+        </div>
+        <div class="ro-stat-card" data-view="closed" onclick="fbaSetView('closed')" title="Amazon status CLOSED">
+          <div class="ro-stat-label">Closed</div><div class="ro-stat-value" id="fbaStat-closed">&ndash;</div><div class="ro-stat-sub">receiving finished</div>
+        </div>
+        <div class="ro-stat-card" data-view="attention" onclick="fbaSetView('attention')" title="Open or closed shipments with a red/amber check">
+          <div class="ro-stat-label">Needs Attention</div><div class="ro-stat-value" id="fbaStat-attention" style="color:#ff8080">&ndash;</div><div class="ro-stat-sub">failed a check</div>
+        </div>
+        <div class="ro-stat-card" data-view="cancelled" onclick="fbaSetView('cancelled')" title="Amazon status CANCELLED / DELETED">
+          <div class="ro-stat-label">Cancelled</div><div class="ro-stat-value" id="fbaStat-cancelled" style="color:var(--muted)">&ndash;</div><div class="ro-stat-sub">hidden elsewhere</div>
+        </div>
+      </div>
+
+      <div class="ro-table-scroll" style="flex:1;overflow-y:auto;overflow-x:auto;min-height:0">
+        <table class="fba-table">
+          <thead>
+            <tr>
+              <th>Shipment</th><th class="c">FC</th><th>Amazon Status</th><th class="c">SKUs</th>
+              <th class="c">Shipped</th><th class="c">Received</th><th>Gatepass</th><th>Appointment</th><th>Checks</th>
+            </tr>
+          </thead>
+          <tbody id="fbaTbody"></tbody>
+        </table>
+      </div>
+
+      <div id="fbaPager" style="display:none;flex-shrink:0;align-items:center;justify-content:center;gap:1rem;padding:.45rem 1.4rem;border-top:1px solid var(--border);background:var(--surface)">
+        <button class="btn btn-secondary btn-sm" style="width:auto" onclick="fbaGoToPage(_fbaPage-1)">&#8592; Prev</button>
+        <span id="fbaPageInfo" style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;white-space:nowrap"></span>
+        <button class="btn btn-secondary btn-sm" style="width:auto" onclick="fbaGoToPage(_fbaPage+1)">Next &#8594;</button>
       </div>
     </div>
 
@@ -1194,6 +1262,31 @@ html .site-header { background: var(--tmh-bg); }
 </div>
 <script>document.getElementById('fcItemsModal').addEventListener('click',function(e){if(e.target===this)fcCloseDetailModal();});</script>
 
+<!-- FBA TRACKER — shipment detail -->
+<div class="modal-bg" id="fbaItemsModal">
+  <div class="modal" style="width:1000px;max-width:95vw;max-height:90vh;overflow-y:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem">
+      <div class="modal-title" style="margin-bottom:0">&#128666; FBA Shipment &mdash; <span id="fba-di-id" style="color:var(--accent)"></span></div>
+      <button onclick="fbaCloseDetail()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
+    </div>
+    <div id="fba-di-summary" style="display:grid;grid-template-columns:repeat(4,1fr);gap:.6rem;background:var(--bg-raised);border:1px solid var(--border);border-radius:6px;padding:.7rem .9rem;margin-bottom:.8rem;font-size:12px"></div>
+    <div id="fba-di-checks" style="margin-bottom:.8rem"></div>
+    <table class="fba-table fba-table-sm">
+      <thead>
+        <tr>
+          <th>Amazon SKU &rarr; UC SKU</th><th>FNSKU</th><th class="c">Shipped</th><th class="c">Received</th><th class="c">Diff</th>
+          <th class="c" title="Available now in UC (bundles: how many full sets the child SKUs allow)">Stock G4</th><th class="c">Stock E3</th>
+        </tr>
+      </thead>
+      <tbody id="fba-di-body"></tbody>
+    </table>
+    <div class="btn-row" style="margin-top:1rem">
+      <button class="btn btn-primary" onclick="fbaCloseDetail()">Close</button>
+    </div>
+  </div>
+</div>
+<script>document.getElementById('fbaItemsModal').addEventListener('click',function(e){if(e.target===this)fbaCloseDetail();});</script>
+
 <!-- LEDGER SETTINGS MODAL — password-gated Delete All (pincode mapping retired — warehouse is read directly off the PDF) -->
 <div class="modal-bg" id="ledgerSettingsModal">
   <div class="modal" style="width:420px">
@@ -1399,13 +1492,14 @@ function switchTab(name, btn) {
   var leftPanel = document.querySelector('.left-panel');
   var previewPanel = document.getElementById('previewPanel');
 
-  if(name==='boxlabel' || name==='fc'){
+  if(name==='boxlabel' || name==='fc' || name==='fba'){
     // Single-column tab: no side-by-side preview needed for this workflow
     leftPanel.style.width='100%';
     leftPanel.style.maxWidth='100%';
     leftPanel.style.borderRight='none';
     previewPanel.style.display='none';
     if(name==='fc') fcLoad();
+    if(name==='fba') fbaLoad();
     return;
   }
   // Restore the normal two-column layout for every other tab
@@ -1892,6 +1986,261 @@ function fcOpenDetailModal(shipmentId) {
 
 function fcCloseDetailModal() {
   document.getElementById('fcItemsModal').classList.remove('show');
+}
+
+// ══════════════════════════════════════════════════════════════════
+// FBA TRACKER TAB — every FBA inbound shipment straight from Amazon's
+// API (worker.js → fbaTrackerList → Supabase mirror, refreshed by SK's
+// sync every ~15 min). Unlike FC Appointments, a shipment shows up as
+// soon as it's created in Seller Central — no appointment email needed.
+// Read-only for now; the "Create gatepass" step comes next.
+// Checks run in the browser (fbaChecks) so the rules are easy to tweak.
+// ══════════════════════════════════════════════════════════════════
+var _fbaRows = [];
+var _fbaPage = 1;
+var FBA_PAGE_SIZE = 15;
+var _fbaView = 'open'; // card filter — page opens on Open shipments
+
+// Amazon shipment status → our stage
+var FBA_STAGE_OF = {
+  WORKING: 'created', READY_TO_SHIP: 'created',
+  SHIPPED: 'transit', IN_TRANSIT: 'transit', DELIVERED: 'transit',
+  CHECKED_IN: 'fc', RECEIVING: 'fc',
+  CLOSED: 'closed',
+  CANCELLED: 'cancelled', DELETED: 'cancelled', ERROR: 'cancelled'
+};
+var FBA_STATUS_LABEL = {
+  WORKING: 'Working', READY_TO_SHIP: 'Ready to ship', SHIPPED: 'Shipped', IN_TRANSIT: 'In transit',
+  DELIVERED: 'Delivered', CHECKED_IN: 'Checked in', RECEIVING: 'Receiving', CLOSED: 'Closed',
+  CANCELLED: 'Cancelled', DELETED: 'Deleted', ERROR: 'Error'
+};
+var FBA_STAGE_COLOR = { created: 'var(--text)', transit: '#5b9fe3', fc: '#5bc0de', closed: '#6dc87a', cancelled: 'var(--muted)' };
+
+function fbaStage(s) { return FBA_STAGE_OF[s.status] || 'created'; }
+function fbaHtml(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function fbaNum(n) { return (n == null || isNaN(n)) ? '—' : Number(n).toLocaleString('en-IN'); }
+function fbaSum(items, key) { return items.reduce(function (t, it) { return t + (Number(it[key]) || 0); }, 0); }
+function fbaGpQty(s) { return s.gatepasses.reduce(function (t, g) { return t + (Number(g.qty) || 0); }, 0); }
+function fbaIsBadUcSku(u) { return !u || /^(unlinked|block)/i.test(u); }
+
+// "2 h ago" / "12 Nov" from an ISO or "YYYY-MM-DD HH:MM:SS" (UTC) string
+function fbaAgo(ts) {
+  if (!ts) return '';
+  var d = new Date(String(ts).indexOf('T') === -1 ? String(ts).replace(' ', 'T') + 'Z' : ts);
+  if (isNaN(d.getTime())) return '';
+  var mins = Math.round((Date.now() - d.getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + ' min ago';
+  if (mins < 48 * 60) return Math.round(mins / 60) + ' h ago';
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+}
+
+// ── Checks ── returns [{ level: 'red'|'amber', text }]
+//   1. Amazon SKU not mapped to a UC SKU (any stage)
+//   2. Not dispatched + no gatepass yet: G4 + E3 stock below shipment qty
+//   3. Dispatched / at FC but no gatepass carries this shipment ID
+//   4. Gatepass qty ≠ shipment qty (skipped when bundles are involved —
+//      gatepasses list the child SKUs, so unit counts don't compare)
+//   5. Closed with received < shipped → shortage claim candidate
+function fbaChecks(s) {
+  var out = [];
+  var stage = fbaStage(s);
+  if (stage === 'cancelled') return out;
+  var items = s.items || [];
+  var shipped = fbaSum(items, 'shipped'), received = fbaSum(items, 'received');
+
+  var unmapped = items.filter(function (it) { return fbaIsBadUcSku(it.uc_sku); }).length;
+  if (unmapped) out.push({ level: 'red', text: unmapped + ' SKU not mapped to UC' });
+
+  if (stage === 'created' && !s.gatepasses.length) {
+    var short = items.filter(function (it) {
+      return it.stock && (it.stock.g4 + it.stock.e3) < it.shipped;
+    }).length;
+    if (short) out.push({ level: 'red', text: 'Stock short on ' + short + ' SKU' });
+  }
+
+  if ((stage === 'transit' || stage === 'fc') && !s.gatepasses.length) {
+    out.push({ level: 'amber', text: 'No gatepass linked' });
+  }
+
+  var hasBundle = items.some(function (it) { return it.stock && it.stock.bundle; });
+  if (s.gatepasses.length && !hasBundle && fbaGpQty(s) !== shipped) {
+    out.push({ level: 'amber', text: 'Gatepass qty ' + fbaNum(fbaGpQty(s)) + ' ≠ ' + fbaNum(shipped) });
+  }
+
+  if (stage === 'closed' && received < shipped) {
+    out.push({ level: 'red', text: 'Received short by ' + fbaNum(shipped - received) });
+  }
+  return out;
+}
+
+function fbaLoad() {
+  var tbody = document.getElementById('fbaTbody');
+  if (tbody) tbody.innerHTML = skRows(9, 6);
+  fetch(getWorkerBase() + '?action=fbaTrackerList')
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (!data || !data.ok) throw new Error((data && data.error) || 'Load failed');
+      _fbaRows = data.shipments || [];
+      // Precompute per row once — render/filter reuse these.
+      _fbaRows.forEach(function (s) {
+        s._stage = fbaStage(s);
+        s._shipped = fbaSum(s.items || [], 'shipped');
+        s._received = fbaSum(s.items || [], 'received');
+        s._checks = fbaChecks(s);
+        s._search = [s.shipment_id, s.shipment_name, s.destination_fc, s.status]
+          .concat((s.items || []).map(function (it) { return it.seller_sku + ' ' + it.uc_sku + ' ' + it.fnsku; }))
+          .concat(s.gatepasses.map(function (g) { return g.code; }))
+          .join(' ').toLowerCase();
+      });
+      var info = document.getElementById('fbaSyncInfo');
+      if (info) info.textContent = data.syncedAt ? '· Amazon sync ' + fbaAgo(data.syncedAt) + (data.syncStatus && data.syncStatus !== 'ok' ? ' (' + data.syncStatus + ')' : '') : '';
+      _fbaPage = 1;
+      fbaRender();
+    })
+    .catch(function (err) {
+      skClear();
+      if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="padding:3rem;text-align:center;color:#e05555;font-size:11px">Failed to load: ' + fbaHtml(err.message || '') + '</td></tr>';
+    });
+}
+
+function fbaSetView(view) { _fbaView = view; _fbaPage = 1; fbaRender(); }
+function fbaGoToPage(p) { _fbaPage = p; fbaRender(); }
+
+function fbaInView(s, view) {
+  if (view === 'open') return s._stage === 'created' || s._stage === 'transit' || s._stage === 'fc';
+  if (view === 'attention') return s._stage !== 'cancelled' && s._checks.length > 0;
+  return s._stage === view;
+}
+
+function fbaRender() {
+  var q = ((document.getElementById('fbaSearch') || {}).value || '').trim().toLowerCase();
+  var base = q ? _fbaRows.filter(function (s) { return s._search.indexOf(q) !== -1; }) : _fbaRows;
+
+  ['open', 'created', 'transit', 'fc', 'closed', 'attention', 'cancelled'].forEach(function (v) {
+    var el = document.getElementById('fbaStat-' + v);
+    if (el) el.textContent = base.filter(function (s) { return fbaInView(s, v); }).length;
+  });
+  document.querySelectorAll('#fbaCards .ro-stat-card').forEach(function (c) {
+    c.classList.toggle('is-active-view', c.getAttribute('data-view') === _fbaView);
+  });
+
+  // Newest first — FBA shipment IDs increase over time.
+  var rows = base.filter(function (s) { return fbaInView(s, _fbaView); })
+    .sort(function (a, b) { return b.shipment_id.localeCompare(a.shipment_id); });
+
+  var pages = Math.max(1, Math.ceil(rows.length / FBA_PAGE_SIZE));
+  if (_fbaPage > pages) _fbaPage = pages;
+  if (_fbaPage < 1) _fbaPage = 1;
+  var pageRows = rows.slice((_fbaPage - 1) * FBA_PAGE_SIZE, _fbaPage * FBA_PAGE_SIZE);
+
+  var tbody = document.getElementById('fbaTbody');
+  if (!pageRows.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="padding:3rem;text-align:center;color:var(--muted);font-size:11px">No shipments here.</td></tr>';
+  } else {
+    tbody.innerHTML = pageRows.map(fbaRowHtml).join('');
+  }
+
+  var pager = document.getElementById('fbaPager');
+  pager.style.display = rows.length > FBA_PAGE_SIZE ? 'flex' : 'none';
+  document.getElementById('fbaPageInfo').textContent = 'Page ' + _fbaPage + ' of ' + pages + ' · ' + rows.length + ' shipments';
+}
+
+// "since …" only once we've actually watched the status change — on the
+// first sync every shipment gets status_since = first_seen_at = that
+// moment, which says nothing about when Amazon really changed it.
+function fbaStatusHtml(s) {
+  var sub = [];
+  if (s.status_since && s.status_since !== s.first_seen_at) sub.push('since ' + fbaHtml(fbaAgo(s.status_since)));
+  if (s.from_history) sub.push('<span title="No longer in the Amazon mirror — shown from our saved copy">history</span>');
+  return '<span style="font-weight:700;color:' + FBA_STAGE_COLOR[s._stage] + '">' + fbaHtml(FBA_STATUS_LABEL[s.status] || s.status) + '</span>' +
+    (sub.length ? '<div class="fba-sub">' + sub.join(' · ') + '</div>' : '');
+}
+
+function fbaGatepassHtml(s) {
+  if (!s.gatepasses.length) return '<span style="color:var(--muted)">—</span>';
+  return s.gatepasses.map(function (g) {
+    var done = g.status === 'CLOSED';
+    return '<div class="fba-mono" style="font-size:12px;white-space:nowrap">' + fbaHtml(g.facility || '?') + ' : ' + fbaHtml(fcSimplifyGatepassCode(g.code)) +
+      ' <span style="color:' + (done ? '#6dc87a' : 'var(--accent)') + ';font-size:10.5px">' + (done ? '&#10003;' : fbaHtml(g.status)) + '</span></div>';
+  }).join('');
+}
+
+function fbaApptHtml(s) {
+  if (!s.appointment) return '<span style="color:var(--muted)">—</span>';
+  var a = s.appointment;
+  var cancelled = /cancel/i.test(a.status || '');
+  return '<div style="font-size:12px;white-space:nowrap' + (cancelled ? ';color:#ff8080;text-decoration:line-through' : '') + '">' + fbaHtml(fcExtractApptDate(a.slot)) + '</div>' +
+    '<div class="fba-sub fba-mono">' + fbaHtml(a.id || '') + '</div>';
+}
+
+function fbaChecksHtml(checks) {
+  if (!checks.length) return '<span class="fba-chip ok">&#10003; OK</span>';
+  return checks.map(function (c) { return '<span class="fba-chip ' + c.level + '">' + fbaHtml(c.text) + '</span>'; }).join('');
+}
+
+function fbaRowHtml(s) {
+  var showRecv = s._stage === 'fc' || s._stage === 'closed';
+  var pct = s._shipped ? Math.round(s._received * 100 / s._shipped) : 0;
+  return '<tr class="fba-row" onclick="fbaOpenDetail(\'' + fcEsc(s.shipment_id) + '\')">' +
+    '<td><span class="fba-mono" style="font-weight:700" onclick="event.stopPropagation();fcCopyText(\'' + fcEsc(s.shipment_id) + '\')" title="Click to copy">' + fbaHtml(s.shipment_id) + '</span>' +
+      '<div class="fba-sub">' + fbaHtml(s.shipment_name || '') + '</div></td>' +
+    '<td class="c" style="font-weight:700">' + fbaHtml(s.destination_fc || '—') + '</td>' +
+    '<td>' + fbaStatusHtml(s) + '</td>' +
+    '<td class="c">' + (s.items || []).length + '</td>' +
+    '<td class="c">' + fbaNum(s._shipped) + '</td>' +
+    '<td class="c">' + (showRecv ? fbaNum(s._received) + '<div class="fba-sub">' + pct + '%</div>' : '<span style="color:var(--muted)">—</span>') + '</td>' +
+    '<td>' + fbaGatepassHtml(s) + '</td>' +
+    '<td>' + fbaApptHtml(s) + '</td>' +
+    '<td style="max-width:240px">' + fbaChecksHtml(s._checks) + '</td>' +
+    '</tr>';
+}
+
+function fbaOpenDetail(shipmentId) {
+  var s = _fbaRows.find(function (r) { return r.shipment_id === shipmentId; });
+  if (!s) return;
+  document.getElementById('fba-di-id').textContent = s.shipment_id;
+
+  function cell(label, val) {
+    return '<div><div style="color:var(--muted);font-size:10px;text-transform:uppercase">' + label + '</div><div style="font-weight:700">' + val + '</div></div>';
+  }
+  document.getElementById('fba-di-summary').innerHTML =
+    cell('Name', fbaHtml(s.shipment_name || '—')) +
+    cell('Dest. FC', fbaHtml(s.destination_fc || '—')) +
+    cell('Amazon Status', fbaStatusHtml(s)) +
+    cell('First Seen by Tracker', fbaHtml(fbaAgo(s.first_seen_at))) +
+    cell('Shipped Qty', fbaNum(s._shipped)) +
+    cell('Received Qty', (s._stage === 'fc' || s._stage === 'closed') ? fbaNum(s._received) : '—') +
+    cell('Gatepass', fbaGatepassHtml(s) + (s.gatepasses.length ? '<div class="fba-sub">' + fbaNum(fbaGpQty(s)) + ' units on gatepass</div>' : '')) +
+    cell('Appointment', fbaApptHtml(s));
+
+  document.getElementById('fba-di-checks').innerHTML = fbaChecksHtml(s._checks);
+
+  var showRecv = s._stage === 'fc' || s._stage === 'closed';
+  document.getElementById('fba-di-body').innerHTML = (s.items || []).map(function (it) {
+    var diff = it.received - it.shipped;
+    var st = it.stock;
+    var bundleKids = st && st.bundle && st.children
+      ? '<div class="fba-sub">Bundle: ' + st.children.map(function (k) { return fbaHtml(k.sku) + ' ×' + k.qty; }).join(', ') + '</div>' : '';
+    var stockShort = s._stage === 'created' && !s.gatepasses.length && st && (st.g4 + st.e3) < it.shipped;
+    var stockStyle = stockShort ? 'color:#ff8080;font-weight:700' : '';
+    return '<tr>' +
+      '<td>' + fbaHtml(it.seller_sku) +
+        '<div class="fba-sub" style="' + (fbaIsBadUcSku(it.uc_sku) ? 'color:#ff8080;font-weight:700' : '') + '">' + (it.uc_sku ? '&rarr; ' + fbaHtml(it.uc_sku) : 'Not mapped to UC') + '</div>' + bundleKids + '</td>' +
+      '<td class="fba-mono">' + fbaHtml(it.fnsku || '—') + '</td>' +
+      '<td class="c">' + fbaNum(it.shipped) + '</td>' +
+      '<td class="c">' + (showRecv ? fbaNum(it.received) : '—') + '</td>' +
+      '<td class="c" style="' + (showRecv && diff < 0 ? 'color:#ff8080;font-weight:700' : showRecv && diff > 0 ? 'color:var(--accent);font-weight:700' : 'color:var(--muted)') + '">' + (showRecv && diff ? (diff > 0 ? '+' : '') + fbaNum(diff) : '—') + '</td>' +
+      '<td class="c" style="' + stockStyle + '">' + (st ? fbaNum(st.g4) : '—') + '</td>' +
+      '<td class="c" style="' + stockStyle + '">' + (st ? fbaNum(st.e3) : '—') + '</td>' +
+      '</tr>';
+  }).join('') || '<tr><td colspan="7" style="padding:2rem;text-align:center;color:var(--muted);font-size:11px">No SKU lines from Amazon yet.</td></tr>';
+
+  document.getElementById('fbaItemsModal').classList.add('show');
+}
+
+function fbaCloseDetail() {
+  document.getElementById('fbaItemsModal').classList.remove('show');
 }
 
 var _ledgerRows = [];

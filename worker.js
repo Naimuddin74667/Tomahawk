@@ -497,6 +497,170 @@ function gpAmazonRef(ref) {
   return String(ref || '').split('-')[0].trim();
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// FBA TRACKER (Marketplace-Shipments → Amazon → FBA Tracker tab)
+// Every FBA inbound shipment straight from Amazon's API — SK's sync
+// mirrors amz_inbound_shipments + amz_inbound_shipment_items into
+// Supabase every ~15 min, so a shipment made in Seller Central shows up
+// here within ~15 min, even at WORKING status (before any appointment
+// email — that's the difference vs the FC Appointments tab).
+// Joined in: UC SKU (amz_uc_sku_map), G4/E3 stock, bundle children,
+// UC gatepasses (any FBA shipment ID inside the gatepass reference) and
+// the FC appointment / FBA-stage emails already tracked in D1.
+// D1 table fba_tracker keeps our own copy of every shipment + its lines,
+// because Supabase drops CLOSED shipments after its retention period —
+// we need shipped-vs-received history for shortage claims.
+// ═══════════════════════════════════════════════════════════════════
+
+// GET every row of a Supabase table / view / set-returning function,
+// paging past PostgREST's 1000-row cap. `path` is everything after
+// /rest/v1/ (e.g. 'amz_inbound_shipments?select=a,b' or 'rpc/fn?select=x').
+async function supabaseGetAll(env, path) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured on Worker');
+  const base = env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/' + path + (path.includes('?') ? '&' : '?');
+  const out = [];
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const r = await fetch(base + 'limit=' + PAGE + '&offset=' + from, { headers: supabaseHeaders(env) });
+    if (!r.ok) throw new Error('Supabase ' + path.split('?')[0] + ' ' + r.status);
+    const rows = await r.json();
+    out.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+  return out;
+}
+
+// FBA shipment IDs look like FBA + 9 letters/digits ("FBA15MV78H7G").
+// Gatepass references hold one (or a few) of them, sometimes with extra
+// hand-typed text around them ("FBA15M8YWFT5-760qty").
+function fbaIdsInText(text) {
+  return String(text || '').toUpperCase().match(/FBA[0-9A-Z]{9}/g) || [];
+}
+
+async function ensureFbaTrackerTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS fba_tracker (
+    shipment_id     TEXT PRIMARY KEY,
+    shipment_name   TEXT,
+    destination_fc  TEXT,
+    status          TEXT,
+    items_json      TEXT,
+    first_seen_at   TEXT DEFAULT (datetime('now')),
+    status_since    TEXT DEFAULT (datetime('now')),
+    updated_at      TEXT DEFAULT (datetime('now'))
+  )`).run();
+}
+
+async function fbaTrackerData(env) {
+  await ensureFbaTrackerTable(env.DB);
+  await ensureAmazonShipmentsTable(env.DB);
+
+  // All Supabase reads in parallel.
+  const [ships, lines, skuMap, invData, bundleRows, gatepasses, lastSync] = await Promise.all([
+    supabaseGetAll(env, 'amz_inbound_shipments?select=shipment_id,shipment_name,shipment_status,destination_fc'),
+    supabaseGetAll(env, 'amz_inbound_shipment_items?select=shipment_id,seller_sku,fnsku,quantity_shipped,quantity_received'),
+    supabaseGetAll(env, 'rpc/amz_uc_sku_map?select=seller_sku,uniware_sku'),
+    supabaseRpcJson(env, 'stock_alert_inventory'),
+    supabaseGetAll(env, 'uc_bundle_composition?select=parent_sku,child_sku,quantity_per_unit'),
+    ucGatepassesLive(env, 'Amazon-FBA'),
+    // Latest sync run only (sync_runs is huge — never page through it).
+    fetch(env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/sync_runs?select=finished_at,status&source=eq.amz_inbound_shipments&order=id.desc&limit=1',
+      { headers: supabaseHeaders(env) })
+      .then(r => r.ok ? r.json() : [])
+      .catch(() => [])  // freshness label only — never block the page on it
+  ]);
+
+  const ucSkuOf = new Map(skuMap.map(m => [m.seller_sku, m.uniware_sku]));
+  const stockOf = new Map(((invData && invData.rows) || []).map(r => [r.skuCode, { g4: Number(r.G4_stock) || 0, e3: Number(r.E3_stock) || 0 }]));
+  const bundleOf = new Map(); // parent UC SKU -> [{ sku, qty }]
+  bundleRows.forEach(b => {
+    if (!bundleOf.has(b.parent_sku)) bundleOf.set(b.parent_sku, []);
+    bundleOf.get(b.parent_sku).push({ sku: b.child_sku, qty: Number(b.quantity_per_unit) || 1 });
+  });
+
+  // Gatepasses grouped by every FBA ID found in their reference.
+  const gpBySid = new Map();
+  gatepasses.forEach(gp => {
+    new Set(fbaIdsInText(gp.reference)).forEach(sid => {
+      if (!gpBySid.has(sid)) gpBySid.set(sid, []);
+      gpBySid.get(sid).push({ code: gp.gatepass_code, facility: gp.facility, status: gp.status, type: gp.type, qty: gp.quantity, created: gp.created });
+    });
+  });
+
+  // Lines grouped by shipment, reduced to what we store.
+  const linesBySid = new Map();
+  lines.forEach(l => {
+    if (!linesBySid.has(l.shipment_id)) linesBySid.set(l.shipment_id, []);
+    linesBySid.get(l.shipment_id).push({
+      seller_sku: l.seller_sku, fnsku: l.fnsku || '', uc_sku: ucSkuOf.get(l.seller_sku) || '',
+      shipped: Number(l.quantity_shipped) || 0, received: Number(l.quantity_received) || 0
+    });
+  });
+  linesBySid.forEach(arr => arr.sort((a, b) => String(a.seller_sku).localeCompare(String(b.seller_sku))));
+
+  // ── D1 history: upsert only shipments whose status or lines changed ──
+  const existing = new Map(((await env.DB.prepare('SELECT * FROM fba_tracker').all()).results || []).map(r => [r.shipment_id, r]));
+  const stmts = [];
+  const liveIds = new Set();
+  ships.forEach(s => {
+    liveIds.add(s.shipment_id);
+    const itemsJson = JSON.stringify(linesBySid.get(s.shipment_id) || []);
+    const old = existing.get(s.shipment_id);
+    if (!old) {
+      stmts.push(env.DB.prepare(
+        'INSERT INTO fba_tracker (shipment_id, shipment_name, destination_fc, status, items_json) VALUES (?, ?, ?, ?, ?)'
+      ).bind(s.shipment_id, s.shipment_name || '', s.destination_fc || '', s.shipment_status || '', itemsJson));
+    } else if (old.status !== s.shipment_status || old.items_json !== itemsJson || old.shipment_name !== (s.shipment_name || '')) {
+      stmts.push(env.DB.prepare(
+        `UPDATE fba_tracker SET shipment_name = ?, destination_fc = ?, items_json = ?, updated_at = datetime('now'),
+           status_since = CASE WHEN status = ? THEN status_since ELSE datetime('now') END, status = ?
+         WHERE shipment_id = ?`
+      ).bind(s.shipment_name || '', s.destination_fc || '', itemsJson, s.shipment_status || '', s.shipment_status || '', s.shipment_id));
+    }
+  });
+  for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
+  const saved = new Map(((await env.DB.prepare('SELECT * FROM fba_tracker').all()).results || []).map(r => [r.shipment_id, r]));
+
+  // FC appointment + FBA-stage info already tracked from Amazon's emails.
+  const apptRows = ((await env.DB.prepare(
+    'SELECT shipment_id, appointment_id, confirmed_slot, appointment_status FROM amazon_shipments'
+  ).all()).results || []);
+  const apptOf = new Map(apptRows.map(a => [a.shipment_id, a]));
+  const stageMap = await loadAmazonFbaStageMap(env.DB);
+
+  // Bundle stock = how many full bundles the children allow, per warehouse.
+  function stockFor(ucSku) {
+    const kids = bundleOf.get(ucSku);
+    if (!kids) { const s = stockOf.get(ucSku); return s ? { g4: s.g4, e3: s.e3, bundle: false } : null; }
+    let g4 = Infinity, e3 = Infinity;
+    kids.forEach(k => {
+      const s = stockOf.get(k.sku) || { g4: 0, e3: 0 };
+      g4 = Math.min(g4, Math.floor(s.g4 / k.qty));
+      e3 = Math.min(e3, Math.floor(s.e3 / k.qty));
+    });
+    return { g4, e3, bundle: true, children: kids };
+  }
+
+  // Output = every saved shipment (live ones + history-only ones).
+  const shipments = [...saved.values()].map(r => {
+    let items = [];
+    try { items = JSON.parse(r.items_json || '[]'); } catch (e) {}
+    items = items.map(it => Object.assign({}, it, { stock: it.uc_sku ? stockFor(it.uc_sku) : null }));
+    const appt = apptOf.get(r.shipment_id) || null;
+    const st = stageMap.get(r.shipment_id) || null;
+    return {
+      shipment_id: r.shipment_id, shipment_name: r.shipment_name, destination_fc: r.destination_fc,
+      status: r.status, status_since: r.status_since, first_seen_at: r.first_seen_at,
+      from_history: !liveIds.has(r.shipment_id), // dropped from Supabase, shown from our D1 copy
+      items, gatepasses: gpBySid.get(r.shipment_id) || [],
+      appointment: appt ? { id: appt.appointment_id, slot: appt.confirmed_slot, status: appt.appointment_status } : null,
+      fba_stage: st ? st.stage : null, fba_stage_date: st ? st.date : null
+    };
+  });
+
+  const last = lastSync && lastSync[0];
+  return { shipments, syncedAt: last ? last.finished_at : null, syncStatus: last ? last.status : null, changed: stmts.length };
+}
+
 // Bundle (parent) SKU codes from uc_bundle_composition.
 async function ucBundleParentSkus(env) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Supabase not configured on Worker');
@@ -836,6 +1000,11 @@ const ACTION_TIERS = {
   //   reference to a shipment ID) — same viewer_read tier as the
   //   Blinkit/Flipkart gatepass proxies.
   amazonGetGatepass: 'viewer_read',
+  // — FBA Tracker tab: every FBA inbound shipment straight from Amazon's
+  //   API (Supabase mirror), with UC SKU, stock, gatepass + appointment
+  //   joined in. Read-only for the user; also refreshes the D1 history
+  //   copy (fba_tracker) as a side effect.
+  fbaTrackerList: 'viewer_read',
 
   // — Flipkart "Successfully Received" email watcher (Gmail integration):
   //   auto-fills fk_ledger.received_qty by matching Consignment No. Same
@@ -2811,6 +2980,17 @@ export default {
             return json({ ok: true, source: 'supabase', records });
           } catch (e) {
             return json({ ok: false, error: e.message, records: [] }, 502);
+          }
+        }
+
+        // ── FBA TRACKER — all FBA inbound shipments from Amazon's API
+        //    (Supabase mirror) + UC SKU, stock, gatepass, appointment.
+        //    See fbaTrackerData for details.
+        if (action === 'fbaTrackerList') {
+          try {
+            return json(Object.assign({ ok: true, source: 'supabase' }, await fbaTrackerData(env)));
+          } catch (e) {
+            return json({ ok: false, error: e.message }, 502);
           }
         }
 
