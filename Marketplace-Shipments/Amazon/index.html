@@ -951,11 +951,11 @@ html .site-header { background: var(--tmh-bg); }
       </div>
 
       <div class="ro-stats-row" id="fbaCards">
-        <div class="ro-stat-card is-active-view" data-view="open" onclick="fbaSetView('open')" title="Created + In transit + At FC">
-          <div class="ro-stat-label">Open</div><div class="ro-stat-value accent" id="fbaStat-open">&ndash;</div><div class="ro-stat-sub">not yet closed</div>
-        </div>
         <div class="ro-stat-card" data-view="created" onclick="fbaSetView('created')" title="Amazon status WORKING / READY_TO_SHIP">
           <div class="ro-stat-label">Created</div><div class="ro-stat-value" id="fbaStat-created">&ndash;</div><div class="ro-stat-sub">not dispatched yet</div>
+        </div>
+        <div class="ro-stat-card" data-view="gppending" onclick="fbaSetView('gppending')" title="Not closed or cancelled, and no UC gatepass carries this shipment ID">
+          <div class="ro-stat-label">Gatepass Pending</div><div class="ro-stat-value" id="fbaStat-gppending" style="color:var(--accent)">&ndash;</div><div class="ro-stat-sub">no UC gatepass yet</div>
         </div>
         <div class="ro-stat-card" data-view="transit" onclick="fbaSetView('transit')" title="Amazon status SHIPPED / IN_TRANSIT / DELIVERED">
           <div class="ro-stat-label">In Transit</div><div class="ro-stat-value" id="fbaStat-transit">&ndash;</div><div class="ro-stat-sub">on the way to FC</div>
@@ -963,14 +963,17 @@ html .site-header { background: var(--tmh-bg); }
         <div class="ro-stat-card" data-view="fc" onclick="fbaSetView('fc')" title="Amazon status CHECKED_IN / RECEIVING">
           <div class="ro-stat-label">At FC</div><div class="ro-stat-value" id="fbaStat-fc">&ndash;</div><div class="ro-stat-sub">checked in / receiving</div>
         </div>
+        <div class="ro-stat-card" data-view="attention" onclick="fbaSetView('attention')" title="Not cancelled, with a red/amber check">
+          <div class="ro-stat-label">Need Attn</div><div class="ro-stat-value" id="fbaStat-attention" style="color:#ff8080">&ndash;</div><div class="ro-stat-sub">failed a check</div>
+        </div>
+        <div class="ro-stat-card is-active-view" data-view="open" onclick="fbaSetView('open')" title="Created + In Transit + At FC">
+          <div class="ro-stat-label">Open</div><div class="ro-stat-value" id="fbaStat-open">&ndash;</div><div class="ro-stat-sub">not yet closed</div>
+        </div>
         <div class="ro-stat-card" data-view="closed" onclick="fbaSetView('closed')" title="Amazon status CLOSED">
-          <div class="ro-stat-label">Closed</div><div class="ro-stat-value" id="fbaStat-closed">&ndash;</div><div class="ro-stat-sub">receiving finished</div>
+          <div class="ro-stat-label">Closed</div><div class="ro-stat-value" id="fbaStat-closed" style="color:#6dc87a">&ndash;</div><div class="ro-stat-sub">receiving finished</div>
         </div>
-        <div class="ro-stat-card" data-view="attention" onclick="fbaSetView('attention')" title="Open or closed shipments with a red/amber check">
-          <div class="ro-stat-label">Needs Attention</div><div class="ro-stat-value" id="fbaStat-attention" style="color:#ff8080">&ndash;</div><div class="ro-stat-sub">failed a check</div>
-        </div>
-        <div class="ro-stat-card" data-view="cancelled" onclick="fbaSetView('cancelled')" title="Amazon status CANCELLED / DELETED">
-          <div class="ro-stat-label">Cancelled</div><div class="ro-stat-value" id="fbaStat-cancelled" style="color:var(--muted)">&ndash;</div><div class="ro-stat-sub">hidden elsewhere</div>
+        <div class="ro-stat-card" data-view="all" onclick="fbaSetView('all')" title="Every shipment, including CANCELLED / DELETED">
+          <div class="ro-stat-label">All</div><div class="ro-stat-value" id="fbaStat-all">&ndash;</div><div class="ro-stat-sub">incl. cancelled</div>
         </div>
       </div>
 
@@ -2107,8 +2110,11 @@ function fbaLoad() {
 function fbaSetView(view) { _fbaView = view; _fbaPage = 1; fbaRender(); }
 function fbaGoToPage(p) { _fbaPage = p; fbaRender(); }
 
+function fbaIsOpen(s) { return s._stage === 'created' || s._stage === 'transit' || s._stage === 'fc'; }
 function fbaInView(s, view) {
-  if (view === 'open') return s._stage === 'created' || s._stage === 'transit' || s._stage === 'fc';
+  if (view === 'all') return true; // the only view that shows cancelled shipments
+  if (view === 'open') return fbaIsOpen(s);
+  if (view === 'gppending') return fbaIsOpen(s) && !s.gatepasses.length;
   if (view === 'attention') return s._stage !== 'cancelled' && s._checks.length > 0;
   return s._stage === view;
 }
@@ -2117,7 +2123,7 @@ function fbaRender() {
   var q = ((document.getElementById('fbaSearch') || {}).value || '').trim().toLowerCase();
   var base = q ? _fbaRows.filter(function (s) { return s._search.indexOf(q) !== -1; }) : _fbaRows;
 
-  ['open', 'created', 'transit', 'fc', 'closed', 'attention', 'cancelled'].forEach(function (v) {
+  ['created', 'gppending', 'transit', 'fc', 'attention', 'open', 'closed', 'all'].forEach(function (v) {
     var el = document.getElementById('fbaStat-' + v);
     if (el) el.textContent = base.filter(function (s) { return fbaInView(s, v); }).length;
   });
