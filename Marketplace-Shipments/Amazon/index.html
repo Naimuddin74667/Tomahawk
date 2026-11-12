@@ -2408,7 +2408,7 @@ function fbaPackSheet(shipmentId) {
 
 function fbaBuildPackPdf(s, sections, logo) {
   var doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4' });
-  var W = 210, M = 14, CW = W - 2 * M, y = 14, GREY = 236, BOTTOM = 262;
+  var W = 210, M = 14, CW = W - 2 * M, y = 12, GREY = 246, BOTTOM = 266;
   var labels = fbaSkuLabels(s);
   var hold = (s.auto_gp && s.auto_gp.hold) || [];
   var user = (function () { try { var x = JSON.parse(localStorage.getItem('tm_session_v1') || 'null'); return x && (x.display_name || x.username); } catch (e) { return ''; } })();
@@ -2418,36 +2418,36 @@ function fbaBuildPackPdf(s, sections, logo) {
   }
   function lab(t, x, yy) { T(String(t).toUpperCase(), x, yy, 7, true); }
   function fit(t, w, size) { doc.setFont('helvetica', 'normal'); doc.setFontSize(size); return doc.splitTextToSize(String(t || ''), w)[0] || ''; }
-  function boxes(q, ppc) { if (!ppc) return '—'; if (q < ppc) return q + ' pcs'; return q % ppc === 0 ? String(q / ppc) : Math.floor(q / ppc) + ' + ' + (q % ppc); }
+  function boxes(q, ppc) { if (!ppc) return '\u2014'; if (q < ppc) return q + ' pcs'; return q % ppc === 0 ? String(q / ppc) : Math.floor(q / ppc) + ' + ' + (q % ppc); }
   function n(v) { return Number(v).toLocaleString('en-IN'); }
   function newPage() { doc.addPage(); y = 16; }
   doc.setTextColor(0); doc.setDrawColor(0); doc.setLineWidth(0.25);
 
   // ── Header ──
-  if (logo) doc.addImage(logo, 'PNG', M, y, 52, 9.7); else T('TOMAHAWK', M, y + 8, 18, true);
-  T('FBA PACK SHEET', W - M, y + 8, 18, true, 'right');
-  y += 14; doc.setLineWidth(0.9); doc.line(M, y, W - M, y); doc.setLineWidth(0.25); y += 5;
+  if (logo) doc.addImage(logo, 'PNG', M, y, 37, 6.9); else T('TOMAHAWK', M, y + 6, 13, true);
+  T('FBA PACK SHEET', W - M, y + 6, 13, true, 'right');
+  y += 10; doc.setLineWidth(0.4); doc.line(M, y, W - M, y); doc.setLineWidth(0.2); y += 4;
 
-  lab('FBA Shipment', M, y + 3); T(s.shipment_id, M, y + 9.5, 13, true);
-  lab('Dest. FC', M + 70, y + 3); T(s.destination_fc || '—', M + 70, y + 9.5, 13, true);
+  lab('FBA Shipment', M, y + 3); T(s.shipment_id, M, y + 8, 10.5, true);
+  lab('Dest. FC', M + 70, y + 3); T(s.destination_fc || '\u2014', M + 70, y + 8, 10.5, true);
   var totalUnits = 0, totalBoxes = 0;
   sections.forEach(function (sec) { sec.lines.forEach(function (l) { totalUnits += l.qty; if (l.ppc) totalBoxes += Math.floor(l.qty / l.ppc); }); });
-  lab('Units on gatepass', M + 105, y + 3); T(n(totalUnits), M + 105, y + 9.5, 13, true);
+  lab('Units on gatepass', M + 105, y + 3); T(n(totalUnits), M + 105, y + 8, 10.5, true);
   lab('Printed', M + 145, y + 3);
-  T(fit(new Date().toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) + (user ? ' · ' + String(user).split(' ')[0] : ''), 40, 8.5), M + 145, y + 9, 8.5, false);
-  y += 13;
-  T(fit(s.shipment_name || '', CW, 8), M, y, 8, false);
-  y += 6;
+  T(fit(new Date().toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) + (user ? ' \u00b7 ' + String(user).split(' ')[0] : ''), 40, 8.5), M + 145, y + 8, 8, false);
+  y += 11.5;
+  T(fit(s.shipment_name || '', CW, 7), M, y, 7, false);
+  y += 4.5;
 
   // ── One section per warehouse ──
   var cols = [
     { h: '', w: 8, c: 1 }, { h: 'Sr', w: 8, c: 1 }, { h: 'UC SKU / Product', w: 62 },
-    { h: 'Amazon SKU / FNSKU', w: 46 }, { h: 'Qty/box', w: 15, c: 1 }, { h: 'Boxes', w: 21, c: 1 }, { h: 'Qty', w: 22, c: 1 }
+    { h: 'FNSKU', w: 46 }, { h: 'Qty/box', w: 15, c: 1 }, { h: 'Boxes', w: 21, c: 1 }, { h: 'Qty', w: 22, c: 1 }
   ];
   function headRow() {
-    doc.setFillColor(0); doc.rect(M, y, CW, 7.5, 'F'); doc.setTextColor(255);
-    var x = M; cols.forEach(function (c) { T(c.h, c.c ? x + c.w / 2 : x + 2.5, y + 5, 7.5, true, c.c ? 'center' : null); x += c.w; });
-    doc.setTextColor(0); y += 7.5;
+    doc.setFillColor(228); doc.rect(M, y, CW, 6, 'F');
+    var x = M; cols.forEach(function (c) { T(c.h, c.c ? x + c.w / 2 : x + 2.5, y + 4.1, 6.8, true, c.c ? 'center' : null); x += c.w; });
+    y += 6;
   }
   sections.forEach(function (sec) {
     if (!sec.lines.length) return;
@@ -2455,66 +2455,65 @@ function fbaBuildPackPdf(s, sections, logo) {
     var secUnits = 0, secBoxes = 0, secLoose = 0;
     sec.lines.forEach(function (l) { secUnits += l.qty; if (l.ppc) { secBoxes += Math.floor(l.qty / l.ppc); secLoose += l.qty % l.ppc; } });
     // Section title bar
-    doc.setLineWidth(0.6); doc.rect(M, y, CW, 9); doc.setLineWidth(0.25);
-    T(sec.fac === 'G4' ? 'G4 WAREHOUSE  ·  FULL CARTONS' : 'E3 WAREHOUSE  ·  LOOSE PIECES', M + 3, y + 6.2, 11, true);
-    T('Gatepass: ' + (sec.codes.join(', ') || '—'), W - M - 3, y + 6.2, 9, true, 'right');
-    y += 11;
+    T(sec.fac === 'G4' ? 'G4 WAREHOUSE  \u00b7  FULL CARTONS' : 'E3 WAREHOUSE  \u00b7  LOOSE PIECES', M, y + 4.5, 9.5, true);
+    T('Gatepass: ' + (sec.codes.join(', ') || '\u2014'), W - M, y + 4.5, 8, false, 'right');
+    doc.setLineWidth(0.4); doc.line(M, y + 6.5, W - M, y + 6.5); doc.setLineWidth(0.2);
+    y += 8;
     headRow();
     sec.lines.sort(function (a, b) { return a.sku.localeCompare(b.sku); }).forEach(function (l, i) {
       var lb = labels[l.sku] || { amazon: '', fnsku: '' };
       var nm = l.name && l.name.replace(/[\s_-]/g, '').toLowerCase() !== l.sku.replace(/[\s_-]/g, '').toLowerCase() ? l.name : '';
-      var rh = 11.5;
+      var rh = 7;
       if (y + rh > BOTTOM) { newPage(); headRow(); }
       if (i % 2 === 1) { doc.setFillColor(GREY); doc.rect(M, y, CW, rh, 'F'); }
-      var mid = y + rh / 2 + 1.5, x = M;
+      var mid = y + rh / 2 + 1.2, x = M;
       cols.forEach(function (c, ci) {
         var cx = x + c.w / 2;
-        if (ci > 0) { doc.setDrawColor(170); doc.line(x, y, x, y + rh); doc.setDrawColor(0); }
-        if (ci === 0) { doc.setLineWidth(0.35); doc.rect(cx - 2.3, y + rh / 2 - 2.3, 4.6, 4.6); doc.setLineWidth(0.25); }
-        else if (ci === 1) T(i + 1, cx, mid, 9, false, 'center');
-        else if (ci === 2) { T(fit(l.sku, c.w - 4, 10), x + 2.5, nm ? y + 5 : mid, 10, true); if (nm) T(fit(nm, c.w - 4, 7), x + 2.5, y + 9.3, 7, false); }
-        else if (ci === 3) { T(fit(lb.fnsku || '—', c.w - 4, 9.5), x + 2.5, y + 5, 9.5, true); T(fit(lb.amazon, c.w - 4, 7), x + 2.5, y + 9.3, 7, false); }
-        else if (ci === 4) T(l.ppc || '—', cx, mid, 9.5, false, 'center');
-        else if (ci === 5) T(boxes(l.qty, l.ppc), cx, mid, 11.5, true, 'center');
-        else if (ci === 6) T(n(l.qty), cx, mid, 11.5, true, 'center');
+        if (ci > 0) { doc.setDrawColor(215); doc.line(x, y, x, y + rh); doc.setDrawColor(0); }
+        if (ci === 0) { doc.setDrawColor(120); doc.rect(cx - 1.8, y + rh / 2 - 1.8, 3.6, 3.6); doc.setDrawColor(0); }
+        else if (ci === 1) T(i + 1, cx, mid, 7.5, false, 'center');
+        else if (ci === 2) T(fit(l.sku, c.w - 4, 8.5), x + 2.5, mid, 8.5, true);
+        else if (ci === 3) T(fit(lb.fnsku || '\u2014', c.w - 4, 8.5), x + 2.5, mid, 8.5, false);
+        else if (ci === 4) T(l.ppc || '\u2014', cx, mid, 8, false, 'center');
+        else if (ci === 5) T(boxes(l.qty, l.ppc), cx, mid, 9.5, true, 'center');
+        else if (ci === 6) T(n(l.qty), cx, mid, 9.5, true, 'center');
         x += c.w;
       });
-      doc.setDrawColor(170); doc.line(M, y + rh, W - M, y + rh); doc.setDrawColor(0);
+      doc.setDrawColor(215); doc.line(M, y + rh, W - M, y + rh); doc.setDrawColor(0);
       y += rh;
     });
     // Section total
-    doc.setLineWidth(0.7); doc.line(M, y, W - M, y); doc.setLineWidth(0.25);
-    T(sec.fac + ' TOTAL  ·  ' + sec.lines.length + ' SKU', M + 18, y + 6, 9.5, true);
-    T(n(secBoxes) + (secLoose ? ' + ' + secLoose : ''), M + 8 + 8 + 62 + 46 + 15 + 10.5, y + 6, 11.5, true, 'center');
-    T(n(secUnits), M + CW - 11, y + 6, 11.5, true, 'center');
-    doc.line(M, y + 9, W - M, y + 9);
-    y += 15;
+    doc.setLineWidth(0.4); doc.line(M, y, W - M, y); doc.setLineWidth(0.2);
+    T(sec.fac + ' TOTAL  \u00b7  ' + sec.lines.length + ' SKU', M + 18, y + 5, 8.5, true);
+    T(n(secBoxes) + (secLoose ? ' + ' + secLoose : ''), M + 8 + 8 + 62 + 46 + 15 + 10.5, y + 5, 9.5, true, 'center');
+    T(n(secUnits), M + CW - 11, y + 5, 9.5, true, 'center');
+    y += 11;
   });
 
   // ── Hold: not on any gatepass ──
   if (hold.length) {
     if (y + 20 > BOTTOM) newPage();
-    doc.setLineWidth(0.6); doc.setLineDashPattern([1.5, 1], 0); doc.rect(M, y, CW, 8 + hold.length * 6); doc.setLineDashPattern([], 0); doc.setLineWidth(0.25);
-    T('HOLD  ·  NOT ON THIS GATEPASS — add manually in UC before packing', M + 3, y + 5.5, 9, true);
-    var hy = y + 11;
+    doc.setDrawColor(150); doc.setLineDashPattern([1.2, 1], 0); doc.rect(M, y, CW, 7 + hold.length * 4.8); doc.setLineDashPattern([], 0); doc.setDrawColor(0);
+    T('HOLD  \u00b7  NOT ON THIS GATEPASS \u2014 add manually in UC before packing', M + 3, y + 4.5, 8, true);
+    var hy = y + 9;
     hold.forEach(function (x) {
       if (hy > BOTTOM) { newPage(); hy = y + 5; }  // y was reset to the new page's top
-      T(fit(x.sku || x.amazon_sku, 80, 9), M + 3, hy, 9, true);
-      T(n(x.qty), M + 95, hy, 9, true, 'right');
-      T(fit(x.reason, CW - 105, 8), M + 100, hy, 8, false);
-      hy += 6;
+      T(fit(x.sku || x.amazon_sku, 80, 8), M + 3, hy, 8, true);
+      T(n(x.qty), M + 95, hy, 8, true, 'right');
+      T(fit(x.reason, CW - 105, 7.5), M + 100, hy, 7.5, false);
+      hy += 4.8;
     });
     y = hy + 4;
   }
-  T('Tick each line when packed.  Boxes = full boxes + loose pcs.  Stick the FNSKU label on every unit.', M, Math.min(y + 2, BOTTOM), 7.5, false);
+  T('Tick each line when packed.  Boxes = full boxes + loose pcs.  Stick the FNSKU label on every unit.', M, Math.min(y + 2, BOTTOM), 6.8, false);
 
-  // ── Signatures ──
-  if (y > 250) newPage();
+  // ── Signatures (line at 270 mm) — new page only if content reaches them ──
+  if (y > 262) newPage();
   var sy = 270, sw = (CW - 20) / 3;
-  doc.setLineWidth(0.4);
+  doc.setLineWidth(0.3);
   ['Picked By', 'Packed By', 'Checked By'].forEach(function (t, i) {
     var sx = M + i * (sw + 10);
-    doc.line(sx, sy, sx + sw, sy); T(t, sx + sw / 2, sy + 5, 9.5, true, 'center');
+    doc.line(sx, sy, sx + sw, sy); T(t, sx + sw / 2, sy + 4.5, 8.5, false, 'center');
   });
   doc.setLineWidth(0.25);
 
@@ -2522,7 +2521,7 @@ function fbaBuildPackPdf(s, sections, logo) {
   var pages = doc.getNumberOfPages();
   for (var p = 1; p <= pages; p++) {
     doc.setPage(p); doc.line(M, 284, W - M, 284);
-    T('Tomahawk Operations  ·  FBA Pack Sheet  ·  ' + s.shipment_id, M, 288.5, 7.5, false);
+    T('Tomahawk Operations  \u00b7  FBA Pack Sheet  \u00b7  ' + s.shipment_id, M, 288.5, 7.5, false);
     T('Page ' + p + ' of ' + pages, W - M, 288.5, 7.5, false, 'right');
   }
   doc.save(s.shipment_id + '-pack-sheet.pdf');
