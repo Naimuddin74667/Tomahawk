@@ -2053,15 +2053,14 @@ function fbaGpQty(s) { return s.gatepasses.reduce(function (t, g) { return t + (
 // Send-to-Amazon — before the truck leaves. So "really dispatched" =
 // a CLOSED UC gatepass carries the shipment ID.
 // Shipments the tracker logged at launch (first_seen ≤ cut-off) that Amazon
-// shows as on the way / at FC / closed are taken as dispatched (gatepass
-// closed), EXCEPT the 5 confirmed not dispatched on 12 Nov.
+// are taken as done (gatepass closed) whatever their Amazon status, EXCEPT
+// the 5 confirmed not dispatched on 12 Nov.
 var FBA_LEGACY_CUTOFF = '2026-11-12 06:21:06';
 var FBA_LEGACY_NOT_DISPATCHED = ['FBA15MTYQ80F', 'FBA15MTZ7MFR', 'FBA15MTZ7MGD', 'FBA15MV78H7G', 'FBA15MV6J44C'];
 function fbaLegacyDispatched(s) {
   var st = FBA_STAGE_OF[s.status];
   return !!s.first_seen_at && s.first_seen_at <= FBA_LEGACY_CUTOFF &&
-    FBA_LEGACY_NOT_DISPATCHED.indexOf(s.shipment_id) === -1 &&
-    (st === 'transit' || st === 'fc' || st === 'closed');
+    FBA_LEGACY_NOT_DISPATCHED.indexOf(s.shipment_id) === -1 && st !== 'cancelled';
 }
 function fbaHasGp(s) { return s.gatepasses.length > 0 || !!(s.auto_gp && (s.auto_gp.g4_code || s.auto_gp.e3_code)) || fbaLegacyDispatched(s); }
 function fbaGpClosed(s) {
@@ -2173,7 +2172,7 @@ function fbaInView(s, view) {
   if (view === 'all') return true; // the only view that shows cancelled shipments
   if (view === 'open') return fbaIsOpen(s);
   if (view === 'gppending') return fbaIsOpen(s) && !fbaHasGp(s);
-  if (view === 'notdisp') return (s._stage === 'created' && fbaHasGp(s)) || s._amzOnly;
+  if (view === 'notdisp') return (s._stage === 'created' && fbaHasGp(s) && !fbaLegacyDispatched(s)) || s._amzOnly;
   if (view === 'transit') return s._stage === 'transit' && !s._amzOnly;
   if (view === 'attention') return s._stage !== 'cancelled' && s._checks.length > 0;
   return s._stage === view;
@@ -2228,6 +2227,7 @@ function fbaGpAgeDays(s) {
   var d = new Date(ts); return isNaN(d.getTime()) ? null : (Date.now() - d.getTime()) / 86400000;
 }
 function fbaPackStatus(s) {
+  if (fbaLegacyDispatched(s)) return null;
   if (s._amzOnly) {
     if (!fbaHasGp(s)) return 'Gatepass Pending';
     if (!fbaGpClosed(s)) return 'Under Packing';
