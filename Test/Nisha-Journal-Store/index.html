@@ -430,7 +430,37 @@ const DEFAULT_CATS = ['Cigarettes', 'Bidi', 'Chewing Tobacco / Khaini', 'Pan Mas
 const emptyState = () => ({ brands: [], cats: [], products: [], log: [], orders: [], meta: { nextOrder: 1001 } });
 let S = emptyState();
 let loaded = false;                                    // true once the cloud copy has arrived
-try { localStorage.removeItem(KEY); } catch (e) {}     // remove the old on-phone copy from earlier versions
+/* =========================================================
+   LOCAL MODE (for now): Nisha's data lives ONLY on this phone/browser (IndexedDB), no Worker / cloud.
+   Shop links and online shop orders need the cloud, so they are hidden until Nisha gets its own Worker.
+   To go online later: set LOCAL_MODE = false (the cloud code below is kept as it is).
+   ========================================================= */
+const LOCAL_MODE = true;
+const ready = () => LOCAL_MODE || !!cloud.key;           // catalogue available to edit
+const IDB = {
+  db: null,
+  open() {
+    return this.db || (this.db = new Promise((ok, no) => {
+      const r = indexedDB.open('nisha_journal_store', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('kv');
+      r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
+    }));
+  },
+  async get(k) { const d = await this.open(); return new Promise((ok, no) => { const q = d.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => ok(q.result); q.onerror = () => no(q.error); }); },
+  async set(k, v) { const d = await this.open(); return new Promise((ok, no) => { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = () => ok(); t.onerror = () => no(t.error); }); }
+};
+async function localLoad() {
+  let st = null;
+  try { st = await IDB.get('state'); } catch (e) { toast('Phone storage not available in this browser'); }
+  S = Object.assign(emptyState(), st || {});
+  if (!st) S.cats = DEFAULT_CATS.map(name => ({ id: uid(), name }));   // first start: the 4 standard categories
+  loaded = true; setCloudStatus('ok'); render();
+  try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}   // ask the browser not to clear it
+}
+async function localSave() {
+  try { await IDB.set('state', JSON.parse(JSON.stringify(S))); }
+  catch (e) { toast('Could not save on this phone — ' + (e && e.message || e)); }
+}
 let cart = loadJSON(CART_KEY, {});            // { variantId: qty }
 let ui = Object.assign({ role: 'owner', tab: 'home', theme: 'light' }, loadJSON(UI_KEY, {}));
 const savedRole = ui.role;
@@ -440,6 +470,7 @@ let saveTimer;
 function save() {                              // 400ms debounce, same pattern as other apps
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
+    if (LOCAL_MODE) return localSave();
     if (!cloud.key) return toast('Not connected to cloud — this change was not saved');
     cloudPush();
   }, 400);
@@ -458,12 +489,14 @@ const STORE = 'nisha';
 const NEED_WORKER = '2026-11-12';
 let workerVersion = null, nishaKeySet = true;     // null = not checked yet, '' = old Worker without a version
 async function checkWorker() {
+  if (LOCAL_MODE) return;
   try { const r = await fetch(API + '?action=ping&store=' + STORE).then(x => x.json()); workerVersion = r.version || ''; nishaKeySet = !!r.ownerKeySet && r.store === STORE; } catch (e) { return; }
   if (workerVersion < NEED_WORKER && cloud.key && !SHOP_MODE) toast('Cloudflare Worker is out of date — paste the latest worker.js (see More)');
   if (ui.tab === 'more' && !SHOP_MODE) render();
 }
 const CLOUD_KEY = 'nj_cloud_v1';
 let cloud = Object.assign({ key: '', updated: 0 }, loadJSON(CLOUD_KEY, {}));
+if (LOCAL_MODE) { try { localStorage.removeItem(CLOUD_KEY); } catch (e) {} cloud.key = ''; }   // local mode: forget any cloud key typed in earlier (e.g. Royal's)
 let BASE = null;     // the cloud copy this screen last loaded or saved (JSON) — used to merge with other phones/tabs
 /* Merge three copies by record id: base = what we started from, mine = this screen, theirs = cloud now.
    A record I changed keeps my version; anything I did not touch takes the cloud's version,
@@ -523,6 +556,7 @@ function cloudPill() {
 }
 // Load the shared catalogue; replaces this phone's copy when the cloud has newer data
 async function cloudLoad(quiet) {
+  if (LOCAL_MODE) return localLoad();
   if (!cloud.key) { setCloudStatus('idle'); render(); return null; }
   setCloudStatus('syncing');
   try {
@@ -650,7 +684,7 @@ function applyTheme() {
 }
 function toggleTheme() { ui.theme = ui.theme === 'dark' ? 'light' : 'dark'; saveUI(); applyTheme(); if (ui.role === 'shop') render(); }
 
-const TABS = [['home','Home','home'], ['products','Products','box'], ['stock','Stock','layers'], ['shops','Shops','store'], ['more','More','more']];
+const TABS = [['home','Home','home'], ['products','Products','box'], ['stock','Stock','layers'], ['shops','Shops','store'], ['more','More','more']].filter(t => !(LOCAL_MODE && t[0] === 'shops'));
 function renderNav() {
   const shop = ui.role === 'shop';
   $('#bnav').style.display = shop ? 'none' : 'flex';
@@ -658,7 +692,7 @@ function renderNav() {
   $('#bnav').innerHTML = TABS.map(([k, l, i]) => `<button class="${ui.tab === k ? 'on' : ''}" onclick="goTab('${k}')">${ic(i)}${l}</button>`).join('');
   $('#roleLbl').textContent = { owner: 'Owner', staff: 'Staff · view only', shop: curShop().name + (curShop().id ? ' · ' + curShop().id : '') }[ui.role];
   $('#roleBtn').innerHTML = ic(shop ? 'store' : 'user');
-  $('#fab').style.display = (isOwner() && cloud.key && loaded && ui.tab === 'products') ? 'grid' : 'none';
+  $('#fab').style.display = (isOwner() && ready() && loaded && ui.tab === 'products') ? 'grid' : 'none';
   $('#fab').innerHTML = ic('plus');
   updateCartBar();
 }
@@ -676,7 +710,7 @@ function render() {
     return renderShop();
   }
   if (ui.role === 'shop') return renderShop();
-  if (!cloud.key) return renderConnect();
+  if (!ready()) return renderConnect();
   if (!loaded) { main.innerHTML = '<div class="empty card" style="margin-top:30px">Loading catalogue from cloud…</div>'; return; }
   ({ home: renderHome, products: renderProducts, stock: renderStock, shops: renderShops, more: renderMore }[ui.tab] || renderHome)();
 }
@@ -716,6 +750,11 @@ function setRole(r) { ui.role = r; if (r !== 'shop' && !TABS.some(t => t[0] === 
    OWNER / STAFF — HOME
    ========================================================= */
 function greet() { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; }
+function homeOrdersHTML(all, orders, newCount) {
+  return `<h3 class="sec">Orders from shops ${newCount ? `<span class="pill gold">${newCount} new</span>` : `<small>${ORD.loaded ? (all.length ? 'nothing new' : 'none yet') : 'loading…'}</small>`}
+      ${all.length > orders.length ? `<button class="pill" style="margin-left:auto;cursor:pointer" onclick="openAllOrders('new')">See all ${all.length}</button>` : ''}</h3>
+    <div class="list">${orders.length ? orders.map(o => orderRow(o)).join('') : `<div class="empty card">${ORD.err ? 'Could not load orders — ' + esc(ORD.err) : 'Orders placed by shops will appear here.'}<br><br><button class="btn ghost" onclick="goTab('shops')">${ic('store')} Add a shop & send its link</button></div>`}</div>`;
+}
 function renderHome() {
   const vs = allVariants();
   const low = vs.filter(x => stState(x.v) !== 'ok').sort((a, b) => a.v.stock - b.v.stock);
@@ -733,11 +772,9 @@ function renderHome() {
     </div>
     ${isOwner() ? `<div class="quick">
       <button class="qa" onclick="openAddProduct()"><span>${ic('plus')}</span>Add product</button>
-      <button class="qa" onclick="goTab('shops');openShopForm()"><span>${ic('store')}</span>Add shop</button>
+      ${LOCAL_MODE ? `<button class="qa" onclick="goTab('stock')"><span>${ic('in')}</span>Stock in</button>` : `<button class="qa" onclick="goTab('shops');openShopForm()"><span>${ic('store')}</span>Add shop</button>`}
       <button class="qa" onclick="setRole('shop')"><span>${ic('eye')}</span>Shop view</button></div>` : ''}
-    <h3 class="sec">Orders from shops ${newCount ? `<span class="pill gold">${newCount} new</span>` : `<small>${ORD.loaded ? (all.length ? 'nothing new' : 'none yet') : 'loading…'}</small>`}
-      ${all.length > orders.length ? `<button class="pill" style="margin-left:auto;cursor:pointer" onclick="openAllOrders('new')">See all ${all.length}</button>` : ''}</h3>
-    <div class="list">${orders.length ? orders.map(o => orderRow(o)).join('') : `<div class="empty card">${ORD.err ? 'Could not load orders — ' + esc(ORD.err) : 'Orders placed by shops will appear here.'}<br><br><button class="btn ghost" onclick="goTab('shops')">${ic('store')} Add a shop & send its link</button></div>`}</div>
+${LOCAL_MODE ? '' : homeOrdersHTML(all, orders, newCount)}
     <h3 class="sec">Needs restock <small>${low.length} variants</small></h3>
     <div class="list">${low.slice(0, 6).map(({ p, v }, i) => stockRow(p, v, i)).join('') || '<div class="empty card">All stock healthy 👌</div>'}</div>`;
 }
@@ -1230,7 +1267,7 @@ function deleteProduct(id) {
 /* Nisha has no brand websites to import from (Royal's Sarju/Ticon import was left out).
    Add product → the form opens → "From pack" reads the pack photo. */
 function openAddProduct() {
-  if (!isOwner() || !cloud.key) return toast('Connect to cloud first');
+  if (!isOwner() || !ready()) return toast('Connect to cloud first');
   openProductForm();
 }
 // find a brand/category by name, or add it
@@ -1249,8 +1286,8 @@ function uploadPhoto(cb) {
   fi.onchange = async () => {
     const f = fi.files[0]; if (!f) return;
     let data;
-    // read the original file once and encode once at high quality (no double JPEG compression)
-    try { data = await catalogueClean(await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(f); }), 1600); } catch (e) { return toast('Could not read that photo'); }
+    // read the original file once and encode once (phone storage: 900 px is plenty; cloud: 1600 px)
+    try { data = await catalogueClean(await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(f); }), LOCAL_MODE ? 900 : 1600); } catch (e) { return toast('Could not read that photo'); }
     if (!cloud.key) return cb(data);
     toast('Uploading photo…');
     try { cb((await api('savePhoto', { data })).url); toast('Photo saved'); }
@@ -1408,7 +1445,56 @@ function compressImage(file, max = 720, quality = .72) {
 // When Google blocks the Worker's location, the phone remembers that (for this session only) and
 // asks Gemini directly next time — saving the Worker's wasted attempt on every box.
 let directGemini = null;      // { models, body, key } from the Worker's first hand-over
+const GEMINI_KEY = 'nj_gemini_v1';
+const geminiKey = () => { try { return localStorage.getItem(GEMINI_KEY) || ''; } catch (e) { return ''; } };
+function setGeminiKey() {
+  const k = (prompt('Paste your Gemini API key (free from aistudio.google.com/apikey). It stays on this phone only.', geminiKey()) || '').trim();
+  if (!k) return;
+  localStorage.setItem(GEMINI_KEY, k); toast('Gemini key saved on this phone'); if (ui.tab === 'more') render();
+}
+// Same instructions the Worker uses for Nisha packs
+const PACK_PROMPT = `This is a phone photo of a retail pack (cigarette pack or carton, bidi bundle, chewing tobacco pouch or tin, pan masala / supari pouch or tin, matchbox, lighter, mouth freshener...).
+Read ONLY what is printed on the pack. Return ONLY JSON with these fields:
+- "brand": the brand printed (e.g. "Gold Flake", "Vimal", "Rajnigandha"), or "".
+- "product": the product / variant name WITHOUT the brand, Title Case (e.g. "Kings", "Lights", "Pan Masala", "Silver Pearls", "Supari"), or "".
+- "pack": the pack size as a short label: stick count for cigarettes/bidis (e.g. "20 Sticks", "10 Sticks"), net weight for others (e.g. "100 g", "1 kg"), or the printed price point for pouches (e.g. "₹10 Pouch"). Use exactly one.
+- "mrp": the MRP printed, as a number in rupees (e.g. 100), or 0 if not readable.
+- "units_inside": how many smaller packs are inside if this is an outer carton / bundle / box (e.g. 10), else 0.
+- "category": one of "Cigarettes","Bidi","Chewing Tobacco","Pan Masala & Supari","Other".
+- "description": every other useful detail printed, as short points joined with " · " (e.g. net weight, count, flavour, filter / non-filter, size like "King Size"). Do NOT copy the statutory health warning or slogans.
+If there is no pack, return {}.`;
+const LOCAL_MODELS = ['gemini-3.8-flash-lite', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'];
+async function readPackLocal(base64) {
+  let key = geminiKey();
+  if (!key) { setGeminiKey(); key = geminiKey(); if (!key) throw new Error('Add your Gemini key first (More → Gemini key)'); }
+  const base = { contents: [{ parts: [{ inline_data: { mime_type: 'image/jpeg', data: base64 } }, { text: PACK_PROMPT }] }] };
+  let last = '';
+  for (const model of LOCAL_MODELS) {
+    for (const gc of [{ responseMimeType: 'application/json', thinkingConfig: { thinkingLevel: 'minimal' } }, { responseMimeType: 'application/json' }]) {
+      let res, j;
+      try {
+        res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+          body: JSON.stringify(Object.assign({}, base, { generationConfig: gc })), signal: AbortSignal.timeout(20000) });
+        j = await res.json().catch(() => ({}));
+      } catch (e) { last = e.name === 'TimeoutError' ? 'took too long' : 'no internet'; break; }
+      const msg = (j.error && j.error.message) || '';
+      if (res.ok) {
+        const text = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
+        try { return JSON.parse(text); } catch (e) { last = 'unreadable answer'; break; }
+      }
+      last = msg || 'HTTP ' + res.status;
+      if (res.status === 400 && /thinking/i.test(msg)) continue;            // model without thinking settings → plain request
+      if (res.status === 400 || res.status === 401 || res.status === 403) {
+        if (/api key|permission|unauthenticated/i.test(msg)) throw new Error('Gemini key not accepted — check it in More');
+      }
+      break;                                                                  // busy / retired → next model
+    }
+  }
+  throw new Error('Gemini busy — ' + last);
+}
 async function readBox(base64) {
+  if (LOCAL_MODE) return readPackLocal(base64);
   let r;
   if (directGemini) {
     const body = JSON.parse(JSON.stringify(directGemini.body));
@@ -1570,7 +1656,14 @@ function renderMore() {
         ${isOwner() ? `<button class="adj" onclick="renameItem('${kind}','${x.id}')">${ic('edit')}</button><button class="adj" onclick="deleteItem('${kind}','${x.id}')">${ic('trash')}</button>` : ''}</div>`;
     }).join('')}</div>${isOwner() ? `<button class="btn ghost block" style="margin-top:10px" onclick="addItem('${kind}')">${ic('plus')} Add ${kind === 'brand' ? 'brand' : 'category'}</button>` : ''}`;
   };
-  main.innerHTML = `<h3 class="sec">Cloud ${cloudPill()}</h3>
+  main.innerHTML = (LOCAL_MODE ? `<h3 class="sec">Data on this phone</h3>
+    <div class="list">
+      <button class="row" onclick="openAddProduct()"><span class="adj" style="color:var(--accent-txt)">${ic('plus')}</span><div class="grow" style="text-align:left"><b>Add product</b><div class="sub">Snap the pack — brand, name, pack size and MRP fill in automatically</div></div></button>
+      <button class="row" onclick="setGeminiKey()"><span class="adj" style="color:var(--accent-txt)">${ic('wand')}</span><div class="grow" style="text-align:left"><b>Gemini key for "From pack"</b><div class="sub">${geminiKey() ? 'Saved on this phone · tap to change' : 'Not set — paste your free key from aistudio.google.com/apikey'}</div></div></button>
+      <button class="row" onclick="openSkuUpdate()"><span class="adj" style="color:var(--accent-txt)">${ic('tag')}</span><div class="grow" style="text-align:left"><b>Update all SKUs</b><div class="sub">NJ-BRAND-PRODUCT-PACK, e.g. NJ-GFL-KINGS-20 · see changes before applying</div></div></button>
+      <button class="row" onclick="exportData()"><span class="adj">${ic('download')}</span><div class="grow" style="text-align:left"><b>Download backup</b><div class="sub">Keep a copy — data on a phone can be lost if the browser is cleared</div></div></button>
+      <button class="row" onclick="restoreBackup()"><span class="adj">${ic('in')}</span><div class="grow" style="text-align:left"><b>Restore backup</b><div class="sub">Load a backup file (replaces what is on this phone)</div></div></button>
+    </div>` : `<h3 class="sec">Cloud ${cloudPill()}</h3>
     <div class="list">
       ${cloud.key
         ? `<button class="row" onclick="cloudPush();cloudLoad()"><span class="adj">${ic('sync')}</span><div class="grow" style="text-align:left"><b>Sync now</b><div class="sub">Owner phone · changes save to the cloud automatically</div></div></button>
@@ -1580,17 +1673,17 @@ function renderMore() {
            <button class="row" onclick="disconnectCloud()"><span class="adj">${ic('cloud')}</span><div class="grow" style="text-align:left"><b>Disconnect this phone</b><div class="sub">Removes the owner key from this phone</div></div></button>`
         : `<button class="row" onclick="connectCloud()"><span class="adj" style="color:var(--accent-txt)">${ic('cloud')}</span><div class="grow" style="text-align:left"><b>Connect to cloud (owner)</b><div class="sub">Enter the owner key once — catalogue and photos sync to every phone</div></div></button>
            <button class="row" onclick="cloudLoad()"><span class="adj">${ic('sync')}</span><div class="grow" style="text-align:left"><b>Refresh from cloud</b><div class="sub">Get the latest catalogue (view only)</div></div></button>`}
-    </div>` + mgr('brand', 'Brands') + mgr('cat', 'Categories') + `
+    </div>`) + mgr('brand', 'Brands') + mgr('cat', 'Categories') + `
     <h3 class="sec">App</h3>
     <div class="list">
       ${installRow()}
       <button class="row" onclick="toggleTheme()"><span class="adj">${ic(ui.theme === 'dark' ? 'sun' : 'moon')}</span><div class="grow" style="text-align:left"><b>${ui.theme === 'dark' ? 'Light' : 'Dark'} mode</b></div></button>
-      <button class="row" onclick="exportData()"><span class="adj">${ic('download')}</span><div class="grow" style="text-align:left"><b>Download backup</b><div class="sub">All products, stock & orders as JSON</div></div></button>
+      ${LOCAL_MODE ? '' : `<button class="row" onclick="exportData()"><span class="adj">${ic('download')}</span><div class="grow" style="text-align:left"><b>Download backup</b><div class="sub">All products, stock & orders as JSON</div></div></button>`}
     </div>
     ${cloud.key && workerVersion !== null ? (workerVersion >= NEED_WORKER
       ? `<div class="note" style="margin-top:16px">Cloudflare Worker up to date (${esc(workerVersion)}).</div>`
       : `<div class="note" style="margin-top:16px;border:1px solid var(--bad);color:var(--text)"><b>Cloudflare Worker is out of date</b> (${workerVersion ? esc(workerVersion) : 'old version'} — needs ${NEED_WORKER}). Nisha's data, kg orders and "From pack" need the latest <b>Test/Royal-Enterprises/worker.js</b> pasted in Cloudflare → royal-enterprises → Edit code → Deploy, plus the secret <b>NISHA_OWNER_KEY</b>.</div>`) : ''}
-    <div class="note" style="margin-top:16px">${cloud.key ? 'Catalogue, stock and photos sync to the cloud.' : 'This phone is not connected — enter the owner key to open the catalogue.'} Delivery, khata and reports come in the next phases.</div>`;
+    <div class="note" style="margin-top:16px">${LOCAL_MODE ? 'Everything is saved on this phone only (not online, not shared with Royal). Download a backup now and then. Shop links & online orders come when Nisha gets its own server.' : cloud.key ? 'Catalogue, stock and photos sync to the cloud.' : 'This phone is not connected — enter the owner key to open the catalogue.'} Delivery, khata and reports come in the next phases.</div>`;
 }
 function addItem(kind) {
   const name = (prompt(kind === 'brand' ? 'Brand name' : 'Category name') || '').trim(); if (!name) return;
@@ -1609,6 +1702,17 @@ function deleteItem(kind, id) {
   if (!confirm('Delete?')) return;
   if (kind === 'brand') S.brands = S.brands.filter(x => x.id !== id); else S.cats = S.cats.filter(x => x.id !== id);
   save(); renderMore();
+}
+function restoreBackup() {
+  const fi = document.createElement('input'); fi.type = 'file'; fi.accept = '.json,application/json';
+  fi.onchange = async () => {
+    const f = fi.files[0]; if (!f) return;
+    let d; try { d = JSON.parse(await f.text()); } catch (e) { return toast('Not a backup file'); }
+    if (!d || !Array.isArray(d.products)) return toast('Not a Nisha backup file');
+    if (!confirm(`Replace everything on this phone with this backup (${d.products.length} products)?`)) return;
+    S = Object.assign(emptyState(), d); await localSave(); render(); toast('Backup restored');
+  };
+  fi.click();
 }
 function exportData() {
   const a = document.createElement('a');
@@ -1894,6 +1998,7 @@ function installRow() {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   if (SHOP_MODE) return shopLoad(true);                 // shop phone: fresh rates & stock when reopened
+  if (LOCAL_MODE) return;
   if (!cloud.key) return cloudLoad(true);
   loadOrders();                                          // owner phone: pick up new orders
   if (!pushing && !pendingPush && !$('#sheetWrap').classList.contains('open')) cloudLoad(true);   // and other phones' edits
