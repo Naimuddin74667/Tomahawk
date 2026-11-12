@@ -23,6 +23,9 @@
    Shops (owner key):
      POST shopsList / shopSave {shop} / shopToggle {id,active} / shopResetLink {id}
      POST ordersList {} / orderSetStatus {id,status}
+   Stores: every call may carry &store=royal|nisha (default royal). Each store has its own owner key
+   (OWNER_KEY / NISHA_OWNER_KEY), its own catalogue (app_state k = main / nisha) and its own shop tables
+   (shops… / nisha_shops…), so the two businesses never see each other's data.
    Shopkeeper (private link token → session in X-Shop-Session header):
      GET  shopInfo&s=TOKEN          → { name }            for the login screen
      POST shopLogin {token,mobile}  → { sess, shop }      5 wrong tries = 15 min lock
@@ -35,7 +38,17 @@
 // Each model has its own free quota, so a busy spell on one rarely blocks all of them.
 // Override/prepend with a GEMINI_MODEL variable in Cloudflare if needed.
 // Bump when this file changes — the app warns the owner when Cloudflare still runs an older copy.
-const WORKER_VERSION = '2026-11-11';
+const WORKER_VERSION = '2026-11-12';
+/* One Worker, several businesses. prefix = table-name prefix for that store's shop tables. */
+const STORES = {
+  royal: { id: 'royal', name: 'Royal Enterprises',   prefix: '',       stateKey: 'main',  keyVar: 'OWNER_KEY',       orderPrefix: 'SO-' },
+  nisha: { id: 'nisha', name: 'Nisha Journal Store', prefix: 'nisha_', stateKey: 'nisha', keyVar: 'NISHA_OWNER_KEY', orderPrefix: 'NJ-' }
+};
+const SHOP_TABLES = /\b(shops|shop_sessions|login_fails|shop_orders)\b/g;
+// A DB wrapper that points the shop tables at the store's own copies (shops → nisha_shops …)
+function storeDB(env, st) {
+  return { prepare: sql => env.DB.prepare(st.prefix ? sql.replace(SHOP_TABLES, st.prefix + '$1') : sql), batch: list => env.DB.batch(list) };
+}
 const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.8-flash-lite'];
 
 const CORS = {
@@ -49,17 +62,24 @@ const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, 
 async function ensureTables(env) {
   await env.DB.batch([
     env.DB.prepare('CREATE TABLE IF NOT EXISTS app_state (k TEXT PRIMARY KEY, json TEXT NOT NULL, updated INTEGER NOT NULL)'),
-    env.DB.prepare('CREATE TABLE IF NOT EXISTS photos (id TEXT PRIMARY KEY, mime TEXT NOT NULL, data TEXT NOT NULL, created INTEGER NOT NULL)'),
-    env.DB.prepare('CREATE TABLE IF NOT EXISTS shops (id TEXT PRIMARY KEY, name TEXT NOT NULL, owner TEXT, mobile TEXT NOT NULL UNIQUE, area TEXT, address TEXT, map TEXT, credit_limit REAL, token TEXT NOT NULL UNIQUE, active INTEGER NOT NULL DEFAULT 1, created INTEGER NOT NULL, last_order INTEGER)'),
-    env.DB.prepare('CREATE TABLE IF NOT EXISTS shop_sessions (sess TEXT PRIMARY KEY, shop_id TEXT NOT NULL, created INTEGER NOT NULL, last_seen INTEGER)'),
-    env.DB.prepare('CREATE TABLE IF NOT EXISTS login_fails (token TEXT PRIMARY KEY, count INTEGER NOT NULL, until INTEGER)'),
-    env.DB.prepare('CREATE TABLE IF NOT EXISTS shop_orders (id INTEGER PRIMARY KEY AUTOINCREMENT, shop_id TEXT NOT NULL, json TEXT NOT NULL, status TEXT NOT NULL, ts INTEGER NOT NULL, updated INTEGER)')
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS photos (id TEXT PRIMARY KEY, mime TEXT NOT NULL, data TEXT NOT NULL, created INTEGER NOT NULL)')
+  ]);
+  // each store's shop tables (Royal: shops…, Nisha: nisha_shops…)
+  for (const st of Object.values(STORES)) await ensureShopTables(storeDB(env, st));
+}
+async function ensureShopTables(D) {
+  await D.batch([
+    D.prepare('CREATE TABLE IF NOT EXISTS shops (id TEXT PRIMARY KEY, name TEXT NOT NULL, owner TEXT, mobile TEXT NOT NULL UNIQUE, area TEXT, address TEXT, map TEXT, credit_limit REAL, token TEXT NOT NULL UNIQUE, active INTEGER NOT NULL DEFAULT 1, created INTEGER NOT NULL, last_order INTEGER)'),
+    D.prepare('CREATE TABLE IF NOT EXISTS shop_sessions (sess TEXT PRIMARY KEY, shop_id TEXT NOT NULL, created INTEGER NOT NULL, last_seen INTEGER)'),
+    D.prepare('CREATE TABLE IF NOT EXISTS login_fails (token TEXT PRIMARY KEY, count INTEGER NOT NULL, until INTEGER)'),
+    D.prepare('CREATE TABLE IF NOT EXISTS shop_orders (id INTEGER PRIMARY KEY AUTOINCREMENT, shop_id TEXT NOT NULL, json TEXT NOT NULL, status TEXT NOT NULL, ts INTEGER NOT NULL, updated INTEGER)')
   ]);
 }
 
+// The owner key must belong to the store being asked for (Royal's key cannot open Nisha and vice versa)
 function isOwner(req, env) {
-  const k = req.headers.get('X-Owner-Key') || '';
-  return env.OWNER_KEY && k === env.OWNER_KEY;
+  const k = req.headers.get('X-Owner-Key') || '', want = env[env.STORE.keyVar];
+  return !!want && k === want;
 }
 
 export default {
@@ -67,17 +87,21 @@ export default {
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url = new URL(req.url);
     const action = url.searchParams.get('action') || 'ping';
+    const st = STORES[url.searchParams.get('store')] || STORES.royal;
+    const rawEnv = env;
+    // from here on env.DB talks to this store's tables and env.STORE says which store it is
+    env = Object.assign({}, rawEnv, { DB: rawEnv.DB && storeDB(rawEnv, st), STORE: st });
     try {
       if (action === 'ping') {
-        return json({ ok: true, version: WORKER_VERSION, gemini: !!env.GEMINI_API_KEY, db: !!env.DB, ownerKeySet: !!env.OWNER_KEY });
+        return json({ ok: true, version: WORKER_VERSION, store: st.id, gemini: !!env.GEMINI_API_KEY, db: !!rawEnv.DB, ownerKeySet: !!env[st.keyVar] });
       }
-      if (!env.DB) return json({ error: 'D1 binding "DB" missing' }, 500);
-      await ensureTables(env);
+      if (!rawEnv.DB) return json({ error: 'D1 binding "DB" missing' }, 500);
+      await ensureTables(rawEnv);
 
       // ---------- shopkeeper routes (link token / session) ----------
       if (action === 'shopInfo') {
         const sh = await env.DB.prepare('SELECT name FROM shops WHERE token = ? AND active = 1').bind(url.searchParams.get('s') || '').first();
-        return sh ? json({ name: sh.name }) : json({ error: 'This link is not active. Ask Royal Enterprises for a new link.' }, 404);
+        return sh ? json({ name: sh.name }) : json({ error: `This link is not active. Ask ${st.name} for a new link.` }, 404);
       }
       if (action === 'shopLogin') {
         if (req.method !== 'POST') return json({ error: 'POST required' }, 405);
@@ -90,7 +114,7 @@ export default {
         if (action === 'shopCatalog') return json(await shopCatalog(env));
         if (action === 'shopMyOrders') {
           const rs = await env.DB.prepare('SELECT id, json, status, ts FROM shop_orders WHERE shop_id = ? ORDER BY id DESC LIMIT 50').bind(shop.id).all();
-          return json({ orders: rs.results.map(orderOut) });
+          return json({ orders: rs.results.map(r => orderOut(r, st)) });
         }
         if (req.method !== 'POST') return json({ error: 'POST required' }, 405);
         return shopPlaceOrder(env, shop, await req.json());
@@ -98,7 +122,7 @@ export default {
 
       if (action === 'getAll') {
         if (!isOwner(req, env)) return json({ error: 'Owner key wrong or missing' }, 401);
-        const row = await env.DB.prepare('SELECT json, updated FROM app_state WHERE k = ?').bind('main').first();
+        const row = await env.DB.prepare('SELECT json, updated FROM app_state WHERE k = ?').bind(st.stateKey).first();
         return json({ state: row ? JSON.parse(row.json) : null, updated: row ? row.updated : 0 });
       }
 
@@ -120,7 +144,7 @@ export default {
         if (!body.state) return json({ error: 'state missing' }, 400);
         const now = Date.now();
         await env.DB.prepare('INSERT INTO app_state (k, json, updated) VALUES (?, ?, ?) ON CONFLICT(k) DO UPDATE SET json = excluded.json, updated = excluded.updated')
-          .bind('main', JSON.stringify(body.state), now).run();
+          .bind(st.stateKey, JSON.stringify(body.state), now).run();
         return json({ ok: true, updated: now });
       }
 
@@ -157,7 +181,7 @@ export default {
       }
       if (action === 'ordersList') {
         const rs = await env.DB.prepare('SELECT id, shop_id, json, status, ts FROM shop_orders ORDER BY id DESC LIMIT 300').all();
-        return json({ orders: rs.results.map(orderOut) });
+        return json({ orders: rs.results.map(r => orderOut(r, st)) });
       }
       if (action === 'orderSetStatus') {
         const id = parseInt(String(body.id).replace(/\D/g, ''));
@@ -221,13 +245,25 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const isTransient = (status, msg) => [429, 500, 502, 503, 504].includes(status) || /high demand|overloaded|unavailable|resource.?exhausted|quota|try again/i.test(msg);
 const isGone = (status, msg) => status === 404 || /no longer available|not found|not supported for generatecontent|is not supported/i.test(msg);
 
+// Nisha Journal Store: read a tobacco / pan masala / supari pack (mode 'pack')
+const PACK_PROMPT = `This is a phone photo of a retail pack (cigarette pack or carton, bidi bundle, chewing tobacco pouch or tin, pan masala / supari pouch or tin, matchbox, lighter, mouth freshener...).
+Read ONLY what is printed on the pack. Return ONLY JSON with these fields:
+- "brand": the brand printed (e.g. "Gold Flake", "Vimal", "Rajnigandha"), or "".
+- "product": the product / variant name WITHOUT the brand, Title Case (e.g. "Kings", "Lights", "Pan Masala", "Silver Pearls", "Supari"), or "".
+- "pack": the pack size as a short label: stick count for cigarettes/bidis (e.g. "20 Sticks", "10 Sticks"), net weight for others (e.g. "100 g", "1 kg"), or the printed price point for pouches (e.g. "₹10 Pouch"). Use exactly one.
+- "mrp": the MRP printed, as a number in rupees (e.g. 100), or 0 if not readable.
+- "units_inside": how many smaller packs are inside if this is an outer carton / bundle / box (e.g. 10), else 0.
+- "category": one of "Cigarettes","Bidi","Chewing Tobacco","Pan Masala & Supari","Other".
+- "description": every other useful detail printed, as short points joined with " · " (e.g. net weight, count, flavour, filter / non-filter, size like "King Size"). Do NOT copy the statutory health warning or slogans.
+If there is no pack, return {}.`;
+
 // mode 'name' (product form → From box): text reading only — no box corners, fastest model first, minimal thinking
 const NAME_MODELS = ['gemini-3.8-flash-lite', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'];
 async function analyzeWithGemini(env, base64Jpeg, mode) {
-  const fast = mode === 'name';
+  const fast = mode === 'name' || mode === 'pack';
   const list = fast ? NAME_MODELS : GEMINI_MODELS;
   const models = [...new Set(env.GEMINI_MODEL ? [env.GEMINI_MODEL, ...list] : list)];
-  const prompt = fast ? PROMPT.replace(/^- "corners".*\n- "box_2d".*\n/m, '').replace(/\nIf there is no product box.*$/s, '\nIf there is no product box, return {}.') : PROMPT;
+  const prompt = mode === 'pack' ? PACK_PROMPT : fast ? PROMPT.replace(/^- "corners".*\n- "box_2d".*\n/m, '').replace(/\nIf there is no product box.*$/s, '\nIf there is no product box, return {}.') : PROMPT;
   const body = { contents: [{ parts: [{ inline_data: { mime_type: 'image/jpeg', data: base64Jpeg } }, { text: prompt }] }],
     // no temperature (not allowed on Gemini 3.8+); low thinking = fast answer, plenty for box + label reading
     generationConfig: { responseMimeType: 'application/json', thinkingConfig: { thinkingLevel: fast ? 'minimal' : 'low' } } };
@@ -367,8 +403,8 @@ function randomId(n) {
   return Array.from(b, x => abc[x % abc.length]).join('');
 }
 const cleanMobile = m => String(m || '').replace(/\D/g, '').slice(-10);
-const orderNo = id => 'SO-' + String(id).padStart(4, '0');
-function orderOut(r) { const o = JSON.parse(r.json); return { ...o, id: 'so' + r.id, no: orderNo(r.id), status: r.status, ts: r.ts, shopId: r.shop_id || o.shopId }; }
+const orderNo = (id, st = STORES.royal) => st.orderPrefix + String(id).padStart(4, '0');
+function orderOut(r, st) { const o = JSON.parse(r.json); return { ...o, id: 'so' + r.id, no: orderNo(r.id, st), status: r.status, ts: r.ts, shopId: r.shop_id || o.shopId }; }
 
 async function shopSave(env, sh) {
   const name = String(sh.name || '').trim(), mobile = cleanMobile(sh.mobile);
@@ -392,7 +428,7 @@ async function shopLogin(env, token, mobile) {
   const fail = await env.DB.prepare('SELECT count, until FROM login_fails WHERE token = ?').bind(token).first();
   if (fail && fail.until && fail.until > now) return json({ error: `Too many wrong tries. Try again in ${Math.ceil((fail.until - now) / 60000)} min.` }, 429);
   const sh = await env.DB.prepare('SELECT * FROM shops WHERE token = ? AND active = 1').bind(token).first();
-  if (!sh) return json({ error: 'This link is not active. Ask Royal Enterprises for a new link.' }, 404);
+  if (!sh) return json({ error: `This link is not active. Ask ${env.STORE.name} for a new link.` }, 404);
   if (cleanMobile(mobile) !== sh.mobile) {
     const count = (fail && (!fail.until || fail.until <= now) ? fail.count : 0) + 1;
     const until = count >= 5 ? now + 15 * 60000 : null;
@@ -415,34 +451,44 @@ async function shopFromSession(req, env) {
 
 // What a shop may see: no purchase price, stock capped (shows "in stock / only N left")
 async function shopCatalog(env) {
-  const row = await env.DB.prepare('SELECT json, updated FROM app_state WHERE k = ?').bind('main').first();
+  const row = await env.DB.prepare('SELECT json, updated FROM app_state WHERE k = ?').bind(env.STORE.stateKey).first();
   const S = row ? JSON.parse(row.json) : { brands: [], cats: [], products: [] };
   const products = (S.products || []).map(p => ({
     id: p.id, name: p.name, brandId: p.brandId, catId: p.catId, desc: p.desc || '', photo: p.photo || '', photos: p.photos || [],
-    variants: (p.variants || []).map(v => ({ id: v.id, label: v.label, sku: v.sku, dist: Number(v.dist) || 0, retail: Number(v.retail) || 0,
-      stock: Math.max(0, Math.min(Number(v.stock) || 0, 9999)), lowAt: Number(v.lowAt) || 0, box: Math.max(1, Math.round(Number(v.box)) || 1), photo: v.photo || '' }))
+    variants: (p.variants || []).map(v => ({ id: v.id, label: v.label, sku: v.sku, dist: Number(v.dist) || 0, retail: Number(v.retail) || 0, mrp: Number(v.mrp) || 0,
+      unit: v.unit || 'pc', step: Number(v.step) || 0,    // unit: pc | box | kg (Nisha); Royal products have no unit → pc
+      stock: Math.max(0, Math.min(Number(v.stock) || 0, 99999)), lowAt: Number(v.lowAt) || 0, box: Math.max(1, Math.round(Number(v.box)) || 1), photo: v.photo || '' }))
   }));
   return { state: { brands: S.brands || [], cats: S.cats || [], products, log: [], orders: [], meta: {} }, updated: row ? row.updated : 0 };
 }
 
 async function shopPlaceOrder(env, shop, body) {
-  const row = await env.DB.prepare('SELECT json FROM app_state WHERE k = ?').bind('main').first();
+  const row = await env.DB.prepare('SELECT json FROM app_state WHERE k = ?').bind(env.STORE.stateKey).first();
   const S = row ? JSON.parse(row.json) : { products: [] };
   const byV = {}; (S.products || []).forEach(p => (p.variants || []).forEach(v => { byV[v.id] = { p, v }; }));
   const items = [];
   for (const it of (body.items || []).slice(0, 200)) {
-    const f = byV[it.vid], qty = Math.round(Number(it.qty) || 0);
-    if (!f || qty <= 0 || qty > 99999 || !(Number(f.v.dist) > 0)) continue;
-    const box = Math.max(1, Math.round(Number(f.v.box)) || 1);
-    if (qty % box) return json({ error: `${f.p.name} ${f.v.label} is sold in boxes of ${box} — refresh and try again` }, 400);
-    items.push({ pid: f.p.id, vid: f.v.id, name: f.p.name, label: f.v.label, sku: f.v.sku, qty, box, rate: Number(f.v.dist) });   // server price, not the phone's
+    const f = byV[it.vid]; if (!f || !(Number(f.v.dist) > 0)) continue;
+    const unit = f.v.unit || 'pc', box = unit === 'kg' ? 1 : Math.max(1, Math.round(Number(f.v.box)) || 1);
+    let qty;
+    if (unit === 'kg') {          // weighed items: decimals in the item's step (e.g. 0.25 kg)
+      const step = Number(f.v.step) || 0.25;
+      qty = Math.round((Number(it.qty) || 0) * 1000) / 1000;
+      if (qty <= 0 || qty > 9999) continue;
+      if (Math.abs(qty / step - Math.round(qty / step)) > 1e-6) return json({ error: `${f.p.name} ${f.v.label} is sold in steps of ${step} kg — refresh and try again` }, 400);
+    } else {
+      qty = Math.round(Number(it.qty) || 0);
+      if (qty <= 0 || qty > 99999) continue;
+      if (qty % box) return json({ error: `${f.p.name} ${f.v.label} is sold in boxes of ${box} — refresh and try again` }, 400);
+    }
+    items.push({ pid: f.p.id, vid: f.v.id, name: f.p.name, label: f.v.label, sku: f.v.sku, qty, box, unit, mrp: Number(f.v.mrp) || 0, rate: Number(f.v.dist) });   // server price, not the phone's
   }
   if (!items.length) return json({ error: 'No valid items in the order (rates may have changed — refresh)' }, 400);
-  const o = { shopId: shop.id, shopName: shop.name, source: 'shop', items, total: items.reduce((a, x) => a + x.qty * x.rate, 0), note: String(body.note || '').slice(0, 300) };
+  const o = { shopId: shop.id, shopName: shop.name, source: 'shop', items, total: Math.round(items.reduce((a, x) => a + x.qty * x.rate, 0) * 100) / 100, note: String(body.note || '').slice(0, 300) };
   const now = Date.now();
   const r = await env.DB.prepare('INSERT INTO shop_orders (shop_id, json, status, ts) VALUES (?, ?, ?, ?) RETURNING id').bind(shop.id, JSON.stringify(o), 'new', now).first();
   await env.DB.prepare('UPDATE shops SET last_order = ? WHERE id = ?').bind(now, shop.id).run();
-  return json({ id: 'so' + r.id, no: orderNo(r.id), total: o.total });
+  return json({ id: 'so' + r.id, no: orderNo(r.id, env.STORE), total: o.total });
 }
 
 /* ---------- Gemini image model: phone photo → clean e-commerce packshot of the SAME box ---------- */

@@ -1,0 +1,1903 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f2e22">
+<title>Nisha Journal Store</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Nisha">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* =========================================================
+   Nisha Journal Store — wholesale ordering, catalogue & stock (copied from Nisha Journal Store, store = nisha)
+   Tobacco / pan masala wholesale: every variant is sold per piece, per box/carton, or per kg (0.25 kg steps), with MRP
+   Owner catalogue + stock, Staff view-only, Shopkeeper ordering preview
+   Data: cloud only (Cloudflare Worker + D1). The phone keeps settings only (owner key, theme, cart).
+   Look: clean, static business app — light default, minimal motion
+   ========================================================= */
+:root{
+  --bg:#f5f3ea; --bg2:#ffffff; --card:#ffffff; --card2:#eef2e9; --line:#dfe6d9;
+  --text:#132019; --muted:#5d6b62;
+  --primary:#123d2c; --primary-ink:#f1d79a; --primary-soft:#e6efe8;
+  --accent:#C9A24A; --accent-ink:#132019; --accent-soft:#f6efd9; --accent-txt:#6f5414;
+  --head:radial-gradient(120% 90% at 100% 0%,#1f5a41 0%,#123d2c 45%,#0b2419 90%);
+  --gold:#8a6a1c; --gold-soft:#f6efdc;
+  --ok:#14915f; --ok-soft:#e3f5ec; --warn:#b86e00; --warn-soft:#fdf0dc; --bad:#d23a4f; --bad-soft:#fbe6e9;
+  --r:14px; --shadow:0 1px 3px rgba(0,0,0,.06); --nav-h:64px;
+}
+[data-theme="dark"]{
+  --bg:#0a130f; --bg2:#0f1b16; --card:#13221b; --card2:#192c23; --line:#24392f;
+  --text:#edf3ee; --muted:#9bb0a3;
+  --primary:#D8B96A; --primary-ink:#0f1b16; --primary-soft:#1d3127;
+  --accent:#D4AD55; --accent-ink:#0f1b16; --accent-soft:#2a2c1d; --accent-txt:#E2C47A;
+  --head:radial-gradient(120% 90% at 100% 0%,#1c4a36 0%,#0f2a1f 45%,#071510 90%);
+  --gold:#d9b356; --gold-soft:#2a2a1b;
+  --ok:#3fcf8e; --ok-soft:#173026; --warn:#f0a63a; --warn-soft:#33281a; --bad:#ff6b7e; --bad-soft:#3a1e24;
+  --shadow:none;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{font-family:'Inter',system-ui,sans-serif;color:var(--text);background:var(--bg);min-height:100vh;overflow-x:hidden;font-size:15px}
+h1,h2,h3,h4{margin:0;font-weight:700;letter-spacing:-.01em}
+button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+input,select,textarea{font:inherit;color:var(--text)}
+.muted{color:var(--muted)}
+svg.ic{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+/* ---------- App bar ---------- */
+.appbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:calc(12px + env(safe-area-inset-top)) 16px 12px;background:var(--head);color:#fff}
+.brand{display:flex;align-items:center;gap:10px;cursor:pointer;min-width:0}
+.logo{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;background:#0f2e22;border:1px solid rgba(226,176,79,.4);flex:none}
+.logo svg{width:auto;height:30px}
+.brand b{font-family:Georgia,'Times New Roman',serif;font-size:16px;letter-spacing:.06em;text-transform:uppercase;color:#F1D79A;display:block;line-height:1.15}
+.brand small{color:rgba(255,255,255,.75);font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.hdr-actions{display:flex;gap:6px}
+.iconbtn{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:var(--card);border:1px solid var(--line)}
+.iconbtn:active{background:var(--card2)}
+.appbar .iconbtn{background:rgba(255,255,255,.14);border:0;color:#fff}
+
+main{padding:14px 16px calc(var(--nav-h) + 30px + env(safe-area-inset-bottom));max-width:760px;margin:0 auto}
+
+/* ---------- Bottom nav ---------- */
+.bnav{position:fixed;left:0;right:0;bottom:0;z-index:60;display:flex;justify-content:space-around;
+  padding:6px 8px calc(6px + env(safe-area-inset-bottom));background:var(--bg2);border-top:1px solid var(--line)}
+.bnav button{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 0;font-size:11.5px;font-weight:600;color:var(--muted)}
+.bnav button.on{color:var(--accent-txt)}
+.bnav button.on svg{stroke-width:2.3}
+
+/* ---------- Common blocks ---------- */
+.sec{display:flex;align-items:center;justify-content:space-between;margin:22px 2px 10px;font-size:16px}
+.sec small{font-weight:500;color:var(--muted);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+.pill{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:6px;font-size:11.5px;font-weight:600;background:var(--card2);color:var(--muted)}
+.pill.gold{background:var(--gold-soft);color:var(--gold)}
+.pill.ok{background:var(--ok-soft);color:var(--ok)}
+.pill.low{background:var(--warn-soft);color:var(--warn)}
+.pill.out{background:var(--bad-soft);color:var(--bad)}
+.empty{text-align:center;padding:28px 16px;color:var(--muted)}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 16px;border-radius:10px;font-weight:600;font-size:15px}
+.btn:active{opacity:.85}
+.btn.gold{background:var(--accent);color:var(--accent-ink);box-shadow:0 4px 12px rgba(201,150,46,.25)}
+.btn.ghost{background:var(--card);border:1px solid var(--line)}
+.btn.danger{background:var(--bad-soft);color:var(--bad)}
+.btn.block{width:100%}
+.btn:disabled{opacity:.4;pointer-events:none}
+
+.search{position:relative;margin:2px 0 12px}
+.search svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--muted);width:18px;height:18px}
+.search input{width:100%;padding:11px 12px 11px 38px;border-radius:10px;border:1px solid var(--line);background:var(--card);outline:none;font-size:15px}
+.search input:focus{border-color:var(--primary)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;padding:7px 13px;border-radius:8px;background:var(--card);border:1px solid var(--line);font-size:13.5px;font-weight:500;color:var(--text)}
+.chip.on{background:var(--primary);color:var(--primary-ink);border-color:var(--primary)}
+
+/* ---------- Owner home ---------- */
+.greet{margin:4px 2px 2px}
+.greet h1{font-size:21px}
+.greet p{margin:3px 0 0;color:var(--muted);font-size:13.5px}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.stat{padding:14px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow)}
+.stat .v{font-size:22px;font-weight:700;margin-top:8px}
+.stat .l{font-size:12.5px;color:var(--muted);font-weight:500}
+.stat .ic{color:var(--muted)}
+.quick{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}
+.qa{display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 6px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);font-size:12.5px;font-weight:600;box-shadow:var(--shadow)}
+.qa:active{background:var(--card2)}
+.qa span{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;background:var(--primary-soft);color:var(--primary)}
+
+/* ---------- Lists ---------- */
+.list{display:flex;flex-direction:column;gap:8px}
+.row{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow)}
+.row img,.thumb{width:48px;height:48px;border-radius:8px;object-fit:cover;flex:none;background:var(--card2)}
+.row .grow{flex:1;min-width:0}
+.row b{display:block;font-size:14.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .sub{font-size:12.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stockn{font-weight:700;font-size:18px;text-align:right;min-width:44px}
+.stockn.low{color:var(--warn)} .stockn.out{color:var(--bad)} .stockn.ok{color:var(--text)}
+.stockn small{display:block;font-size:10.5px;color:var(--muted);font-weight:500}
+.adj{width:36px;height:36px;border-radius:9px;display:grid;place-items:center;background:var(--card);border:1px solid var(--line)}
+
+.pcard{display:flex;gap:12px;padding:12px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);cursor:pointer}
+.pcard img{width:72px;height:72px;border-radius:10px;object-fit:cover;flex:none}
+.pcard .grow{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.pcard b{font-size:15px;font-weight:600}
+.pcard .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:auto}
+
+/* ---------- FAB ---------- */
+.fab{position:fixed;right:16px;bottom:calc(var(--nav-h) + 16px + env(safe-area-inset-bottom));z-index:55;width:54px;height:54px;border-radius:16px;
+  display:grid;place-items:center;background:var(--accent);color:var(--accent-ink);box-shadow:0 6px 16px rgba(201,150,46,.35)}
+.fab svg{width:24px;height:24px;stroke-width:2.4}
+
+/* ---------- Bottom sheet ---------- */
+.sheet-wrap{position:fixed;inset:0;z-index:100;background:rgba(15,18,30,.45);opacity:0;visibility:hidden;transition:opacity .2s,visibility .2s}
+.sheet-wrap.open{opacity:1;visibility:visible}
+.sheet{position:absolute;left:0;right:0;bottom:0;max-height:92vh;overflow-y:auto;margin:0 auto;max-width:760px;
+  background:var(--bg);border-radius:18px 18px 0 0;padding:6px 16px calc(20px + env(safe-area-inset-bottom));
+  transform:translateY(100%);transition:transform .25s ease-out}
+.sheet-wrap.open .sheet{transform:translateY(0)}
+.grab{width:40px;height:4px;border-radius:9px;background:var(--line);margin:4px auto 12px}
+.sheet-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
+.sheet-h h2{font-size:18px}
+
+/* ---------- Forms ---------- */
+.field{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
+.field label{font-size:12.5px;font-weight:600;color:var(--muted)}
+.field input,.field select,.field textarea{width:100%;padding:11px 12px;border-radius:9px;border:1px solid var(--line);background:var(--card);outline:none;font-size:15px}
+.field input:focus,.field select:focus,.field textarea:focus{border-color:var(--primary)}
+.field input:disabled{background:var(--card2);color:var(--muted)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.photo-pick{display:grid;place-items:center;height:130px;border-radius:var(--r);border:1.5px dashed var(--line);background:var(--card);margin-bottom:14px;overflow:hidden;cursor:pointer;color:var(--muted);font-weight:500;text-align:center}
+.photo-pick{grid-template:minmax(0,1fr)/minmax(0,1fr)}
+.photo-pick img{width:100%;height:100%;min-height:0;object-fit:contain;background:var(--card2)}
+.vblock{padding:14px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);margin-bottom:10px}
+.vblock-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-weight:600}
+.vphoto{width:44px;height:44px;border-radius:8px;border:1.5px dashed var(--line);display:grid;place-items:center;overflow:hidden;color:var(--muted);flex:none;cursor:pointer}
+.vphoto img{width:100%;height:100%;object-fit:cover}
+.seg{display:flex;background:var(--card2);border-radius:10px;padding:3px;margin-bottom:14px}
+.seg button{flex:1;padding:9px;border-radius:8px;font-weight:600;color:var(--muted);font-size:14px}
+.seg button.on{background:var(--card);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.1)}
+
+/* ---------- Product detail (owner) ---------- */
+.pd-img{width:100%;height:210px;border-radius:var(--r);object-fit:contain;background:var(--card2)}
+.vcard{padding:12px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);margin-bottom:8px}
+.vcard-top{display:flex;align-items:center;gap:10px}
+.prices{display:grid;grid-template-columns:repeat(auto-fit,minmax(70px,1fr));gap:6px;margin-top:10px}
+.prices div{padding:7px;border-radius:8px;background:var(--card2);text-align:center}
+.prices small{display:block;font-size:10.5px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.prices b{font-size:14.5px}
+
+/* ---------- Shop view (Purple Rush) ---------- */
+body.shop .appbar{display:none}
+body.shop main{padding-top:0}
+.ps-top{margin:0 -16px;padding:calc(16px + env(safe-area-inset-top)) 16px 16px;background:var(--head);color:#fff;border-radius:0 0 26px 26px}
+.ps-row{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.ps-eta{font-size:21px;font-weight:800;letter-spacing:-.02em;min-width:0}
+.ps-eta small{display:block;font-size:12.5px;font-weight:500;opacity:.8;letter-spacing:0;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ps-acts{display:flex;gap:8px;flex:none}
+.ps-btn{width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.16);display:grid;place-items:center;color:#fff;font-weight:700;font-size:13px}
+.ps-search{position:relative;margin-top:14px}
+.ps-search svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#8a8170;width:18px;height:18px}
+.ps-search input{width:100%;border:0;outline:none;border-radius:14px;padding:12px 12px 12px 38px;font-size:15px;background:#fff;color:#17140f}
+/* padding leaves room for the selected outline, which the scroll box would otherwise clip */
+.ps-cats{display:flex;align-items:flex-start;gap:12px;margin:10px -4px 0;padding:6px 4px 2px;overflow-x:auto;scrollbar-width:none}
+.ps-cats::-webkit-scrollbar{display:none}
+.ps-cat{flex:none;width:64px;text-align:center;font-size:11.5px;font-weight:600;color:#fff;opacity:.72;line-height:1.2}
+.ps-cat.on{opacity:1}
+.ps-cat .ci{width:52px;height:52px;border-radius:16px;margin:0 auto 6px;display:grid;place-items:center;background:rgba(255,255,255,.14)}
+.ps-cat .ci img{width:38px;height:38px}
+.ps-cat.on .ci{background:rgba(226,176,79,.22);outline:2px solid #E2B04F;outline-offset:2px}
+.ps-bans{display:flex;gap:10px;overflow-x:auto;margin:14px -16px 0;padding:0 16px;scrollbar-width:none;scroll-snap-type:x mandatory}
+.ps-bans::-webkit-scrollbar{display:none}
+.ps-ban{flex:none;width:78%;max-width:300px;scroll-snap-align:start;padding:14px 16px;border-radius:18px;color:#fff}
+.ps-ban b{display:block;font-size:16px}
+.ps-ban small{font-size:12.5px;opacity:.9}
+.ps-brands{display:flex;align-items:center;gap:10px;overflow-x:auto;margin:0 -4px;padding:14px 4px 4px;scrollbar-width:none}
+.ps-brands::-webkit-scrollbar{display:none}
+.ps-brand{flex:none;padding:7px 13px;border-radius:999px;border:1px solid var(--line);background:var(--card);font-size:13px;font-weight:600}
+.ps-brand.on{background:var(--primary);color:var(--primary-ink);border-color:var(--primary)}
+/* brand chips that show the brand's own logo on its own background colour */
+.ps-brand.blogo{height:40px;padding:0 12px;display:flex;align-items:center;border-radius:12px}
+.ps-brand.blogo img{height:30px;width:auto;max-width:none;flex:none;display:block}
+.ps-brand.blogo.on{outline:2px solid var(--accent);outline-offset:2px}
+.ps-brand.txt{height:40px;border-radius:12px}
+.ps-h{display:flex;justify-content:space-between;align-items:baseline;margin:16px 2px 10px}
+.ps-h b{font-size:17px;font-weight:800}
+.ps-h small{color:var(--muted);font-size:12.5px}
+.ps-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+@media(min-width:620px){.ps-grid{grid-template-columns:repeat(4,1fr)}}
+.ps-card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:6px;cursor:pointer;position:relative}
+.ps-img{position:relative}
+.ps-img img{width:100%;aspect-ratio:1/1;border-radius:10px;object-fit:cover;display:block;background:var(--card2)}
+.ps-oos{position:absolute;inset:0;border-radius:10px;background:rgba(255,255,255,.65);display:grid;place-items:center;font-size:11px;font-weight:800;color:var(--bad)}
+[data-theme="dark"] .ps-oos{background:rgba(13,12,10,.65)}
+.ps-addw{position:absolute;right:0;bottom:-8px}
+.ps-add{height:30px;min-width:52px;padding:0 8px;border-radius:9px;background:var(--card);border:1.5px solid var(--accent);color:var(--accent-txt);font-weight:800;font-size:12px;box-shadow:0 4px 10px rgba(201,150,46,.18)}
+.ps-step{height:30px;min-width:64px;border-radius:9px;background:var(--accent);color:var(--accent-ink);display:flex;align-items:center;justify-content:space-between;font-weight:800;font-size:13px;box-shadow:0 4px 10px rgba(201,150,46,.3)}
+.ps-step button{width:21px;height:30px;color:var(--accent-ink);font-size:16px;font-weight:800}
+.ps-step span{padding:0 4px;display:flex;align-items:center;gap:2px}
+.ps-pr{margin:12px 2px 0;font-size:14px;font-weight:800}
+.ps-pr s{font-size:10.5px;color:var(--muted);font-weight:500;margin-left:3px}
+.ps-nm{font-size:12px;font-weight:600;line-height:1.25;margin:2px 2px 0;min-height:30px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ps-op{font-size:10.5px;color:var(--muted);margin:2px 2px 2px}
+
+.gal{position:relative;margin:0 auto 14px;max-width:320px}
+.gal-track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;border-radius:20px;background:#fff;scrollbar-width:none}
+.gal-track::-webkit-scrollbar{display:none}
+.gal-track img{flex:0 0 100%;width:100%;aspect-ratio:1/1;object-fit:contain;scroll-snap-align:center;background:#fff}
+.gal-btn{position:absolute;top:50%;transform:translateY(-50%);width:36px;height:36px;border-radius:50%;border:0;background:rgba(10,9,7,.55);color:#fff;font-size:24px;line-height:1;display:grid;place-items:center;cursor:pointer;padding:0 0 3px}
+.gal-btn:hover{background:rgba(10,9,7,.8)}.gal-btn.prev{left:8px}.gal-btn.next{right:8px}
+.gal-dots i{cursor:pointer}
+.gal-n{position:absolute;right:10px;bottom:10px;background:rgba(10,9,7,.7);color:#fff;font-size:11.5px;font-weight:700;padding:3px 8px;border-radius:999px}
+.gal-dots{display:flex;justify-content:center;gap:5px;margin-top:8px}.gal-dots i{width:6px;height:6px;border-radius:50%;background:var(--line)}.gal-dots i.on{background:var(--accent);width:16px;border-radius:3px}
+.gstrip{display:flex;gap:8px;overflow-x:auto;padding:2px 0 12px}
+.gstrip .g{position:relative;flex:none;width:64px;height:64px;border-radius:10px;overflow:hidden;border:1px solid var(--line);background:#fff}
+.gstrip .g img{width:100%;height:100%;object-fit:cover}
+.gstrip .g button{position:absolute;top:2px;right:2px;width:20px;height:20px;border-radius:50%;background:rgba(10,9,7,.75);color:#fff;font-size:13px;line-height:20px;padding:0}
+.gstrip .g.main{border:2px solid var(--accent)}
+.gstrip .add{display:grid;place-items:center;color:var(--muted);border-style:dashed;cursor:pointer}
+.sp-img{display:block;height:210px;width:210px;max-width:100%;margin:0 auto 14px;border-radius:20px;object-fit:cover}
+.sp-title{font-size:20px;font-weight:800}
+.namerow{display:flex;gap:8px}.namerow input{flex:1;min-width:0}.namerow .btn{flex:none;padding:0 12px;font-size:13px;white-space:nowrap}
+.gem2{display:flex;gap:8px;margin:-6px 0 10px}.gem2 .btn{flex:1;padding:8px 10px;font-size:13px;text-align:center;text-decoration:none;color:var(--text)}
+.vblock .field{margin-bottom:8px}.vblock{padding:12px}
+.addres .row{cursor:pointer;padding:8px 10px}.addres .row img{width:44px;height:44px;background:#fff;object-fit:contain}
+/* Product sheets on a desktop/tablet screen: photos left, variants right — everything in one view.
+   Phones keep the single column (same order: photos first, then variants). */
+@media(min-width:900px){
+  .sheet.wide{max-width:1120px}
+  .pd2{display:grid;grid-template-columns:minmax(0,440px) minmax(0,1fr);gap:28px;align-items:start}
+  .pd2-l{position:sticky;top:0}
+  .pd2 .gal{max-width:none;margin:0 0 10px}
+  .pf2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:28px;align-items:start}
+  .pf2-r{position:sticky;top:0}
+  .pf2 .photo-pick{height:150px}
+  .pd2-r>.sec:first-child,.pd2-r>.sp-title:first-child{margin-top:0}
+}
+.sp-sub{color:var(--muted);font-size:13px;margin:3px 0 14px}
+.vopt{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);margin-bottom:8px}
+.vopt.sel{border-color:var(--accent);background:var(--accent-soft)}
+.vopt.dis{opacity:.5}
+.vopt img{width:44px;height:44px;border-radius:10px;object-fit:cover}
+.vopt .grow{flex:1;min-width:0}
+.vopt b{font-size:14.5px;font-weight:600;display:block}
+.vopt .price{font-weight:800;font-size:15px;margin:2px 0}
+.stepper{display:flex;align-items:center;border-radius:10px;overflow:hidden;background:var(--accent);color:var(--accent-ink)}
+.stepper button{width:32px;height:36px;display:grid;place-items:center;font-size:19px;font-weight:700;color:var(--accent-ink)}
+.stepper input{width:36px;text-align:center;border:0;background:none;font-weight:800;font-size:15px;outline:none;color:var(--accent-ink);-moz-appearance:textfield}
+.stepper.zero{background:var(--card);border:1.5px solid var(--accent)}
+.stepper.zero button,.stepper.zero input{color:var(--accent-txt)}
+.stepper input::-webkit-outer-spin-button,.stepper input::-webkit-inner-spin-button{-webkit-appearance:none}
+
+.cartbar{position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:70;max-width:736px;margin:0 auto;display:none;align-items:center;justify-content:space-between;gap:12px;
+  padding:10px 10px 10px 16px;border-radius:16px;background:#14110c;color:#fff;border:1px solid rgba(226,176,79,.35);box-shadow:0 10px 24px rgba(0,0,0,.35);cursor:pointer}
+.cartbar.show{display:flex}
+.cartbar b{font-size:17px}
+.cartbar small{opacity:.75;font-weight:500}
+.cartbar .go{display:flex;align-items:center;gap:6px;padding:10px 14px;border-radius:12px;font-weight:800;background:var(--accent);color:var(--accent-ink)}
+
+.success{text-align:center;padding:10px 0 6px}
+.success .tick{width:64px;height:64px;margin:8px auto 14px;border-radius:50%;display:grid;place-items:center;background:var(--ok-soft);color:var(--ok)}
+.success .tick svg{width:32px;height:32px;stroke-width:2.6}
+
+.imp-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:12px;background:var(--card);margin-bottom:8px;cursor:pointer}
+.imp-row.on{border-color:var(--accent);background:var(--accent-soft)}
+.imp-row img{width:52px;height:52px;border-radius:8px;object-fit:cover;background:#fff;flex:none}
+.imp-row .ck{width:22px;height:22px;border-radius:6px;border:2px solid var(--line);flex:none;display:grid;place-items:center}
+.imp-row.on .ck{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.imp-row b{font-size:13.5px;display:block;line-height:1.25}.imp-row small{color:var(--muted);font-size:12px}
+.pill.inapp{background:var(--ok-soft);color:var(--ok)}
+.cloudpill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;padding:3px 8px;border-radius:999px;background:var(--card2);color:var(--muted)}
+.cloudpill.ok{color:var(--ok);background:var(--ok-soft)}.cloudpill.err{color:var(--bad);background:var(--bad-soft)}
+.toast{position:fixed;left:50%;bottom:calc(var(--nav-h) + 24px);transform:translateX(-50%);opacity:0;z-index:4000;background:#1b1f2e;color:#fff;padding:10px 16px;border-radius:10px;font-weight:500;font-size:14px;transition:opacity .2s;pointer-events:none;max-width:88vw;text-align:center}
+.toast.show{opacity:1}
+body.shop .toast{bottom:calc(84px + env(safe-area-inset-bottom))}
+
+.role-opt{display:flex;align-items:center;gap:14px;width:100%;text-align:left;padding:12px;border-radius:var(--r);background:var(--card);border:1px solid var(--line);margin-bottom:8px}
+.role-opt.on{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary)}
+.role-opt span{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;background:var(--primary-soft);color:var(--primary);flex:none}
+.role-opt small{display:block;color:var(--muted);font-size:12.5px;margin-top:2px}
+.note{font-size:12.5px;color:var(--muted);background:var(--card2);border-radius:10px;padding:10px 12px;margin-top:8px}
+
+.order-line{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px}
+.order-line:last-child{border-bottom:0}
+.linkbox{font:12.5px/1.4 ui-monospace,monospace;word-break:break-all;background:var(--card2);border:1px dashed var(--line);border-radius:9px;padding:10px 12px;margin:6px 0 10px;user-select:all}
+.kv{display:flex;justify-content:space-between;gap:14px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
+.kv:last-child{border-bottom:0}
+.kv span{color:var(--muted);flex:none}
+.kv b{text-align:right;font-weight:600;min-width:0;overflow-wrap:anywhere}
+.kv a{color:var(--accent-txt);font-weight:600;text-decoration:none}
+.avatar{width:44px;height:44px;border-radius:50%;flex:none;display:grid;place-items:center;font-weight:800;font-size:15px;background:var(--card2);color:var(--accent-txt);border:1px solid var(--line)}
+.row.off{opacity:.55}
+.total-row{display:flex;justify-content:space-between;align-items:center;padding:14px 0 4px;font-size:18px;font-weight:700}
+</style>
+</head>
+<body>
+
+
+<header class="appbar">
+  <div class="brand" onclick="goTab('home')"><span class="logo" id="logoCrown"></span><div><b>Nisha Journal Store</b><small id="roleLbl">Owner</small></div></div>
+  <div class="hdr-actions">
+    <button class="iconbtn" onclick="openRole()" aria-label="Switch view" id="roleBtn"></button>
+    <button class="iconbtn" onclick="toggleTheme()" aria-label="Theme" id="themeBtn"></button>
+  </div>
+</header>
+
+<main id="main"></main>
+
+<nav class="bnav" id="bnav"></nav>
+<button class="fab" id="fab" onclick="openAddProduct()" aria-label="Add product" style="display:none"></button>
+<div class="cartbar" id="cartbar" onclick="openCart()"></div>
+
+<div class="sheet-wrap" id="sheetWrap" onclick="if(event.target===this)closeSheet()"><div class="sheet" id="sheet"></div></div>
+<div class="toast" id="toast"></div>
+<input type="file" id="fileIn" accept="image/*" hidden>
+
+<script>
+/* =========================================================
+   STORAGE KEYS (app prefix "nj_" + _v1 suffix — Royal uses "re_" on the same website)
+   ========================================================= */
+const KEY = 'nj_data_v1', CART_KEY = 'nj_cart_v1', UI_KEY = 'nj_ui_v1';
+const DEMO_SHOP = { id: 'SH-0000', name: 'Preview shop' };   // owner's "Shopkeeper (preview)" view only
+
+/* ---------- small helpers ---------- */
+const $ = s => document.querySelector(s);
+const main = $('#main');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const num = v => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
+const inr = n => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const loadJSON = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } };
+const fmtDT = ts => new Date(ts).toLocaleString('en-IN', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+
+/* ---------- icons (inline SVG) ---------- */
+const ICONS = {
+  cloud:'<path d="M7 18h10a4 4 0 0 0 .5-8 6 6 0 0 0-11.6 1.5A3.3 3.3 0 0 0 7 18z"/>', sync:'<path d="M20 11a8 8 0 0 0-14.8-4M4 13a8 8 0 0 0 14.8 4"/><path d="M5 3v4h4M19 21v-4h-4"/>', wand:'<path d="M4 20L16 8M14 4l1 2 2 1-2 1-1 2-1-2-2-1 2-1zM19 11l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z"/>',
+  home:'<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>',
+  box:'<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/>',
+  layers:'<path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/><path d="M3 17l9 5 9-5"/>',
+  more:'<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
+  user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
+  moon:'<path d="M21 13A9 9 0 1 1 11 3a7 7 0 0 0 10 10z"/>',
+  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>', minus:'<path d="M5 12h14"/>',
+  search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/>',
+  cart:'<path d="M3 4h2l2.4 11h11l2-8H6.3"/><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/>',
+  edit:'<path d="M4 20h4L19 9l-4-4L4 16v4z"/>', clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  camera:'<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
+  store:'<path d="M4 9l1.5-5h13L20 9"/><path d="M4 9h16v2a3 3 0 0 1-5.3 2 3 3 0 0 1-5.4 0A3 3 0 0 1 4 11z"/><path d="M5 14v6h14v-6"/>',
+  trash:'<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>', x:'<path d="M6 6l12 12M18 6L6 18"/>',
+  check:'<path d="M5 12l5 5 9-10"/>', alert:'<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/>',
+  rupee:'<path d="M6 4h12M6 9h12M14 4c3 0 4 2.5 4 5s-2 5-6 5H7l8 7"/>', eye:'<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  tag:'<path d="M3 12V4h8l10 10-8 8z"/><circle cx="8" cy="8" r="1.5"/>', download:'<path d="M12 4v11M7 10l5 5 5-5M4 20h16"/>',
+  arrow:'<path d="M5 12h14M13 6l6 6-6 6"/>', in:'<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>'
+};
+const ic = (n, extra = '') => `<svg class="ic" viewBox="0 0 24 24" ${extra}>${ICONS[n] || ''}</svg>`;
+// Nisha Journal Store monogram — gold "NJS" in a double ring, used in the header, login and connect screens
+const CROWN = `<svg viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="lionGold" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F6E3B0"/><stop offset=".5" stop-color="#E0BB6A"/><stop offset="1" stop-color="#B58635"/></linearGradient></defs><circle cx="50" cy="50" r="46" fill="none" stroke="url(#lionGold)" stroke-width="3.5"/><circle cx="50" cy="50" r="39" fill="none" stroke="url(#lionGold)" stroke-width="1.2"/><text x="50" y="61" text-anchor="middle" font-family="Georgia,'Times New Roman',serif" font-weight="700" font-size="30" letter-spacing="1" fill="url(#lionGold)">NJS</text></svg>`;
+
+/* ---------- placeholder product art (used when no photo uploaded) ---------- */
+const ART = {
+  pack:'<rect x="62" y="40" width="76" height="120" rx="8"/><path d="M62 70h76M80 40v-8h40v8"/>',
+  pouch:'<path d="M66 50h68l-6 110H72z"/><path d="M66 50l6-12h56l6 12M84 90h32"/>',
+  charger:'<rect x="62" y="70" width="76" height="80" rx="14"/><path d="M85 70V45M115 70V45"/><path d="M104 92l-14 20h20l-14 20"/>',
+  cable:'<path d="M60 150c0-40 80-30 80-70 0-20-15-30-30-30"/><rect x="92" y="28" width="30" height="24" rx="6"/><rect x="48" y="146" width="24" height="26" rx="5"/>',
+  earphone:'<path d="M66 120V95a34 34 0 0 1 68 0v25"/><rect x="54" y="112" width="24" height="38" rx="11"/><rect x="122" y="112" width="24" height="38" rx="11"/>',
+  power:'<rect x="70" y="45" width="60" height="110" rx="14"/><path d="M104 75l-14 24h20l-14 24"/>',
+  cover:'<rect x="66" y="35" width="68" height="130" rx="16"/><circle cx="88" cy="58" r="8"/><circle cx="88" cy="81" r="8"/>',
+  glass:'<rect x="66" y="35" width="68" height="130" rx="16"/><path d="M82 72l36-18M82 102l36-18M82 132l36-18"/>',
+  speaker:'<rect x="62" y="40" width="76" height="120" rx="18"/><circle cx="100" cy="115" r="22"/><circle cx="100" cy="68" r="8"/>',
+  default:'<path d="M60 82h80l-8 68H68z"/><path d="M80 82a20 20 0 0 1 40 0"/>'
+};
+const HUE = { charger:262, cable:205, earphone:325, power:150, cover:22, glass:188, speaker:290, default:245 };
+function artKind(catName) {
+  const c = (catName || '').toLowerCase();
+  if (/cigar|bidi|carton/.test(c)) return 'pack';
+  if (/tobacco|khaini|pan|supari|masala|gutkha|fresh/.test(c)) return 'pouch';
+  if (/charg|adapter/.test(c)) return 'charger';
+  if (/cable|wire|cord/.test(c)) return 'cable';
+  if (/ear|neck|head|bud/.test(c)) return 'earphone';
+  if (/power ?bank|bank/.test(c)) return 'power';
+  if (/cover|case|back/.test(c)) return 'cover';
+  if (/glass|guard|screen/.test(c)) return 'glass';
+  if (/speaker/.test(c)) return 'speaker';
+  return 'default';
+}
+const artCache = {};
+function art(kind) {
+  if (artCache[kind]) return artCache[kind];
+  // placeholder art: one warm gold tone for all categories (black & gold brand)
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect width="200" height="200" fill="#f4ede0"/><g transform="translate(40 40) scale(.6)" fill="none" stroke="#9a6b14" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">${ART[kind]}</g></svg>`;
+  return (artCache[kind] = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg));
+}
+
+/* =========================================================
+   DATA
+   ========================================================= */
+// The catalogue lives ONLY in the cloud. Nothing is kept on the phone except settings,
+// so every phone always shows exactly what is in the cloud.
+const DEFAULT_CATS = ['Cigarettes', 'Bidi', 'Chewing Tobacco / Khaini', 'Pan Masala & Supari'];
+const emptyState = () => ({ brands: [], cats: [], products: [], log: [], orders: [], meta: { nextOrder: 1001 } });
+let S = emptyState();
+let loaded = false;                                    // true once the cloud copy has arrived
+try { localStorage.removeItem(KEY); } catch (e) {}     // remove the old on-phone copy from earlier versions
+let cart = loadJSON(CART_KEY, {});            // { variantId: qty }
+let ui = Object.assign({ role: 'owner', tab: 'home', theme: 'light' }, loadJSON(UI_KEY, {}));
+const savedRole = ui.role;
+const view = { q: '', brand: 'all', cat: 'all', stock: 'all' };
+
+let saveTimer;
+function save() {                              // 400ms debounce, same pattern as other apps
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    if (!cloud.key) return toast('Not connected to cloud — this change was not saved');
+    cloudPush();
+  }, 400);
+}
+const saveCart = () => localStorage.setItem(CART_KEY, JSON.stringify(cart));
+/* =========================================================
+   CLOUD SYNC (Cloudflare Worker + D1)
+   - Everyone loads the catalogue from the cloud on open.
+   - Only a phone with the owner key (OWNER_KEY secret) can save to the cloud.
+   - Whole-state save, last write wins (fine with one owner).
+   ========================================================= */
+const API = 'https://royal-enterprises.naimuddinshaikh74667.workers.dev/';   // shared with Royal for now — data kept apart by STORE
+const STORE = 'nisha';
+// The Worker is pasted into Cloudflare by hand — if it is older than this, newer features (box sizes for shops,
+// fast box reading, …) silently fall back. The app checks once and warns the owner.
+const NEED_WORKER = '2026-11-12';
+let workerVersion = null, nishaKeySet = true;     // null = not checked yet, '' = old Worker without a version
+async function checkWorker() {
+  try { const r = await fetch(API + '?action=ping&store=' + STORE).then(x => x.json()); workerVersion = r.version || ''; nishaKeySet = !!r.ownerKeySet && r.store === STORE; } catch (e) { return; }
+  if (workerVersion < NEED_WORKER && cloud.key && !SHOP_MODE) toast('Cloudflare Worker is out of date — paste the latest worker.js (see More)');
+  if (ui.tab === 'more' && !SHOP_MODE) render();
+}
+const CLOUD_KEY = 'nj_cloud_v1';
+let cloud = Object.assign({ key: '', updated: 0 }, loadJSON(CLOUD_KEY, {}));
+let BASE = null;     // the cloud copy this screen last loaded or saved (JSON) — used to merge with other phones/tabs
+/* Merge three copies by record id: base = what we started from, mine = this screen, theirs = cloud now.
+   A record I changed keeps my version; anything I did not touch takes the cloud's version,
+   so an older tab or phone can never wipe edits made somewhere else. */
+function mergeList(b = [], m = [], t = [], newFirst = true) {
+  const B = new Map(b.map(x => [x.id, JSON.stringify(x)])), M = new Map(m.map(x => [x.id, x])), out = [], seen = new Set();
+  for (const x of t) {
+    seen.add(x.id);
+    if (M.has(x.id)) { const mine = M.get(x.id); out.push(JSON.stringify(mine) !== B.get(x.id) ? mine : x); }
+    else if (!B.has(x.id) || JSON.stringify(x) !== B.get(x.id)) out.push(x);   // added there, or changed there after I deleted it
+  }
+  const mineNew = m.filter(x => !seen.has(x.id) && !B.has(x.id));            // added on this screen
+  return newFirst ? [...mineNew, ...out] : [...out, ...mineNew];
+}
+function mergeStates(base, mine, theirs) {
+  return Object.assign({}, theirs, {
+    brands: mergeList(base.brands, mine.brands, theirs.brands, false), cats: mergeList(base.cats, mine.cats, theirs.cats, false),
+    products: mergeList(base.products, mine.products, theirs.products, true),
+    log: mergeList(base.log, mine.log, theirs.log, false).sort((a, b) => a.ts - b.ts),
+    orders: mergeList(base.orders, mine.orders, theirs.orders, false),
+    meta: Object.assign({}, theirs.meta, { nextOrder: Math.max(num(mine.meta?.nextOrder), num(theirs.meta?.nextOrder)) || 1001 })
+  });
+}
+let cloudStatus = 'idle';       // idle | syncing | ok | error | offline
+const saveCloud = () => localStorage.setItem(CLOUD_KEY, JSON.stringify(cloud));
+
+/* ---------- Real shop login ----------
+   Each shop gets a private link (…/?s=TOKEN). The shopkeeper opens it and types the shop's mobile.
+   The session stays on that phone, so the app (or home-screen icon) opens straight into the shop next time. */
+const SHOP_KEY = 'nj_shop_v1';
+const LINK_TOKEN = new URLSearchParams(location.search).get('s') || '';
+let SHOP = loadJSON(SHOP_KEY, null);                    // { token, sess, shop: { id, name, owner, area } }
+if (SHOP && LINK_TOKEN && SHOP.token !== LINK_TOKEN) SHOP = { token: LINK_TOKEN, sess: '' };   // another shop's link → log in again
+if (!SHOP && LINK_TOKEN) SHOP = { token: LINK_TOKEN, sess: '' };
+const saveShop = () => localStorage.setItem(SHOP_KEY, JSON.stringify(SHOP));
+// This phone is a shop phone when it was opened from a shop link, or it has a shop session and no owner key
+const SHOP_MODE = !!LINK_TOKEN || (!!(SHOP && SHOP.sess) && !cloud.key);
+const shopLoggedIn = () => !!(SHOP && SHOP.sess && SHOP.shop);
+const curShop = () => SHOP_MODE ? (SHOP && SHOP.shop) || { id: '', name: 'Shop' } : DEMO_SHOP;
+async function api(action, body, timeoutMs) {
+  const headers = {};
+  if (SHOP_MODE) { if (SHOP && SHOP.sess) headers['X-Shop-Session'] = SHOP.sess; }   // shop phone never sends the owner key
+  else if (cloud.key) headers['X-Owner-Key'] = cloud.key;
+  const opt = body ? { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : { headers };
+  if (timeoutMs) opt.signal = AbortSignal.timeout(timeoutMs);
+  let r;
+  try { r = await fetch(API + '?action=' + action + '&store=' + STORE, opt); }
+  catch (e) { throw new Error(e.name === 'TimeoutError' ? 'took too long — try again' : 'no internet'); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || ('HTTP ' + r.status)); e.status = r.status; throw e; }
+  return j;
+}
+function setCloudStatus(st) { cloudStatus = st; const el = $('#cloudPill'); if (el) el.outerHTML = cloudPill(); }
+function cloudPill() {
+  const t = { idle: 'Not synced', syncing: 'Syncing…', ok: cloud.key ? 'Synced' : 'Cloud (view only)', error: 'Sync error', offline: 'Offline' }[cloudStatus];
+  return `<span id="cloudPill" class="cloudpill ${cloudStatus === 'ok' ? 'ok' : cloudStatus === 'error' ? 'err' : ''}">${ic('cloud', 'style="width:13px;height:13px"')}${t}</span>`;
+}
+// Load the shared catalogue; replaces this phone's copy when the cloud has newer data
+async function cloudLoad(quiet) {
+  if (!cloud.key) { setCloudStatus('idle'); render(); return null; }
+  setCloudStatus('syncing');
+  try {
+    const r = await api('getAll');
+    S = Object.assign(emptyState(), r.state || {}); cloud.updated = r.updated; saveCloud(); BASE = JSON.stringify(S);
+    loaded = true; render();
+    if (!quiet) toast('Catalogue refreshed');
+    setCloudStatus('ok');
+    return r;
+  } catch (e) {
+    if (e.status === 401) { cloud.key = ''; saveCloud(); toast('Owner key rejected — connect again'); }
+    setCloudStatus(navigator.onLine ? 'error' : 'offline'); render(); return null;
+  }
+}
+let pushTimer, pushing = false, pendingPush = false;
+function cloudPush() {
+  if (!cloud.key) return;
+  clearTimeout(pushTimer); pendingPush = true;
+  pushTimer = setTimeout(async () => {
+    if (pushing) return cloudPush();
+    pushing = true; pendingPush = false; setCloudStatus('syncing');
+    try {
+      // someone saved from another phone/tab since we loaded → merge instead of overwriting their edits
+      const cur = await api('getAll');
+      let merged = false;
+      if (cur.state && cur.updated !== cloud.updated && BASE) { S = mergeStates(JSON.parse(BASE), S, Object.assign(emptyState(), cur.state)); merged = true; }
+      const r = await api('saveAll', { state: S }); cloud.updated = r.updated; saveCloud(); BASE = JSON.stringify(S); setCloudStatus('ok');
+      if (merged) { render(); toast('Saved · merged with changes from another phone/tab'); }
+    }
+    catch (e) {
+      setCloudStatus('error');
+      if (e.status === 401) { cloud.key = ''; saveCloud(); toast('Owner key rejected — connect again in More'); }
+      else toast('Cloud save failed — will retry on next change');
+    } finally { pushing = false; }
+  }, 1200);
+}
+async function connectCloud() {
+  const key = (prompt('Enter the owner key (OWNER_KEY password)') || '').trim(); if (!key) return;
+  toast('Connecting…');
+  cloud.key = key;
+  let r;
+  try { r = await api('getAll'); }
+  catch (e) { cloud.key = ''; return toast(e.status === 401 ? 'Wrong owner key' : 'Cannot reach the cloud — check internet'); }
+  if (r.state) S = Object.assign(emptyState(), r.state);
+  else {                                   // brand-new cloud → start with your brands + standard categories
+    S = emptyState();
+    S.brands = [];                         // brands are added as you add products (From pack adds them automatically)
+    S.cats = DEFAULT_CATS.map(name => ({ id: uid(), name }));
+    try { const w = await api('saveAll', { state: S }); r.updated = w.updated; } catch (e) { cloud.key = ''; return toast('Could not set up the cloud'); }
+  }
+  cloud.updated = r.updated; saveCloud(); BASE = JSON.stringify(S); loaded = true; render(); setCloudStatus('ok');
+  toast('Connected ☁️'); loadOrders();
+}
+function disconnectCloud() {
+  if (!confirm('Remove the owner key from this phone? It will become view-only.')) return;
+  cloud.key = ''; saveCloud(); render(); toast('This phone is now view-only');
+}
+
+const saveUI = () => localStorage.setItem(UI_KEY, JSON.stringify(SHOP_MODE ? { ...ui, role: savedRole } : ui));
+if (SHOP_MODE) ui.role = 'shop';
+
+
+/* ---------- lookups ---------- */
+const brandName = id => (S.brands.find(b => b.id === id) || {}).name || '—';
+const catName = id => (S.cats.find(c => c.id === id) || {}).name || '—';
+const getP = id => S.products.find(p => p.id === id);
+const getV = (p, vid) => p && p.variants.find(v => v.id === vid);
+function findV(vid) { for (const p of S.products) { const v = p.variants.find(x => x.id === vid); if (v) return { p, v }; } return null; }
+const allVariants = () => S.products.flatMap(p => p.variants.map(v => ({ p, v })));
+const stState = v => v.stock <= 0 ? 'out' : v.stock <= (v.lowAt || 0) ? 'low' : 'ok';
+const imgP = p => p.photo || art(artKind(catName(p.catId)));
+// Single-variant product: the variant IS the product, so always show the product's main photo
+// Variant photos can no longer be edited, so every variant shows the product's main photo (old import box shots are ignored)
+const imgV = (p, v) => p.photo || v.photo || imgP(p);
+const totalStock = p => p.variants.reduce((a, v) => a + num(v.stock), 0);
+/* ---------- Box (pack) quantities ----------
+   v.box = pieces in one box. Stock and orders are always counted in PIECES underneath;
+   boxes are only how they are shown and how shops pick quantities (whole boxes only when box > 1). */
+/* ---------- Sale units (Nisha) ----------
+   unit 'pc'  : sold per piece / packet          → shops order pieces
+   unit 'box' : box / carton / bundle of N pieces → shops order whole boxes (stock still counted in pieces)
+   unit 'kg'  : weighed (loose)                   → shops order in 0.25 kg steps (stock counted in kg) */
+const KG_STEP = 0.25;
+const r3 = n => Math.round(num(n) * 1000) / 1000;                        // kg maths without 0.30000000004
+const unitOf = v => (v && v.unit) || 'pc';
+const isKg = v => unitOf(v) === 'kg';
+const kgStep = v => num(v && v.step) > 0 ? num(v.step) : KG_STEP;
+const perBox = v => unitOf(v) === 'box' ? Math.max(1, Math.round(num(v.box)) || 1) : 1;
+const uWord = v => isKg(v) ? 'kg' : 'pc';                                 // rate is per kg or per piece
+function qtyTxt(v, q) {               // 25 pcs, box of 10 → "2 box + 5 pcs"; kg → "1.75 kg"
+  if (isKg(v)) return r3(q) + ' kg';
+  const b = perBox(v), pcs = Math.round(num(q));
+  if (b <= 1) return pcs + ' pcs';
+  const n = Math.floor(Math.abs(pcs) / b) * Math.sign(pcs || 1), r = pcs - n * b;
+  return [n ? n + ' box' : '', r ? r + ' pcs' : ''].filter(Boolean).join(' + ') || '0 box';
+}
+const boxTag = v => isKg(v) ? `Sold by kg (${kgStep(v)} kg steps)` : perBox(v) > 1 ? `Box of ${perBox(v)}` : 'Sold per piece';
+const shopStep = v => isKg(v) ? kgStep(v) : perBox(v);                   // added per tap of +
+const shopMax = v => isKg(v) ? r3(Math.floor(num(v.stock) / kgStep(v) + 1e-9) * kgStep(v)) : Math.floor(num(v.stock) / perBox(v)) * perBox(v);
+const showQ = (v, q) => isKg(v) ? r3(q) : Math.round(num(q) / perBox(v)); // number in the steppers: kg, boxes or pieces
+const fromShown = (v, n) => isKg(v) ? r3(Math.round(num(n) / kgStep(v)) * kgStep(v)) : Math.max(0, Math.round(num(n))) * perBox(v);
+const shownStep = v => isKg(v) ? kgStep(v) : 1;
+const shopLbl = (v, q) => isKg(v) ? r3(q) + ' kg' : perBox(v) > 1 ? showQ(v, q) + ' box' : String(q);
+// "12 pcs · 1.5 kg" for a mix of counted and weighed items
+function mixTxt(list) {                // list of [variant, qty]
+  let pcs = 0, kg = 0;
+  list.forEach(([v, q]) => { if (isKg(v)) kg += num(q); else pcs += num(q); });
+  return [pcs ? pcs + ' pcs' : '', kg ? r3(kg) + ' kg' : ''].filter(Boolean).join(' · ') || '0';
+}
+const mrpTxt = v => num(v.mrp) > 0 ? `MRP ${inr(v.mrp)}` : '';
+const isOwner = () => ui.role === 'owner';
+function priceRange(p, key = 'dist') {
+  const xs = p.variants.map(v => num(v[key]));
+  const lo = Math.min(...xs), hi = Math.max(...xs);
+  return lo === hi ? inr(lo) : `${inr(lo)}–${inr(hi)}`;
+}
+
+/* =========================================================
+   UI SHELL: roles, nav, theme, sheets, toast
+   ========================================================= */
+function applyTheme() {
+  document.documentElement.dataset.theme = ui.theme;
+  $('#themeBtn').innerHTML = ic(ui.theme === 'dark' ? 'sun' : 'moon');
+  document.querySelector('meta[name=theme-color]').content = ui.theme === 'dark' ? '#081a13' : '#0f2e22';
+}
+function toggleTheme() { ui.theme = ui.theme === 'dark' ? 'light' : 'dark'; saveUI(); applyTheme(); if (ui.role === 'shop') render(); }
+
+const TABS = [['home','Home','home'], ['products','Products','box'], ['stock','Stock','layers'], ['shops','Shops','store'], ['more','More','more']];
+function renderNav() {
+  const shop = ui.role === 'shop';
+  $('#bnav').style.display = shop ? 'none' : 'flex';
+  document.body.classList.toggle('shop', shop);
+  $('#bnav').innerHTML = TABS.map(([k, l, i]) => `<button class="${ui.tab === k ? 'on' : ''}" onclick="goTab('${k}')">${ic(i)}${l}</button>`).join('');
+  $('#roleLbl').textContent = { owner: 'Owner', staff: 'Staff · view only', shop: curShop().name + (curShop().id ? ' · ' + curShop().id : '') }[ui.role];
+  $('#roleBtn').innerHTML = ic(shop ? 'store' : 'user');
+  $('#fab').style.display = (isOwner() && cloud.key && loaded && ui.tab === 'products') ? 'grid' : 'none';
+  $('#fab').innerHTML = ic('plus');
+  updateCartBar();
+}
+function goTab(t) {
+  if (ui.role === 'shop') { render(); return; }
+  ui.tab = t; saveUI(); render(); window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (t === 'shops') loadShops();
+  if (t === 'home' || t === 'shops') loadOrders();
+}
+function render() {
+  renderNav();
+  if (SHOP_MODE) {
+    if (!shopLoggedIn()) return renderShopLogin();
+    if (!loaded) { main.innerHTML = '<div class="empty card" style="margin-top:30px">Loading products…</div>'; return; }
+    return renderShop();
+  }
+  if (ui.role === 'shop') return renderShop();
+  if (!cloud.key) return renderConnect();
+  if (!loaded) { main.innerHTML = '<div class="empty card" style="margin-top:30px">Loading catalogue from cloud…</div>'; return; }
+  ({ home: renderHome, products: renderProducts, stock: renderStock, shops: renderShops, more: renderMore }[ui.tab] || renderHome)();
+}
+
+function renderConnect() {
+  main.innerHTML = `<div class="card" style="margin-top:28px;padding:26px 20px;text-align:center">
+    <div style="width:84px;height:84px;margin:0 auto 14px;border-radius:22px;background:#0f2e22;display:grid;place-items:center">${CROWN.replace('<svg ', '<svg style="height:62px;width:auto" ')}</div>
+    <h2 style="margin:0 0 6px">Connect to Nisha cloud</h2>
+    <p class="muted" style="margin:0 0 18px">Your catalogue, stock and orders live in the cloud. Enter the owner key once on this phone to open them.</p>
+    <button class="btn gold block" onclick="connectCloud()">${ic('cloud')} Enter owner key</button></div>`;
+}
+function openSheet(html, opts = {}) {
+  const w = $('#sheetWrap');
+  $('#sheet').classList.toggle('wide', !!opts.wide);   // wide = two-column product sheet on desktop
+  $('#sheet').innerHTML = '<div class="grab"></div>' + html;
+  $('#sheet').scrollTop = 0;
+  requestAnimationFrame(() => w.classList.add('open'));
+}
+function closeSheet() { $('#sheetWrap').classList.remove('open'); }
+const sheetHead = (title, sub = '') => `<div class="sheet-h"><div><h2>${title}</h2>${sub ? `<div class="muted" style="font-size:13px;margin-top:2px">${sub}</div>` : ''}</div><button class="iconbtn" onclick="closeSheet()">${ic('x')}</button></div>`;
+
+let toastT;
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2200); }
+
+function openRole() {
+  if (SHOP_MODE) return shopLoggedIn() ? openShopAccount() : null;
+  const opt = (r, icon, t, s) => `<button class="role-opt ${ui.role === r ? 'on' : ''}" onclick="setRole('${r}')"><span>${ic(icon)}</span><div><b>${t}</b><small>${s}</small></div></button>`;
+  openSheet(sheetHead('Switch view') +
+    opt('owner', 'user', 'Owner', 'Add products, prices, stock, confirm orders') +
+    opt('staff', 'eye', 'Staff', 'View catalogue, stock & orders only') +
+    opt('shop', 'store', 'Shopkeeper (preview)', 'What your retailers see when they order') +
+    `<div class="note">Shopkeeper (preview) only shows what shops see. Real shops log in from their own link — Shops tab → Send link.</div>`);
+}
+function setRole(r) { ui.role = r; if (r !== 'shop' && !TABS.some(t => t[0] === ui.tab)) ui.tab = 'home'; saveUI(); closeSheet(); render(); window.scrollTo(0, 0); }
+
+/* =========================================================
+   OWNER / STAFF — HOME
+   ========================================================= */
+function greet() { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; }
+function renderHome() {
+  const vs = allVariants();
+  const low = vs.filter(x => stState(x.v) !== 'ok').sort((a, b) => a.v.stock - b.v.stock);
+  const value = vs.reduce((a, x) => a + num(x.v.stock) * num(isOwner() ? x.v.purchase : x.v.dist), 0);
+  const all = allOrders(), orders = all.slice(0, 6);
+  const newCount = all.filter(o => o.status === 'new').length;
+  const stat = (i, icon, l, v) => `<div class="stat">${ic(icon)}<div class="v">${v}</div><div class="l">${l}</div></div>`;
+  main.innerHTML = `
+    <div class="greet"><h1>${greet()}</h1><p>${new Date().toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' })}</p></div>
+    <div class="stats">
+      ${stat(0, 'box', 'Products', S.products.length)}
+      ${stat(1, 'tag', 'Variants (SKUs)', vs.length)}
+      ${stat(2, 'rupee', isOwner() ? 'Stock value (cost)' : 'Stock value (dist. rate)', inr(value))}
+      ${stat(3, 'alert', 'Low / out of stock', low.length)}
+    </div>
+    ${isOwner() ? `<div class="quick">
+      <button class="qa" onclick="openAddProduct()"><span>${ic('plus')}</span>Add product</button>
+      <button class="qa" onclick="goTab('shops');openShopForm()"><span>${ic('store')}</span>Add shop</button>
+      <button class="qa" onclick="setRole('shop')"><span>${ic('eye')}</span>Shop view</button></div>` : ''}
+    <h3 class="sec">Orders from shops ${newCount ? `<span class="pill gold">${newCount} new</span>` : `<small>${ORD.loaded ? (all.length ? 'nothing new' : 'none yet') : 'loading…'}</small>`}
+      ${all.length > orders.length ? `<button class="pill" style="margin-left:auto;cursor:pointer" onclick="openAllOrders('new')">See all ${all.length}</button>` : ''}</h3>
+    <div class="list">${orders.length ? orders.map(o => orderRow(o)).join('') : `<div class="empty card">${ORD.err ? 'Could not load orders — ' + esc(ORD.err) : 'Orders placed by shops will appear here.'}<br><br><button class="btn ghost" onclick="goTab('shops')">${ic('store')} Add a shop & send its link</button></div>`}</div>
+    <h3 class="sec">Needs restock <small>${low.length} variants</small></h3>
+    <div class="list">${low.slice(0, 6).map(({ p, v }, i) => stockRow(p, v, i)).join('') || '<div class="empty card">All stock healthy 👌</div>'}</div>`;
+}
+
+/* ---------- Orders from shops (cloud table shop_orders; old preview orders in S.orders still show) ---------- */
+let ORD = { list: [], loaded: false, busy: false, err: '' };
+const ORDER_PILL = { new: 'gold', confirmed: 'ok', delivered: 'ok', cancelled: 'out' };
+const ORDER_LBL = { new: 'New', confirmed: 'Confirmed', delivered: 'Delivered', cancelled: 'Cancelled' };
+function allOrders() {
+  const legacy = (S.orders || []).map(o => Object.assign(o, { legacy: true }));
+  return ORD.list.concat(legacy).sort((a, b) => b.ts - a.ts);
+}
+const findOrder = id => allOrders().find(o => o.id === id);
+async function loadOrders() {
+  if (SHOP_MODE || !cloud.key || ORD.busy) return;
+  ORD.busy = true;
+  try { const r = await api('ordersList', {}); ORD.list = r.orders || []; ORD.loaded = true; ORD.err = ''; }
+  catch (e) { ORD.err = e.message; }
+  finally { ORD.busy = false; }
+  if (ui.role !== 'shop' && loaded && (ui.tab === 'home' || ui.tab === 'shops')) render();
+}
+function orderRow(o, click) {
+  const qty = mixTxt(o.items.map(x => [x, x.qty]));
+  const lbl = SHOP_MODE && o.status === 'new' ? 'Placed' : ORDER_LBL[o.status] || o.status;
+  return `<div class="row" style="cursor:pointer" onclick="${click || `openOrder('${o.id}')`}">
+    <div class="thumb" style="display:grid;place-items:center;color:var(--gold)">${ic('cart')}</div>
+    <div class="grow"><b>${esc(o.no)}${SHOP_MODE ? '' : ' · ' + esc(o.shopName)}</b><div class="sub">${fmtDT(o.ts)} · ${qty} · ${o.items.length} item${o.items.length === 1 ? '' : 's'}</div></div>
+    <div style="text-align:right"><b>${inr(o.total)}</b><span class="pill ${ORDER_PILL[o.status] || ''}" style="margin-top:4px">${lbl}</span></div></div>`;
+}
+function orderLinesHTML(o) {
+  const lines = o.items.map(x => `<div class="order-line"><div><b>${esc(x.name)}</b><div class="muted" style="font-size:12.5px">${esc(x.label)} · ${esc(x.sku)}</div></div><div style="text-align:right;white-space:nowrap">${x.box > 1 ? `<span class="muted" style="font-size:12.5px">${qtyTxt(x, x.qty)}</span><br>` : ''}${isKg(x) ? r3(x.qty) + ' kg' : x.qty} × ${inr(x.rate)}${isKg(x) ? '/kg' : ''}<div><b>${inr(x.qty * x.rate)}</b></div></div></div>`).join('');
+  return `<div class="card" style="padding:4px 14px">${lines}</div><div class="total-row"><span>Total</span><span>${inr(o.total)}</span></div>`
+    + (o.note ? `<div class="note"><b>Note:</b> ${esc(o.note)}</div>` : '');
+}
+function openOrder(id) {
+  const o = findOrder(id); if (!o) return;
+  const sh = SHOPS.list.find(x => x.id === o.shopId);
+  let actions = '';
+  if (isOwner() && o.status === 'new') actions = `<div class="grid2" style="margin-top:16px"><button class="btn danger" onclick="setOrderStatus('${o.id}','cancelled')">Cancel</button><button class="btn gold" onclick="setOrderStatus('${o.id}','confirmed')">${ic('check')} Confirm</button></div>
+       <div class="note">Confirming takes the items out of stock.</div>`;
+  if (isOwner() && o.status === 'confirmed') actions = `<div class="grid2" style="margin-top:16px"><button class="btn danger" onclick="setOrderStatus('${o.id}','cancelled')">Cancel</button><button class="btn gold" onclick="setOrderStatus('${o.id}','delivered')">${ic('check')} Mark delivered</button></div>
+       <div class="note">Cancelling a confirmed order puts its items back in stock.</div>`;
+  const shopBtns = sh ? `<div class="grid2" style="margin-top:10px"><a class="btn ghost" style="text-align:center;text-decoration:none;color:var(--text)" href="tel:+91${sh.mobile}">Call shop</a><button class="btn ghost" onclick="openShop('${sh.id}')">${ic('store')} Shop details</button></div>` : '';
+  openSheet(sheetHead(esc(o.no), `${esc(o.shopName)} (${esc(o.shopId)}) · ${fmtDT(o.ts)} · <span class="pill ${ORDER_PILL[o.status] || ''}">${ORDER_LBL[o.status] || o.status}</span>`) + orderLinesHTML(o) + actions + shopBtns);
+}
+async function setOrderStatus(id, status) {
+  const o = findOrder(id); if (!o) return;
+  const wasOut = o.status === 'confirmed' || o.status === 'delivered';       // stock already taken out?
+  if (status === 'confirmed' && !wasOut) {
+    // check stock first so we never go negative
+    const short = o.items.filter(x => { const f = findV(x.vid); return !f || num(f.v.stock) < x.qty; });
+    if (short.length) return toast('Not enough stock: ' + short.map(x => x.name + ' ' + x.label).join(', '));
+  }
+  if (status === 'cancelled' && !confirm(wasOut ? 'Cancel this confirmed order? Its items go back into stock.' : 'Cancel this order?')) return;
+  if (!o.legacy) {
+    try { await api('orderSetStatus', { id: o.id, status }); }
+    catch (e) { return toast('Could not update the order — ' + e.message); }
+  }
+  // stock moves only after the cloud accepted the new status
+  if (status === 'confirmed' && !wasOut) o.items.forEach(x => { const f = findV(x.vid); if (f) applyStock(f.p.id, f.v.id, -x.qty, 'order', o.no); });
+  if (status === 'cancelled' && wasOut) o.items.forEach(x => { const f = findV(x.vid); if (f) applyStock(f.p.id, f.v.id, x.qty, 'order', o.no + ' cancelled'); });
+  o.status = status; o.updated = Date.now(); save(); closeSheet(); render();
+  toast({ confirmed: 'Order confirmed · stock updated', delivered: 'Marked delivered', cancelled: wasOut ? 'Order cancelled · stock returned' : 'Order cancelled' }[status]);
+}
+let ordFilter = 'new';
+function openAllOrders(f) {
+  if (f) ordFilter = f;
+  const all = allOrders(), list = ordFilter === 'all' ? all : all.filter(o => o.status === ordFilter);
+  const cnt = k => k === 'all' ? all.length : all.filter(o => o.status === k).length;
+  const seg = ['new', 'confirmed', 'delivered', 'cancelled', 'all'].map(k => `<button class="${ordFilter === k ? 'on' : ''}" style="font-size:12.5px;padding:8px 2px" onclick="openAllOrders('${k}')">${k === 'all' ? 'All' : ORDER_LBL[k]} ${cnt(k)}</button>`).join('');
+  openSheet(sheetHead('Orders', all.length + ' orders') + `<div class="seg">${seg}</div><div class="list">${list.map(o => orderRow(o)).join('') || '<div class="empty card">No orders here</div>'}</div>`);
+}
+
+/* =========================================================
+   OWNER / STAFF — SHOPS (retailers who order through their own link)
+   ========================================================= */
+let SHOPS = { list: [], loaded: false, busy: false, err: '' };
+const shopQ = { q: '' };
+async function loadShops() {
+  if (SHOP_MODE || !cloud.key || SHOPS.busy) return;
+  SHOPS.busy = true;
+  try { const r = await api('shopsList', {}); SHOPS.list = r.shops || []; SHOPS.loaded = true; SHOPS.err = ''; }
+  catch (e) { SHOPS.err = e.message; }
+  finally { SHOPS.busy = false; }
+  if (ui.tab === 'shops' && ui.role !== 'shop') renderShopList();
+}
+const shopLink = sh => location.origin + location.pathname + '?s=' + sh.token;
+const initials = name => String(name || '?').trim().split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
+const mapUrl = m => /^https?:\/\//i.test(m) ? m : 'https://www.google.com/maps?q=' + encodeURIComponent(m);
+function shopOrders(id) { return ORD.list.filter(o => o.shopId === id); }
+function renderShops() {
+  if (!SHOPS.loaded && !SHOPS.busy && !SHOPS.err) loadShops();
+  main.innerHTML = `
+    <div class="search">${ic('search')}<input placeholder="Search shop, owner, area, mobile…" value="${esc(shopQ.q)}" oninput="shopQ.q=this.value;renderShopList()"></div>
+    <h3 class="sec">Shops <small id="shopCount"></small></h3>
+    <div class="list" id="shopList"></div>
+    ${isOwner() ? `<button class="btn gold block" style="margin-top:12px" onclick="openShopForm()">${ic('plus')} Add shop</button>` : ''}
+    <div class="note" style="margin-top:12px">Each shop gets its own private link. The shopkeeper opens it and logs in with the shop's mobile number. Shops see only the distributor rate — never your purchase price.</div>`;
+  renderShopList();
+}
+function renderShopList() {
+  const el = $('#shopList'); if (!el) return;
+  const q = shopQ.q.trim().toLowerCase();
+  const list = SHOPS.list.filter(sh => !q || [sh.name, sh.owner, sh.area, sh.mobile, sh.id].join(' ').toLowerCase().includes(q));
+  $('#shopCount').textContent = SHOPS.loaded ? `${SHOPS.list.filter(x => x.active).length} active` : '';
+  if (!SHOPS.loaded) { el.innerHTML = `<div class="empty card">${SHOPS.err ? 'Could not load shops — ' + esc(SHOPS.err) + `<br><br><button class="btn ghost" onclick="SHOPS.err='';loadShops()">Try again</button>` : 'Loading shops…'}</div>`; return; }
+  el.innerHTML = list.map(sh => {
+    const n = shopOrders(sh.id).length;
+    return `<div class="row ${sh.active ? '' : 'off'}" style="cursor:pointer" onclick="openShop('${sh.id}')">
+      <div class="avatar">${esc(initials(sh.name))}</div>
+      <div class="grow"><b>${esc(sh.name)}</b> ${sh.active ? '' : '<span class="pill out">Off</span>'}<div class="sub">${[sh.owner, sh.area, sh.mobile].filter(Boolean).map(esc).join(' · ')}</div></div>
+      <div style="text-align:right;font-size:12px" class="muted"><b style="color:var(--text);font-size:15px">${n}</b><br>order${n === 1 ? '' : 's'}</div></div>`;
+  }).join('') || `<div class="empty card">${SHOPS.list.length ? 'No shop matches' : 'No shops yet — add your first shop.'}</div>`;
+}
+function openShop(id) {
+  const sh = SHOPS.list.find(x => x.id === id); if (!sh) return;
+  const ords = shopOrders(id), live = ords.filter(o => o.status !== 'cancelled');
+  const kv = (k, v) => v ? `<div class="kv"><span>${k}</span><b>${v}</b></div>` : '';
+  openSheet(sheetHead(esc(sh.name), `${esc(sh.id)} · ${sh.active ? '<span class="pill ok">Active</span>' : '<span class="pill out">Disabled</span>'}`) + `
+    <div class="card" style="padding:2px 14px">
+      ${kv('Owner', esc(sh.owner))}
+      ${kv('Mobile', `<a href="tel:+91${esc(sh.mobile)}">${esc(sh.mobile)}</a>`)}
+      ${kv('Area / market', esc(sh.area))}
+      ${kv('Address', esc(sh.address))}
+      ${kv('Location', sh.map ? `<a href="${esc(mapUrl(sh.map))}" target="_blank" rel="noopener">Open map ↗</a>` : '')}
+      ${kv('Credit limit', sh.credit_limit != null ? inr(sh.credit_limit) : '')}
+      ${kv('Orders', ords.length ? `${ords.length} · ${inr(live.reduce((a, o) => a + o.total, 0))}` : 'none yet')}
+      ${kv('Last order', sh.last_order ? fmtDT(sh.last_order) : '')}
+      ${kv('Added', sh.created ? new Date(sh.created).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '')}
+    </div>
+    ${sh.active ? `<h3 class="sec">Shop link <small>private to this shop</small></h3>
+    <div class="linkbox">${esc(shopLink(sh))}</div>
+    ${isOwner() ? `<div class="grid2"><button class="btn gold" onclick="sendShopLink('${sh.id}')">Send on WhatsApp</button><button class="btn ghost" onclick="copyShopLink('${sh.id}')">Copy link</button></div>` : ''}` : '<div class="note">This shop is disabled — its link does not work and it cannot order.</div>'}
+    ${ords.length ? `<h3 class="sec">Recent orders</h3><div class="list">${ords.slice(0, 5).map(o => orderRow(o)).join('')}</div>` : ''}
+    ${isOwner() ? `<h3 class="sec">Manage</h3>
+    <div class="grid2"><button class="btn ghost" onclick="openShopForm('${sh.id}')">${ic('edit')} Edit</button>
+      <button class="btn ${sh.active ? 'danger' : 'gold'}" onclick="toggleShop('${sh.id}')">${sh.active ? 'Disable' : 'Enable'}</button></div>
+    ${sh.active ? `<button class="btn ghost block" style="margin-top:10px" onclick="resetShopLink('${sh.id}')">${ic('sync')} Reset link</button>
+    <div class="note">Reset if the link was shared with the wrong person: the old link stops working and the shop's phone is logged out.</div>` : ''}` : ''}`);
+}
+let SF = null;     // shop being added / edited
+function openShopForm(id) {
+  if (!isOwner()) return;
+  const sh = id && SHOPS.list.find(x => x.id === id);
+  SF = sh ? { ...sh } : { id: null, name: '', owner: '', mobile: '', area: '', address: '', map: '', credit_limit: null };
+  const areas = [...new Set(SHOPS.list.map(x => x.area).filter(Boolean))].sort();
+  openSheet(sheetHead(sh ? 'Edit shop' : 'Add shop', sh ? esc(sh.id) : 'A private link is made for the shop when you save') + `
+    <div class="field"><label>Shop name *</label><input id="sfName" value="${esc(SF.name)}" placeholder="e.g. Sai Mobile Point"></div>
+    <div class="field"><label>Owner name</label><input id="sfOwner" value="${esc(SF.owner)}" placeholder="e.g. Ramesh Patil"></div>
+    <div class="field"><label>Mobile * <small class="muted">— the shop logs in with this</small></label><input id="sfMobile" type="tel" inputmode="numeric" maxlength="14" value="${esc(SF.mobile)}" placeholder="10-digit mobile"></div>
+    <div class="field"><label>Area / market</label><input id="sfArea" list="sfAreas" value="${esc(SF.area)}" placeholder="e.g. Dhamankar Naka"><datalist id="sfAreas">${areas.map(a => `<option value="${esc(a)}">`).join('')}</datalist></div>
+    <div class="field"><label>Address</label><textarea id="sfAddr" rows="2" placeholder="Shop no., building, landmark">${esc(SF.address)}</textarea></div>
+    <div class="field"><label>Location pin <small class="muted">— optional</small></label><input id="sfMap" value="${esc(SF.map)}" placeholder="Paste a Google Maps link, or use the button">
+      <button class="btn ghost block" style="margin-top:8px" onclick="useMyLocation()">Use current location</button></div>
+    <div class="field"><label>Credit limit ₹ <small class="muted">— optional</small></label><input id="sfCredit" type="number" inputmode="numeric" min="0" value="${SF.credit_limit != null ? esc(SF.credit_limit) : ''}" placeholder="Leave empty for no limit"></div>
+    <button class="btn gold block" id="sfSave" onclick="saveShopForm()">${ic('check')} ${sh ? 'Save changes' : 'Add shop'}</button>`);
+}
+function useMyLocation() {
+  if (!navigator.geolocation) return toast('Location is not available on this phone');
+  toast('Finding location…');
+  navigator.geolocation.getCurrentPosition(
+    p => { const el = $('#sfMap'); if (el) el.value = p.coords.latitude.toFixed(6) + ',' + p.coords.longitude.toFixed(6); toast('Location added (stand inside the shop for best result)'); },
+    () => toast('Could not get location — allow location access and try again'),
+    { enableHighAccuracy: true, timeout: 15000 });
+}
+async function saveShopForm() {
+  const v = id => ($(id).value || '').trim();
+  const shop = { id: SF.id, name: v('#sfName'), owner: v('#sfOwner'), mobile: v('#sfMobile').replace(/\D/g, '').slice(-10), area: v('#sfArea'), address: v('#sfAddr'), map: v('#sfMap'), credit_limit: v('#sfCredit') };
+  if (!shop.name) return toast('Enter the shop name');
+  if (shop.mobile.length !== 10) return toast('Enter a 10-digit mobile number');
+  const btn = $('#sfSave'); btn.disabled = true;
+  let r;
+  try { r = await api('shopSave', { shop }); }
+  catch (e) { btn.disabled = false; return toast(e.message); }
+  const i = SHOPS.list.findIndex(x => x.id === r.shop.id);
+  if (i >= 0) SHOPS.list[i] = r.shop; else SHOPS.list.push(r.shop);
+  renderShopList();
+  openShop(r.shop.id);
+  toast(shop.id ? 'Shop saved' : 'Shop added — now send the link');
+}
+async function toggleShop(id) {
+  const sh = SHOPS.list.find(x => x.id === id); if (!sh) return;
+  if (sh.active && !confirm(`Disable ${sh.name}? Their link stops working and they cannot order until you enable them again.`)) return;
+  try { await api('shopToggle', { id, active: !sh.active }); } catch (e) { return toast(e.message); }
+  sh.active = sh.active ? 0 : 1; renderShopList(); openShop(id);
+  toast(sh.active ? 'Shop enabled' : 'Shop disabled');
+}
+async function resetShopLink(id) {
+  const sh = SHOPS.list.find(x => x.id === id); if (!sh) return;
+  if (!confirm(`Make a new link for ${sh.name}? The old link stops working and their phone is logged out.`)) return;
+  let r; try { r = await api('shopResetLink', { id }); } catch (e) { return toast(e.message); }
+  sh.token = r.token; openShop(id); toast('New link made — send it to the shop');
+}
+async function copyShopLink(id) {
+  const sh = SHOPS.list.find(x => x.id === id); if (!sh) return;
+  try { await navigator.clipboard.writeText(shopLink(sh)); toast('Link copied'); }
+  catch (e) { prompt('Copy this link', shopLink(sh)); }
+}
+function sendShopLink(id) {
+  const sh = SHOPS.list.find(x => x.id === id); if (!sh) return;
+  const msg = `Namaste ${sh.owner || sh.name} 🙏\n\nYou can now order from *Nisha Journal Store* on your phone:\n${shopLink(sh)}\n\nOpen the link and log in with this mobile number. Tip: in Chrome tap ⋮ → "Add to Home screen" to keep it as an app.`;
+  window.open('https://wa.me/91' + sh.mobile + '?text=' + encodeURIComponent(msg), '_blank');
+}
+
+/* =========================================================
+   OWNER / STAFF — PRODUCTS
+   ========================================================= */
+function filterChips(kind) {
+  const list = kind === 'brand' ? S.brands : S.cats;
+  const cur = view[kind === 'brand' ? 'brand' : 'cat'];
+  const fn = kind === 'brand' ? 'setBrandF' : 'setCatF';
+  return `<div class="chips"><button class="chip ${cur === 'all' ? 'on' : ''}" onclick="${fn}('all')">All ${kind === 'brand' ? 'brands' : 'categories'}</button>` +
+    list.map(x => `<button class="chip ${cur === x.id ? 'on' : ''}" onclick="${fn}('${x.id}')">${esc(x.name)}</button>`).join('') + '</div>';
+}
+function setBrandF(id) { view.brand = id; ui.role === 'shop' ? renderShopGrid() : renderProducts(); }
+function setCatF(id) { view.cat = id; ui.role === 'shop' ? (renderCatChips(), renderShopGrid()) : renderProducts(); }
+function matchP(p) {
+  const q = view.q.trim().toLowerCase();
+  if (view.brand !== 'all' && p.brandId !== view.brand) return false;
+  if (view.cat !== 'all' && p.catId !== view.cat) return false;
+  if (!q) return true;
+  return (p.name + ' ' + brandName(p.brandId) + ' ' + catName(p.catId) + ' ' + p.variants.map(v => v.label + ' ' + v.sku).join(' ')).toLowerCase().includes(q);
+}
+function renderProducts() {
+  main.innerHTML = `
+    <div class="search">${ic('search')}<input id="pq" placeholder="Search product, variant or SKU" value="${esc(view.q)}" oninput="view.q=this.value;renderProductList()"></div>
+    ${filterChips('brand')}${filterChips('cat')}
+    <div class="list" id="plist"></div>`;
+  renderProductList();
+}
+function renderProductList() {
+  const ps = S.products.filter(matchP);
+  $('#plist').innerHTML = ps.length ? ps.map((p, i) => {
+    const t = totalStock(p), anyLow = p.variants.some(v => stState(v) !== 'ok');
+    return `<div class="pcard" onclick="openProduct('${p.id}')">
+      <img src="${imgP(p)}" alt="" loading="lazy">
+      <div class="grow"><b>${esc(p.name)}</b><span class="muted" style="font-size:12.5px">${esc(brandName(p.brandId))} · ${esc(catName(p.catId))}</span>
+        <div class="meta"><span class="pill">${p.variants.length} variants</span><span class="pill gold">${priceRange(p)}</span>${anyLow ? '<span class="pill low">restock</span>' : ''}</div></div>
+      <div class="stockn ${t <= 0 ? 'out' : anyLow ? 'low' : 'ok'}">${t}<small>in stock</small></div></div>`;
+  }).join('') : `<div class="empty card">No products match.${isOwner() ? `<br><br><button class="btn gold" onclick="openAddProduct()">${ic('plus')} Add product</button>` : ''}</div>`;
+}
+function openProduct(id) {
+  const p = getP(id); if (!p) return;
+  const vcards = p.variants.map(v => {
+    const s = stState(v), margin = num(v.dist) ? Math.round((num(v.dist) - num(v.purchase)) / num(v.dist) * 100) : 0;
+    return `<div class="vcard"><div class="vcard-top">
+      <div style="flex:1;min-width:0"><b>${esc(v.label)}</b><div class="muted" style="font-size:12.5px">${esc(v.sku)}${v.weight ? ' · ' + v.weight + ' g' : ''} · ${boxTag(v)}</div>${perBox(v) > 1 ? `<div class="muted" style="font-size:12.5px">${qtyTxt(v, v.stock)}</div>` : ''}</div>
+      <div class="stockn ${s}">${isKg(v) ? r3(v.stock) : v.stock}<small>${s === 'out' ? 'out' : s === 'low' ? 'low' : isKg(v) ? 'kg' : 'pcs'}</small></div>
+      ${isOwner() ? `<button class="adj" onclick="openAdjust('${p.id}','${v.id}')" aria-label="Adjust stock">${ic('layers')}</button>` : ''}</div>
+      <div class="prices">${isOwner() ? `<div><small>Purchase</small><b>${inr(v.purchase)}</b></div>` : ''}<div><small>Rate /${uWord(v)}</small><b>${inr(v.dist)}</b>${perBox(v) > 1 ? `<small>${inr(num(v.dist) * perBox(v))}/box</small>` : ''}</div><div><small>MRP</small><b>${num(v.mrp) ? inr(v.mrp) : '—'}</b></div>${isOwner() ? `<div><small>Margin</small><b style="color:var(--ok)">${margin}%</b></div>` : ''}</div></div>`;
+  }).join('');
+  openSheet(sheetHead(esc(p.name), `${esc(brandName(p.brandId))} · ${esc(catName(p.catId))}`) +
+    `<div class="pd2"><div class="pd2-l">${galleryHTML(p)}${p.desc ? `<p class="muted" style="margin:12px 2px 0">${esc(p.desc)}</p>` : ''}</div>
+     <div class="pd2-r"><h3 class="sec">Packs <small>${p.variants.length} · ${mixTxt(p.variants.map(v => [v, v.stock]))} in stock</small></h3>${vcards}
+     ${isOwner() ? `<button class="btn gold block" style="margin-top:8px" onclick="openProductForm('${p.id}')">${ic('edit')} Edit product</button>` : ''}</div></div>`, { wide: true });
+}
+
+/* ---------- Photo gallery (product photos + variant photos, swipeable) ---------- */
+function galleryOf(p) {
+  // product photos (main first); variant photos only if the product has none of its own
+  let list = [p.photo, ...(p.photos || [])].filter(Boolean);
+  if (!list.length) list = p.variants.map(v => v.photo).filter(Boolean);
+  const out = [...new Set(list)];
+  return out.length ? out : [imgP(p)];
+}
+function galleryHTML(p) {
+  const imgs = galleryOf(p), gid = 'g' + p.id;
+  if (imgs.length === 1) return `<div class="gal"><div class="gal-track"><img src="${imgs[0]}" alt=""></div></div>`;
+  return `<div class="gal"><div class="gal-track" id="${gid}" onscroll="galScroll(this,${imgs.length})">${imgs.map(u => `<img src="${u}" alt="" loading="lazy">`).join('')}</div>
+    <button class="gal-btn prev" onclick="galGo('${gid}',-1)" aria-label="Previous photo">&#8249;</button>
+    <button class="gal-btn next" onclick="galGo('${gid}',1)" aria-label="Next photo">&#8250;</button>
+    <span class="gal-n" id="${gid}-n">1/${imgs.length}</span></div>
+    <div class="gal-dots" id="${gid}-d">${imgs.map((_, i) => `<i class="${i ? '' : 'on'}" onclick="galGo('${gid}',0,${i})"></i>`).join('')}</div>`;
+}
+// Arrow / dot navigation (desktop has no swipe). step = ±1, or jump to index `to`; wraps around.
+function galGo(gid, step, to) {
+  const el = $('#' + gid); if (!el) return;
+  const n = el.children.length, cur = Math.round(el.scrollLeft / el.clientWidth);
+  const i = to != null ? to : (cur + step + n) % n;
+  el.scrollTo({ left: i * el.clientWidth, behavior: 'smooth' });
+}
+function galScroll(el, n) {
+  const i = Math.round(el.scrollLeft / el.clientWidth);
+  const c = $('#' + el.id + '-n'); if (c) c.textContent = (i + 1) + '/' + n;
+  $('#' + el.id + '-d')?.querySelectorAll('i').forEach((d, k) => d.classList.toggle('on', k === i));
+}
+
+/* ---------- Add / Edit product form ---------- */
+let F = null; // draft while the form is open
+function blankVariant() { return { id: uid(), label: '', sku: '', weight: '', purchase: '', dist: '', retail: '', mrp: '', unit: 'pc', stock: '', lowAt: 5, box: '', photo: '', isNew: true }; }
+function openProductForm(id, pre) {          // pre = details fetched from the brand website (not saved yet)
+  if (!isOwner()) return;
+  const p = id && getP(id);
+  F = p ? JSON.parse(JSON.stringify(p)) : pre || { id: null, name: '', brandId: S.brands[0]?.id || '', catId: S.cats[0]?.id || '', desc: '', photo: '', variants: [blankVariant()] };
+  const opts = (list, cur, kind) => list.map(x => `<option value="${x.id}" ${x.id === cur ? 'selected' : ''}>${esc(x.name)}</option>`).join('') + `<option value="__new">+ Add new ${kind}…</option>`;
+  const sub = p ? esc(p.name) : 'Snap the pack with From pack, check, then Add';
+  openSheet(sheetHead(p ? 'Edit product' : 'Add product', sub) + `<div class="pf2"><div class="pf2-l">
+    <div class="photo-pick" id="fPhoto" onclick="uploadPhoto(url=>{if(F.photos.length)F.photos[0]=url;else F.photos.push(url);F.photo=url;showFormPhoto()})"></div>
+    <div class="gem2"><button class="btn ghost" onclick="copyGeminiPrompt()">${ic('wand')} Gemini prompt</button><a class="btn ghost" href="https://gemini.google.com/app" target="_blank" rel="noopener">Open Gemini ↗</a></div>
+    <div class="gstrip" id="fGal"></div>
+    <div class="field"><label>Product name * <small class="muted">— Brand Product (pack size goes in Packs)</small></label>
+      <div class="namerow"><input id="fName" value="${esc(F.name)}" placeholder="e.g. Gold Flake Kings" oninput="F.name=this.value;refreshSkus()"><button class="btn ghost" id="nameBtn" onclick="nameFromBox()" title="Read everything from a photo of the pack">${ic('camera')} From pack</button></div>
+      <div class="chips" id="nameOpts" style="margin-top:6px;flex-wrap:wrap;padding:0"></div></div>
+    <div class="grid2">
+      <div class="field"><label>Brand *</label><select id="fBrand" onchange="pickOrAdd(this,'brand');refreshSkus()">${opts(S.brands, F.brandId, 'brand')}</select></div>
+      <div class="field"><label>Category *</label><select id="fCat" onchange="pickOrAdd(this,'cat')">${opts(S.cats, F.catId, 'category')}</select></div>
+    </div>
+    <div class="field"><label>Short description <small class="muted">— pack details (From pack fills this)</small></label><textarea id="fDesc" rows="3" placeholder="e.g. King size · Filter · 20 sticks" oninput="F.desc=this.value">${esc(F.desc)}</textarea></div>
+    </div><div class="pf2-r">
+    <h3 class="sec" style="margin-top:0">Packs <small>one per pack size / carton / loose kg</small></h3>
+    <div id="fVars"></div>
+    <button class="btn ghost block" onclick="F.variants.push(Object.assign(blankVariant(), { skuAuto: true }));renderFormVariants();refreshSkus()">${ic('plus')} Add pack</button>
+    <button class="btn gold block" id="fSave" style="margin-top:12px" onclick="saveProduct()">${ic('check')} ${p ? 'Save product' : 'Add product'}</button>
+    ${p ? `<button class="btn danger block" style="margin-top:10px" onclick="deleteProduct('${p.id}')">${ic('trash')} Delete product</button>` : ''}
+    </div></div>`, { wide: true });
+  // new product: SKUs follow the name automatically; existing product: only empty SKUs do (saved SKUs never change by themselves)
+  F.variants.forEach(v => { v.skuAuto = !p || !v.sku; });
+  showFormPhoto(); renderFormVariants(); refreshSkus();
+}
+function showFormPhoto() {
+  if (!F || !$('#fPhoto')) return;   // form may have closed (photo went to an existing product)
+  // One photo list: the strip shows every product photo, the first one is the main (big) photo.
+  // Exactly these photos appear in the product gallery — nothing hidden.
+  F.photos = [...new Set([F.photo, ...(F.photos || [])].filter(Boolean))];
+  F.photo = F.photos[0] || '';
+  $('#fGal').innerHTML = F.photos.map((u, i) => `<div class="g${i ? '' : ' main'}"><img src="${u}" alt="" title="${i ? 'Tap to make main photo' : 'Main photo'}" onclick="F.photos.unshift(...F.photos.splice(${i},1));F.photo='';showFormPhoto()"><button onclick="F.photos.splice(${i},1);F.photo='';showFormPhoto()" aria-label="Remove photo">×</button></div>`).join('')
+    + `<div class="g add" onclick="uploadPhoto(u=>{F.photos.push(u);showFormPhoto()})" title="Add gallery photo">${ic('plus')}</div>`;
+  $('#fPhoto').innerHTML = F.photo ? `<img src="${F.photo}" alt="">` : `<div>${ic('camera', 'style="width:26px;height:26px"')}<br>Add photo<br><small style="opacity:.75">Made in Gemini (prompt below)</small></div>`;
+}
+const boxRateTxt = i => perBox(F.variants[i]) > 1 ? inr(num(F.variants[i].dist) * perBox(F.variants[i])) : '—';
+function setVarUnit(i, u) { F.variants[i].unit = u; if (u !== 'box') F.variants[i].box = ''; renderFormVariants(); }
+function renderFormVariants() {
+  if (!F || !$('#fVars')) return;
+  $('#fVars').innerHTML = F.variants.map((v, i) => {
+    const u = unitOf(v), kg = u === 'kg';
+    return `
+    <div class="vblock"><div class="vblock-h"><span>Pack ${i + 1}</span>${F.variants.length > 1 ? `<button class="iconbtn" style="width:32px;height:32px" onclick="F.variants.splice(${i},1);renderFormVariants()">${ic('trash')}</button>` : ''}</div>
+      <div class="grid2">
+        <div class="field"><label>Pack / variant *</label><input value="${esc(v.label)}" placeholder="e.g. 20 Sticks · ₹10 Pouch · 1 kg" oninput="F.variants[${i}].label=this.value;refreshSkus()"></div>
+        <div class="field"><label>SKU code</label><input id="sku${i}" value="${esc(v.sku)}" placeholder="Auto: NJ-BRAND-PRODUCT-PACK" oninput="F.variants[${i}].sku=this.value.toUpperCase();F.variants[${i}].skuAuto=!this.value.trim();if(!this.value.trim())refreshSkus()"></div>
+      </div>
+      <div class="field"><label>Sold to shops by</label><div class="seg" style="margin:0">
+        <button class="${u === 'pc' ? 'on' : ''}" onclick="setVarUnit(${i},'pc')">Piece / packet</button><button class="${u === 'box' ? 'on' : ''}" onclick="setVarUnit(${i},'box')">Box / carton</button><button class="${kg ? 'on' : ''}" onclick="setVarUnit(${i},'kg')">Kg (${KG_STEP} steps)</button></div></div>
+      <div class="grid3">
+        <div class="field"><label>Purchase ₹/${kg ? 'kg' : 'pc'}</label><input type="number" inputmode="decimal" value="${esc(v.purchase)}" oninput="F.variants[${i}].purchase=this.value"></div>
+        <div class="field"><label>Rate ₹/${kg ? 'kg' : 'pc'}</label><input type="number" inputmode="decimal" value="${esc(v.dist)}" oninput="F.variants[${i}].dist=this.value;const b=$('#bxr${i}');if(b)b.value=boxRateTxt(${i})"></div>
+        <div class="field"><label>MRP ₹</label><input type="number" inputmode="decimal" value="${esc(v.mrp)}" placeholder="printed" oninput="F.variants[${i}].mrp=this.value"></div>
+      </div>
+      ${u === 'box' ? `<div class="grid2">
+        <div class="field"><label>Pieces per box / carton</label><input type="number" inputmode="numeric" min="1" value="${esc(v.box || '')}" placeholder="e.g. 10" oninput="F.variants[${i}].box=this.value;$('#bxr${i}').value=boxRateTxt(${i})"></div>
+        <div class="field"><label>Box rate</label><input id="bxr${i}" value="${boxRateTxt(i)}" disabled></div>
+      </div>` : ''}
+      <div class="grid2">
+        ${v.isNew ? `<div class="field"><label>Opening stock (${kg ? 'kg' : 'pcs'})</label><input type="number" inputmode="${kg ? 'decimal' : 'numeric'}" value="${esc(v.stock)}" oninput="F.variants[${i}].stock=this.value"></div>` : `<div class="field"><label>Current stock</label><input value="${qtyTxt(v, v.stock)}${perBox(v) > 1 ? ' (' + v.stock + ' pcs)' : ''}" disabled></div>`}
+        <div class="field"><label>Low-stock alert at (${kg ? 'kg' : 'pcs'})</label><input type="number" inputmode="decimal" value="${esc(v.lowAt)}" oninput="F.variants[${i}].lowAt=this.value"></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+function pickOrAdd(sel, kind) {
+  if (sel.value !== '__new') { F[kind === 'brand' ? 'brandId' : 'catId'] = sel.value; return; }
+  const name = (prompt(kind === 'brand' ? 'New brand name' : 'New category name') || '').trim();
+  const list = kind === 'brand' ? S.brands : S.cats;
+  if (!name) { sel.value = F[kind === 'brand' ? 'brandId' : 'catId']; return; }
+  let item = list.find(x => x.name.toLowerCase() === name.toLowerCase());
+  if (!item) { item = { id: uid(), name }; list.push(item); save(); }
+  F[kind === 'brand' ? 'brandId' : 'catId'] = item.id;
+  sel.insertAdjacentHTML('afterbegin', `<option value="${item.id}">${esc(item.name)}</option>`);
+  sel.value = item.id;
+}
+/* ---------- SKU rule (Nisha): NJ-BRAND-PRODUCT-PACK, e.g. NJ-GFL-KINGS-20, NJ-VML-PM-10, NJ-RJN-SUP-1KG ----------
+   BRAND: 3 letters — initials of a 2-word brand + next consonant (Gold Flake → GFL), else first letter + next 2 consonants (Vimal → VML).
+   PRODUCT: the product name without the brand — several words → initials (Pan Masala → PM); one word → itself if ≤5 letters (Kings), else first 3 (Supari → SUP).
+   PACK: weight with unit (100 g → 100G, 1 kg → 1KG), else the first number (20 Sticks → 20, ₹10 Pouch → 10). */
+const words = t => String(t || '').replace(/[^A-Za-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+function brandCode(name) {
+  const w = words(name); if (!w.length) return 'GEN';
+  const cons = t => t.slice(1).replace(/[^bcdfghjklmnpqrstvwxyz0-9]/gi, '');
+  let c = w.length > 1 ? w.slice(0, 2).map(x => x[0]).join('') + cons(w[1]).slice(0, 1) : w[0][0] + cons(w[0]).slice(0, 2);
+  c = (c + w.join('').slice(1)).slice(0, 3);
+  return c.toUpperCase();
+}
+function productCode(pname, brand) {
+  const b = new Set(words(brand).map(x => x.toLowerCase()));
+  const w = words(pname).filter(x => !b.has(x.toLowerCase()));
+  if (!w.length) return '';
+  if (w.length > 1) return w.map(x => /\d/.test(x) ? x : x[0]).join('').slice(0, 5).toUpperCase();
+  return (w[0].length <= 5 ? w[0] : w[0].slice(0, 3)).toUpperCase();
+}
+function packCode(label) {
+  const t = String(label || ''), m = t.match(/(\d+(?:\.\d+)?)\s*(kg|gm|g|grams?|ml|l)\b/i);
+  if (m) return m[1].replace('.', '') + m[2].toUpperCase().replace(/^GRAMS?$|^GM$/, 'G');
+  const n = t.match(/\d+(?:\.\d+)?/);
+  return n ? n[0].replace('.', '') : words(t).join('').slice(0, 6).toUpperCase();
+}
+// taken = SKUs already used (a -2, -3 … is added when the same SKU exists)
+function makeSku(pname, brandId, vlabel, taken) {
+  const brand = brandName(brandId) === '—' ? '' : brandName(brandId);
+  const base = ['NJ', brandCode(brand || pname), productCode(pname, brand), packCode(vlabel)].filter(Boolean).join('-');
+  let sku = base, n = 2;
+  while (taken.has(sku)) sku = base + '-' + n++;
+  taken.add(sku);
+  return sku;
+}
+/* Live SKU in the product form: variants whose SKU you have not typed yourself follow
+   name + brand + variant as you type. Typing in the SKU box takes over; clearing it hands back to auto. */
+function refreshSkus() {
+  if (!F) return;
+  const taken = new Set(S.products.filter(p => p.id !== F.id).flatMap(p => p.variants.map(v => v.sku)));
+  F.variants.forEach((v, i) => {
+    if (!v.skuAuto) { if (v.sku) taken.add(v.sku); return; }
+    v.sku = F.name.trim() ? makeSku(F.name, F.brandId, v.label, taken) : '';
+    const el = $('#sku' + i); if (el && el !== document.activeElement) el.value = v.sku;
+  });
+}
+function autoSku(pname, vlabel, brandId = F && F.brandId) {
+  return makeSku(pname, brandId, vlabel, new Set(allVariants().map(x => x.v.sku)));
+}
+// More → Update all SKUs: shows every change first, applies only when you press Apply
+function openSkuUpdate() {
+  const taken = new Set(), rows = [];
+  S.products.forEach(p => p.variants.forEach(v => {
+    const nu = makeSku(p.name, p.brandId, v.label, taken);
+    if (nu !== v.sku) rows.push({ p, v, nu });
+  }));
+  SKU_PLAN = rows;
+  openSheet(sheetHead('Update all SKUs', 'Rule: NJ-BRAND-PRODUCT-PACK, e.g. NJ-GFL-KINGS-20') + (rows.length
+    ? `<div class="card" style="padding:4px 14px">${rows.map(r => `<div class="order-line"><div style="min-width:0"><b>${esc(r.p.name)}</b><div class="muted" style="font-size:12.5px">${esc(r.v.label)}</div></div>
+        <div style="text-align:right;white-space:nowrap;font-size:13px"><span class="muted"><s>${esc(r.v.sku || '—')}</s></span><br><b>${esc(r.nu)}</b></div></div>`).join('')}</div>
+       <div class="note">Check each new SKU. A wrong pack code at the end means the pack name is wrong — fix the pack name first, then run this again. Old orders keep the SKU they were placed with.</div>
+       <button class="btn gold block" style="margin-top:12px" onclick="applySkuUpdate()">${ic('check')} Apply ${rows.length} change${rows.length === 1 ? '' : 's'}</button>`
+    : '<div class="empty card">All SKUs already follow the rule 👌</div>'));
+}
+let SKU_PLAN = [];
+function applySkuUpdate() {
+  SKU_PLAN.forEach(r => { r.v.sku = r.nu; r.p.updated = Date.now(); });
+  const n = SKU_PLAN.length; SKU_PLAN = [];
+  save(); closeSheet(); render(); toast(`${n} SKU${n === 1 ? '' : 's'} updated`);
+}
+async function saveProduct() {
+  const name = F.name.trim();
+  if (!name) return toast('Enter product name');
+  if (!F.brandId || !F.catId) return toast('Select brand and category');
+  const vs = F.variants.filter(v => v.label.trim());
+  if (!vs.length) return toast('Add at least one variant name');
+  // SKU must be unique across all products
+  const others = new Set(allVariants().filter(x => x.p.id !== F.id).map(x => x.v.sku));
+  const seen = new Set();
+  for (const v of vs) {
+    v.label = v.label.trim();
+    if (!v.sku) v.sku = autoSku(name, v.label, F.brandId);
+    if (others.has(v.sku) || seen.has(v.sku)) return toast('Duplicate SKU: ' + v.sku);
+    seen.add(v.sku);
+  }
+  // photos still on the brand website (not yet in our cloud) are copied in now — nothing is stored if you cancel
+  const web = (F.photos || []).filter(u => /^https?:/.test(u) && !u.startsWith(API));
+  if (web.length) {
+    const btn = $('#fSave'); if (btn) btn.disabled = true;
+    F.srcMap = F.srcMap || {};
+    const map = {};
+    for (let k = 0; k < web.length; k++) {
+      if (btn) btn.textContent = `Saving photos ${k + 1}/${web.length}…`;
+      try { map[web[k]] = F.srcMap[web[k]] = (await api('importPhoto', { url: web[k] })).url; } catch (e) { map[web[k]] = ''; }
+    }
+    F.photos = F.photos.map(u => u in map ? map[u] : u).filter(Boolean);
+    F.photo = F.photos[0] || '';
+    if (btn) { btn.disabled = false; btn.innerHTML = `${ic('check')} Saving…`; }
+    if (web.some(u => !map[u])) toast('Some website photos could not be copied');
+  }
+  const isNewP = !F.id;
+  const pid = F.id || uid();
+  const clean = vs.map(v => ({ id: v.id, label: v.label, sku: v.sku, weight: num(v.weight), purchase: num(v.purchase), dist: num(v.dist), retail: num(v.mrp) || num(v.retail),
+    stock: v.isNew ? (isKg(v) ? Math.max(0, r3(v.stock)) : Math.max(0, Math.round(num(v.stock)))) : v.stock, lowAt: Math.max(0, isKg(v) ? r3(v.lowAt) : Math.round(num(v.lowAt))),
+    unit: unitOf(v), mrp: num(v.mrp), step: isKg(v) ? kgStep(v) : 0, box: perBox(v), photo: (vs.length === 1 && F.photo) ? F.photo : (v.photo || '') }));   // single variant → same photo as the product
+  vs.filter(v => v.isNew && num(v.stock) > 0).forEach(v => S.log.push({ id: uid(), ts: Date.now(), pid, vid: v.id, qty: isKg(v) ? r3(v.stock) : Math.round(num(v.stock)), type: 'opening', note: 'Opening stock', by: 'owner' }));
+  const obj = { id: pid, name, brandId: F.brandId, catId: F.catId, desc: F.desc.trim(), photo: F.photo, photos: F.photos || [], variants: clean, created: F.created || Date.now(), updated: Date.now() };
+  if (F.key) obj.key = F.key;     // links to built-in product list (prevents re-adding)
+  if (F.ext) obj.ext = F.ext;     // links to the brand website product
+  if (F.srcMap) obj.srcMap = F.srcMap;   // website photo → our copy (so the same photo is never added twice)
+  if (isNewP) S.products.unshift(obj); else S.products[S.products.findIndex(p => p.id === pid)] = obj;
+  save(); closeSheet(); F = null;
+  if (ui.tab !== 'products') ui.tab = 'products';
+  render(); toast((isNewP ? 'Product added ✨' : 'Product updated') + (clean.some(v => !v.dist) ? ' · rate not set → shops see "Rate soon"' : ''));
+}
+function deleteProduct(id) {
+  if (!confirm('Delete this product and all its variants?')) return;
+  S.products = S.products.filter(p => p.id !== id);
+  save(); closeSheet(); render(); toast('Product deleted');
+}
+/* Nisha has no brand websites to import from (Royal's Sarju/Ticon import was left out).
+   Add product → the form opens → "From pack" reads the pack photo. */
+function openAddProduct() {
+  if (!isOwner() || !cloud.key) return toast('Connect to cloud first');
+  openProductForm();
+}
+// find a brand/category by name, or add it
+function findOrAdd(list, name) {
+  if (!name) return null;
+  let it = list.find(x => x.name.toLowerCase() === name.toLowerCase());
+  if (!it) { it = { id: uid(), name }; list.push(it); save(); }
+  return it;
+}
+/* =========================================================
+   PRODUCT PHOTOS — made in the Gemini app (Copy prompt → Gemini → save),
+   then uploaded here as-is: shrunk to max 1024 px and saved to the cloud.
+   ========================================================= */
+function uploadPhoto(cb) {
+  const fi = $('#fileIn'); fi.value = '';
+  fi.onchange = async () => {
+    const f = fi.files[0]; if (!f) return;
+    let data;
+    // read the original file once and encode once at high quality (no double JPEG compression)
+    try { data = await catalogueClean(await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(f); }), 1600); } catch (e) { return toast('Could not read that photo'); }
+    if (!cloud.key) return cb(data);
+    toast('Uploading photo…');
+    try { cb((await api('savePhoto', { data })).url); toast('Photo saved'); }
+    catch (e) { toast('Upload failed — ' + e.message); }
+  };
+  fi.click();
+}
+/* Make an uploaded product photo look like the brand-website images:
+   off-white / light-grey background → pure white, then trim empty margins
+   so the product fills ~88% of a square white canvas. Runs on the phone, free.
+   Skipped if the photo's edges are not a light, plain background. */
+// Encode a canvas as JPEG at the best quality that still fits the cloud's ~1 MB photo limit.
+function encodeFit(c) {
+  for (const q of [.95, .92, .88, .84, .8]) { const u = c.toDataURL('image/jpeg', q); if (u.length < 1_350_000) return u; }
+  const s = document.createElement('canvas'); s.width = Math.round(c.width * .75); s.height = Math.round(c.height * .75);
+  s.getContext('2d').drawImage(c, 0, 0, s.width, s.height); return encodeFit(s);
+}
+// Scale a canvas down so its longest side is at most `max` (never up).
+function fitCanvas(c, max) {
+  const k = Math.min(1, max / Math.max(c.width, c.height)); if (k === 1) return c;
+  const s = document.createElement('canvas'); s.width = Math.round(c.width * k); s.height = Math.round(c.height * k);
+  const g = s.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(c, 0, 0, s.width, s.height); return s;
+}
+function catalogueClean(dataUrl, out = 1600, onlyIfGrey = false) {
+  return new Promise(res => {
+    const img = new Image();
+    img.onload = () => {
+      const w = img.width, h = img.height;
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, w, h); g.drawImage(img, 0, 0);   // transparent PNG → white
+      const id = g.getImageData(0, 0, w, h), d = id.data;
+      // 1. background level = median brightness of the border pixels
+      // Sample rings at several insets: older photos have a white frame around a grey
+      // inner background, so the outermost ring alone would look "already white".
+      const at = (x, y) => { const i = (y * w + x) * 4; return [d[i], d[i + 1], d[i + 2]]; };
+      let bg = 999, sat = 0;
+      for (const f of [0, .03, .06, .09, .12]) {
+        const ix = Math.round(w * f), iy = Math.round(h * f), ring = [];
+        for (let x = ix; x < w - ix; x += 2) ring.push(at(x, iy), at(x, h - 1 - iy));
+        for (let y = iy; y < h - iy; y += 2) ring.push(at(ix, y), at(w - 1 - ix, y));
+        const lum = ring.map(p => (p[0] + p[1] + p[2]) / 3).sort((a, b) => a - b);
+        const med = lum[Math.floor(lum.length / 2)];
+        const rs = ring.reduce((m, p) => m + Math.max(...p) - Math.min(...p), 0) / ring.length;
+        if (med >= 200 && rs <= 25 && med < bg) { bg = med; sat = rs; }   // darkest plain light ring = real background
+      }
+      if (bg === 999) { bg = 0; sat = 99; }
+      if (bg < 200 || sat > 25) return res(onlyIfGrey ? null : encodeFit(fitCanvas(c, out)));   // not a plain light background — leave as is
+      if (onlyIfGrey && bg >= 252) return res(null);          // already white (e.g. brand-website photo) — nothing to fix
+      // 2. lift the background to pure white (gentle gain, then snap near-white to 255)
+      const gain = Math.min(1.15, 255 / Math.max(bg - 4, 1));
+      let x0 = w, y0 = h, x1 = -1, y1 = -1;
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        let r = Math.min(255, d[i] * gain), gg = Math.min(255, d[i + 1] * gain), b = Math.min(255, d[i + 2] * gain);
+        const mn = Math.min(r, gg, b), mx = Math.max(r, gg, b);
+        if (mx - mn < 12 && mn > 236) {                        // near-white, colourless → fade smoothly to pure white
+          const t = Math.min(1, (mn - 236) / 14), k = t * t * (3 - 2 * t);   // smoothstep: no hard edges
+          r += (255 - r) * k; gg += (255 - gg) * k; b += (255 - b) * k;
+        }
+        else if (mn < 240 || mx - mn > 18) {                    // real product pixel → grow bounding box
+          if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+        d[i] = r; d[i + 1] = gg; d[i + 2] = b;
+      }
+      g.putImageData(id, 0, 0);
+      if (x1 < 0) return res(onlyIfGrey ? null : encodeFit(fitCanvas(c, out)));
+      // 3. trim + centre on a square white canvas, product ≈ 88% of the frame
+      const bw = x1 - x0 + 1, bh = y1 - y0 + 1, side = Math.max(bw, bh) / .88;
+      out = Math.min(out, Math.round(side));                 // never upscale (keeps it sharp)
+      const o = document.createElement('canvas'); o.width = o.height = out;
+      const og = o.getContext('2d'); og.fillStyle = '#fff'; og.fillRect(0, 0, out, out);
+      const k = out / side; og.imageSmoothingQuality = 'high';
+      og.drawImage(c, x0, y0, bw, bh, (out - bw * k) / 2, (out - bh * k) / 2, bw * k, bh * k);
+      res(encodeFit(o));
+    };
+    img.onerror = () => res(onlyIfGrey ? null : dataUrl);
+    if (!dataUrl.startsWith('data:')) { img.crossOrigin = 'anonymous'; dataUrl += (dataUrl.includes('?') ? '&' : '?') + 'cors=1'; }
+    img.src = dataUrl;
+  });
+}
+
+// More → "Fix photo backgrounds": runs catalogueClean on every saved photo that has a grey /
+// off-white background, uploads the cleaned copy and swaps it in. White photos are skipped.
+async function fixAllPhotos() {
+  if (!cloud.key) return toast('Connect to cloud first');
+  const urls = [...new Set(S.products.flatMap(p => [...(p.photos || []), p.photo, ...p.variants.map(v => v.photo)]).filter(Boolean))];
+  if (!confirm(`Check ${urls.length} photos and make grey backgrounds pure white?`)) return;
+  const map = {}; let done = 0;
+  for (const u of urls) {
+    toast(`Checking photos… ${++done}/${urls.length}`);
+    try {
+      const data = await catalogueClean(u, 1600, true);
+      if (data) map[u] = (await api('savePhoto', { data })).url;
+    } catch (e) { /* skip this one, keep the old photo */ }
+  }
+  const n = Object.keys(map).length;
+  if (!n) return toast('All photos already have a white background');
+  const sw = u => map[u] || u;
+  S.products.forEach(p => { if (p.photos) p.photos = p.photos.map(sw); if (p.photo) p.photo = sw(p.photo); p.variants.forEach(v => { if (v.photo) v.photo = sw(v.photo); }); });
+  save(); render(); toast(`Fixed ${n} photo${n > 1 ? 's' : ''}`);
+}
+// Prompt for the Gemini app: clean e-commerce image of the product itself (not the box), pure white, no added text
+function geminiPrompt() {           // ONE hero image, copied from the product picture printed on the box (no re-imagining)
+  const v = F && F.variants && F.variants.map(x => x.label).filter(Boolean).join(' / ');
+  const known = F && F.name ? `\nProduct: ${F.name}${v ? ' · Variant: ' + v : ''}\n` : '';
+  return GEMINI_PROMPT.replace('{KNOWN}', known);
+}
+const GEMINI_PROMPT = `I am attaching photos of ONE real retail pack (cigarette pack / carton, bidi bundle, pouch or tin).
+{KNOWN}
+Make ONE clean e-commerce product photo of this exact pack. Do NOT design or imagine a new pack.
+
+- Copy the pack exactly as in my photo: same shape, colours, artwork, brand name, text and printed warning panel. Do not change, translate, remove or add any text.
+- Straighten it so it faces the camera, slightly angled to show depth.
+- Remove the hand, table and everything around it.
+- Background 100% pure white (#FFFFFF) edge to edge — no grey, no gradient, no floor, no reflection, no shadow.
+- Even, bright lighting; true colours; sharp; pack centred and large, filling about 85–90% of a square frame.
+
+Output: just 1 square 1:1 image. No extra text, no props, no watermark.`;
+async function copyGeminiPrompt() {
+  const t = geminiPrompt();
+  try { await navigator.clipboard.writeText(t); }
+  catch (e) { const a = document.createElement('textarea'); a.value = t; document.body.appendChild(a); a.select(); document.execCommand('copy'); a.remove(); }
+  toast('Prompt copied — paste it in Gemini with the pack photo');
+}
+function pickPhoto(cb) {
+  const fi = $('#fileIn'); fi.value = '';
+  fi.onchange = async () => {
+    const f = fi.files[0]; if (!f) return;
+    try { cb(await compressImage(f)); } catch (e) { toast('Could not read that photo'); }
+  };
+  fi.click();
+}
+// Shrinks phone photos (often 3–5 MB) to ~60 KB so storage stays small
+function compressImage(file, max = 720, quality = .72) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const s = Math.min(1, max / Math.max(img.width, img.height));
+        const c = document.createElement('canvas'); c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        const g = c.getContext('2d'); g.globalCompositeOperation = 'destination-over'; g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);   // transparent PNG → white
+        res(c.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = rej; img.src = fr.result;
+    };
+    fr.onerror = rej; fr.readAsDataURL(file);
+  });
+}
+
+/* ---------- Product name from a box photo (Gemini reads the box) ----------
+   The Worker asks Gemini. If Google blocks the Worker's location, it hands back the request
+   and this phone (India) makes the same call itself. */
+// When Google blocks the Worker's location, the phone remembers that (for this session only) and
+// asks Gemini directly next time — saving the Worker's wasted attempt on every box.
+let directGemini = null;      // { models, body, key } from the Worker's first hand-over
+async function readBox(base64) {
+  let r;
+  if (directGemini) {
+    const body = JSON.parse(JSON.stringify(directGemini.body));
+    body.contents[0].parts[0].inline_data.data = base64;
+    r = { clientCall: { models: directGemini.models, body }, key: directGemini.key };
+  } else {
+    r = await api('analyzePhoto', { image: base64, mode: 'pack' }, 35000);   // never hang longer than this
+    if (!r.clientCall) return r;
+    try { r.clientCall.body.contents[0].parts[0].inline_data.data = base64; } catch (e) {}
+    directGemini = { models: r.clientCall.models, body: r.clientCall.body, key: r.key };
+  }
+  let last = '';
+  for (const model of r.clientCall.models) {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': r.key }, body: JSON.stringify(r.clientCall.body), signal: AbortSignal.timeout(20000) }).catch(e => ({ ok: false, json: async () => ({ error: { message: 'took too long' } }) }));
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { last = (j.error && j.error.message) || 'HTTP ' + res.status; continue; }   // busy / retired → next model
+    const text = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
+    try { return JSON.parse(text); } catch (e) { last = 'unreadable answer'; }
+  }
+  throw new Error('Gemini busy — ' + last);
+}
+// From pack: one photo of the pack fills brand (added if new), name, category, pack size, MRP, carton count and description
+function nameFromBox() {
+  const fi = $('#fileIn'); fi.value = '';
+  fi.onchange = async () => {
+    const f = fi.files[0]; if (!f) return;
+    const btn = $('#nameBtn'), t0 = Date.now();
+    if (btn) btn.disabled = true;
+    const tick = setInterval(() => { const b = $('#nameBtn'); if (b) b.textContent = `Reading… ${Math.round((Date.now() - t0) / 1000)}s`; }, 250);
+    try {
+      const img = await compressImage(f, 1024, .8);
+      const r = await readBox(img.split(',')[1]);
+      const title = t => String(t || '').trim().replace(/\s+/g, ' ').replace(/\b([a-z])/g, c => c.toUpperCase());
+      const brand = title(r.brand), product = title(r.product);
+      const name = [brand, product].filter(Boolean).join(' ');
+      if (!name) throw new Error('Could not read the pack — try a clearer, front-on photo');
+      if (!F) return;
+      if (brand) {                                      // brand: pick existing (any spelling case) or add it
+        const br = findOrAdd(S.brands, brand); F.brandId = br.id;
+        const sel = $('#fBrand');
+        if (sel && ![...sel.options].some(o => o.value === br.id)) sel.insertAdjacentHTML('afterbegin', `<option value="${br.id}">${esc(br.name)}</option>`);
+        if (sel) sel.value = br.id;
+      }
+      const cat = String(r.category || '').toLowerCase().split(/[ /&]+/)[0];
+      const ct = cat && S.cats.find(c => c.name.toLowerCase().includes(cat));
+      if (ct) { F.catId = ct.id; const sel = $('#fCat'); if (sel) sel.value = ct.id; }
+      const desc = String(r.description || '').replace(/\s+/g, ' ').trim();
+      if (desc) { F.desc = desc; const d = $('#fDesc'); if (d) d.value = desc; }
+      const v = F.variants.length === 1 ? F.variants[0] : null;
+      if (v && (!F.id || !v.label.trim())) {
+        if (r.pack) v.label = String(r.pack).trim();
+        if (num(r.mrp) > 0) v.mrp = num(r.mrp);
+        if (num(r.units_inside) > 1) { v.unit = 'box'; v.box = Math.round(num(r.units_inside)); }
+        renderFormVariants();
+      }
+      setFormName(name);
+      toast('Filled from the pack — check rate & stock');
+    } catch (e) { toast(e.message || 'Could not read the pack'); }
+    finally { clearInterval(tick); const b = $('#nameBtn'); if (b) { b.disabled = false; b.innerHTML = `${ic('camera')} From pack`; } }
+  };
+  fi.click();
+}
+function setFormName(n) {
+  F.name = n; const i = $('#fName'); if (i) i.value = n; refreshSkus();
+  document.querySelectorAll('#nameOpts .chip').forEach(c => c.classList.toggle('on', c.textContent === n));
+}
+
+/* =========================================================
+   OWNER / STAFF — STOCK
+   ========================================================= */
+function stockRow(p, v, i = 0) {
+  const s = stState(v);
+  return `<div class="row">
+    <img src="${imgV(p, v)}" alt="" loading="lazy">
+    <div class="grow" onclick="openProduct('${p.id}')" style="cursor:pointer"><b>${esc(p.name)}</b><div class="sub">${esc(v.label)} · ${esc(v.sku)}</div>${perBox(v) > 1 || isKg(v) ? `<div class="sub">${boxTag(v)} · ${qtyTxt(v, v.stock)}</div>` : ''}</div>
+    <div class="stockn ${s}">${isKg(v) ? r3(v.stock) : v.stock}<small>${s === 'out' ? 'out' : s === 'low' ? 'low' : isKg(v) ? 'kg' : 'pcs'}</small></div>
+    ${isOwner() ? `<button class="adj" onclick="openAdjust('${p.id}','${v.id}')" aria-label="Adjust">${ic('plus')}</button>` : ''}</div>`;
+}
+function renderStock() {
+  const vs = allVariants();
+  const cnt = k => k === 'all' ? vs.length : vs.filter(x => stState(x.v) === k).length;
+  const chip = (k, l) => `<button class="chip ${view.stock === k ? 'on' : ''}" onclick="view.stock='${k}';renderStock()">${l} (${cnt(k)})</button>`;
+  main.innerHTML = `
+    <div class="search">${ic('search')}<input placeholder="Search product, variant or SKU" value="${esc(view.q)}" oninput="view.q=this.value;renderStockList()"></div>
+    <div class="chips">${chip('all', 'All')}${chip('low', 'Low')}${chip('out', 'Out')}${chip('ok', 'Healthy')}</div>
+    <div style="display:flex;justify-content:flex-end;margin:-2px 0 10px"><button class="btn ghost" style="padding:9px 14px;font-size:13.5px" onclick="openHistory()">${ic('clock')} Stock history</button></div>
+    <div class="list" id="slist"></div>`;
+  renderStockList();
+}
+function renderStockList() {
+  const q = view.q.trim().toLowerCase();
+  const rows = allVariants().filter(({ p, v }) =>
+    (view.stock === 'all' || stState(v) === view.stock) &&
+    (!q || (p.name + ' ' + v.label + ' ' + v.sku).toLowerCase().includes(q)));
+  $('#slist').innerHTML = rows.map(({ p, v }, i) => stockRow(p, v, i)).join('') || '<div class="empty card">Nothing here.</div>';
+}
+let adj = null;
+function openAdjust(pid, vid) {
+  const p = getP(pid), v = getV(p, vid); if (!v) return;
+  adj = { pid, vid, mode: 'in' };
+  openSheet(sheetHead('Adjust stock', `${esc(p.name)} · ${esc(v.label)}`) + `
+    <div class="card" style="padding:16px;text-align:center;margin-bottom:14px"><div class="muted" style="font-size:12.5px;font-weight:600">Current stock</div><div style="font-size:34px;font-weight:700">${isKg(v) ? r3(v.stock) + ' kg' : v.stock}</div>${perBox(v) > 1 ? `<div class="muted" style="font-size:13px">${qtyTxt(v, v.stock)} · box of ${perBox(v)}</div>` : ''}</div>
+    <div class="seg" id="adjSeg">
+      <button class="on" onclick="setAdjMode('in',this)">+ Stock in</button><button onclick="setAdjMode('out',this)">− Stock out</button><button onclick="setAdjMode('set',this)">Set count</button></div>
+    ${perBox(v) > 1 ? `<div class="grid2"><div class="field"><label id="adjLbl">Boxes received</label><input id="adjBox" type="number" inputmode="numeric" placeholder="0" oninput="adjShow()"></div>
+      <div class="field"><label>+ loose pcs</label><input id="adjPcs" type="number" inputmode="numeric" placeholder="0" oninput="adjShow()"></div></div>
+      <div class="muted" id="adjSum" style="font-size:12.5px;margin:-4px 0 12px">1 box = ${perBox(v)} pcs</div>`
+    : `<div class="field"><label id="adjLbl">${isKg(v) ? 'Kg received' : 'Quantity received'}</label><input id="adjQty" type="number" inputmode="${isKg(v) ? 'decimal' : 'numeric'}" step="${isKg(v) ? '0.001' : '1'}" placeholder="0"></div>`}
+    <div class="field"><label>Note</label><input id="adjNote" placeholder="e.g. Purchase from supplier / damaged / recount"></div>
+    <button class="btn gold block" onclick="saveAdjust()">${ic('check')} Save</button>`);
+  setTimeout(() => ($('#adjBox') || $('#adjQty'))?.focus(), 400);
+}
+function setAdjMode(m, btn) {
+  adj.mode = m;
+  document.querySelectorAll('#adjSeg button').forEach(b => b.classList.toggle('on', b === btn));
+  const box = !!$('#adjBox'), kg = isKg(getV(getP(adj.pid), adj.vid));
+  $('#adjLbl').textContent = { in: box ? 'Boxes received' : kg ? 'Kg received' : 'Quantity received', out: box ? 'Boxes removed' : kg ? 'Kg removed' : 'Quantity removed', set: box ? 'Boxes on shelf' : kg ? 'Kg on shelf' : 'Actual count on shelf' }[m];
+}
+// pieces typed in the adjust sheet (boxes × pcs-per-box + loose pieces, or plain pieces)
+function adjPieces(v) { return $('#adjBox') ? Math.round(num($('#adjBox').value)) * perBox(v) + Math.round(num($('#adjPcs').value)) : isKg(v) ? r3($('#adjQty').value) : Math.round(num($('#adjQty').value)); }
+function adjShow() { const v = getV(getP(adj.pid), adj.vid), el = $('#adjSum'); if (v && el) el.textContent = `= ${adjPieces(v)} pcs (1 box = ${perBox(v)} pcs)`; }
+function saveAdjust() {
+  const p = getP(adj.pid), v = getV(p, adj.vid);
+  const q = adjPieces(v);
+  if (adj.mode !== 'set' && q <= 0) return toast('Enter a quantity');
+  if (adj.mode === 'set' && q < 0) return toast('Count cannot be negative');
+  const delta = r3(adj.mode === 'in' ? q : adj.mode === 'out' ? -q : q - v.stock);
+  if (v.stock + delta < 0) return toast('Stock cannot go below zero');
+  if (delta === 0) { closeSheet(); return; }
+  applyStock(p.id, v.id, delta, adj.mode === 'set' ? 'count' : adj.mode, $('#adjNote').value.trim());
+  save(); closeSheet(); render(); toast(`Stock ${delta > 0 ? '+' : ''}${delta} → ${v.stock}`);
+}
+// Every stock change goes through here so the history log is always complete
+function applyStock(pid, vid, delta, type, note = '') {
+  const v = getV(getP(pid), vid); if (!v) return;
+  v.stock = r3(num(v.stock) + delta);                 // r3: kg stock stays clean (1.75, not 1.7500000001)
+  S.log.push({ id: uid(), ts: Date.now(), pid, vid, qty: delta, type, note, by: ui.role });
+}
+function openHistory() {
+  const TYPE = { opening: 'Opening', in: 'Stock in', out: 'Stock out', count: 'Recount', order: 'Order' };
+  const rows = S.log.slice().reverse().slice(0, 150).map(l => {
+    const f = findV(l.vid);
+    return `<div class="order-line"><div style="min-width:0"><b>${f ? esc(f.p.name) + ' · ' + esc(f.v.label) : '(deleted item)'}</b><div class="muted" style="font-size:12px">${fmtDT(l.ts)} · ${TYPE[l.type] || l.type}${l.note ? ' · ' + esc(l.note) : ''}</div></div>
+      <b style="color:${l.qty >= 0 ? 'var(--ok)' : 'var(--bad)'};white-space:nowrap">${l.qty >= 0 ? '+' : ''}${l.qty}</b></div>`;
+  }).join('');
+  openSheet(sheetHead('Stock history', 'Latest 150 movements') + `<div class="card" style="padding:4px 14px">${rows || '<div class="empty">No movements yet</div>'}</div>`);
+}
+
+/* =========================================================
+   MORE
+   ========================================================= */
+function renderMore() {
+  const mgr = (kind, title) => {
+    const list = kind === 'brand' ? S.brands : S.cats, key = kind === 'brand' ? 'brandId' : 'catId';
+    return `<h3 class="sec">${title} <small>${list.length}</small></h3><div class="list">${list.map(x => {
+      const used = S.products.filter(p => p[key] === x.id).length;
+      return `<div class="row"><div class="grow"><b>${esc(x.name)}</b><div class="sub">${used} products</div></div>
+        ${isOwner() ? `<button class="adj" onclick="renameItem('${kind}','${x.id}')">${ic('edit')}</button><button class="adj" onclick="deleteItem('${kind}','${x.id}')">${ic('trash')}</button>` : ''}</div>`;
+    }).join('')}</div>${isOwner() ? `<button class="btn ghost block" style="margin-top:10px" onclick="addItem('${kind}')">${ic('plus')} Add ${kind === 'brand' ? 'brand' : 'category'}</button>` : ''}`;
+  };
+  main.innerHTML = `<h3 class="sec">Cloud ${cloudPill()}</h3>
+    <div class="list">
+      ${cloud.key
+        ? `<button class="row" onclick="cloudPush();cloudLoad()"><span class="adj">${ic('sync')}</span><div class="grow" style="text-align:left"><b>Sync now</b><div class="sub">Owner phone · changes save to the cloud automatically</div></div></button>
+           <button class="row" onclick="openAddProduct()"><span class="adj" style="color:var(--accent-txt)">${ic('in')}</span><div class="grow" style="text-align:left"><b>Add product</b><div class="sub">Snap the pack — brand, name, pack size and MRP fill in automatically</div></div></button>
+           <button class="row" onclick="openSkuUpdate()"><span class="adj" style="color:var(--accent-txt)">${ic('tag')}</span><div class="grow" style="text-align:left"><b>Update all SKUs</b><div class="sub">NJ-BRAND-PRODUCT-PACK, e.g. NJ-GFL-KINGS-20 · see changes before applying</div></div></button>
+           <button class="row" onclick="fixAllPhotos()"><span class="adj" style="color:var(--accent-txt)">${ic('sync')}</span><div class="grow" style="text-align:left"><b>Fix photo backgrounds</b><div class="sub">Makes grey / off-white photo backgrounds pure white, like the brand websites</div></div></button>
+           <button class="row" onclick="disconnectCloud()"><span class="adj">${ic('cloud')}</span><div class="grow" style="text-align:left"><b>Disconnect this phone</b><div class="sub">Removes the owner key from this phone</div></div></button>`
+        : `<button class="row" onclick="connectCloud()"><span class="adj" style="color:var(--accent-txt)">${ic('cloud')}</span><div class="grow" style="text-align:left"><b>Connect to cloud (owner)</b><div class="sub">Enter the owner key once — catalogue and photos sync to every phone</div></div></button>
+           <button class="row" onclick="cloudLoad()"><span class="adj">${ic('sync')}</span><div class="grow" style="text-align:left"><b>Refresh from cloud</b><div class="sub">Get the latest catalogue (view only)</div></div></button>`}
+    </div>` + mgr('brand', 'Brands') + mgr('cat', 'Categories') + `
+    <h3 class="sec">App</h3>
+    <div class="list">
+      ${installRow()}
+      <button class="row" onclick="toggleTheme()"><span class="adj">${ic(ui.theme === 'dark' ? 'sun' : 'moon')}</span><div class="grow" style="text-align:left"><b>${ui.theme === 'dark' ? 'Light' : 'Dark'} mode</b></div></button>
+      <button class="row" onclick="exportData()"><span class="adj">${ic('download')}</span><div class="grow" style="text-align:left"><b>Download backup</b><div class="sub">All products, stock & orders as JSON</div></div></button>
+    </div>
+    ${cloud.key && workerVersion !== null ? (workerVersion >= NEED_WORKER
+      ? `<div class="note" style="margin-top:16px">Cloudflare Worker up to date (${esc(workerVersion)}).</div>`
+      : `<div class="note" style="margin-top:16px;border:1px solid var(--bad);color:var(--text)"><b>Cloudflare Worker is out of date</b> (${workerVersion ? esc(workerVersion) : 'old version'} — needs ${NEED_WORKER}). Nisha's data, kg orders and "From pack" need the latest <b>Test/Royal-Enterprises/worker.js</b> pasted in Cloudflare → royal-enterprises → Edit code → Deploy, plus the secret <b>NISHA_OWNER_KEY</b>.</div>`) : ''}
+    <div class="note" style="margin-top:16px">${cloud.key ? 'Catalogue, stock and photos sync to the cloud.' : 'This phone is not connected — enter the owner key to open the catalogue.'} Delivery, khata and reports come in the next phases.</div>`;
+}
+function addItem(kind) {
+  const name = (prompt(kind === 'brand' ? 'Brand name' : 'Category name') || '').trim(); if (!name) return;
+  const list = kind === 'brand' ? S.brands : S.cats;
+  if (list.some(x => x.name.toLowerCase() === name.toLowerCase())) return toast('Already exists');
+  list.push({ id: uid(), name }); save(); renderMore();
+}
+function renameItem(kind, id) {
+  const list = kind === 'brand' ? S.brands : S.cats, it = list.find(x => x.id === id);
+  const name = (prompt('Rename', it.name) || '').trim(); if (!name) return;
+  it.name = name; save(); renderMore();
+}
+function deleteItem(kind, id) {
+  const key = kind === 'brand' ? 'brandId' : 'catId';
+  if (S.products.some(p => p[key] === id)) return toast('Move its products first — it is in use');
+  if (!confirm('Delete?')) return;
+  if (kind === 'brand') S.brands = S.brands.filter(x => x.id !== id); else S.cats = S.cats.filter(x => x.id !== id);
+  save(); renderMore();
+}
+function exportData() {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }));
+  a.download = 'nisha-journal-store-backup-' + new Date().toISOString().slice(0, 10) + '.json'; a.click();
+}
+
+/* =========================================================
+   SHOPKEEPER VIEW (ordering preview)
+   Shopkeepers see distributor rate only — never purchase price or exact stock
+   ========================================================= */
+const BANNERS = [['linear-gradient(120deg,#123d2c,#2e7a57)', 'Best wholesale rates', 'Cigarettes · Bidi · Pan masala'], ['linear-gradient(120deg,#8a6a1c,#d4ad55)', 'Same-day delivery', 'Order before 2 PM']];
+function shopInitials() { return initials(curShop().name); }
+function renderShop() {
+  main.innerHTML = `
+    <section class="ps-top">
+      <div class="ps-row"><div class="ps-eta">Same-day delivery<small>${esc(curShop().name)}${curShop().id ? ' · ' + esc(curShop().id) : ''}</small></div>
+        <div class="ps-acts"><button class="ps-btn" onclick="toggleTheme()" aria-label="Theme">${ic(ui.theme === 'dark' ? 'sun' : 'moon')}</button><button class="ps-btn" onclick="openRole()" aria-label="Account">${shopInitials()}</button></div></div>
+      <div class="ps-search">${ic('search')}<input placeholder="Search cigarettes, bidi, pan masala…" value="${esc(view.q)}" oninput="view.q=this.value;renderShopGrid()"></div>
+      <div class="ps-cats" id="catBar"></div>
+    </section>
+    <div class="ps-bans">${BANNERS.map(b => `<div class="ps-ban" style="background:${b[0]}"><b>${b[1]}</b><small>${b[2]}</small></div>`).join('')}</div>
+    <div class="ps-brands" id="brandBar"></div>
+    <div class="ps-h"><b>All products</b><small id="psCount"></small></div>
+    <div class="ps-grid" id="shopGrid"></div>
+    <div style="height:84px"></div>`;
+  renderCatChips(); renderBrandBar(); renderShopGrid();
+}
+// category icons inside the purple header
+function renderCatChips() {
+  const cats = S.cats.filter(c => S.products.some(p => p.catId === c.id));
+  const tile = (id, name, img) => `<button class="ps-cat ${view.cat === id ? 'on' : ''}" onclick="setCatF('${id}')"><span class="ci"><img src="${img}" alt=""></span>${esc(name)}</button>`;
+  $('#catBar').innerHTML = tile('all', 'All', headIcon('default')) + cats.map(c => tile(c.id, c.name, headIcon(artKind(c.name)))).join('');
+}
+function headIcon(kind) {   // white line icon on transparent background
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><g transform="translate(30 30) scale(.7)" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">${ART[kind]}</g></svg>`;
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+}
+// Brand logos (cut from the brands' websites) — chip shows logo on its own background colour
+const BRAND_LOGOS = {};   // brand chips show the brand name (no logo images for these brands yet)
+function renderBrandBar() {
+  const b = (id, name) => {
+    const lg = BRAND_LOGOS[name];
+    if (lg) return `<button class="ps-brand blogo ${view.brand === id ? 'on' : ''}" style="background:${lg.bg};border-color:${lg.bg}" onclick="pickBrand('${id}')" aria-label="${esc(name)}"><img src="${lg.src}" alt="${esc(name)}"></button>`;
+    return `<button class="ps-brand txt ${view.brand === id ? 'on' : ''}" onclick="pickBrand('${id}')">${esc(name)}</button>`;
+  };
+  $('#brandBar').innerHTML = b('all', 'All brands') + S.brands.filter(x => S.products.some(p => p.brandId === x.id)).map(x => b(x.id, x.name)).join('');
+}
+function pickBrand(id) { view.brand = id; renderBrandBar(); renderShopGrid(); }
+function renderShopGrid() {
+  const ps = S.products.filter(matchP);
+  $('#psCount').textContent = ps.length + ' item' + (ps.length === 1 ? '' : 's');
+  $('#shopGrid').innerHTML = ps.length ? ps.map(p => {
+    const live = p.variants.filter(v => shopMax(v) > 0);   // at least one full box / step left
+    const inCart = p.variants.reduce((a, v) => a + (cart[v.id] || 0), 0);
+    const lo = Math.min(...p.variants.map(v => num(v.dist)));
+    const v0 = p.variants.find(v => num(v.dist) === lo) || p.variants[0];
+    const single = p.variants.length === 1;
+    const rated = lo > 0;   // owner hasn't set the rate yet → show "Rate soon", no ADD
+    let btn = '';
+    if (live.length && rated) {
+      if (!inCart) btn = `<button class="ps-add" onclick="event.stopPropagation();${single ? `quickAdd('${p.variants[0].id}',1)` : `openShopProduct('${p.id}')`}">ADD</button>`;
+      else if (single) btn = `<div class="ps-step" onclick="event.stopPropagation()"><button onclick="quickAdd('${p.variants[0].id}',-1)">−</button>${shopLbl(p.variants[0], inCart)}<button onclick="quickAdd('${p.variants[0].id}',1)">+</button></div>`;
+      else btn = `<div class="ps-step" style="padding:0 8px" onclick="event.stopPropagation();openShopProduct('${p.id}')"><span>${p.variants.filter(v => cart[v.id]).length} in cart</span>${ic('edit', 'style="width:14px;height:14px"')}</div>`;
+    }
+    const sv = p.variants[0];
+    return `<div class="ps-card" onclick="openShopProduct('${p.id}')">
+      <div class="ps-img"><img src="${imgP(p)}" alt="" loading="lazy">${live.length || !rated ? '' : '<div class="ps-oos">OUT OF STOCK</div>'}<div class="ps-addw">${btn}</div></div>
+      <div class="ps-pr">${rated ? inr(lo) + `<small class="muted" style="font-weight:500">/${uWord(v0)}</small>` : '<span class="muted" style="font-size:12px">Rate soon</span>'}</div>
+      ${rated && mrpTxt(v0) ? `<div class="muted" style="font-size:11.5px;margin-top:-2px">${mrpTxt(v0)}</div>` : ''}
+      <div class="ps-nm">${esc(p.name)}</div><div class="ps-op">${single ? esc(sv.label) : p.variants.length + ' options'}${single && perBox(sv) > 1 ? ' · box of ' + perBox(sv) + (rated ? ' · ' + inr(lo * perBox(sv)) + '/box' : '') : ''}</div></div>`;
+  }).join('') : '<div class="empty card" style="grid-column:1/-1">No products found</div>';
+}
+function quickAdd(vid, d) {
+  const f = findV(vid); if (!f) return;
+  let q = r3(Math.max(0, (cart[vid] || 0) + d * shopStep(f.v)));     // d = ±1 box / ±1 pc / ±0.25 kg
+  if (q > shopMax(f.v)) { q = shopMax(f.v); toast(`Only ${qtyTxt(f.v, shopMax(f.v))} available`); }
+  if (q) cart[vid] = q; else delete cart[vid];
+  saveCart(); renderShopGrid(); updateCartBar();
+}
+let tmp = {}, tmpPid = null; // quantities being picked inside the product sheet (pieces or kg)
+function openShopProduct(pid) {
+  const p = getP(pid); if (!p) return;
+  tmpPid = pid; tmp = {};
+  p.variants.forEach(v => { if (cart[v.id]) tmp[v.id] = cart[v.id]; });
+  const avail = v => num(v.dist) <= 0 ? '<span class="pill low">Rate coming soon</span>' : shopMax(v) <= 0 ? '<span class="pill out">Out of stock</span>' : v.stock <= v.lowAt ? `<span class="pill low">Only ${qtyTxt(v, shopMax(v))} left</span>` : '<span class="pill ok">In stock</span>';
+  const unit = v => `<div class="muted" style="font-size:12px">${[perBox(v) > 1 ? `Box of ${perBox(v)} · ${inr(num(v.dist) * perBox(v))}/box` : isKg(v) ? `By weight · ${kgStep(v)} kg steps` : '', mrpTxt(v)].filter(Boolean).join(' · ')}</div>`;
+  const what = p.variants.some(v => isKg(v)) ? 'quantity in kg / boxes' : p.variants.some(v => perBox(v) > 1) ? 'quantity in boxes' : 'enter quantity';
+  openSheet(`<div class="pd2"><div class="pd2-l">${galleryHTML(p)}</div><div class="pd2-r">
+    <div class="sp-title">${esc(p.name)}</div><div class="sp-sub">${esc(brandName(p.brandId))} · ${esc(catName(p.catId))}${p.desc ? ' · ' + esc(p.desc) : ''}</div>
+    <h3 class="sec" style="margin-top:0">Choose pack <small>${what}</small></h3>
+    ${p.variants.map(v => `<div class="vopt ${shopMax(v) <= 0 || num(v.dist) <= 0 ? 'dis' : ''} ${tmp[v.id] ? 'sel' : ''}" id="vo-${v.id}">
+      <img src="${imgV(p, v)}" alt=""><div class="grow"><b>${esc(v.label)}</b><div class="price">${num(v.dist) > 0 ? inr(v.dist) + `<small class="muted" style="font-weight:500">/${uWord(v)}</small>` : '—'}</div>${num(v.dist) > 0 ? unit(v) : ''}${avail(v)}</div>
+      ${shopMax(v) > 0 && num(v.dist) > 0 ? `<div class="stepper ${tmp[v.id] ? '' : 'zero'}" id="st-${v.id}"><button onclick="stepTmp('${v.id}',-1)">−</button><input id="tq-${v.id}" type="number" inputmode="${isKg(v) ? 'decimal' : 'numeric'}" step="${shownStep(v)}" value="${showQ(v, tmp[v.id] || 0)}" onchange="setTmp('${v.id}',this.value)"><button onclick="stepTmp('${v.id}',1)">+</button></div>` : ''}</div>`).join('')}
+    <button class="btn gold block" id="addBtn" style="margin-top:8px" onclick="commitTmp()"></button></div></div>`, { wide: true });
+  updateAddBtn();
+}
+function setTmp(vid, val, fromStep) {           // val = kg, boxes or pieces (what the stepper shows); tmp keeps pieces / kg
+  const f = findV(vid); if (!f) return;
+  let q = fromShown(f.v, Math.max(0, num(val)));
+  if (q > shopMax(f.v)) { q = shopMax(f.v); toast(`Only ${qtyTxt(f.v, q)} available`); }
+  if (q) tmp[vid] = q; else delete tmp[vid];
+  const inp = $('#tq-' + vid), n = showQ(f.v, q); if (inp && (fromStep || String(n) !== inp.value)) inp.value = n;
+  $('#vo-' + vid)?.classList.toggle('sel', q > 0);
+  $('#st-' + vid)?.classList.toggle('zero', q === 0);
+  updateAddBtn();
+}
+function stepTmp(vid, d) { const f = findV(vid); if (f) setTmp(vid, showQ(f.v, tmp[vid] || 0) + d * shownStep(f.v), true); }
+function updateAddBtn() {
+  const p = getP(tmpPid);
+  const ent = Object.entries(tmp).map(([vid, q]) => [getV(p, vid), q]).filter(x => x[0]);
+  const amt = ent.reduce((a, [v, q]) => a + q * num(v.dist), 0);
+  const hadInCart = p.variants.some(v => cart[v.id]);
+  const b = $('#addBtn'); if (!b) return;
+  const boxes = ent.reduce((a, [v, q]) => a + (perBox(v) > 1 ? q / perBox(v) : 0), 0);
+  b.innerHTML = ent.length ? `${ic('cart')} ${hadInCart ? 'Update cart' : 'Add to cart'} · ${boxes ? boxes + ' box · ' : ''}${mixTxt(ent)} · ${inr(amt)}` : (hadInCart ? `${ic('trash')} Remove from cart` : 'Select a quantity');
+  b.disabled = !ent.length && !hadInCart;
+}
+function commitTmp() {
+  const p = getP(tmpPid);
+  p.variants.forEach(v => { if (tmp[v.id]) cart[v.id] = tmp[v.id]; else delete cart[v.id]; });
+  saveCart();
+  const added = Object.keys(tmp).length > 0;
+  closeSheet(); renderShopGrid(); updateCartBar();
+  toast(added ? 'Cart updated' : 'Removed from cart');
+}
+function cartTotals() {
+  // unknown items are dropped only once the catalogue has loaded (else the cart would empty on startup)
+  let amt = 0, lines = 0; const ent = [];
+  for (const [vid, q] of Object.entries(cart)) { const f = findV(vid); if (!f) { if (loaded) delete cart[vid]; continue; } ent.push([f.v, q]); amt += q * num(f.v.dist); lines++; }
+  return { qty: ent.length, amt, lines, txt: mixTxt(ent) };
+}
+function updateCartBar() {
+  const bar = $('#cartbar');
+  if (ui.role !== 'shop') { bar.classList.remove('show'); return; }
+  const t = cartTotals();
+  bar.innerHTML = `<div><small>${t.lines} item${t.lines > 1 ? 's' : ''} · ${t.txt}</small><br><b>${inr(t.amt)}</b></div><div class="go">View cart ${ic('arrow', 'style="width:16px;height:16px"')}</div>`;
+  bar.classList.toggle('show', t.qty > 0);
+}
+function openCart() {
+  const t = cartTotals();
+  if (!t.qty) { closeSheet(); updateCartBar(); return; }
+  const lines = Object.entries(cart).map(([vid, q]) => {
+    const { p, v } = findV(vid);
+    const b = perBox(v);
+    return `<div class="vopt"><img src="${imgV(p, v)}" alt=""><div class="grow"><b>${esc(p.name)}</b><div class="muted" style="font-size:12.5px">${esc(v.label)} · ${inr(v.dist)}/${uWord(v)}${b > 1 ? ` · ${q / b} box × ${b} = ${q} pcs` : isKg(v) ? ` · ${r3(q)} kg` : ''}</div><div class="price">${inr(q * v.dist)}</div></div>
+      <div class="stepper"><button onclick="stepCart('${vid}',-1)">−</button><input type="number" inputmode="${isKg(v) ? 'decimal' : 'numeric'}" step="${shownStep(v)}" value="${showQ(v, q)}" onchange="setCart('${vid}',this.value)"><button onclick="stepCart('${vid}',1)">+</button></div></div>`;
+  }).join('');
+  openSheet(sheetHead('Your order', `${esc(curShop().name)}${curShop().id ? ' · ' + esc(curShop().id) : ''}`) + lines + `
+    <div class="total-row"><span>Total <small class="muted" style="font-size:13px;font-weight:500">${t.txt}</small></span><span>${inr(t.amt)}</span></div>
+    ${SHOP_MODE ? `<div class="field" style="margin-top:8px"><label>Note for Nisha Journal Store (optional)</label><input id="orderNote" placeholder="e.g. deliver after 4 pm"></div>
+    <button class="btn gold block" id="placeBtn" onclick="submitOrder()">${ic('check')} Place order</button>`
+    : `<div class="note">Preview only — orders are placed by shops from their own link (Shops tab → Send link).</div>`}`);
+}
+function setCart(vid, val) {                      // val = kg, boxes or pieces (what the stepper shows)
+  const f = findV(vid); if (!f) return;
+  let q = fromShown(f.v, Math.max(0, num(val)));
+  if (q > shopMax(f.v)) { q = shopMax(f.v); toast(`Only ${qtyTxt(f.v, q)} available`); }
+  if (q) cart[vid] = q; else delete cart[vid];
+  saveCart(); updateCartBar(); renderShopGrid(); openCart();
+}
+function stepCart(vid, d) { const f = findV(vid); if (f) setCart(vid, showQ(f.v, cart[vid] || 0) + d * shownStep(f.v)); }
+async function submitOrder() {
+  if (!SHOP_MODE) return toast('Preview only');
+  const items = Object.entries(cart).map(([vid, qty]) => ({ vid, qty }));
+  if (!items.length) return;
+  const btn = $('#placeBtn'); btn.disabled = true; btn.textContent = 'Placing order…';
+  let r;
+  try { r = await api('shopPlaceOrder', { items, note: ($('#orderNote')?.value || '').trim() }); }
+  catch (e) {
+    btn.disabled = false; btn.innerHTML = `${ic('check')} Place order`;
+    if (e.status === 401) return shopSessionLost();
+    return toast(e.message);
+  }
+  cart = {}; saveCart(); updateCartBar(); renderShopGrid();
+  openSheet(`<div class="success"><div class="tick">${ic('check')}</div><h2>Order placed!</h2>
+    <p class="muted" style="margin:8px 0 2px">Order <b style="color:var(--text)">${esc(r.no)}</b> · ${inr(r.total)}</p>
+    <p class="muted" style="font-size:13px;margin:0 0 18px">Nisha Journal Store will confirm and deliver soon.</p>
+    <div class="grid2"><button class="btn ghost" onclick="openMyOrders()">My orders</button><button class="btn gold" onclick="closeSheet()">Continue shopping</button></div></div>`);
+}
+
+/* ---------- Shop phone: login, catalogue, account, my orders ---------- */
+let shopLinkName = '';
+function renderShopLogin() {
+  main.innerHTML = `<div class="card" style="margin-top:34px;padding:26px 20px;text-align:center">
+    <div style="width:84px;height:84px;margin:0 auto 14px;border-radius:22px;background:#0f2e22;display:grid;place-items:center">${CROWN.replace(/lionGold/g, 'lionGoldLogin').replace('<svg ', '<svg style="height:62px;width:auto" ')}</div>
+    <div class="muted" style="font-size:12.5px;letter-spacing:.08em;text-transform:uppercase">Nisha Journal Store</div>
+    <h2 style="margin:6px 0 4px" id="loginShop">${esc(shopLinkName || 'Shop login')}</h2>
+    <p class="muted" style="margin:0 0 18px" id="loginMsg">Enter your shop's mobile number to start ordering.</p>
+    <div class="field" style="text-align:left"><label>Mobile number</label><input id="loginMob" type="tel" inputmode="numeric" maxlength="14" placeholder="10-digit mobile" onkeydown="if(event.key==='Enter')doShopLogin()"></div>
+    <button class="btn gold block" id="loginBtn" onclick="doShopLogin()">Log in</button></div>`;
+  if (!SHOP || !SHOP.token) { $('#loginMsg').textContent = 'Open your shop link again to log in.'; $('#loginBtn').disabled = true; return; }
+  if (!shopLinkName) api('shopInfo&s=' + encodeURIComponent(SHOP.token))
+    .then(r => { shopLinkName = r.name; const h = $('#loginShop'); if (h) h.textContent = r.name; })
+    .catch(e => { const m = $('#loginMsg'); if (m) m.textContent = e.message; const b = $('#loginBtn'); if (b) b.disabled = true; });
+}
+async function doShopLogin() {
+  const mobile = ($('#loginMob').value || '').replace(/\D/g, '').slice(-10);
+  if (mobile.length !== 10) return toast('Enter your 10-digit mobile number');
+  const btn = $('#loginBtn'); btn.disabled = true; btn.textContent = 'Logging in…';
+  try {
+    const r = await api('shopLogin', { token: SHOP.token, mobile });
+    SHOP.sess = r.sess; SHOP.shop = r.shop; saveShop();
+    // the link has done its job — keep the address bar clean so the token is not shared by accident
+    if (LINK_TOKEN) history.replaceState(null, '', location.pathname);
+    loaded = false; render(); shopLoad(true);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Log in';
+    const m = $('#loginMsg'); if (m) { m.textContent = e.message; m.style.color = 'var(--bad)'; }
+  }
+}
+function shopSessionLost() {
+  SHOP.sess = ''; saveShop(); loaded = false; S = emptyState(); closeSheet(); render();
+  toast('Please log in again');
+}
+async function shopLoad(quiet) {
+  if (!shopLoggedIn()) return;
+  const first = !loaded;
+  try {
+    const r = await api('shopCatalog');
+    S = Object.assign(emptyState(), r.state || {}); loaded = true;
+    if (first || !$('#shopGrid')) render(); else { renderCatChips(); renderBrandBar(); renderShopGrid(); updateCartBar(); }
+    if (!quiet) toast('Products refreshed');
+  } catch (e) {
+    if (e.status === 401) return shopSessionLost();
+    if (first) main.innerHTML = `<div class="empty card" style="margin-top:30px">Could not load products — ${esc(navigator.onLine ? e.message : 'no internet')}<br><br><button class="btn gold" onclick="shopLoad()">Try again</button></div>`;
+    else toast('Could not refresh — check internet');
+  }
+}
+function openShopAccount() {
+  const sh = curShop();
+  const row = (icon, t, sub, on) => `<button class="row" onclick="${on}"><span class="adj">${ic(icon)}</span><div class="grow" style="text-align:left"><b>${t}</b>${sub ? `<div class="sub">${sub}</div>` : ''}</div></button>`;
+  openSheet(sheetHead(esc(sh.name), [sh.id, sh.owner, sh.area].filter(Boolean).map(esc).join(' · ')) + `<div class="list">
+    ${row('cart', 'My orders', 'Orders you placed and their status', 'openMyOrders()')}
+    ${row('sync', 'Refresh products', 'Get the latest rates and stock', 'closeSheet();shopLoad()')}
+    ${installRow()}
+    ${row(ui.theme === 'dark' ? 'sun' : 'moon', (ui.theme === 'dark' ? 'Light' : 'Dark') + ' mode', '', 'closeSheet();toggleTheme()')}
+    ${row('x', 'Log out', 'You can log in again with your mobile number', 'shopLogout()')}</div>`);
+}
+function shopLogout() {
+  if (!confirm('Log out of this phone?')) return;
+  cart = {}; saveCart(); shopSessionLost();
+}
+let MYORD = [];
+async function openMyOrders() {
+  openSheet(sheetHead('My orders', esc(curShop().name)) + '<div class="list" id="myOrd"><div class="empty card">Loading…</div></div>');
+  try { MYORD = (await api('shopMyOrders')).orders || []; }
+  catch (e) { if (e.status === 401) return shopSessionLost(); const el = $('#myOrd'); if (el) el.innerHTML = `<div class="empty card">${esc(e.message)}</div>`; return; }
+  const el = $('#myOrd'); if (!el) return;
+  el.innerHTML = MYORD.map((o, i) => orderRow(o, `openMyOrder(${i})`)).join('') || '<div class="empty card">No orders yet</div>';
+}
+function openMyOrder(i) {
+  const o = MYORD[i]; if (!o) return;
+  const lbl = o.status === 'new' ? 'Placed — waiting for confirmation' : ORDER_LBL[o.status] || o.status;
+  openSheet(sheetHead(esc(o.no), `${fmtDT(o.ts)} · <span class="pill ${ORDER_PILL[o.status] || ''}">${lbl}</span>`) + orderLinesHTML(o)
+    + `<button class="btn ghost block" style="margin-top:14px" onclick="openMyOrders()">← All my orders</button>`);
+}
+
+/* =========================================================
+   BOOT
+   ========================================================= */
+$('#logoCrown').innerHTML = CROWN;
+applyTheme();
+render();
+if (SHOP_MODE) shopLoad(true);
+else { cloudLoad(true); loadOrders(); checkWorker(); }
+/* ---------- Install as an app (home-screen icon) ---------- */
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+let installEvt = null;
+const isInstalled = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; if (ui.tab === 'more' || ui.role === 'shop') render(); });
+window.addEventListener('appinstalled', () => { installEvt = null; toast('Installed — open Nisha from your home screen'); render(); });
+async function installApp() {
+  if (installEvt) { installEvt.prompt(); await installEvt.userChoice; installEvt = null; render(); return; }
+  if (isIOS) return alert('On iPhone: tap the Share button (square with arrow) in Safari → "Add to Home Screen".');
+  alert('Open this page in Chrome → tap ⋮ (top right) → "Install app" or "Add to Home screen".');
+}
+function installRow() {
+  if (isInstalled()) return '';
+  return `<button class="row" onclick="installApp()"><span class="adj" style="color:var(--accent-txt)">${ic('in')}</span><div class="grow" style="text-align:left"><b>Install app on this phone</b><div class="sub">Adds the Nisha icon to your home screen</div></div></button>`;
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  if (SHOP_MODE) return shopLoad(true);                 // shop phone: fresh rates & stock when reopened
+  if (!cloud.key) return cloudLoad(true);
+  loadOrders();                                          // owner phone: pick up new orders
+  if (!pushing && !pendingPush && !$('#sheetWrap').classList.contains('open')) cloudLoad(true);   // and other phones' edits
+});
+</script>
+</body>
+</html>
