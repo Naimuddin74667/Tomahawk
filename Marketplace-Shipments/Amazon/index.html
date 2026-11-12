@@ -959,8 +959,8 @@ html .site-header { background: var(--tmh-bg); }
         <div class="ro-stat-card" data-view="gppending" onclick="fbaSetView('gppending')" title="Not closed or cancelled, and no UC gatepass carries this shipment ID">
           <div class="ro-stat-label">Gatepass Pending</div><div class="ro-stat-value" id="fbaStat-gppending" style="color:var(--accent)">&ndash;</div><div class="ro-stat-sub">no UC gatepass yet</div>
         </div>
-        <div class="ro-stat-card" data-view="notdisp" onclick="fbaSetView('notdisp')" title="Gatepass created in UC, but Amazon still shows Working / Ready to ship">
-          <div class="ro-stat-label">Not Dispatched</div><div class="ro-stat-value" id="fbaStat-notdisp" style="color:#5b9fe3">&ndash;</div><div class="ro-stat-sub">gatepass done, not shipped</div>
+        <div class="ro-stat-card" data-view="notdisp" onclick="fbaSetView('notdisp')" title="Not left the warehouse: gatepass made but Amazon not shipped yet, or Amazon says In Transit but no CLOSED UC gatepass">
+          <div class="ro-stat-label">Not Dispatched</div><div class="ro-stat-value" id="fbaStat-notdisp" style="color:#5b9fe3">&ndash;</div><div class="ro-stat-sub">not left warehouse</div>
         </div>
         <div class="ro-stat-card" data-view="transit" onclick="fbaSetView('transit')" title="Amazon status SHIPPED / IN_TRANSIT">
           <div class="ro-stat-label">In Transit</div><div class="ro-stat-value" id="fbaStat-transit">&ndash;</div><div class="ro-stat-sub">on the way to FC</div>
@@ -2048,7 +2048,25 @@ function fbaSum(items, key) { return items.reduce(function (t, it) { return t + 
 function fbaGpQty(s) { return s.gatepasses.reduce(function (t, g) { return t + (Number(g.qty) || 0); }, 0); }
 // A shipment "has a gatepass" if UC shows one with its ID, or we just
 // created one from here (the mirror can lag ~15 min behind UC).
-function fbaHasGp(s) { return s.gatepasses.length > 0 || !!(s.auto_gp && (s.auto_gp.g4_code || s.auto_gp.e3_code)); }
+// ── Dispatch rule (agreed 12 Nov 2026) ──
+// Amazon flips a shipment to IN_TRANSIT as soon as it's confirmed in
+// Send-to-Amazon — before the truck leaves. So "really dispatched" =
+// a CLOSED UC gatepass carries the shipment ID.
+// Shipments the tracker logged at launch (first_seen ≤ cut-off) that Amazon
+// shows as on the way / at FC / closed are taken as dispatched (gatepass
+// closed), EXCEPT the 5 confirmed not dispatched on 12 Nov.
+var FBA_LEGACY_CUTOFF = '2026-11-12 06:21:06';
+var FBA_LEGACY_NOT_DISPATCHED = ['FBA15MTYQ80F', 'FBA15MTZ7MFR', 'FBA15MTZ7MGD', 'FBA15MV78H7G', 'FBA15MV6J44C'];
+function fbaLegacyDispatched(s) {
+  var st = FBA_STAGE_OF[s.status];
+  return !!s.first_seen_at && s.first_seen_at <= FBA_LEGACY_CUTOFF &&
+    FBA_LEGACY_NOT_DISPATCHED.indexOf(s.shipment_id) === -1 &&
+    (st === 'transit' || st === 'fc' || st === 'closed');
+}
+function fbaHasGp(s) { return s.gatepasses.length > 0 || !!(s.auto_gp && (s.auto_gp.g4_code || s.auto_gp.e3_code)) || fbaLegacyDispatched(s); }
+function fbaGpClosed(s) {
+  return fbaLegacyDispatched(s) || (s.gatepasses.length > 0 && s.gatepasses.every(function (g) { return g.status === 'CLOSED'; }));
+}
 function fbaHoldQty(s) { return s.auto_gp && s.auto_gp.hold ? s.auto_gp.hold.reduce(function (t, x) { return t + (Number(x.qty) || 0); }, 0) : 0; }
 function fbaIsBadUcSku(u) { return !u || /^(unlinked|block)/i.test(u); }
 
@@ -2088,7 +2106,9 @@ function fbaChecks(s) {
     if (short) out.push({ level: 'red', text: 'Stock short on ' + short + ' SKU' });
   }
 
-  if ((stage === 'transit' || stage === 'fc') && !fbaHasGp(s)) {
+  if (s._amzOnly) {
+    out.push({ level: 'red', text: 'Amazon shows In Transit \u2014 not dispatched from warehouse' });
+  } else if (stage === 'fc' && !fbaHasGp(s)) {
     out.push({ level: 'amber', text: 'No gatepass linked' });
   }
 
@@ -2124,6 +2144,8 @@ function fbaLoad() {
       // Precompute per row once — render/filter reuse these.
       _fbaRows.forEach(function (s) {
         s._stage = fbaStage(s);
+        // Amazon says In Transit but no CLOSED gatepass → not really dispatched
+        s._amzOnly = s._stage === 'transit' && !fbaGpClosed(s);
         s._shipped = fbaSum(s.items || [], 'shipped');
         s._received = fbaSum(s.items || [], 'received');
         s._checks = fbaChecks(s);
@@ -2151,7 +2173,8 @@ function fbaInView(s, view) {
   if (view === 'all') return true; // the only view that shows cancelled shipments
   if (view === 'open') return fbaIsOpen(s);
   if (view === 'gppending') return fbaIsOpen(s) && !fbaHasGp(s);
-  if (view === 'notdisp') return s._stage === 'created' && fbaHasGp(s);
+  if (view === 'notdisp') return (s._stage === 'created' && fbaHasGp(s)) || s._amzOnly;
+  if (view === 'transit') return s._stage === 'transit' && !s._amzOnly;
   if (view === 'attention') return s._stage !== 'cancelled' && s._checks.length > 0;
   return s._stage === view;
 }
@@ -2205,6 +2228,10 @@ function fbaGpAgeDays(s) {
   var d = new Date(ts); return isNaN(d.getTime()) ? null : (Date.now() - d.getTime()) / 86400000;
 }
 function fbaPackStatus(s) {
+  if (s._amzOnly) {
+    if (!fbaHasGp(s)) return 'Gatepass Pending';
+    if (!fbaGpClosed(s)) return 'Under Packing';
+  }
   if (s._stage !== 'created' || !fbaHasGp(s)) return null;
   var left = s.gatepasses.length > 0 && s.gatepasses.every(function (g) { return g.status === 'CLOSED'; });
   return left ? 'Left Warehouse' : 'Under Packing';
@@ -2217,7 +2244,7 @@ function fbaStatusHtml(s) {
   var ps = fbaPackStatus(s);
   if (ps) {
     var age = fbaGpAgeDays(s);
-    sub.unshift('<span style="font-weight:700;color:' + (ps === 'Left Warehouse' ? 'var(--accent)' : '#5b9fe3') + '">' + ps + '</span>' +
+    sub.unshift('<span style="font-weight:700;color:' + (ps === 'Left Warehouse' ? 'var(--accent)' : ps === 'Gatepass Pending' ? '#ff8080' : '#5b9fe3') + '">' + ps + '</span>' +
       (age != null ? ' · GP ' + fbaHtml(fbaAgo(fbaGpCreatedAt(s))) : ''));
   }
   return '<span style="font-weight:700;color:' + FBA_STAGE_COLOR[s._stage] + '">' + fbaHtml(FBA_STATUS_LABEL[s.status] || s.status) + '</span>' +
@@ -2244,7 +2271,10 @@ function fbaGatepassHtml(s, inDetail) {
     html += '<button class="btn btn-secondary btn-sm" style="width:auto;padding:3px 9px;font-size:11px;margin-top:4px" ' +
       'onclick="event.stopPropagation();fbaPackSheet(\'' + fcEsc(s.shipment_id) + '\')" title="A4 PDF for the packers \u2014 G4 section + E3 section">&#128424; Pack Sheet</button>';
   }
-  var canCreate = window.TM_CAN_EDIT && fbaIsOpen(s) && !s.gatepasses.length &&
+  if (!html && fbaLegacyDispatched(s)) {
+    html = '<span style="color:var(--muted);font-size:11.5px" title="Logged before the tracker started \u2014 taken as dispatched (gatepass closed)">Before tracker</span>';
+  }
+  var canCreate = window.TM_CAN_EDIT && fbaIsOpen(s) && !s.gatepasses.length && !fbaLegacyDispatched(s) &&
     (!s.auto_gp || s.auto_gp.status === 'partial');
   if (canCreate) {
     var label = s.auto_gp && s.auto_gp.status === 'partial' ? '&#8635; Retry Gatepass' : '+ Create Gatepass';
