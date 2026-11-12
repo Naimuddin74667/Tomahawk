@@ -2427,14 +2427,11 @@ function fbaBuildPackPdf(s, sections, logo) {
   T('FBA PACK SHEET', W - M, y + 6, 13, true, 'right');
   y += 10; doc.setLineWidth(0.4); doc.line(M, y, W - M, y); doc.setLineWidth(0.2); y += 4;
 
-  lab('FBA Shipment', M, y + 3); T(s.shipment_id, M, y + 8, 10.5, true);
-  lab('Dest. FC', M + 70, y + 3); T(s.destination_fc || '\u2014', M + 70, y + 8, 10.5, true);
-  var totalUnits = 0, totalBoxes = 0;
-  sections.forEach(function (sec) { sec.lines.forEach(function (l) { totalUnits += l.qty; if (l.ppc) totalBoxes += Math.floor(l.qty / l.ppc); }); });
-  lab('Units on gatepass', M + 105, y + 3); T(n(totalUnits), M + 105, y + 8, 10.5, true);
-  y += 11.5;
-  T(fit(s.shipment_name || '', CW, 7), M, y, 7, false);
-  y += 4.5;
+  // Header strip: FBA Shipment ID · Appt. date · Dest. FC · Total units (whole shipment)
+  var appt = s.appointment && s.appointment.slot ? fcExtractApptDate(s.appointment.slot) : '—';
+  [['FBA Shipment ID', s.shipment_id], ['Appt. Date', appt], ['Dest. FC', s.destination_fc || '—'], ['Total Units', n(s._shipped || 0)]]
+    .forEach(function (f, k) { var fx = M + k * (CW / 4); lab(f[0], fx, y + 3); T(f[1], fx, y + 8.5, 11, true); });
+  y += 14;
 
   // ── One section per warehouse ──
   // Column sets: G4 = Boxes then Qty/box then Qty; E3 (loose) = Qty only.
