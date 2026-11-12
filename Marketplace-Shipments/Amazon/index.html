@@ -615,7 +615,7 @@ html .site-header { background: var(--tmh-bg); }
     azWarehouseMapSave: 'manager', azWarehouseMapDelete: 'manager',
     azLedgerDeleteAll: 'admin',
     amazonCheckFcEmails: 'manager', amazonSetFcStatus: 'manager', amazonDeleteFcLog: 'admin',
-    fbaGpCreate: 'manager'
+    fbaGpCreate: 'manager', fbaSetAppt: 'manager'
   };
   function actionAllowed(action, role) {
     var min = ACTION_ROLE_MIN[action];
@@ -2281,11 +2281,65 @@ function fbaGatepassHtml(s, inDetail) {
 }
 
 function fbaApptHtml(s) {
-  if (!s.appointment) return '<span style="color:var(--muted)">—</span>';
+  var edit = '<button class="btn btn-secondary btn-sm" style="width:auto;padding:2px 7px;font-size:10px;margin-top:3px" ' +
+    'onclick="event.stopPropagation();fbaApptEdit(\'' + fcEsc(s.shipment_id) + '\')" title="Add / edit appointment ID + date by hand">' +
+    (s.appointment ? '&#9998; Edit' : '+ Add') + '</button>';
+  if (!s.appointment) return '<span style="color:var(--muted)">—</span><div>' + edit + '</div>';
   var a = s.appointment;
   var cancelled = /cancel/i.test(a.status || '');
   return '<div style="font-size:12px;white-space:nowrap' + (cancelled ? ';color:#ff8080;text-decoration:line-through' : '') + '">' + fbaHtml(fcExtractApptDate(a.slot)) + '</div>' +
-    '<div class="fba-sub fba-mono">' + fbaHtml(a.id || '') + '</div>';
+    '<div class="fba-sub fba-mono">' + fbaHtml(a.id || '') + (a.manual ? ' <span title="Entered by hand">&#9998;</span>' : '') + '</div>' + edit;
+}
+
+// Manual FC appointment (ID + date) — used when Amazon's email isn't in yet.
+// Saved by the Worker in fba_appt_manual; Amazon's email always wins.
+// onDone(saved) is called after Save (true) or Skip/close (false).
+function fbaApptEdit(shipmentId, onDone, skipLabel) {
+  var s = _fbaRows.find(function (r) { return r.shipment_id === shipmentId; });
+  if (!s) return;
+  var a = s.appointment || {};
+  var curDate = a.manual_date || '';
+  var iso = '';
+  if (curDate) { var d = new Date(curDate); if (!isNaN(d)) iso = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); }
+  var ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px';
+  ov.innerHTML = '<div style="background:var(--surface,#fff);color:var(--text,#111);border:1px solid var(--border,#ddd);border-radius:12px;padding:22px;width:100%;max-width:400px">' +
+    '<div style="font-weight:800;font-size:16px;margin-bottom:4px">FC Appointment</div>' +
+    '<div style="font-size:12px;color:var(--muted);margin-bottom:14px">' + fbaHtml(shipmentId) + (a.id && !a.manual ? ' · from Amazon email: ' + fbaHtml(a.id) : '') + '</div>' +
+    '<label style="font-size:11px;font-weight:700;color:var(--muted)">Appointment ID</label>' +
+    '<input id="fba-ap-id" type="text" value="' + fbaHtml(a.manual_id || (a.manual ? '' : a.id || '')) + '" style="width:100%;margin:4px 0 12px;padding:8px 10px;font-size:13px">' +
+    '<label style="font-size:11px;font-weight:700;color:var(--muted)">Appointment date</label>' +
+    '<input id="fba-ap-dt" type="date" value="' + iso + '" style="width:100%;margin:4px 0 16px;padding:8px 10px;font-size:13px">' +
+    '<div style="display:flex;justify-content:flex-end;gap:8px">' +
+    '<button class="btn btn-secondary btn-sm" style="width:auto" data-x="skip">' + (skipLabel || 'Cancel') + '</button>' +
+    '<button class="btn btn-sm" style="width:auto;background:var(--accent);color:#181818" data-x="save">Save</button></div></div>';
+  document.body.appendChild(ov);
+  ov.querySelector('#fba-ap-id').focus();
+  function close(saved) { ov.remove(); if (onDone) onDone(saved); }
+  ov.addEventListener('click', function (e) {
+    var x = e.target.getAttribute('data-x');
+    if (x === 'skip') return close(false);
+    if (x !== 'save') return;
+    var id = ov.querySelector('#fba-ap-id').value.trim(), dv = ov.querySelector('#fba-ap-dt').value;
+    var dt = dv ? new Date(dv + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
+    e.target.disabled = true;
+    fetch(getWorkerBase() + '?action=fbaSetAppt', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'fbaSetAppt', shipment_id: shipmentId, appointment_id: id, appt_date: dt }) })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.error || 'Save failed');
+        // Update this row in place (Amazon's email data still wins on next load)
+        if (!id && !dt) { if (s.appointment && s.appointment.manual && !s.appointment.status) s.appointment = null; }
+        else {
+          var em = s.appointment && !s.appointment.manual ? s.appointment : null;
+          s.appointment = { id: (em && em.id) || id, slot: (em && em.slot) || dt, status: em ? em.status : '', manual: true, manual_id: id, manual_date: dt };
+        }
+        toast('Appointment saved', 'ok');
+        try { fbaRender(); } catch (er) {}
+        close(true);
+      })
+      .catch(function (er) { e.target.disabled = false; toast(er.message, 'err'); });
+  });
 }
 
 function fbaChecksHtml(checks) {
@@ -2462,8 +2516,13 @@ function fbaPackSheet(shipmentId) {
   if (!sections[0].lines.length && !sections[1].lines.length && !((s.auto_gp && s.auto_gp.hold) || []).length) {
     toast('No gatepass lines yet — the UC sync may still be catching up (~15 min).', 'err', 5000); return;
   }
-  fbaLoadScript(FBA_JSPDF_URL, 'jspdf').then(fbaLogoPng).then(function (logo) { fbaBuildPackPdf(s, sections, logo); })
-    .catch(function (e) { toast(e.message, 'err'); });
+  function go() {
+    fbaLoadScript(FBA_JSPDF_URL, 'jspdf').then(fbaLogoPng).then(function (logo) { fbaBuildPackPdf(s, sections, logo); })
+      .catch(function (e) { toast(e.message, 'err'); });
+  }
+  // No appointment ID/date yet → offer to add it first (Skip prints with "—")
+  if (!s.appointment || !s.appointment.id || !s.appointment.slot) fbaApptEdit(shipmentId, go, 'Skip & print');
+  else go();
 }
 
 function fbaBuildPackPdf(s, sections, logo) {

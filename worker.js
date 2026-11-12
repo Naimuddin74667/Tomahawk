@@ -550,8 +550,22 @@ async function ensureFbaTrackerTable(DB) {
   )`).run();
 }
 
+// Manually entered FC appointment (ID + date) per FBA shipment — used only
+// when Amazon's appointment email hasn't been picked up yet. Kept in its own
+// table so the email sync (amazon_shipments upsert) can never overwrite it.
+async function ensureFbaApptManualTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS fba_appt_manual (
+    shipment_id    TEXT PRIMARY KEY,
+    appointment_id TEXT,
+    appt_date      TEXT,
+    updated_by     TEXT,
+    updated_at     TEXT DEFAULT (datetime('now'))
+  )`).run();
+}
+
 async function fbaTrackerData(env) {
   await ensureFbaTrackerTable(env.DB);
+  await ensureFbaApptManualTable(env.DB);
   await ensureAmazonShipmentsTable(env.DB);
 
   // All Supabase reads in parallel.
@@ -631,6 +645,7 @@ async function fbaTrackerData(env) {
     'SELECT shipment_id, appointment_id, confirmed_slot, appointment_status FROM amazon_shipments'
   ).all()).results || []);
   const apptOf = new Map(apptRows.map(a => [a.shipment_id, a]));
+  const manualAppt = new Map(((await env.DB.prepare('SELECT * FROM fba_appt_manual').all()).results || []).map(a => [a.shipment_id, a]));
   const stageMap = await loadAmazonFbaStageMap(env.DB);
 
   // Bundle stock = how many full bundles the children allow, per warehouse.
@@ -658,7 +673,14 @@ async function fbaTrackerData(env) {
       status: r.status, status_since: r.status_since, first_seen_at: r.first_seen_at,
       from_history: !liveIds.has(r.shipment_id), // dropped from Supabase, shown from our D1 copy
       items, gatepasses: gpBySid.get(r.shipment_id) || [],
-      appointment: appt ? { id: appt.appointment_id, slot: appt.confirmed_slot, status: appt.appointment_status } : null,
+      // Amazon's email wins; manual entry fills only what the email doesn't have
+      appointment: (function () {
+        const m = manualAppt.get(r.shipment_id);
+        if (appt && appt.appointment_id && appt.confirmed_slot) return { id: appt.appointment_id, slot: appt.confirmed_slot, status: appt.appointment_status };
+        if (!appt && !m) return null;
+        return { id: (appt && appt.appointment_id) || (m && m.appointment_id) || '', slot: (appt && appt.confirmed_slot) || (m && m.appt_date) || '',
+          status: (appt && appt.appointment_status) || '', manual: !!m, manual_id: m ? m.appointment_id || '' : '', manual_date: m ? m.appt_date || '' : '' };
+      })(),
       fba_stage: st ? st.stage : null, fba_stage_date: st ? st.date : null
     };
   });
@@ -1283,6 +1305,7 @@ const ACTION_TIERS = {
   //   joined in. Read-only for the user; also refreshes the D1 history
   //   copy (fba_tracker) as a side effect.
   fbaTrackerList: 'viewer_read',
+  fbaSetAppt: 'manager_up',
   // — FBA Tracker auto gatepass: plan = read-only preview of the G4/E3/Hold
   //   split; create = pushes the gatepasses into UC via SK's API.
   fbaGpPlan: 'viewer_read',
@@ -3272,6 +3295,23 @@ export default {
         // ── FBA TRACKER — all FBA inbound shipments from Amazon's API
         //    (Supabase mirror) + UC SKU, stock, gatepass, appointment.
         //    See fbaTrackerData for details.
+        // ── FBA TRACKER — manual FC appointment (ID + date) for one shipment ──
+        if (action === 'fbaSetAppt') {
+          await ensureFbaApptManualTable(env.DB);
+          const sid = String((body && body.shipment_id) || '').trim();
+          if (!sid) return json({ ok: false, error: 'shipment_id required' }, 400);
+          const id = String((body && body.appointment_id) || '').trim(), dt = String((body && body.appt_date) || '').trim();
+          if (!id && !dt) {
+            await env.DB.prepare('DELETE FROM fba_appt_manual WHERE shipment_id = ?').bind(sid).run();
+            return json({ ok: true, cleared: true });
+          }
+          const who = (authResult && authResult.user && (authResult.user.display_name || authResult.user.username)) || '';
+          await env.DB.prepare(`INSERT INTO fba_appt_manual (shipment_id, appointment_id, appt_date, updated_by, updated_at)
+            VALUES (?, ?, ?, ?, datetime('now')) ON CONFLICT(shipment_id) DO UPDATE SET appointment_id = excluded.appointment_id,
+            appt_date = excluded.appt_date, updated_by = excluded.updated_by, updated_at = datetime('now')`).bind(sid, id, dt, who).run();
+          return json({ ok: true });
+        }
+
         if (action === 'fbaTrackerList') {
           try {
             return json(Object.assign({ ok: true, source: 'supabase' }, await fbaTrackerData(env)));
