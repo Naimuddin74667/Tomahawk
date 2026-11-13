@@ -7146,6 +7146,10 @@ async function markRtdIfPacker(request, env, waybill) {
   ).bind(waybill).run();
 }
 const CC_ORDER_EMAIL_TEST_TO = ['naimuddin+test@bullet.co.in'];
+// New service request team alert (13-Nov-2026): NOT to support@ — that inbox is
+// Zoho Desk's email channel, so every alert became a Zoho ticket. The team
+// works these requests in the Customer Care Dashboard instead.
+const SR_ALERT_EMAIL_TO = ['faique@bullet.co.in'];
 
 // UTF-8 safe base64 (btoa alone breaks on ₹, Hindi names, etc.)
 function utf8ToBase64(str) {
@@ -9959,7 +9963,7 @@ async function submitWarrantyClaim(env, b, ip) {
   ));
 
   const v = x => x ? String(x) : '-';
-  const to = CC_ORDER_EMAIL_TEST_MODE ? CC_ORDER_EMAIL_TEST_TO : CC_ORDER_EMAIL_TO;
+  const to = CC_ORDER_EMAIL_TEST_MODE ? CC_ORDER_EMAIL_TEST_TO : SR_ALERT_EMAIL_TO;
   const text = [
     'A new service request was submitted on the website.', '',
     'Claim ID        : ' + claimId,
