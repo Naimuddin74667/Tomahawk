@@ -8406,7 +8406,7 @@ async function rpCreate(env, user, b) {
     // where the advance is adjusted.
     line_items: lines.map((l, i) => ({ description: l.label + ' (incl. ' + ZB_GST_RATE + '% GST) · ' + (kind === 'repair' ? (row.product || '') + ' · ' : '') + claimId,
       item_order: i + 1, rate: rpWithGst(l.amount) })),
-    notes: 'Advance for ' + (kind === 'logistics' ? (selfShip ? 'return delivery' : 'pickup and return delivery') : 'service and spare parts') + ', service request ' + claimId +
+    notes: 'Advance for ' + (kind === 'logistics' ? (selfShip ? 'return delivery' : 'pickup and return delivery') : lines.some(l => /deliver/i.test(l.label)) ? 'service, spare parts and return delivery' : 'service and spare parts') + ', service request ' + claimId +
       '. The full tax invoice is issued when your request is closed. Thank you for choosing TOMAHAWK® Tools.',
     payment_options: { payment_gateways: [{ gateway_name: 'razorpay', configured: true }] }
   };
@@ -8579,7 +8579,8 @@ function rpFinalLines(lines, row, claimId, env) {
   for (const l of lines) {
     const lbl = String(l.label || '');
     if (l.kind === 'logistics' && /pick/i.test(lbl)) groups.pickup.push(l);
-    else if (l.kind === 'logistics' && /deliver/i.test(lbl)) groups.delivery.push(l);
+    // Self-ship (14-Nov-2026): the return delivery can ride on the repair advance too
+    else if (/deliver/i.test(lbl) && !/^spare part/i.test(lbl)) groups.delivery.push(l);
     else if (l.kind === 'repair' && /^spare part/i.test(lbl)) groups.parts.push(l);
     else if (l.kind === 'repair' && /service|repair|processing/i.test(lbl)) groups.repair.push(l);
     else other.push(l);

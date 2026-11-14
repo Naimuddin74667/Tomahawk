@@ -2929,7 +2929,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         return { ok: false, msg: rp && rp.status === 'pending' ? 'The service & spare parts payment is not paid yet.'
           : 'Send the service & spare parts quote first — or mark it "Not repaired" in Payments if there is no charge.' };
       if (!forDispatch) return { ok: true, claim: claim };
-      if (l && l.status === 'paid') return { ok: true, claim: claim };
+      if ((l && l.status === 'paid') || (rp.status === 'paid' && payHasDelivery(rp))) return { ok: true, claim: claim };
       return { ok: false, needDelivery: !l || l.status === 'void', msg: l && l.status === 'pending'
         ? 'The delivery payment is not paid yet. Send back unlocks once the customer pays (or use "Customer collects").'
         : 'Delivery is chargeable: send the delivery payment link first (Payments → Return delivery). Or use "Customer collects".' };
@@ -5242,10 +5242,15 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // Charge and the 'logistics' advance becomes Step 2 = return delivery, only
   // when we deliver it back (skipped when the customer collects).
   var PAY_STEP_SELF = {
-    repair:    { n: 1, title: 'Spare Parts & Service Charge', when: 'advance · sent after the technician inspects the product', btn: '&#8377; Send repair quote' },
-    logistics: { n: 2, title: 'Return delivery', when: 'advance · only if we deliver it back · skip if the customer collects', btn: '&#8377; Get quote &amp; send delivery link' },
+    repair:    { n: 1, title: 'Spare Parts & Service Charge', when: 'advance · after inspection · add delivery here if we send it back (one link)', btn: '&#8377; Send repair quote' },
+    logistics: { n: 2, title: 'Return delivery', when: 'only when delivery was not in Step 1 (e.g. Not repaired) · skip if the customer collects', btn: '&#8377; Get quote &amp; send delivery link' },
     final:     PAY_STEP.final
   };
+  // Repair advance that already carries the return delivery charge (self-ship, one link)
+  function payHasDelivery(p) {
+    if (!p || p.status === 'void' || p.status === 'skipped') return false;
+    try { return JSON.parse(p.lines_json || '[]').some(function (l) { return /deliver/i.test(l.label || ''); }); } catch (e) { return false; }
+  }
   function paySelf() { return !!(stepsCtx && stepsCtx.c && isSelfShip(stepsCtx.c.reverse)); }
   function payDef(kind) { return (paySelf() ? PAY_STEP_SELF : PAY_STEP)[kind]; }
   var payState = {};   // latest payments for the open request: { logistics, repair, final }
@@ -5294,7 +5299,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var self = paySelf();
     var need = {
       // Self-ship: delivery card only once Step 1 is settled (and the customer may still collect instead)
-      logistics: self ? settled(rp) && !settled(l) && stage <= 5 : !settled(l),
+      logistics: self ? settled(rp) && !payHasDelivery(rp) && !settled(l) && stage <= 5 : !settled(l),
       repair: (stage >= 4 || has(rp)) && !settled(rp),
       // Final invoice is made automatically when Send back is booked — its card
       // only shows if that left something to fix (made but advances not applied).
@@ -5341,7 +5346,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var s2 = rp && rp.status === 'skipped' ? ['done', 'Not repaired'] : settled(rp) ? ['done', 'Paid'] : has(rp) ? ['cur', 'Payment pending'] : lock.repair ? ['todo', 'Locked'] : ['cur', 'Send quote'];
       var s3 = f && f.status === 'paid' ? ['done', 'Settled'] : has(f) ? ['cur', 'Apply advances'] : lock.final ? ['todo', 'Locked'] : ['cur', 'At dispatch'];
       if (self) {   // 1 service & parts · 2 return delivery (or collected) · ✓ final
-        var d2 = settled(l) ? ['done', 'Paid'] : has(l) ? ['cur', 'Payment pending'] : lock.logistics ? ['todo', 'Locked'] : ['cur', 'Only if we deliver'];
+        var d2 = settled(l) ? ['done', 'Paid'] : has(l) ? ['cur', 'Payment pending'] : payHasDelivery(rp) ? [settled(rp) ? 'done' : 'todo', 'Included in Step 1'] : lock.logistics ? ['todo', 'Locked'] : ['cur', 'Only if we deliver'];
         s2[0] = s2[0] === 'todo' ? 'cur' : s2[0];
         bar.innerHTML = old ? '' : seg(1, 'Spare Parts &amp; Service Charge', s2[0], s2[1]) + seg(2, 'Return delivery', d2[0], d2[1]) + seg(3, 'Final invoice', s3[0], s3[1]);
       } else
@@ -5702,6 +5707,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         '<label for="rp-svc">Repair &amp; processing fee (before GST)</label><input class="sb-input" id="rp-svc" type="number" min="0" step="1" placeholder="e.g. 500">' +
         '<label>Spare parts</label><div><div id="rp-parts"></div><button type="button" class="linkish" id="rp-add">+ Add spare part</button></div>' +
         '<label for="rp-desc">Work done</label><input class="sb-input" id="rp-desc" maxlength="300" placeholder="e.g. Switch and carbon brushes replaced">' +
+        // Self-ship (14-Nov-2026): one link — add the return delivery when the customer wants it sent back
+        (paySelf() ? '<label>Return delivery</label><div><label class="rp-dlv"><input type="checkbox" id="rp-dlv"> Deliver back to customer</label> ' +
+          '<input class="sb-input" id="rp-dlv-amt" type="number" min="0" step="1" placeholder="₹ before GST" hidden style="width:120px;display:inline-block"> ' +
+          '<span class="pay-hint" id="rp-dlv-hint">Leave unticked if the customer collects it.</span></div>' : '') +
         '<label>Customer pays</label><div><span class="pay-total" id="rp-tot">—</span> <span class="pay-hint">incl. ' + PAY_GST + '% GST</span></div>' +
       '</div>' +
       '<div class="pay-hint" id="rp-from">Checking Zoho Books connection…</div>' +
@@ -5715,12 +5724,30 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         var n = row.querySelector('.rp-pn').value.trim(), a = parseFloat(row.querySelector('.rp-pa').value) || 0;
         if (a > 0) out.push({ label: 'Spare part: ' + (n || '?'), amount: a, _noName: !n });
       });
+      var dl = document.getElementById('rp-dlv');
+      if (dl && dl.checked) out.push({ label: 'Return delivery charge', amount: parseFloat(document.getElementById('rp-dlv-amt').value) || 0, _dlv: true });
       return out;
     }
     function upd() {
       var t = lines().reduce(function (s, l) { return s + l.amount; }, 0);
       document.getElementById('rp-tot').textContent = t > 0 ? money(withGst(t)) : '—';
       send.disabled = !ready || !(t > 0);
+    }
+    var dlv = document.getElementById('rp-dlv');
+    if (dlv) {
+      var amt = document.getElementById('rp-dlv-amt'), hint = document.getElementById('rp-dlv-hint');
+      amt.addEventListener('input', upd);
+      dlv.addEventListener('change', function () {
+        amt.hidden = !dlv.checked;
+        hint.textContent = dlv.checked ? 'Getting courier rate for ' + (r.pincode || '') + '…' : 'Leave unticked if the customer collects it.';
+        upd();
+        if (!dlv.checked || amt.value) { if (dlv.checked) hint.textContent = 'before GST'; return; }
+        api('ccLogisticsQuote&claim_id=' + encodeURIComponent(r.claim_id)).then(function (q) {
+          if (q && q.ok && q.suggested && q.suggested.delivery && !amt.value) amt.value = q.suggested.delivery;
+          hint.textContent = 'before GST' + (q && q.ok && q.suggested ? ' · prefilled = higher courier + buffer' : ' · enter by hand');
+          upd();
+        }).catch(function () { hint.textContent = 'before GST · enter by hand'; });
+      });
     }
     function addPart() {
       parts.insertAdjacentHTML('beforeend', '<div class="rp-part"><input class="sb-input rp-pn" maxlength="80" placeholder="Part name, e.g. Switch">' +
@@ -5738,9 +5765,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var ls = lines(), d = document.getElementById('rp-desc').value.trim();
       if (!ls.length) { alert('Enter the service charge and/or spare parts.'); return; }
       if (ls.some(function (l) { return l._noName; })) { alert('Give every spare part a name.'); return; }
+      if (ls.some(function (l) { return l._dlv && !(l.amount > 0); })) { alert('Enter the delivery charge, or untick Deliver back.'); return; }
       if (!d) { alert('Describe the work done in a few words.'); return; }
       createPayment(r, send, { kind: 'repair', description: d,
-        lines: ls.map(function (l) { return { label: l.label, amount: l.amount }; }) }, 'the repair');
+        lines: ls.map(function (l) { return { label: l.label, amount: l.amount }; }) }, ls.some(function (l) { return l._dlv; }) ? 'the repair + return delivery' : 'the repair');
     });
   }
 
