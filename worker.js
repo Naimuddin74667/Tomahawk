@@ -8916,6 +8916,8 @@ async function ccHandOver(env, user, oid) {
         catch (e) { out.finalError = e.message; }
       }
     }
+    // WhatsApp "delivered" (+ invoice for SRN) right away (best effort)
+    try { await srWaMilestones(env, rv.claim_id); } catch (e) { console.error('handover WhatsApp', e.message); }
   }
   return out;
 }
@@ -9894,7 +9896,8 @@ async function srSendWhatsAppVerified(env, row, oldId) {
 const SR_WA_FOLLOWUP_FROM = '2026-11-04 04:30:00';   // UTC — cron never back-fills older cases
 const SR_WA_FOLLOWUP_NAMES = {
   payment_pickup: 'Pickup payment link', product_received: 'Product received',
-  payment_repair: 'Repair payment link', request_delivered: 'Delivered', media_reupload: 'Photos/video upload link', request_closed: 'Request closed'
+  payment_repair: 'Repair payment link', request_delivered: 'Delivered', media_reupload: 'Photos/video upload link', request_closed: 'Request closed',
+  request_delivered_invoice: 'Delivered + tax invoice'
 };
 async function srWaEnsureSent(DB) {
   await DB.prepare('CREATE TABLE IF NOT EXISTS sr_wa_sent (claim_id TEXT, tpl TEXT, ref TEXT, at TEXT DEFAULT (datetime(\'now\')), result TEXT, PRIMARY KEY (claim_id, tpl, ref))').run();
@@ -10012,13 +10015,27 @@ async function srWaMilestones(env, onlyClaimId) {
   let sent = 0;
   for (const row of rows) {
     const have = ((await env.DB.prepare('SELECT tpl FROM sr_wa_sent WHERE claim_id = ?').bind(row.claim_id).all()).results || []).map(x => x.tpl);
-    if (have.includes('product_received') && have.includes('request_delivered')) continue;
+    const delivSent = have.includes('request_delivered') || have.includes('request_delivered_invoice');
+    if (have.includes('product_received') && delivSent) continue;
     const { rev, fwd } = await srCaseLegs(env.DB, row.case_id);
     if (rev && rev.received_at && rev.received_at >= SR_WA_FOLLOWUP_FROM && !have.includes('product_received'))
       if ((await srSendWhatsAppFollowup(env, row, 'product_received', {}, '')).sent) sent++;
-    const fd = fwd && fwd.track_stage === 'Delivered' ? (fwd.delivered_at || '') : '';
-    if (fd && fd >= SR_WA_FOLLOWUP_FROM && !have.includes('request_delivered'))
-      if ((await srSendWhatsAppFollowup(env, row, 'request_delivered', { 'Feedback Token': await srFeedbackToken(env, row) }, '')).sent) sent++;
+    // Delivered back — or collected from us (self-ship, 14-Nov-2026)
+    const fd = fwd && fwd.track_stage === 'Delivered' ? (fwd.delivered_at || '') : (rev && rev.handed_over_at) || '';
+    if (fd && fd >= SR_WA_FOLLOWUP_FROM && !delivSent) {
+      const fb = { 'Feedback Token': await srFeedbackToken(env, row) };
+      // SRN (paid) cases: the same message + the final tax invoice (14-Nov-2026).
+      // Template request_delivered_invoice; falls back to request_delivered if it fails.
+      let res = { sent: false };
+      if (/^SRN-/.test(row.claim_id) || row.warranty_status === 'Out of warranty') {
+        const fin = await rpLatest(env.DB, row.claim_id, 'final').catch(() => null);
+        if (fin && fin.status !== 'void' && fin.invoice_url)
+          res = await srSendWhatsAppFollowup(env, row, 'request_delivered_invoice', Object.assign({}, fb, {
+            'Invoice Number': fin.invoice_number || '', 'Invoice Amount': Number(fin.total || 0).toFixed(2), 'Invoice Link': fin.invoice_url }), '');
+      }
+      if (!res.sent) res = await srSendWhatsAppFollowup(env, row, 'request_delivered', fb, '');
+      if (res.sent) sent++;
+    }
   }
   return { checked: rows.length, sent };
 }
