@@ -2828,7 +2828,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     }
     if (r.job_type === 'Refund') return btn('startrefund', 'Start refund');
     // Step 5 → Step 6 (03-Nov-2026): Send back opens only after "Repair done".
+    // Replace instead (14-Nov-2026): can't be repaired → a new unit goes out; "Back to repair" undoes it
     if (!r.repair_done_at) return btn('repairdone', '&#10003; ' + (/^Replace/.test(r.job_type || '') ? 'Replacement ready' : 'Repair done')) +
+      (/^repair/i.test(r.job_type || '') ? '<button class="case-act" data-act="replace">Replace instead</button>'
+        : r.replace_reason ? '<button class="case-act" data-act="replaceundo">Back to repair</button>' : '') +
       '<button class="case-act" data-act="startrefund">Refund instead</button>';
     // Self-ship (14-Nov-2026): after the repair the customer either collects it, or we deliver
     // (out of warranty: delivery is charged first — Payments).
@@ -3881,6 +3884,42 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     } catch (e) { alert("Couldn't update: " + e.message); btn.disabled = false; }
   }
 
+  // Replace instead (14-Nov-2026): Repair → Replacement with a reason; send back
+  // then goes out as a Replacement (GP gatepass). Undo = Back to repair.
+  var REPLACE_REASONS = ['Not repairable', 'Part not available', 'Other'];
+  function replaceSwitchPanel(c, btn, undo) {
+    if (undo) {
+      if (!confirm(c.caseNo + ': go back to repairing this machine (no replacement)?')) return;
+      return replaceSwitch(c, btn, { undo: true });
+    }
+    var panel = document.getElementById('cm-confirm'); if (!panel) return;
+    panel.innerHTML = '<div class="cm-sec-title" style="margin-bottom:8px">Replace instead · a new unit goes to the customer</div>' +
+      '<div class="cm-summary"><div class="span2"><div class="cm-k">Reason</div><select class="sb-input" id="rpl-why">' +
+        REPLACE_REASONS.map(function (x) { return '<option>' + x + '</option>'; }).join('') + '</select>' +
+        '<input class="sb-input" id="rpl-other" maxlength="150" placeholder="Reason" hidden></div></div>' +
+      '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
+        '<button class="case-act primary" id="rpl-go">Switch to Replacement</button><button class="case-act" id="rpl-no">Cancel</button>' +
+        '<span class="cm-muted" style="margin-left:auto">Send back will go out as a Replacement (GP — take the gatepass).</span></div>';
+    panel.hidden = false;
+    var sel = document.getElementById('rpl-why'), oth = document.getElementById('rpl-other');
+    sel.addEventListener('change', function () { oth.hidden = sel.value !== 'Other'; if (!oth.hidden) oth.focus(); });
+    document.getElementById('rpl-no').addEventListener('click', function () { panel.hidden = true; panel.innerHTML = ''; });
+    document.getElementById('rpl-go').addEventListener('click', function () {
+      var why = sel.value === 'Other' ? oth.value.trim() : sel.value;
+      if (!why) { alert('Write the reason.'); return; }
+      replaceSwitch(c, this, { reason: why });
+    });
+    panel.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+  async function replaceSwitch(c, btn, body) {
+    btn.disabled = true;
+    try {
+      var res = await post('delhiveryReplaceSwitch', Object.assign({ order_id: c.reverse.order_id }, body));
+      if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
+      await reopenCase(c.id);
+    } catch (e) { alert("Couldn't update: " + e.message); btn.disabled = false; }
+  }
+
   // RTO parcel back with us → Received, or Close case (with an optional reason).
   async function rtoAction(c, btn) {
     var f = c.forward, body = { order_id: f.order_id }, act;
@@ -3903,6 +3942,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   async function caseAction(c, btn) {
     if (btn.dataset.act === 'repairdone') return repairDoneAction(c, btn, false);
     if (btn.dataset.act === 'repairundo') return repairDoneAction(c, btn, true);
+    if (btn.dataset.act === 'replace' || btn.dataset.act === 'replaceundo') return replaceSwitchPanel(c, btn, btn.dataset.act === 'replaceundo');
     if (btn.dataset.act === 'sendback') return startSendBack(c, btn);
     if (btn.dataset.act === 'resend') return startResend(c, btn);
     if (btn.dataset.act === 'rtorecv' || btn.dataset.act === 'rtoclose') return rtoAction(c, btn);

@@ -1407,6 +1407,7 @@ const ACTION_TIERS = {
   delhiveryApproveRefund: 'manager_up', // + handler allows only admins and 'shikhar' (always enforced)
   delhiveryMarkInProcess: 'manager_up', delhiveryCancelCase: 'admin_only',
   delhiveryRepairDone: 'manager_up', // Step 5 done (Repair done / Replacement ready) → unlocks Send back
+  delhiveryReplaceSwitch: 'manager_up', // Repair → Replacement (can't be repaired) / back to repair (14-Nov-2026)
   // Customer's own order ID (Flipkart / Amazon / Shopify) on a case + live lookup.
   ccSetOrderId: 'manager_up', ccOrderLookup: 'viewer_read',
   // Dashboard "Raise ticket" — record (or clear) a courier escalation ticket on one leg.
@@ -5167,6 +5168,37 @@ export default {
         //   Needs the parcel received. Out-of-warranty requests billed with
         //   Zoho advances also need Step 2 of Payments paid or "Not repaired".
         //   Undo only while no send-back is booked.
+        // ── Replace instead (14-Nov-2026): the machine can't be repaired → a new
+        //   unit goes out. Switches the Repair case to Replacement (send back is
+        //   then booked as Replacement → GP gatepass). Body: { order_id, reason, undo }.
+        //   Only before Step 5 is done and while no send-back is booked.
+        if (act === 'delhiveryReplaceSwitch') {
+          await ensureDelhiveryTable(env.DB);
+          const oid = String(body.order_id || '').trim();
+          if (!oid) return json({ ok: false, error: 'order_id required' }, 400);
+          const who = ((await resolveSession(request, env.DB)) || {}).username || 'unknown';
+          const rv = await env.DB.prepare("SELECT * FROM delhivery_orders WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1").bind(oid).first();
+          if (!rv) return json({ ok: false, error: 'No case with that Order ID' }, 404);
+          if (!rv.received_at) return json({ ok: false, error: 'Mark the parcel Received first' }, 400);
+          if (rv.refunded_at || rv.resolution === 'refund') return json({ ok: false, error: 'This case is on the refund path.' }, 400);
+          if (rv.linked_order_id) {
+            const fw = await env.DB.prepare("SELECT track_stage, cancelled_at FROM delhivery_orders WHERE order_id = ? AND delhivery_ok = 1").bind(rv.linked_order_id).first();
+            if (fw && !fw.cancelled_at && fw.track_stage !== 'Cancelled') return json({ ok: false, error: 'A send-back is already booked — cancel it first.' }, 400);
+          }
+          if (body.undo) {
+            if (!rv.replace_reason) return json({ ok: false, error: 'This case was not switched to Replacement.' }, 400);
+            await env.DB.prepare("UPDATE delhivery_orders SET job_type = 'Repair', replace_reason = NULL, repair_done_at = NULL, repair_done_by = NULL WHERE order_id = ?").bind(oid).run();
+            if (rv.claim_id) await srAddEvent(env.DB, rv.claim_id, { by: who, kind: 'note', note: 'Back to repair (Replacement undone)' }, {});
+            return json({ ok: true });
+          }
+          if (!/^repair/i.test(rv.job_type || '')) return json({ ok: false, error: 'Only Repair cases can switch to Replacement.' }, 400);
+          if (rv.repair_done_at) return json({ ok: false, error: 'Repair is already marked done — reopen it first.' }, 400);
+          const reason = String(body.reason || '').replace(/\s+/g, ' ').trim().slice(0, 200) || 'Not repairable';
+          await env.DB.prepare("UPDATE delhivery_orders SET job_type = 'Replacement', replace_reason = ? WHERE order_id = ?").bind(reason, oid).run();
+          if (rv.claim_id) await srAddEvent(env.DB, rv.claim_id, { by: who, kind: 'note', note: 'Switched to Replacement — ' + reason }, {});
+          return json({ ok: true });
+        }
+
         if (act === 'delhiveryRepairDone') {
           await ensureDelhiveryTable(env.DB);
           const oid = String(body.order_id || '').trim();
@@ -6555,6 +6587,8 @@ async function ensureDelhiveryTable(DB) {
                      'cust_called_at TEXT', 'cust_called_by TEXT',
                      // Step 5 "Inspection & Repair" finished (03-Nov-2026) — unlocks Send back.
                      'repair_done_at TEXT', 'repair_done_by TEXT',
+                     // Repair switched to Replacement at Step 5 (14-Nov-2026) — set = switched (reason), cleared by undo
+                     'replace_reason TEXT',
                      // claim_id — the website request (WRN-/SRN-…) this shipment belongs to.
                      // The Dashboard shows it as the case ID (29-Oct-2026). Set on approve,
                      // by Care Desk bookings, and copied to the send-back forward.
