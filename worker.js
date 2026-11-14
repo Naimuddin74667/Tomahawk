@@ -1416,6 +1416,8 @@ const ACTION_TIERS = {
   // Self-ship reverse case (customer sends it via Speed Post / any courier — no booking)
   // + update its tracking no. / mark it arrived at our warehouse.
   selfShipCreate: 'manager_up', selfShipUpdate: 'manager_up',
+  // Self-ship case: customer collects the repaired product from us (14-Nov-2026)
+  ccHandOver: 'manager_up',
   // Dashboard "Called" — team phoned the customer after a failed delivery attempt.
   ccMarkCalled: 'manager_up',
   // Refund flow — customer bank-details form (NEFT). The two public actions
@@ -5184,7 +5186,13 @@ export default {
             try {
               await ensureRepairPaymentsTable(env.DB);
               const l = await rpLatest(env.DB, rv.claim_id, 'logistics');
-              if (l && l.doc_type === 'retainer' && l.status !== 'void') {
+              // Self-ship out of warranty: no Step 1 advance, but service & parts still applies
+              let selfOow = false;
+              if (rv.courier === 'Self-ship') {
+                const cl = await env.DB.prepare('SELECT warranty_status FROM warranty_claims WHERE claim_id = ?').bind(rv.claim_id).first();
+                selfOow = !!cl && cl.warranty_status !== 'Under warranty';
+              }
+              if (selfOow || (l && l.doc_type === 'retainer' && l.status !== 'void')) {
                 const rp = await rpLatest(env.DB, rv.claim_id, 'repair');
                 if (!rp || !['paid', 'skipped'].includes(rp.status))
                   return json({ ok: false, error: rp && rp.status === 'pending'
@@ -5453,6 +5461,19 @@ export default {
           }
           if (!r.meta || !r.meta.changes) return json({ ok: false, error: 'No open self-ship case with that Order ID' }, 404);
           return json({ ok: true });
+        }
+
+        // ── Customer collects (14-Nov-2026) — self-ship case, repair done, the
+        //   customer takes the product from us: no send-back, no delivery charge.
+        //   Body: { order_id }. Closes the case; out-of-warranty → final invoice
+        //   made here from whatever was paid (service & parts).
+        if (act === 'ccHandOver') {
+          await ensureDelhiveryTable(env.DB);
+          const oid = String(body.order_id || '').trim();
+          if (!oid) return json({ ok: false, error: 'order_id required' }, 400);
+          const user = (await resolveSession(request, env.DB)) || {};
+          const r = await ccHandOver(env, user, oid);
+          return json(r, r.ok ? 200 : 400);
         }
 
         // ── Dashboard "Called" — the team phoned the customer after a failed
@@ -6527,6 +6548,8 @@ async function ensureDelhiveryTable(DB) {
                      // Self-ship reverse case (courier = 'Self-ship'): which courier the customer
                      // used (Speed Post / DTDC / …). waybill = their tracking no. (may be blank).
                      'self_courier TEXT',
+                     // Customer collected the product from us instead of a send-back (14-Nov-2026)
+                     'handed_over_at TEXT', 'handed_over_by TEXT',
                      // Forward leg: team phoned the customer after a failed delivery attempt
                      // (Dashboard "Called"). A newer failed attempt brings the case back.
                      'cust_called_at TEXT', 'cust_called_by TEXT',
@@ -7612,7 +7635,7 @@ async function srAction(env, user, b) {
     sets.case_id = caseId;
   }
   let emailed = false;
-  if (k.subject) {
+  if (k.subject && !(kind === 'approve' && b.self_ship === true)) {
     // Send FOC part (07-Nov-2026): approve with a free part instead of a pickup
     const focApprove = kind === 'approve' && b.foc === true;
     const lines = [focApprove ? SR_FOC_TEXT : SR_DEFAULT_TEXT[kind]];
@@ -8327,6 +8350,13 @@ async function rpCreate(env, user, b) {
   if (open) return { ok: false, error: 'A ' + (kind === 'logistics' ? 'pickup & delivery' : 'repair') + ' payment link already exists for this request. Refresh to see it.' };
   if (await rpLatest(env.DB, claimId, 'final')) return { ok: false, error: 'The final invoice is already made for this request — no new advances.' };
 
+  // Self-ship (14-Nov-2026): the 'logistics' advance is the return delivery only,
+  // sent after service & parts is settled, when the customer wants it delivered.
+  const selfShip = await srIsSelfShip(env.DB, row.case_id);
+  if (selfShip && kind === 'logistics') {
+    const rp = await rpLatest(env.DB, claimId, 'repair');
+    if (!rp || !['paid', 'skipped'].includes(rp.status)) return { ok: false, error: 'Settle the service & spare parts payment (or Not repaired) first — delivery is charged after that.' };
+  }
   const z = await rpZohoContext(env, row);
   if (z.error) return { ok: false, error: z.error };
   // Line SAC is carried into the final invoice (lines_json keeps label + amount).
@@ -8338,7 +8368,7 @@ async function rpCreate(env, user, b) {
     // where the advance is adjusted.
     line_items: lines.map((l, i) => ({ description: l.label + ' (incl. ' + ZB_GST_RATE + '% GST) · ' + (kind === 'repair' ? (row.product || '') + ' · ' : '') + claimId,
       item_order: i + 1, rate: rpWithGst(l.amount) })),
-    notes: 'Advance for ' + (kind === 'logistics' ? 'pickup and return delivery' : 'service and spare parts') + ', service request ' + claimId +
+    notes: 'Advance for ' + (kind === 'logistics' ? (selfShip ? 'return delivery' : 'pickup and return delivery') : 'service and spare parts') + ', service request ' + claimId +
       '. The full tax invoice is issued when your request is closed. Thank you for choosing TOMAHAWK® Tools.',
     payment_options: { payment_gateways: [{ gateway_name: 'razorpay', configured: true }] }
   };
@@ -8364,7 +8394,12 @@ async function rpCreate(env, user, b) {
   let emailed = false;
   if (url) {
     const tot = '₹' + total.toFixed(2);
-    emailed = await srEmailCustomer(env, row, kind === 'logistics' ? 'Pickup & delivery payment' : 'Repair payment', kind === 'logistics' ? [
+    emailed = await srEmailCustomer(env, row, kind === 'logistics' ? (selfShip ? 'Delivery payment' : 'Pickup & delivery payment') : 'Repair payment', kind === 'logistics' && selfShip ? [
+      'Please pay the delivery charges to send your repaired product back to you. Total payable (incl. 18% GST): ' + tot + '.',
+      'Advance no.: ' + number,
+      'Pay securely online here: ' + url,
+      'We dispatch your product as soon as the payment is received. You get one full tax invoice when your request is closed.'
+    ] : kind === 'logistics' ? [
       'As agreed, please pay the pickup and return delivery charges for your product. Total payable (incl. 18% GST): ' + tot + '.',
       'Advance no.: ' + number,
       'Pay securely online here: ' + url,
@@ -8377,14 +8412,14 @@ async function rpCreate(env, user, b) {
     ]);
   }
   await srAddEvent(env.DB, claimId, { by, kind: 'payment_link',
-    note: RP_STEP_NAME[kind] + ' advance · ' + number + ' · ₹' + total.toFixed(2) + ' (₹' + amount.toFixed(2) + ' + GST) · ' + desc, emailed }, {});
+    note: (selfShip && kind === 'logistics' ? 'Return delivery' : RP_STEP_NAME[kind]) + ' advance · ' + number + ' · ₹' + total.toFixed(2) + ' (₹' + amount.toFixed(2) + ' + GST) · ' + desc, emailed }, {});
   // WhatsApp payment_pickup / payment_repair with the Pay Now link (best effort)
   let wa = { sent: false };
   const tok = rpPayToken(url);
   if (tok) {
     const f = { 'Payment Amount': total.toFixed(2), 'Payment Token': tok };
-    if (kind !== 'logistics') f['Repair Details'] = desc || 'Service & spare parts';
-    try { wa = await srSendWhatsAppFollowup(env, row, kind === 'logistics' ? 'payment_pickup' : 'payment_repair', f, number, by); }
+    if (kind !== 'logistics' || selfShip) f['Repair Details'] = kind === 'logistics' ? 'Return delivery charges' : (desc || 'Service & spare parts');
+    try { wa = await srSendWhatsAppFollowup(env, row, kind === 'logistics' && !selfShip ? 'payment_pickup' : 'payment_repair', f, number, by); }
     catch (e) { wa = { sent: false, error: e.message }; }
   }
   return { ok: true, emailed, whatsapp: !!wa.sent, payment: await rpLatest(env.DB, claimId, kind) };
@@ -8411,7 +8446,10 @@ async function rpFinal(env, user, claimId) {
   if (adv.some(p => p.status !== 'skipped' && p.doc_type !== 'retainer')) return { ok: false, error: 'This request was billed the old way (normal invoices) — no final invoice needed.' };
   if (adv.some(p => p.status === 'pending')) return { ok: false, error: 'An advance link is still unpaid. Wait for the payment, or cancel that link first.' };
   const paid = adv.filter(p => p.status === 'paid');
-  if (!paid.some(p => p.kind === 'logistics')) return { ok: false, error: 'Step 1 (pickup & delivery) must be paid before the final invoice.' };
+  // Self-ship (14-Nov-2026): no pickup advance — any paid advance is enough.
+  const selfShip = await srIsSelfShip(env.DB, row.case_id);
+  if (selfShip ? !paid.length : !paid.some(p => p.kind === 'logistics'))
+    return { ok: false, error: selfShip ? 'Nothing has been paid on this request — no final invoice needed.' : 'Step 1 (pickup & delivery) must be paid before the final invoice.' };
 
   const z = await rpZohoContext(env, row);
   if (z.error) return { ok: false, error: z.error };
@@ -8793,9 +8831,59 @@ async function lqQuote(env, claimId, ov) {
 }
 
 // ── Where is the linked pickup case? (reverse leg + its send-back leg) ──
+// Self-ship case (14-Nov-2026): the customer sent the product themselves, so
+// there is no pickup charge. Out of warranty: service & parts is paid first;
+// the return delivery charge (kind 'logistics', -A) only if we deliver it back.
+async function srIsSelfShip(DB, caseId) {
+  if (!caseId) return false;
+  const r = await DB.prepare("SELECT 1 FROM delhivery_orders WHERE order_id = ? AND courier = 'Self-ship' AND delhivery_ok = 1 LIMIT 1").bind(caseId).first();
+  return !!r;
+}
+
+async function ccHandOver(env, user, oid) {
+  const rv = await env.DB.prepare("SELECT * FROM delhivery_orders WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1").bind(oid).first();
+  if (!rv) return { ok: false, error: 'No case with that Order ID' };
+  if (rv.courier !== 'Self-ship') return { ok: false, error: 'Customer collect is only for self-shipped cases.' };
+  if (rv.handed_over_at) return { ok: true, already: true };
+  if (!rv.received_at) return { ok: false, error: 'Mark the parcel Received first' };
+  if (!rv.repair_done_at) return { ok: false, error: 'Mark "Repair done" first' };
+  if (rv.refunded_at || rv.resolution === 'refund') return { ok: false, error: 'This case is on the refund path.' };
+  if (rv.linked_order_id) {
+    const fw = await env.DB.prepare("SELECT track_stage, cancelled_at FROM delhivery_orders WHERE order_id = ? AND delhivery_ok = 1").bind(rv.linked_order_id).first();
+    if (fw && !fw.cancelled_at && fw.track_stage !== 'Cancelled') return { ok: false, error: 'A send-back is already booked — cancel it first.' };
+  }
+  let claim = null;
+  if (rv.claim_id) {
+    await ensureRepairPaymentsTable(env.DB);
+    claim = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(rv.claim_id).first();
+    if (claim && claim.warranty_status !== 'Under warranty') {
+      const rp = await rpLatest(env.DB, rv.claim_id, 'repair');
+      if (!rp || !['paid', 'skipped'].includes(rp.status)) return { ok: false, error: 'The service & spare parts payment is not settled yet (Payments).' };
+      const l = await rpLatest(env.DB, rv.claim_id, 'logistics');
+      if (l && l.status === 'pending') return { ok: false, error: 'A delivery payment link is open — cancel it under Payments first (no delivery when the customer collects).' };
+    }
+  }
+  const by = (user && user.username) || 'unknown';
+  await env.DB.prepare('UPDATE delhivery_orders SET handed_over_at = ?, handed_over_by = ? WHERE order_id = ?').bind(new Date().toISOString(), by, oid).run();
+  const out = { ok: true };
+  if (rv.claim_id) {
+    await srAddEvent(env.DB, rv.claim_id, { by, kind: 'handed_over', note: 'Customer collected the product from us — case closed' },
+      { status: 'closed', m_delivered_at: new Date().toISOString() });
+    // Final invoice from whatever was paid (service & parts) — same as a send-back
+    if (claim && claim.warranty_status !== 'Under warranty' && zbConfigured(env)) {
+      const paid = (await env.DB.prepare("SELECT 1 FROM repair_payments WHERE claim_id = ? AND status = 'paid' AND doc_type = 'retainer' LIMIT 1").bind(rv.claim_id).first());
+      if (paid && !(await rpLatest(env.DB, rv.claim_id, 'final'))) {
+        try { const f = await rpFinal(env, user, rv.claim_id); if (!f.ok) out.finalError = f.error; else if (f.applyError) out.finalError = f.applyError; }
+        catch (e) { out.finalError = e.message; }
+      }
+    }
+  }
+  return out;
+}
+
 async function srCaseLegs(DB, caseId) {
   if (!caseId) return { rev: null, fwd: null };
-  const rev = await DB.prepare("SELECT order_id, waybill, courier, track_stage, received_at, in_process_at, delivered_at, cancelled_at, linked_order_id, refunded_at, resolution, created_at FROM delhivery_orders WHERE order_id = ? AND delhivery_ok = 1 ORDER BY id DESC LIMIT 1").bind(caseId).first();
+  const rev = await DB.prepare("SELECT order_id, waybill, courier, self_courier, track_stage, received_at, in_process_at, delivered_at, cancelled_at, linked_order_id, refunded_at, resolution, handed_over_at, created_at FROM delhivery_orders WHERE order_id = ? AND delhivery_ok = 1 ORDER BY id DESC LIMIT 1").bind(caseId).first();
   let fwd = null;
   if (rev && rev.linked_order_id) {
     fwd = await DB.prepare("SELECT order_id, waybill, courier, track_stage, rtd_at, delivered_at, created_at FROM delhivery_orders WHERE order_id = ? AND delhivery_ok = 1 ORDER BY id DESC LIMIT 1").bind(rev.linked_order_id).first();
@@ -8834,6 +8922,12 @@ function srSteps(row, legs) {
   steps.push({ key: 'picked', state: picked ? 'done' : 'now', courier: rev && rev.courier || null, awb: rev && rev.waybill || null, stage: rev && rev.track_stage || null });
   steps.push({ key: 'reached', state: reached ? 'done' : (picked ? 'now' : 'todo'), at: rev && rev.received_at || null });
   if (refunded) { steps.push({ key: 'refunded', state: 'done', at: rev.refunded_at }); return { steps, final: true }; }
+  if (rev && rev.handed_over_at) {   // customer collected it from us (14-Nov-2026)
+    steps.push({ key: 'repair', state: 'done' });
+    steps.push({ key: 'sent', state: 'done', note: 'Collected by you' });
+    steps.push({ key: 'delivered', state: 'done', at: rev.handed_over_at, note: 'Collected by you' });
+    return { steps, final: true };
+  }
   steps.push({ key: 'repair', state: sent ? 'done' : (reached ? 'now' : 'todo') });
   steps.push({ key: 'sent', state: delivered ? 'done' : (sent ? 'now' : 'todo'), courier: fwd && fwd.courier || null, awb: sent ? fwd.waybill : null, stage: fwd && fwd.track_stage || null });
   steps.push({ key: 'delivered', state: delivered ? 'done' : 'todo', at: fwd && fwd.delivered_at || null });
