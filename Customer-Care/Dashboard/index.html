@@ -366,6 +366,7 @@ body.cc-fit .pager { padding: 6px 0 4px; margin-top: 0; }
 .b-blue { background: color-mix(in srgb, var(--text) 15%, transparent); color: var(--text); }
 .b-gray { background: var(--surface2); color: var(--text2); }
 .b-red { background: color-mix(in srgb, var(--red) 15%, transparent); color: var(--red); }
+.rep-chip { font-family: inherit; font-size: 10px; padding: 2px 7px; margin-left: 4px; vertical-align: middle; white-space: nowrap; }
 /* Ticket TAT cell: days number + priority/SLA pill (reuses badge colours) */
 .tat-d { font-family: var(--font-display); font-weight: 800; font-size: 14px; white-space: nowrap; }
 .tat-d.breach { color: var(--red); }
@@ -2707,7 +2708,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       // (AWB/courier = the leg moving now; full details in the case popup).
       var lg = liveLeg(c) || c.forward || c.reverse;
       tr.innerHTML =
-        '<td class="mono" title="' + esc(caseLegIds(c)) + '">' + esc(c.caseNo) + (c.attempt > 1 ? ' <span class="att-chip" title="Sent again after an RTO — attempt ' + c.attempt + '">&#8635;' + c.attempt + '</span>' : '') + stepsMini(computeSteps(c, caseRequest(c), null)) + '</td>' +
+        '<td class="mono" title="' + esc(caseLegIds(c)) + '">' + esc(c.caseNo) + repeatChip(caseRequest(c)) + (c.attempt > 1 ? ' <span class="att-chip" title="Sent again after an RTO — attempt ' + c.attempt + '">&#8635;' + c.attempt + '</span>' : '') + stepsMini(computeSteps(c, caseRequest(c), null)) + '</td>' +
         '<td>' + esc(c.type) + '</td>' +
         '<td class="name-cell" title="' + esc(c.city || '') + '">' + esc(c.customer || '—') + '</td>' +
         '<td class="prod-cell" title="' + esc(c.product || '') + '">' + esc(c.product || '—') + '</td>' +
@@ -4615,6 +4616,16 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   }
   function reqCaseStatus(r) { var c = reqCase(r); return c && c.st ? c.st.label : ''; }
 
+  // Repeat claim (14-Nov-2026): same order came back after we delivered it.
+  //   priority = within 30 days → HIGH PRIORITY (red) · used = warranty already used → paid (SRN)
+  function repeatChip(r) {
+    if (!r || !r.repeat_kind) return '';
+    var tip = (r.repeat_kind === 'priority' ? 'Came back within 30 days of our delivery' : 'Warranty already used — chargeable') +
+      ' · earlier: ' + (r.repeat_of || '') + (r.repeat_delivered_at ? ' (delivered ' + shortWhen(r.repeat_delivered_at) + ')' : '');
+    return r.repeat_kind === 'priority'
+      ? ' <span class="badge b-red rep-chip" title="' + esc(tip) + '">&#9888; Repeat · High priority</span>'
+      : ' <span class="badge b-gray rep-chip" title="' + esc(tip) + '">Repeat · Warranty used</span>';
+  }
   function renderRequests() {
     var chips = document.getElementById('req-chips');
     // Slim cards (04-Nov-2026): the 4 working filters, then Closed (greyed). No "All" card —
@@ -4650,6 +4661,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       });
       renderReqPager(0, 1); return;
     }
+    // High-priority repeats first (still open), then the usual order
+    var hp = function (r) { return r.repeat_kind === 'priority' && ['closed', 'not_covered'].indexOf(r.status) === -1 ? 0 : 1; };
+    rows = rows.map(function (r, i) { return [r, i]; }).sort(function (a, b) { return hp(a[0]) - hp(b[0]) || a[1] - b[1]; }).map(function (x) { return x[0]; });
     var total = rows.length, totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (reqPage > totalPages) reqPage = totalPages;
     if (reqPage < 1) reqPage = 1;
@@ -4661,7 +4675,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var st = REQ_STATUS[r.status || 'new'] || [r.status, 'b-gray'];
       var cs = reqCaseStatus(r);
       return '<tr class="case-row' + ((r.status || 'new') === 'new' ? ' attn' : '') + '" data-id="' + esc(r.claim_id) + '">' +
-        '<td class="mono">' + esc(r.claim_id) + '<div class="sub">' + esc(fmtWhen(r.created_at)) + (r.prev_claim_id ? ' · was ' + esc(r.prev_claim_id) : '') + '</div>' + stepsMini(computeSteps(reqCase(r), r, null)) + '</td>' +
+        '<td class="mono">' + esc(r.claim_id) + repeatChip(r) + '<div class="sub">' + esc(fmtWhen(r.created_at)) + (r.prev_claim_id ? ' · was ' + esc(r.prev_claim_id) : '') + '</div>' + stepsMini(computeSteps(reqCase(r), r, null)) + '</td>' +
         '<td>' + esc(r.name) + '</td>' +
         '<td>' + esc(r.platform || '\u2014') + '</td>' +
         '<td class="mono">' + esc(r.order_id || '\u2014') + '</td>' +
@@ -4686,7 +4700,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     openCaseId = null; openReqId = id; payView = 'req'; payClaim = id;
     var st = REQ_STATUS[r.status || 'new'] || [r.status, 'b-gray'];
     document.getElementById('case-title').textContent = r.claim_id;
-    document.getElementById('case-sub').innerHTML = 'Received ' + esc(fmtWhen(r.created_at)) + ageText(r.created_at) + ' &nbsp; <span class="badge ' + st[1] + '">' + esc(st[0]) + '</span>';
+    document.getElementById('case-sub').innerHTML = 'Received ' + esc(fmtWhen(r.created_at)) + ageText(r.created_at) + ' &nbsp; <span class="badge ' + st[1] + '">' + esc(st[0]) + '</span>' + repeatChip(r) +
+      (r.repeat_of ? ' <span class="muted">· earlier ' + esc(r.repeat_of) + '</span>' : '');
     var f = function (k, v, cls) { return '<div' + (cls ? ' class="' + cls + '"' : '') + '><div class="cm-k">' + k + '</div><div>' + (v ? esc(v) : '&#8212;') + '</div></div>'; };
     var addr = [r.address, r.city, r.state, r.pincode].filter(Boolean).join(', ');
     var w = r.warranty_status + (r.warranty_until ? ' (until ' + r.warranty_until + ')' : '');

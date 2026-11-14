@@ -2086,7 +2086,7 @@ export default {
         await ensureServiceRequestCols(env.DB);
         const days = Math.min(365, Math.max(1, parseInt(url.searchParams.get('days') || '90', 10) || 90));
         const rows = (await env.DB.prepare(
-          "SELECT claim_id, created_at, updated_at, order_id, platform, product, name, phone, email, issue_type, description, address, pincode, city, state, warranty_status, order_date, warranty_until, order_skus, file_count, status, case_id, events_json, prev_claim_id, confirmed_sku, confirmed_product FROM warranty_claims WHERE created_at > datetime('now', ?) OR COALESCE(status, 'new') NOT IN ('closed','not_covered') ORDER BY created_at DESC LIMIT 500"
+          "SELECT claim_id, created_at, updated_at, order_id, platform, product, name, phone, email, issue_type, description, address, pincode, city, state, warranty_status, order_date, warranty_until, order_skus, file_count, status, case_id, events_json, prev_claim_id, confirmed_sku, confirmed_product, repeat_of, repeat_kind, repeat_delivered_at FROM warranty_claims WHERE created_at > datetime('now', ?) OR COALESCE(status, 'new') NOT IN ('closed','not_covered') ORDER BY created_at DESC LIMIT 500"
         ).bind('-' + days + ' days').all()).results || [];
         return json({ ok: true, requests: rows.map(r => ({ ...r, events: srEvents(r), events_json: undefined })) });
       }
@@ -7529,6 +7529,10 @@ const SR_KINDS = {
 async function ensureServiceRequestCols(DB) {
   await ensureWarrantyClaimsTable(DB);
   for (const col of ['case_id TEXT', 'events_json TEXT', 'updated_at TEXT', 'files_json TEXT',
+                     // Repeat claim (14-Nov-2026): same order came back after we delivered it.
+                     // repeat_of = earlier request / case ID · repeat_kind = 'priority' (≤30 days,
+                     // high priority, covered) | 'used' (>30 days, warranty already used → SRN)
+                     'repeat_of TEXT', 'repeat_kind TEXT', 'repeat_delivered_at TEXT',
                      'm_picked_at TEXT', 'm_received_at TEXT', 'm_sent_at TEXT', 'm_delivered_at TEXT',
                      'prev_claim_id TEXT',
                      // Product the team confirmed while verifying an NV- request (29-Oct-2026):
@@ -10069,13 +10073,23 @@ async function submitWarrantyClaim(env, b, ip) {
   // Fetch our own order facts (never trust the browser for these).
   let w = { found: false };
   try { w = await warrantyLookup(env, f.order_id); } catch (e) { /* lookup down — claim still goes through */ }
-  const warrantyStatus = !w.found ? 'Order not verified' : w.cancelled ? 'Order cancelled'
+  let warrantyStatus = !w.found ? 'Order not verified' : w.cancelled ? 'Order cancelled'
     : w.under_warranty ? 'Under warranty' : 'Out of warranty';
+  // Repeat claim (14-Nov-2026): we already serviced this order and delivered it back.
+  //   ≤ 30 days since delivery → high priority, covered again (WRN)
+  //   > 30 days               → warranty claim already used → chargeable (SRN)
+  let repeat = null;
+  try { repeat = await srLastDelivery(env.DB, orderKey); } catch (e) { console.error('repeat check failed:', e.message); }
+  if (repeat) {
+    const days = (Date.now() - repeat.ms) / 864e5;
+    repeat.kind = days <= SR_REPEAT_DAYS ? 'priority' : 'used';
+    warrantyStatus = repeat.kind === 'priority' ? 'Under warranty' : 'Out of warranty';
+  }
   const skus = w.found ? (w.items || []).map(it => it.sku + (it.qty > 1 ? ' x' + it.qty : '')).join(', ') : '';
   // Out-of-warranty charges agreement (website checkbox, field charges_consent: true).
   // Enforced only once the website sends it — turn on with Worker var REQUIRE_CHARGES_CONSENT = '1'.
   const chargesConsent = b.charges_consent === true;
-  if (warrantyStatus === 'Out of warranty' && !chargesConsent && env.REQUIRE_CHARGES_CONSENT === '1')
+  if (warrantyStatus === 'Out of warranty' && !chargesConsent && env.REQUIRE_CHARGES_CONSENT === '1' && !repeat)
     throw claimErr('Your product is out of warranty. Please tick that you agree to pay the pickup, delivery, service and spare-part charges.');
 
   // Claim ID: <prefix>-YYMMDD-NN (IST date, per-day serial per prefix).
@@ -10120,6 +10134,15 @@ async function submitWarrantyClaim(env, b, ip) {
     text, attachments: files.map((x, i) => ({ ...x, filename: claimId + '_' + (i + 1) + '_' + x.filename }))
   });
   await env.DB.prepare("UPDATE warranty_claims SET emailed_at = datetime('now') WHERE claim_id = ?").bind(claimId).run();
+  if (repeat) {
+    try {
+      await env.DB.prepare('UPDATE warranty_claims SET repeat_of = ?, repeat_kind = ?, repeat_delivered_at = ? WHERE claim_id = ?')
+        .bind(repeat.ref, repeat.kind, repeat.at, claimId).run();
+      await srAddEvent(env.DB, claimId, { by: 'system', kind: 'note', note: repeat.kind === 'priority'
+        ? 'REPEAT — HIGH PRIORITY: same order came back within ' + SR_REPEAT_DAYS + ' days of our delivery (' + repeat.ref + ', delivered ' + repeat.at.slice(0, 10) + ')'
+        : 'Warranty claim already used on this order (' + repeat.ref + ', delivered ' + repeat.at.slice(0, 10) + ') — chargeable service request' }, {});
+    } catch (e) { console.error('repeat mark failed:', e.message); }
+  }
   if (chargesConsent) {
     try { await srAddEvent(env.DB, claimId, { by: 'customer', kind: 'consent',
       note: 'Agreed on the website to pay pickup, delivery, service and spare-part charges if out of warranty' }, {}); }
@@ -10149,7 +10172,43 @@ async function submitWarrantyClaim(env, b, ip) {
       await srAddEvent(env.DB, claimId, { by: 'system', kind: 'note', note: 'Confirmation email sent to customer (' + via + ')' }, {});
     } catch (e) { console.error('claim confirmation email failed:', e.message); }
   }
-  return { ok: true, claim_id: claimId, warranty_status: warrantyStatus };
+  return { ok: true, claim_id: claimId, warranty_status: warrantyStatus,
+    ...(repeat ? { repeat: repeat.kind, notice: repeat.kind === 'priority' ? SR_REPEAT_NOTICE : SR_USED_NOTICE } : {}) };
+}
+
+// Repeat claims (14-Nov-2026)
+const SR_REPEAT_DAYS = 30;
+const SR_REPEAT_NOTICE = 'We see we serviced this product recently. Your request is marked high priority and our team will contact you soon.';
+const SR_USED_NOTICE = 'You have already claimed warranty service for this order. This request is registered as a paid service request — repair charges apply.';
+// Latest time we delivered this order's product back to the customer after a
+// service case (send-back delivered, or collected from us). Matches website
+// requests (order_key) and manual cases (market_order_id).
+// → { ms, at (ISO), ref (request / case ID) } or null
+async function srLastDelivery(DB, orderKey) {
+  if (!orderKey) return null;
+  await ensureDelhiveryTable(DB);
+  const claims = ((await DB.prepare('SELECT claim_id, case_id FROM warranty_claims WHERE order_key = ? AND case_id IS NOT NULL').bind(orderKey).all()).results) || [];
+  const caseIds = claims.map(c => c.case_id);
+  const refOf = {}; claims.forEach(c => { refOf[c.case_id] = c.claim_id; });
+  // Reverse cases for this order: by request link, or by the saved customer order ID
+  const revs = ((await DB.prepare(
+    "SELECT order_id, linked_order_id, handed_over_at, market_order_id, claim_id FROM delhivery_orders WHERE direction = 'reverse' AND delhivery_ok = 1 AND (UPPER(REPLACE(REPLACE(market_order_id, ' ', ''), '#', '')) = ? OR order_id IN (SELECT value FROM json_each(?)))"
+  ).bind(orderKey, JSON.stringify(caseIds)).all()).results) || [];
+  let best = null;
+  const take = (iso, ref) => {
+    const ms = Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : String(iso).replace(' ', 'T') + 'Z');
+    if (!isNaN(ms) && (!best || ms > best.ms)) best = { ms, at: new Date(ms).toISOString(), ref };
+  };
+  for (const r of revs) {
+    const ref = r.claim_id || refOf[r.order_id] || r.order_id;
+    if (r.handed_over_at) take(r.handed_over_at, ref);
+    // Send-back (and any re-send after an RTO) delivered to the customer
+    const fws = ((await DB.prepare(
+      "SELECT delivered_at, tracked_at FROM delhivery_orders WHERE direction = 'forward' AND delhivery_ok = 1 AND cancelled_at IS NULL AND track_stage = 'Delivered' AND (order_id = ? OR linked_order_id = ?)"
+    ).bind(r.linked_order_id || '', r.order_id).all()).results) || [];
+    for (const f of fws) take(f.delivered_at || f.tracked_at, ref);
+  }
+  return best;
 }
 
 // ══════════════════════════════════════════════════════════════════
