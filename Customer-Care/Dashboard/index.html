@@ -4678,7 +4678,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         (!r.case_id && !fin && !isNV(r) && !oow ? '<button type="button" class="case-act" id="req-foc">Send FOC part</button>' : '') +
         // Customer self-shipped (14-Nov-2026): the customer already sent it themselves →
         // save their courier + tracking no., no pickup and no pickup payment.
-        (!r.case_id && !fin && !isNV(r) ? '<button type="button" class="case-act" id="req-self">Customer self-shipped</button>' : '') +
+        // Out of warranty: it sits beside "Get quote & send link" in Payments instead (14-Nov-2026)
+        (!r.case_id && !fin && !isNV(r) && !oow ? '<button type="button" class="case-act" id="req-self">Customer self-shipped</button>' : '') +
         // Customer emails are off for the first go-live, so only status actions
         // are offered (Ask for info / Tip / Repair quote come back with the emails).
         // Ask for photos / video again (04-Nov-2026) — WhatsApp media_reupload with an upload link
@@ -5399,12 +5400,17 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       el.innerHTML = stepHead(kind) +
         '<div class="pay-row"><span class="pay-hint">' + (p ? esc(p.invoice_number || '') + ' was voided. ' : '') + 'No payment link yet.' + hint + '</span>' +
         (canActReq() && !fin && !payState.final ? '<button class="case-act primary" data-new="' + kind + '">' + payDef(kind).btn + '</button>' : '') +
+        // Customer self-shipped — beside the pickup link: no pickup, so no Step 1 link needed
+        (kind === 'logistics' && payView === 'req' && !paySelf() && !r.case_id && canActReq() && !fin
+          ? '<button class="case-act" data-self>Customer self-shipped</button>' : '') +
         // "Not repaired" once Step 1 is paid: no service charge / customer declined → skip Step 2
         // (self-ship: no pickup payment, so straight away)
         (kind === 'repair' && canActReq() && !fin && !payState.final && (paySelf() || (payState.logistics && payState.logistics.status === 'paid'))
           ? '<button class="case-act" data-skip>Not repaired</button>' : '') + '</div>';
       var b = el.querySelector('[data-new]');
       if (b) b.addEventListener('click', function () { kind === 'logistics' ? logisticsForm(r) : repairForm(r); });
+      var ss = el.querySelector('[data-self]');
+      if (ss) ss.addEventListener('click', function () { selfShipPanel(r); });
       var sk = el.querySelector('[data-skip]');
       if (sk) sk.addEventListener('click', async function () {
         var why = prompt('Not repaired — Step 2 payment will be skipped and Send back unlocked.\nReason (optional), e.g. "No fault found" or "Customer declined":', '');
