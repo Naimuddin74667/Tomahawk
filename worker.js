@@ -5703,11 +5703,13 @@ export default {
     // Stock Alert — WhatsApp LOW-stock alerts, 5 min after each out-of-stock
     // slot: the separate '35 3,6,10 * * *' cron = 9:05 / 12:05 / 4:05 PM IST.
     // That tick runs ONLY this job and returns (watchers run on */15 ticks).
-    // Customer Care → Shopify Orders: sync AWBs + courier tracking — its own
-    // '5,35 * * * *' cron (twice an hour) so it never shares a tick's
-    // subrequest budget with the watchers. Each AWB every 2 h at most.
-    if (event.cron === '5,35 * * * *') {
-      ctx.waitUntil(shopShipRefresh(env, false).catch(err => console.error('shopify shipments:', err.message)));
+    // Customer Care → Shopify Orders: courier tracking on its own
+    // '5-59/10 * * * *' cron (every 10 min, :05 :15 … :55) so it never shares a
+    // tick's subrequest budget with the watchers. The :05 run also syncs new
+    // orders + customer names; the others only track (each AWB every 2 h).
+    if (event.cron === '5-59/10 * * * *') {
+      const trackOnly = new Date(event.scheduledTime || Date.now()).getUTCMinutes() >= 10;
+      ctx.waitUntil(shopShipRefresh(env, false, trackOnly).catch(err => console.error('shopify shipments:', err.message)));
       return;
     }
     if (event.cron === '35 3,6,10 * * *') {
@@ -13014,7 +13016,7 @@ function shopShipRto(list, stage) {
   };
 }
 
-async function shopShipTrack(env, force) {
+async function shopShipTrack(env, force, ekartMax) {
   await ensureShopShipTable(env.DB);
   const due = force ? "AND (tracked_at IS NULL OR tracked_at < datetime('now', '-10 minutes'))"
                     : "AND (tracked_at IS NULL OR tracked_at < datetime('now', '-2 hours'))";
@@ -13046,7 +13048,7 @@ async function shopShipTrack(env, force) {
     }
   }
   // Ekart — one public track call each, 10 at a time
-  const eks = await pickRows('Ekart', 30);
+  const eks = await pickRows('Ekart', ekartMax || 30);
   for (let i = 0; i < eks.length; i += 10) {
     await Promise.all(eks.slice(i, i + 10).map(async awb => {
       try {
@@ -13102,7 +13104,7 @@ async function shopShipRefresh(env, force, trackOnly) {
     try { Object.assign(out, await shopShipSync(env)); } catch (e) { out.syncError = e.message; }
     Object.assign(out, await shopShipCustomers(env));
   }
-  try { Object.assign(out, await shopShipTrack(env, force)); } catch (e) { out.trackError = e.message; }
+  try { Object.assign(out, await shopShipTrack(env, force, trackOnly ? 40 : 30)); } catch (e) { out.trackError = e.message; }
   await env.DB.prepare("INSERT OR REPLACE INTO tm_settings (key, value) VALUES ('shop_ship_refreshed', ?)").bind(new Date().toISOString()).run().catch(() => {});
   // Still waiting for a first / fresh track (the page keeps calling while this is > 0)
   const left = await env.DB.prepare(`SELECT COUNT(*) AS n FROM shopify_shipments WHERE received_at IS NULL
