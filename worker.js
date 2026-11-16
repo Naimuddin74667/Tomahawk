@@ -13079,12 +13079,12 @@ async function shopShipCustomers(env) {
       const data = await shopifyGql(env, `query($q: String!, $after: String) {
         orders(first: 250, query: $q, after: $after) {
           pageInfo { hasNextPage endCursor }
-          nodes { id shippingAddress { name city province phone } customer { displayName } }
+          nodes { id shippingAddress { name city province phone } billingAddress { name } }
         } }`, { q: 'created_at:>=' + since, after });
       const o = data && data.orders;
       ((o && o.nodes) || []).forEach(n => {
         const a = n.shippingAddress || {};
-        const name = a.name || (n.customer && n.customer.displayName) || null;
+        const name = a.name || (n.billingAddress && n.billingAddress.name) || null;   // no customer{} — needs read_customers
         stmts.push(env.DB.prepare('UPDATE shopify_shipments SET cust_name = ?, city = ?, phone = ?, cust_checked = 1 WHERE order_id = ?')
           .bind(name, [a.city, a.province].filter(Boolean).join(', ') || null, a.phone || null, String(n.id).split('/').pop()));
       });
