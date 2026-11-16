@@ -1192,6 +1192,7 @@ const ACTION_TIERS = {
   orderCancel: 'public', // public 'Cancel order' on Track Order — order no. + mobile/email must match, only before courier pickup, rate-limited
   invoiceUploadInfo: 'public', invoiceUploadSubmit: 'public', // customer re-uploads the invoice — single-use link token, rate-limited
   ccAnalyticsData: 'viewer_read',  // Customer Care Analysis page (04-Nov-2026)
+  shopShipList: 'viewer_read', shopShipRefresh: 'manager_up', shopShipReceived: 'manager_up', // Customer Care → Shopify Orders (16-Nov-2026)
   ccCloseRequest: 'manager_up',   // Customer Care: close a request with a reason (+ WhatsApp request_closed)
   ccMediaRequest: 'manager_up',   // Customer Care: ask for photos / video again (WhatsApp + upload link)
   ccInvoiceRequest: 'manager_up', // Customer Care: ask the customer to upload the invoice again (makes the link)
@@ -1467,7 +1468,8 @@ const ACTION_TIERS = {
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
 const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
-  'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccPaymentWaive', 'ccLogisticsQuote', 'ccVersion']);
+  'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccPaymentWaive', 'ccLogisticsQuote', 'ccVersion',
+  'shopShipList', 'shopShipRefresh', 'shopShipReceived']);
 
 function getAuthRequirement(act) {
   return ACTION_TIERS[act] || 'manager_up'; // fail-closed default for anything unmapped
@@ -2123,6 +2125,28 @@ export default {
         if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
         const r = await srInvoiceRequest(env, user, body || {});
         return json(r, r.ok ? 200 : 400);
+      }
+      // ── Customer Care → Shopify Orders (16-Nov-2026): Delhivery / Ekart shipments + RTO with reason ──
+      if (request.method === 'GET' && action === 'shopShipList') {
+        try { return json(await shopShipList(env)); }
+        catch (e) { console.error('shopShipList:', e.message); return json({ ok: false, error: e.message }, 500); }
+      }
+      if (request.method === 'POST' && act === 'shopShipRefresh') {
+        try { const r = await shopShipRefresh(env, true); return json({ ok: true, ...r }); }
+        catch (e) { console.error('shopShipRefresh:', e.message); return json({ ok: false, error: e.message }, 500); }
+      }
+      if (request.method === 'POST' && act === 'shopShipReceived') {
+        const user = authResult.user || (await resolveSession(request, env.DB));
+        if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
+        await ensureShopShipTable(env.DB);
+        const awb = String((body || {}).awb || '').trim();
+        if (!awb) return json({ ok: false, error: 'awb required' }, 400);
+        const r = (body || {}).undo
+          ? await env.DB.prepare('UPDATE shopify_shipments SET received_at = NULL, received_by = NULL WHERE awb = ?').bind(awb).run()
+          : await env.DB.prepare('UPDATE shopify_shipments SET received_at = COALESCE(received_at, ?), received_by = COALESCE(received_by, ?) WHERE awb = ?')
+              .bind(new Date().toISOString(), user.username || 'unknown', awb).run();
+        if (!r.meta || !r.meta.changes) return json({ ok: false, error: 'No shipment with that AWB' }, 404);
+        return json({ ok: true });
       }
       // ── Customer Care Analysis (04-Nov-2026): raw rows since ?from=YYYY-MM-DD; the page does the maths ──
       if (request.method === 'GET' && action === 'ccAnalyticsData') {
@@ -5714,6 +5738,10 @@ export default {
     ctx.waitUntil(srWaProcessQueue(env).catch(err => console.error('wa queue:', err.message)));
     // Service requests — WhatsApp "Product received" / "Delivered" follow-ups. */15 ticks.
     ctx.waitUntil(srWaMilestones(env).catch(err => console.error('wa milestones:', err.message)));
+    // Customer Care → Shopify Orders: sync AWBs + courier tracking, once an hour
+    // (the */15 tick in the first quarter of each hour). Each AWB every 2 h at most.
+    if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() < 15)
+      ctx.waitUntil(shopShipRefresh(env, false).catch(err => console.error('shopify shipments:', err.message)));
     // Repair payments — mark requests Paid once Zoho shows the invoice paid. */15 ticks.
     ctx.waitUntil(rpCronCheck(env).catch(err => console.error('repair payments:', err.message)));
     // Order-data retention (Supabase mirror) — once a day, on the tick
@@ -12876,3 +12904,196 @@ async function g4gpSkFetch(env, code) {
   return d;
 }
 
+
+// ══ SHOPIFY ORDERS — courier shipments + RTO (16-Nov-2026) ═══════════
+// Customer Care → Shopify Orders page. Website (Shopify) orders shipped by
+// Delhivery or Ekart, mainly to see parcels coming back to us (RTO) and why.
+//   1. shopShipSync  — copies fulfillments (AWB + courier) of the last 60
+//      days from the Supabase mirror into D1 shopify_shipments, with the
+//      order's COD flag, amount, items and Unicommerce package status.
+//   2. shopShipTrack — live courier tracking for shipments not finished yet
+//      (stage, failed attempts, RTO reason + date). Each AWB at most every
+//      2 hours (cron) — the page's Refresh button forces it.
+//   3. Customer name / city / phone from Shopify for RTO + failed-attempt
+//      parcels only (small set, cached).
+// The team marks an RTO parcel Received when it reaches the warehouse.
+const SHOP_SHIP_DAYS = 60;
+
+async function ensureShopShipTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS shopify_shipments (
+    awb TEXT PRIMARY KEY, courier TEXT, order_id TEXT, order_name TEXT, shipped_at TEXT,
+    is_cod INTEGER, amount REAL, items TEXT, order_cancelled INTEGER DEFAULT 0,
+    cust_name TEXT, city TEXT, phone TEXT, cust_checked INTEGER DEFAULT 0,
+    track_stage TEXT, track_status TEXT, attempts INTEGER DEFAULT 0, rto_reason TEXT, rto_at TEXT,
+    last_scan TEXT, scan_info TEXT, tracked_at TEXT, uc_status TEXT, synced_at TEXT,
+    received_at TEXT, received_by TEXT)`).run();
+}
+
+function shopShipCourier(c) {
+  const s = String(c || '').toLowerCase();
+  if (/delhivery/.test(s)) return 'Delhivery';
+  if (/ekart/.test(s)) return 'Ekart';
+  return null;
+}
+
+async function shopShipSync(env) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) return { synced: 0, note: 'Supabase not configured' };
+  await ensureShopShipTable(env.DB);
+  const base = env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/';
+  const get = async path => {
+    const r = await fetch(base + path, { headers: supabaseHeaders(env) });
+    if (!r.ok) throw new Error('Supabase ' + path.split('?')[0] + ' ' + r.status);
+    return r.json();
+  };
+  const since = new Date(Date.now() - SHOP_SHIP_DAYS * 864e5).toISOString();
+  const fl = await get('shopify_fulfillments?select=order_id,order_name,status,courier,tracking_number,created_at' +
+    '&status=eq.success&tracking_number=not.is.null&created_at=gte.' + encodeURIComponent(since) + '&order=created_at.desc&limit=2000');
+  const rows = (fl || []).map(f => ({ ...f, c: shopShipCourier(f.courier), awb: String(f.tracking_number || '').trim() }))
+    .filter(f => f.c && /^[A-Za-z0-9]{6,40}$/.test(f.awb));
+  if (!rows.length) return { synced: 0 };
+  const ids = [...new Set(rows.map(r => String(r.order_id)).filter(x => /^\d+$/.test(x)))];
+  const orders = {}, items = {}, ucByAwb = {}, ucByOrder = {};
+  for (let i = 0; i < ids.length; i += 120) {
+    const inList = 'in.(' + ids.slice(i, i + 120).join(',') + ')';
+    const [os, its, pk] = await Promise.all([
+      get('shopify_orders?select=order_id,name,is_cod,current_total_price,total_price,cancelled_at&order_id=' + inList),
+      get('shopify_order_items?select=order_id,title,quantity,current_quantity&order_id=' + inList),
+      get('uc_shipping_packages?select=sale_order_code,status,awb:raw->>trackingNumber&sale_order_code=' + inList).catch(() => [])
+    ]);
+    (os || []).forEach(o => { orders[String(o.order_id)] = o; });
+    (its || []).forEach(it => {
+      const q = it.current_quantity == null ? Number(it.quantity) : Number(it.current_quantity);
+      if (q > 0) (items[String(it.order_id)] = items[String(it.order_id)] || []).push((q > 1 ? q + ' × ' : '') + it.title);
+    });
+    (pk || []).forEach(p => {
+      if (p.awb) ucByAwb[String(p.awb)] = p.status;
+      (ucByOrder[String(p.sale_order_code)] = ucByOrder[String(p.sale_order_code)] || []).push(p.status);
+    });
+  }
+  const now = new Date().toISOString();
+  const stmts = rows.map(f => {
+    const o = orders[String(f.order_id)] || {};
+    const uc = ucByAwb[f.awb] || ((ucByOrder[String(f.order_id)] || []).length === 1 ? ucByOrder[String(f.order_id)][0] : null);
+    return env.DB.prepare(`INSERT INTO shopify_shipments (awb, courier, order_id, order_name, shipped_at, is_cod, amount, items, order_cancelled, uc_status, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(awb) DO UPDATE SET courier = excluded.courier, order_id = excluded.order_id, order_name = excluded.order_name,
+        shipped_at = excluded.shipped_at, is_cod = excluded.is_cod, amount = excluded.amount, items = excluded.items,
+        order_cancelled = excluded.order_cancelled, uc_status = COALESCE(excluded.uc_status, shopify_shipments.uc_status), synced_at = excluded.synced_at`)
+      .bind(f.awb, f.c, String(f.order_id), o.name || f.order_name || null, f.created_at || null,
+        o.is_cod ? 1 : 0, Number(o.current_total_price != null ? o.current_total_price : o.total_price) || 0,
+        (items[String(f.order_id)] || []).join(', ').slice(0, 400), o.cancelled_at ? 1 : 0, uc || null, now);
+  });
+  for (let i = 0; i < stmts.length; i += 80) await env.DB.batch(stmts.slice(i, i + 80));
+  return { synced: stmts.length };
+}
+
+// Scans normalised to {t, s, d, l}, oldest first.
+function shopShipRto(list, stage) {
+  const sc = (list || []).filter(x => x && x.t).sort((a, b) => a.t - b.t);
+  const txt = x => (x.s + ' ' + x.d).toLowerCase();
+  const isRto = x => /\brto\b|return to origin|returned to (origin|shipper|seller)|rt-/.test(txt(x));
+  const first = sc.find(isRto);
+  const before = first ? sc.filter(x => x.t <= first.t) : sc;
+  const und = before.filter(x => /undeliver|not delivered|delivery attempt failed|consignee|customer (not|refused|denied|unavailable|wants)|refused|address|door ?lock|premises closed|cod amount|not reachable|unreachable|out of (delivery|service) area|future delivery|reschedul/.test(txt(x))
+    && !/out for delivery/.test(String(x.s).toLowerCase()) && !isRto(x));
+  const pick = und.filter(x => x.d && !/^undelivered$/i.test(x.d.trim())).pop() || und[und.length - 1];
+  let reason = pick ? (pick.d || pick.s) : null;
+  if (!reason && first && /rto|return/i.test(stage || '')) reason = first.d || first.s;
+  const days = new Set(und.map(x => new Date(x.t + 19800000).toISOString().slice(0, 10))).size;
+  const last = sc[sc.length - 1];
+  return {
+    rto_at: first ? new Date(first.t).toISOString() : null,
+    reason: reason ? String(reason).replace(/\s+/g, ' ').trim().slice(0, 160) : null,
+    attempts: days,
+    last: last ? JSON.stringify({ t: last.t, s: String(last.s).slice(0, 80), d: String(last.d).slice(0, 120), l: String(last.l).slice(0, 80) }) : null
+  };
+}
+
+async function shopShipTrack(env, force) {
+  await ensureShopShipTable(env.DB);
+  const due = force ? '' : "AND (tracked_at IS NULL OR tracked_at < datetime('now', '-2 hours'))";
+  const pickRows = async (courier, limit) => ((await env.DB.prepare(`SELECT awb FROM shopify_shipments
+    WHERE courier = ? AND received_at IS NULL AND (track_stage IS NULL OR track_stage NOT IN ('Delivered','RTO Delivered','Cancelled','Lost')) ${due}
+    ORDER BY tracked_at IS NOT NULL, tracked_at LIMIT ${limit}`).bind(courier).all()).results || []).map(r => r.awb);
+  const upd = (awb, d, info, sumInfo) => env.DB.prepare(`UPDATE shopify_shipments SET track_stage = ?, track_status = ?, attempts = ?,
+      rto_reason = COALESCE(?, rto_reason), rto_at = COALESCE(rto_at, ?), last_scan = ?, scan_info = ?, tracked_at = datetime('now') WHERE awb = ?`)
+    .bind(d.stage, d.rawStatus, Math.max(info.attempts, d.reattempts ? d.reattempts + 1 : 0), info.reason, info.rto_at, info.last, sumInfo, awb);
+  const stmts = [];
+  // Delhivery — 50 AWBs per call
+  if (env.DELHIVERY_API_TOKEN) {
+    const wbs = await pickRows('Delhivery', force ? 250 : 150);
+    const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
+    for (let i = 0; i < wbs.length; i += 50) {
+      try {
+        const r = await fetch(base + '/api/v1/packages/json/?waybill=' + wbs.slice(i, i + 50).join(','), { headers: { 'Authorization': 'Token ' + env.DELHIVERY_API_TOKEN } });
+        const j = await r.json();
+        ((j && j.ShipmentData) || []).forEach(sd => {
+          const s = sd && sd.Shipment; if (!s || !s.AWB) return;
+          const d = deriveDelhiveryStage(s, 'forward');
+          const list = (s.Scans || []).map(x => x.ScanDetail || x).map(x => {
+            const iso = istToIso(x.ScanDateTime || x.StatusDateTime);
+            return { t: iso ? Date.parse(iso) : 0, s: String(x.Scan || x.Status || ''), d: String(x.Instructions || ''), l: String(x.ScannedLocation || x.StatusLocation || '') };
+          });
+          stmts.push(upd(String(s.AWB), d, shopShipRto(list, d.stage), delhiveryScanInfo(s)));
+        });
+      } catch (e) { console.warn('shopShipTrack delhivery', e.message); }
+    }
+  }
+  // Ekart — one public track call each, 10 at a time
+  const eks = await pickRows('Ekart', force ? 120 : 40);
+  for (let i = 0; i < eks.length; i += 10) {
+    await Promise.all(eks.slice(i, i + 10).map(async awb => {
+      try {
+        const r = await fetch(ekartBase(env) + '/api/v1/track/' + encodeURIComponent(awb));
+        const j = await r.json();
+        if (!j || !j.track) return;
+        const d = deriveEkartStage(j.track, 'forward');
+        const list = (j.track.details || []).map(x => ({ t: Number(x.ctime) || 0, s: String(x.status || ''), d: String(x.desc || ''), l: String(x.location || '') }));
+        stmts.push(upd(awb, d, shopShipRto(list, d.stage), ekartScanInfo(j.track)));
+      } catch (e) { /* skip this one */ }
+    }));
+  }
+  for (let i = 0; i < stmts.length; i += 80) await env.DB.batch(stmts.slice(i, i + 80));
+  return { tracked: stmts.length };
+}
+
+// Customer name / city / phone from Shopify — RTO and failed-attempt parcels only.
+async function shopShipCustomers(env) {
+  if (!shopifyConfigured(env)) return;
+  const rows = (await env.DB.prepare(`SELECT DISTINCT order_id FROM shopify_shipments WHERE cust_checked = 0 AND order_id GLOB '[0-9]*'
+    AND (track_stage IN ('RTO','RTO Delivered') OR attempts > 0 OR uc_status IN ('RETURN_EXPECTED','RETURNED')) LIMIT 50`).all()).results || [];
+  if (!rows.length) return;
+  try {
+    const data = await shopifyGql(env, `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { id shippingAddress { name city province phone } } } }`,
+      { ids: rows.map(r => 'gid://shopify/Order/' + r.order_id) });
+    const stmts = [];
+    (data.nodes || []).forEach(n => {
+      if (!n || !n.id) return;
+      const a = n.shippingAddress || {};
+      stmts.push(env.DB.prepare('UPDATE shopify_shipments SET cust_name = ?, city = ?, phone = ?, cust_checked = 1 WHERE order_id = ?')
+        .bind(a.name || null, [a.city, a.province].filter(Boolean).join(', ') || null, a.phone || null, n.id.split('/').pop()));
+    });
+    const found = new Set((data.nodes || []).filter(Boolean).map(n => n.id && n.id.split('/').pop()));
+    rows.filter(r => !found.has(String(r.order_id))).forEach(r =>
+      stmts.push(env.DB.prepare('UPDATE shopify_shipments SET cust_checked = 1 WHERE order_id = ?').bind(r.order_id)));
+    if (stmts.length) await env.DB.batch(stmts);
+  } catch (e) { console.warn('shopShipCustomers', e.message); }
+}
+
+async function shopShipRefresh(env, force) {
+  const out = {};
+  try { Object.assign(out, await shopShipSync(env)); } catch (e) { out.syncError = e.message; }
+  try { Object.assign(out, await shopShipTrack(env, force)); } catch (e) { out.trackError = e.message; }
+  await shopShipCustomers(env);
+  await env.DB.prepare("INSERT OR REPLACE INTO tm_settings (key, value) VALUES ('shop_ship_refreshed', ?)").bind(new Date().toISOString()).run().catch(() => {});
+  return out;
+}
+
+async function shopShipList(env) {
+  await ensureShopShipTable(env.DB);
+  const rows = (await env.DB.prepare(`SELECT awb, courier, order_id, order_name, shipped_at, is_cod, amount, items, order_cancelled,
+      cust_name, city, phone, track_stage, track_status, attempts, rto_reason, rto_at, last_scan, tracked_at, uc_status, received_at, received_by
+    FROM shopify_shipments WHERE shipped_at >= ? ORDER BY shipped_at DESC`).bind(new Date(Date.now() - SHOP_SHIP_DAYS * 864e5).toISOString()).all()).results || [];
+  const st = await env.DB.prepare("SELECT value FROM tm_settings WHERE key = 'shop_ship_refreshed'").first().catch(() => null);
+  return { ok: true, rows, refreshed_at: st ? st.value : null, days: SHOP_SHIP_DAYS };
+}
