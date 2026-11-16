@@ -2090,7 +2090,23 @@ export default {
         const rows = (await env.DB.prepare(
           "SELECT claim_id, created_at, updated_at, order_id, platform, product, name, phone, email, issue_type, description, address, pincode, city, state, warranty_status, order_date, warranty_until, order_skus, file_count, status, case_id, events_json, prev_claim_id, confirmed_sku, confirmed_product, repeat_of, repeat_kind, repeat_delivered_at FROM warranty_claims WHERE created_at > datetime('now', ?) OR COALESCE(status, 'new') NOT IN ('closed','not_covered') ORDER BY created_at DESC LIMIT 500"
         ).bind('-' + days + ' days').all()).results || [];
-        return json({ ok: true, requests: rows.map(r => ({ ...r, events: srEvents(r), events_json: undefined })) });
+        // Payment chip for the list (16-Nov-2026): latest advance per step →
+        // 'free' (Free service) | 'pending' (a link is out) | 'paid' (all sent links paid)
+        const payOf = {};
+        try {
+          await ensureRepairPaymentsTable(env.DB);
+          const ps = (await env.DB.prepare(`SELECT claim_id, status, doc_type FROM repair_payments WHERE id IN (
+              SELECT MAX(id) FROM repair_payments WHERE COALESCE(kind, 'repair') <> 'final' GROUP BY claim_id, COALESCE(kind, 'repair'))`).all()).results || [];
+          ps.forEach(p => {
+            const cur = payOf[p.claim_id];
+            const st = p.status === 'skipped' && p.doc_type === 'waived' ? 'free' : p.status === 'pending' ? 'pending' : p.status === 'paid' ? 'paid' : null;
+            if (!st) return;
+            if (cur === 'free' || st === 'free') payOf[p.claim_id] = 'free';
+            else if (cur === 'pending' || st === 'pending') payOf[p.claim_id] = 'pending';
+            else payOf[p.claim_id] = 'paid';
+          });
+        } catch (e) { console.warn('ccClaimsList pay', e.message); }
+        return json({ ok: true, requests: rows.map(r => ({ ...r, pay: payOf[r.claim_id] || null, events: srEvents(r), events_json: undefined })) });
       }
       if (request.method === 'GET' && action === 'ccClaimGet') {
         await ensureServiceRequestCols(env.DB);
