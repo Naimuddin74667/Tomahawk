@@ -2845,6 +2845,11 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
 
   // Refund approval is limited to admins + Shikhar (worker enforces it too).
   function canApproveRefund() { return window.TM_ROLE === 'admin' || window.TM_USER === 'shikhar'; }
+  // Free service (16-Nov-2026): exceptional SRN requests with no charges at all.
+  // Stored as 'skipped' payments with doc_type 'waived'. Admin / Shikhar only (Worker enforces too).
+  function canWaive() { return canApproveRefund(); }
+  function isWaived(p) { return !!p && p.status === 'skipped' && p.doc_type === 'waived'; }
+  function payWaived(ps) { ps = ps || {}; return isWaived(ps.logistics) || isWaived(ps.repair); }
   // Next refund button once bank details are in: Approve → Refund completed.
   function refundNextBtn(r) {
     if (r.refund_approved_at) return '<button class="case-act primary" data-act="refund">Refund completed</button>';
@@ -2923,6 +2928,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var res = await api('ccPaymentGet&claim_id=' + encodeURIComponent(claim) + '&refresh=1');
     var ps = (res && res.ok && res.payments) || {};
     var l = ps.logistics, rp = ps.repair;
+    if (payWaived(ps)) return { ok: true, claim: claim };   // Free service — nothing to collect
     // Self-ship out of warranty (14-Nov-2026): 1) service & parts, 2) delivery — only when we deliver.
     if (selfOow(c)) {
       if (!(rp && (rp.status === 'paid' || rp.status === 'skipped')))
@@ -4186,7 +4192,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     notes[2] = rvOk ? courierName(rv) + ' · ' + (rv.received_at || rs === 'Delivered' || PICKED_STAGES.indexOf(rs) === -1 ? 'Collected' : (PICKUP_LABEL[rs] || rs)) : '';
     notes[3] = rvOk && rv.received_at ? shortWhen(rv.received_at) + (recvEarly(rv) ? ' · before courier scan' : rv.received_by ? ' · ' + rv.received_by : '') : '';
     notes[4] = rvOk && rv.repair_done_at ? shortWhen(rv.repair_done_at) + (rv.repair_done_by ? ' · ' + rv.repair_done_by : '') +
-      (pay && pay.repair && pay.repair.status === 'skipped' ? ' · Not repaired' : '') : '';
+      (payWaived(pay) ? ' · Free service' : pay && pay.repair && pay.repair.status === 'skipped' ? ' · Not repaired' : '') : '';
     notes[5] = fwOk ? shortWhen(fw.created_at) + ' · ' + courierName(fw) : handed ? 'Customer collects' : '';
     notes[6] = fwOk && fs === 'Delivered' ? shortWhen(fw.delivered_at || fw.tracked_at) : handed ? shortWhen(rv.handed_over_at) + ' · collected' + (rv.handed_over_by ? ' · ' + rv.handed_over_by : '') : '';
     if (self && done[2] && !rv.received_at) notes[2] = courierName(rv) + (rv.waybill ? ' · ' + rv.waybill : '');
@@ -4195,7 +4201,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (cur === 0) notes[0] = r && r.status === 'waiting_customer' ? 'Waiting for customer' : 'Verify the order';
     if (cur === 1) {
       if (pay && oow && pay.logistics && pay.logistics.status === 'pending') notes[1] = 'Waiting for pickup payment · ' + rupees(pay.logistics.total);
-      else if (pay && oow && !paid('logistics')) notes[1] = 'Send pickup & delivery link';
+      else if (pay && oow && !paid('logistics') && !payWaived(pay)) notes[1] = 'Send pickup & delivery link';
       else notes[1] = 'Approve & book pickup';
       if (rv && rv.delhivery_ok === 0) { notes[1] = 'Booking failed · book again'; warn = true; }
     }
@@ -4209,11 +4215,11 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (cur === 4) {
       var rp = pay && pay.repair;
       if (oow && pay) notes[4] = rp && rp.status === 'pending' ? 'Waiting for repair payment · ' + rupees(rp.total)
-        : rp && (rp.status === 'paid' || rp.status === 'skipped') ? (rp.status === 'skipped' ? 'Not repaired' : 'Repair paid') + ' · mark Repair done'
+        : rp && (rp.status === 'paid' || rp.status === 'skipped') ? (isWaived(rp) ? 'Free service' : rp.status === 'skipped' ? 'Not repaired' : 'Repair paid') + ' · mark Repair done'
         : 'Inspect · send repair quote or Not repaired';
       else notes[4] = oow ? 'Inspection · repair payment' : 'Inspect & repair · mark Repair done';
     }
-    if (cur === 5) notes[5] = self ? (oow && pay && !paid('logistics') ? 'Customer collects · or delivery payment, then send back' : 'Customer collects · or send back') : 'Book send back';
+    if (cur === 5) notes[5] = self ? (oow && pay && !paid('logistics') && !payWaived(pay) ? 'Customer collects · or delivery payment, then send back' : 'Customer collects · or send back') : 'Book send back';
     if (cur === 6) {
       if (isRtoStage(fs) && fw.rto_closed_at) { notes[6] = 'Closed after RTO'; warn = true; }
       else if (isRtoStage(fs) && fw.received_at) { notes[6] = 'RTO back with us · send again or close'; warn = true; }
@@ -5291,6 +5297,30 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var cards = { logistics: document.getElementById('pay-logistics'), repair: document.getElementById('pay-repair'), final: document.getElementById('pay-final') };
     if (!sum || !tg || !cards.logistics) return;
     var l = payState.logistics, rp = payState.repair, f = payState.final;
+    if (payWaived(payState)) {   // Free service: one line, no step cards
+      var w = isWaived(l) ? l : rp;
+      Object.keys(cards).forEach(function (k) { cards[k].hidden = true; });
+      var bar0 = document.getElementById('pay-bar'); if (bar0) { bar0.innerHTML = ''; bar0.hidden = true; }
+      tg.hidden = true;
+      sum.hidden = false;
+      sum.innerHTML = '<div class="pay-sum-row"><span class="pay-sum-n"><span class="badge b-green">FREE SERVICE</span></span>' +
+        '<span class="pay-total">' + money(0) + '</span>' +
+        '<span class="pay-hint">' + esc(String(w.description || '').replace(/^Free service · /, '')) + ' · by ' + esc(w.created_by || '') + ', ' + esc(fmtWhen(w.created_at)) + '</span>' +
+        (canWaive() && !f ? '<button type="button" class="case-act" id="pay-waive-undo">Undo free service</button>' : '') + '</div>' +
+        '<div class="pay-hint" style="margin-top:4px">No payment links and no invoice — pickup, repair and send back are unlocked.</div>';
+      var un = document.getElementById('pay-waive-undo');
+      if (un) un.onclick = async function () {
+        if (!confirm('Undo Free service? The payment steps open again.')) return;
+        un.disabled = true;
+        try {
+          var res = await post('ccPaymentWaive', { claim_id: payClaim, undo: true });
+          if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
+          var rq = (typeof requests !== 'undefined' ? requests : []).filter(function (x) { return x.claim_id === payClaim; })[0] || { claim_id: payClaim };
+          await payAfterChange(rq);
+        } catch (e) { alert("Couldn't undo: " + e.message); un.disabled = false; }
+      };
+      return;
+    }
     var has = function (x) { return !!x && x.status !== 'void'; };
     var settled = function (x) { return !!x && (x.status === 'paid' || x.status === 'skipped'); };
     var stage = stepsCtx ? computeSteps(stepsCtx.c, stepsCtx.r, payState).cur : 0;   // 0-based tracker step
@@ -5414,7 +5444,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       renderPaySummary();
       if (stepsCtx && stepsCtx.r && stepsCtx.r.claim_id === r.claim_id) { stepsCtx.pay = payState; drawSteps(); }
       // Legacy: requests billed before two-step billing (single repair payment, already paid) stay unlocked
-      setApproveLock((payState.logistics && payState.logistics.status === 'paid') ||
+      setApproveLock(payWaived(payState) || (payState.logistics && payState.logistics.status === 'paid') ||
         (!payState.logistics && payState.repair && payState.repair.status === 'paid'));
     }).catch(function (e) {
       ['logistics', 'repair', 'final'].forEach(function (k) {
@@ -5466,11 +5496,27 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         // "Not repaired" once Step 1 is paid: no service charge / customer declined → skip Step 2
         // (self-ship: no pickup payment, so straight away)
         (kind === 'repair' && canActReq() && !fin && !payState.final && (paySelf() || (payState.logistics && payState.logistics.status === 'paid'))
-          ? '<button class="case-act" data-skip>Not repaired</button>' : '') + '</div>';
+          ? '<button class="case-act" data-skip>Not repaired</button>' : '') +
+        // Free service (16-Nov-2026) — on the Step 1 card, Admin / Shikhar, nothing paid or pending
+        (kind === (paySelf() ? 'repair' : 'logistics') && canWaive() && !fin && !payState.final &&
+          ![payState.logistics, payState.repair].some(function (x) { return x && (x.status === 'paid' || x.status === 'pending'); })
+          ? '<button class="case-act" data-waive>Free service</button>' : '') + '</div>';
       var b = el.querySelector('[data-new]');
       if (b) b.addEventListener('click', function () { kind === 'logistics' ? logisticsForm(r) : repairForm(r); });
       var ss = el.querySelector('[data-self]');
       if (ss) ss.addEventListener('click', function () { selfShipPanel(r); });
+      var wv = el.querySelector('[data-waive]');
+      if (wv) wv.addEventListener('click', async function () {
+        var why = prompt('Free service — no charges for ' + r.claim_id + ': no payment links, no invoice; pickup, repair and send back unlock.\nReason (required), e.g. "Dealer goodwill":', '');
+        if (why === null) return;
+        if (!why.trim()) { alert('Please enter a reason.'); return; }
+        wv.disabled = true;
+        try {
+          var res = await post('ccPaymentWaive', { claim_id: r.claim_id, reason: why });
+          if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
+          await payAfterChange(r);
+        } catch (e) { alert("Couldn't save: " + e.message); wv.disabled = false; }
+      });
       var sk = el.querySelector('[data-skip]');
       if (sk) sk.addEventListener('click', async function () {
         var why = prompt('Not repaired — Step 2 payment will be skipped and Send back unlocked.\nReason (optional), e.g. "No fault found" or "Customer declined":', '');

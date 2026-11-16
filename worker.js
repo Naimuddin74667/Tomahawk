@@ -1197,7 +1197,7 @@ const ACTION_TIERS = {
   ccInvoiceRequest: 'manager_up', // Customer Care: ask the customer to upload the invoice again (makes the link)
   ccClaimsList: 'viewer_read', ccClaimGet: 'viewer_read', ccClaimFiles: 'viewer_read', // Customer Care: New requests
   ccClaimAction: 'manager_up',
-  ccPaymentInfo: 'manager_up', ccPaymentCreate: 'manager_up', ccPaymentVoid: 'manager_up', ccPaymentGet: 'viewer_read', ccPaymentFinal: 'manager_up', ccPaymentSkipRepair: 'manager_up',
+  ccPaymentInfo: 'manager_up', ccPaymentCreate: 'manager_up', ccPaymentVoid: 'manager_up', ccPaymentGet: 'viewer_read', ccPaymentFinal: 'manager_up', ccPaymentSkipRepair: 'manager_up', ccPaymentWaive: 'manager_up',
   ccVersion: 'viewer_read', // Customer Care Dashboard: tiny "anything changed?" check (every 15 s) // Repair payments (Zoho Books)
   ccLogisticsQuote: 'manager_up', // Out-of-warranty pickup + delivery quote (Delhivery + Ekart rates, Amazon dimensions)
   // Shikhar's Care Desk server — checked by the X-Care-Key header (env.CARE_KEY) inside the handler
@@ -1467,7 +1467,7 @@ const ACTION_TIERS = {
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
 const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
-  'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccLogisticsQuote', 'ccVersion']);
+  'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccPaymentWaive', 'ccLogisticsQuote', 'ccVersion']);
 
 function getAuthRequirement(act) {
   return ACTION_TIERS[act] || 'manager_up'; // fail-closed default for anything unmapped
@@ -2242,6 +2242,13 @@ export default {
         if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
         try { const r = await rpSkipRepair(env, user, String((body || {}).claim_id || '').trim(), String((body || {}).reason || ''), !!(body || {}).undo); return json(r, r.ok ? 200 : 400); }
         catch (e) { console.error('ccPaymentSkipRepair:', e.message); return json({ ok: false, error: e.message }, 500); }
+      }
+      // Free service (16-Nov-2026) — Admin / Shikhar only (checked inside rpWaive)
+      if (request.method === 'POST' && act === 'ccPaymentWaive') {
+        const user = authResult.user || (await resolveSession(request, env.DB));
+        if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
+        try { const r = await rpWaive(env, user, String((body || {}).claim_id || '').trim(), String((body || {}).reason || ''), !!(body || {}).undo); return json(r, r.ok ? 200 : (r.forbidden ? 403 : 400)); }
+        catch (e) { console.error('ccPaymentWaive:', e.message); return json({ ok: false, error: e.message }, 500); }
       }
       if (request.method === 'POST' && act === 'ccPaymentFinal') {
         const user = authResult.user || (await resolveSession(request, env.DB));
@@ -8384,6 +8391,7 @@ async function rpCreate(env, user, b) {
   if (!row) return { ok: false, error: 'No such request' };
   if (row.warranty_status === 'Under warranty') return { ok: false, error: 'This request is under warranty — no payment needed.' };
   const open = await env.DB.prepare("SELECT status FROM repair_payments WHERE claim_id = ? AND COALESCE(kind, 'repair') = ? AND status IN ('pending','paid','skipped')").bind(claimId, kind).first();
+  if (await rpIsWaived(env.DB, claimId)) return { ok: false, error: 'This request is marked Free service — no payment needed. Undo that first.' };
   if (open && open.status === 'skipped') return { ok: false, error: 'Step 2 is marked "Not repaired". Undo that first.' };
   if (open) return { ok: false, error: 'A ' + (kind === 'logistics' ? 'pickup & delivery' : 'repair') + ' payment link already exists for this request. Refresh to see it.' };
   if (await rpLatest(env.DB, claimId, 'final')) return { ok: false, error: 'The final invoice is already made for this request — no new advances.' };
@@ -8551,6 +8559,7 @@ async function rpSkipRepair(env, user, claimId, reason, undo) {
   const by = (user && user.username) || 'unknown';
   const cur = await rpLatest(env.DB, claimId, 'repair');
   if (await rpLatest(env.DB, claimId, 'final')) return { ok: false, error: 'The final invoice is already made — change it in Zoho Books instead.' };
+  if (await rpIsWaived(env.DB, claimId)) return { ok: false, error: 'This request is marked Free service — use Undo free service instead.' };
   if (undo) {
     if (!cur || cur.status !== 'skipped') return { ok: false, error: 'Step 2 is not marked "Not repaired".' };
     await env.DB.prepare("UPDATE repair_payments SET status = 'void', checked_at = datetime('now') WHERE id = ?").bind(cur.id).run();
@@ -8564,6 +8573,52 @@ async function rpSkipRepair(env, user, claimId, reason, undo) {
   await env.DB.prepare(`INSERT INTO repair_payments (claim_id, kind, doc_type, lines_json, amount, total, description, status, created_by)
     VALUES (?, 'repair', 'none', '[]', 0, 0, ?, 'skipped', ?)`).bind(claimId, why || 'Not repaired', by).run();
   await srAddEvent(env.DB, claimId, { by, kind: 'note', note: 'Not repaired — Step 2 payment skipped' + (why ? ' · ' + why : '') }, {});
+  return { ok: true };
+}
+
+// POST ccPaymentWaive { claim_id, reason, undo } — "Free service" (16-Nov-2026):
+// exceptional SRN cases where we charge the customer nothing. ONLY Admin or
+// Shikhar (same as refund approval). Stores 'skipped' rows (doc_type 'waived')
+// for BOTH advances, so every existing payment lock (book pickup, repair done,
+// send back, customer collects) treats them as settled and no final invoice is
+// made (nothing paid). Needs no paid / pending advance and no final invoice.
+// Undo voids both rows while that is still true.
+async function rpIsWaived(DB, claimId) {
+  for (const k of RP_KINDS) {
+    const p = await rpLatest(DB, claimId, k);
+    if (p && p.status === 'skipped' && p.doc_type === 'waived') return true;
+  }
+  return false;
+}
+async function rpWaive(env, user, claimId, reason, undo) {
+  if (!canApproveRefund(user)) return { ok: false, forbidden: true, error: 'Only Admin or Shikhar can mark a request as Free service.' };
+  await ensureRepairPaymentsTable(env.DB);
+  const row = await env.DB.prepare('SELECT claim_id, warranty_status FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
+  if (!row) return { ok: false, error: 'No such request' };
+  if (row.warranty_status === 'Under warranty') return { ok: false, error: 'This request is under warranty — it is already free.' };
+  if (await rpLatest(env.DB, claimId, 'final')) return { ok: false, error: 'The final invoice is already made — change it in Zoho Books instead.' };
+  const by = (user && user.username) || 'unknown';
+  const latest = {};
+  for (const k of RP_KINDS) latest[k] = await rpLatest(env.DB, claimId, k);
+  const waived = RP_KINDS.filter(k => latest[k] && latest[k].status === 'skipped' && latest[k].doc_type === 'waived');
+  if (undo) {
+    if (!waived.length) return { ok: false, error: 'This request is not marked Free service.' };
+    for (const k of waived) await env.DB.prepare("UPDATE repair_payments SET status = 'void', checked_at = datetime('now') WHERE id = ?").bind(latest[k].id).run();
+    await srAddEvent(env.DB, claimId, { by, kind: 'note', note: 'Free service undone — payments open again' }, {});
+    return { ok: true };
+  }
+  if (waived.length) return { ok: true };
+  for (const k of RP_KINDS) {
+    const p = latest[k];
+    if (p && p.status === 'paid') return { ok: false, error: 'A payment was already received on this request — refund it first (Razorpay), then mark it free.' };
+    if (p && p.status === 'pending') return { ok: false, error: 'A payment link is open — cancel it under Payments first.' };
+  }
+  const why = String(reason || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  if (!why) return { ok: false, error: 'Enter a reason for the free service.' };
+  for (const k of RP_KINDS)
+    await env.DB.prepare(`INSERT INTO repair_payments (claim_id, kind, doc_type, lines_json, amount, total, description, status, created_by)
+      VALUES (?, ?, 'waived', '[]', 0, 0, ?, 'skipped', ?)`).bind(claimId, k, 'Free service · ' + why, by).run();
+  await srAddEvent(env.DB, claimId, { by, kind: 'note', note: 'Free service — no charges for this request · ' + why }, {});
   return { ok: true };
 }
 
