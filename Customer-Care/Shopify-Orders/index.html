@@ -1295,12 +1295,12 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   }
 
   // ── Classification ──
-  // RTO = courier says RTO / RTO delivered, or (not tracked yet) Unicommerce says return expected / returned.
+  // RTO = courier says RTO / RTO delivered, or Unicommerce says return expected / returned.
   function isRto(r) {
     return r.track_stage === 'RTO' || r.track_stage === 'RTO Delivered' ||
-      (!r.track_stage && (r.uc_status === 'RETURN_EXPECTED' || r.uc_status === 'RETURNED')) || !!r.received_at;
+      r.uc_status === 'RETURN_EXPECTED' || r.uc_status === 'RETURNED' || !!r.received_at;
   }
-  function rtoBack(r) { return r.track_stage === 'RTO Delivered' || (!r.track_stage && r.uc_status === 'RETURNED'); }
+  function rtoBack(r) { return r.track_stage === 'RTO Delivered' || r.uc_status === 'RETURNED'; }
   function kind(r) {
     if (isRto(r)) return 'rto';
     if (r.track_stage === 'Delivered') return 'delivered';
@@ -1422,12 +1422,21 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 
   var rb = document.getElementById('so-refresh');
   rb.onclick = async function () {
-    rb.disabled = true; rb.textContent = 'Refreshing… (up to a minute)';
+    rb.disabled = true; rb.textContent = 'Refreshing…';
     try {
-      var res = await post('shopShipRefresh', {});
-      if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
-      if (res.syncError || res.trackError) alert('Partly refreshed: ' + (res.syncError || res.trackError));
-      await load();
+      // Round 1 syncs orders + names and tracks a batch; the Worker can only
+      // track ~30 Ekart parcels per call, so keep calling while some are left.
+      var res = await post('shopShipRefresh', {}), round = 1, warn = [];
+      for (;;) {
+        if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
+        [res.syncError, res.custError, res.trackError].forEach(function (x) { if (x && warn.indexOf(x) === -1) warn.push(x); });
+        await load();
+        if (!res.left || !res.tracked || round >= 15) break;
+        round++;
+        rb.textContent = 'Refreshing… ' + res.left + ' left';
+        res = await post('shopShipRefresh', { trackOnly: true });
+      }
+      if (warn.length) alert('Refreshed, with a problem: ' + warn.join(' · '));
     } catch (e) { alert("Couldn't refresh: " + e.message); }
     rb.disabled = false; rb.innerHTML = '&#8635; Refresh tracking';
   };

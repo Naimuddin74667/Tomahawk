@@ -2132,7 +2132,7 @@ export default {
         catch (e) { console.error('shopShipList:', e.message); return json({ ok: false, error: e.message }, 500); }
       }
       if (request.method === 'POST' && act === 'shopShipRefresh') {
-        try { const r = await shopShipRefresh(env, true); return json({ ok: true, ...r }); }
+        try { const r = await shopShipRefresh(env, true, !!(body || {}).trackOnly); return json({ ok: true, ...r }); }
         catch (e) { console.error('shopShipRefresh:', e.message); return json({ ok: false, error: e.message }, 500); }
       }
       if (request.method === 'POST' && act === 'shopShipReceived') {
@@ -5703,6 +5703,13 @@ export default {
     // Stock Alert — WhatsApp LOW-stock alerts, 5 min after each out-of-stock
     // slot: the separate '35 3,6,10 * * *' cron = 9:05 / 12:05 / 4:05 PM IST.
     // That tick runs ONLY this job and returns (watchers run on */15 ticks).
+    // Customer Care → Shopify Orders: sync AWBs + courier tracking — its own
+    // '5,35 * * * *' cron (twice an hour) so it never shares a tick's
+    // subrequest budget with the watchers. Each AWB every 2 h at most.
+    if (event.cron === '5,35 * * * *') {
+      ctx.waitUntil(shopShipRefresh(env, false).catch(err => console.error('shopify shipments:', err.message)));
+      return;
+    }
     if (event.cron === '35 3,6,10 * * *') {
       ctx.waitUntil(runStockAlertCheck(env, { kind: 'low' })
         .then(r => recordHeartbeat(env, 'stock_alert_whatsapp_low', 'Stock Alert WhatsApp — Low Stock (9:05 / 12:05 / 4:05 PM IST)', 'ok',
@@ -5738,10 +5745,6 @@ export default {
     ctx.waitUntil(srWaProcessQueue(env).catch(err => console.error('wa queue:', err.message)));
     // Service requests — WhatsApp "Product received" / "Delivered" follow-ups. */15 ticks.
     ctx.waitUntil(srWaMilestones(env).catch(err => console.error('wa milestones:', err.message)));
-    // Customer Care → Shopify Orders: sync AWBs + courier tracking, once an hour
-    // (the */15 tick in the first quarter of each hour). Each AWB every 2 h at most.
-    if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() < 15)
-      ctx.waitUntil(shopShipRefresh(env, false).catch(err => console.error('shopify shipments:', err.message)));
     // Repair payments — mark requests Paid once Zoho shows the invoice paid. */15 ticks.
     ctx.waitUntil(rpCronCheck(env).catch(err => console.error('repair payments:', err.message)));
     // Order-data retention (Supabase mirror) — once a day, on the tick
@@ -12991,11 +12994,13 @@ async function shopShipSync(env) {
 function shopShipRto(list, stage) {
   const sc = (list || []).filter(x => x && x.t).sort((a, b) => a.t - b.t);
   const txt = x => (x.s + ' ' + x.d).toLowerCase();
-  const isRto = x => /\brto\b|return to origin|returned to (origin|shipper|seller)|rt-/.test(txt(x));
+  const isRto = x => /\brto\b|return to origin|returned to (origin|shipper|seller)|return accepted|rt-/.test(txt(x));
+  // courier housekeeping lines that are not a reason ("Call placed to consignee", "Dispatched for RTO")
+  const notReason = x => /call placed|dispatched|out for delivery|bagged|in transit|shipment (picked|received)|\brto\b|return/i.test(x.s + ' ' + x.d);
   const first = sc.find(isRto);
   const before = first ? sc.filter(x => x.t <= first.t) : sc;
   const und = before.filter(x => /undeliver|not delivered|delivery attempt failed|consignee|customer (not|refused|denied|unavailable|wants)|refused|address|door ?lock|premises closed|cod amount|not reachable|unreachable|out of (delivery|service) area|future delivery|reschedul/.test(txt(x))
-    && !/out for delivery/.test(String(x.s).toLowerCase()) && !isRto(x));
+    && !notReason(x));
   const pick = und.filter(x => x.d && !/^undelivered$/i.test(x.d.trim())).pop() || und[und.length - 1];
   let reason = pick ? (pick.d || pick.s) : null;
   if (!reason && first && /rto|return/i.test(stage || '')) reason = first.d || first.s;
@@ -13011,7 +13016,8 @@ function shopShipRto(list, stage) {
 
 async function shopShipTrack(env, force) {
   await ensureShopShipTable(env.DB);
-  const due = force ? '' : "AND (tracked_at IS NULL OR tracked_at < datetime('now', '-2 hours'))";
+  const due = force ? "AND (tracked_at IS NULL OR tracked_at < datetime('now', '-10 minutes'))"
+                    : "AND (tracked_at IS NULL OR tracked_at < datetime('now', '-2 hours'))";
   const pickRows = async (courier, limit) => ((await env.DB.prepare(`SELECT awb FROM shopify_shipments
     WHERE courier = ? AND received_at IS NULL AND (track_stage IS NULL OR track_stage NOT IN ('Delivered','RTO Delivered','Cancelled','Lost')) ${due}
     ORDER BY tracked_at IS NOT NULL, tracked_at LIMIT ${limit}`).bind(courier).all()).results || []).map(r => r.awb);
@@ -13021,7 +13027,7 @@ async function shopShipTrack(env, force) {
   const stmts = [];
   // Delhivery — 50 AWBs per call
   if (env.DELHIVERY_API_TOKEN) {
-    const wbs = await pickRows('Delhivery', force ? 250 : 150);
+    const wbs = await pickRows('Delhivery', 150);
     const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
     for (let i = 0; i < wbs.length; i += 50) {
       try {
@@ -13040,7 +13046,7 @@ async function shopShipTrack(env, force) {
     }
   }
   // Ekart — one public track call each, 10 at a time
-  const eks = await pickRows('Ekart', force ? 120 : 40);
+  const eks = await pickRows('Ekart', 30);
   for (let i = 0; i < eks.length; i += 10) {
     await Promise.all(eks.slice(i, i + 10).map(async awb => {
       try {
@@ -13057,35 +13063,52 @@ async function shopShipTrack(env, force) {
   return { tracked: stmts.length };
 }
 
-// Customer name / city / phone from Shopify — RTO and failed-attempt parcels only.
+// Customer name / city / phone for every order — straight from the Shopify
+// Admin API (the mirror has no names). One paged orders query (250 per page)
+// covers the whole window, so it costs 1–3 calls. Runs before tracking so it
+// never loses out on the Worker's per-call request budget.
 async function shopShipCustomers(env) {
-  if (!shopifyConfigured(env)) return;
-  const rows = (await env.DB.prepare(`SELECT DISTINCT order_id FROM shopify_shipments WHERE cust_checked = 0 AND order_id GLOB '[0-9]*'
-    AND (track_stage IN ('RTO','RTO Delivered') OR attempts > 0 OR uc_status IN ('RETURN_EXPECTED','RETURNED')) LIMIT 50`).all()).results || [];
-  if (!rows.length) return;
+  if (!shopifyConfigured(env)) return { custError: 'Shopify API not configured on the Worker' };
+  const missing = (await env.DB.prepare("SELECT COUNT(*) AS n FROM shopify_shipments WHERE cust_checked = 0").first()) || {};
+  if (!missing.n) return { names: 0 };
+  const since = new Date(Date.now() - (SHOP_SHIP_DAYS + 30) * 864e5).toISOString().slice(0, 10);
+  const stmts = [];
+  let after = null;
   try {
-    const data = await shopifyGql(env, `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { id shippingAddress { name city province phone } } } }`,
-      { ids: rows.map(r => 'gid://shopify/Order/' + r.order_id) });
-    const stmts = [];
-    (data.nodes || []).forEach(n => {
-      if (!n || !n.id) return;
-      const a = n.shippingAddress || {};
-      stmts.push(env.DB.prepare('UPDATE shopify_shipments SET cust_name = ?, city = ?, phone = ?, cust_checked = 1 WHERE order_id = ?')
-        .bind(a.name || null, [a.city, a.province].filter(Boolean).join(', ') || null, a.phone || null, n.id.split('/').pop()));
-    });
-    const found = new Set((data.nodes || []).filter(Boolean).map(n => n.id && n.id.split('/').pop()));
-    rows.filter(r => !found.has(String(r.order_id))).forEach(r =>
-      stmts.push(env.DB.prepare('UPDATE shopify_shipments SET cust_checked = 1 WHERE order_id = ?').bind(r.order_id)));
-    if (stmts.length) await env.DB.batch(stmts);
-  } catch (e) { console.warn('shopShipCustomers', e.message); }
+    for (let page = 0; page < 4; page++) {
+      const data = await shopifyGql(env, `query($q: String!, $after: String) {
+        orders(first: 250, query: $q, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          nodes { id shippingAddress { name city province phone } customer { displayName } }
+        } }`, { q: 'created_at:>=' + since, after });
+      const o = data && data.orders;
+      ((o && o.nodes) || []).forEach(n => {
+        const a = n.shippingAddress || {};
+        const name = a.name || (n.customer && n.customer.displayName) || null;
+        stmts.push(env.DB.prepare('UPDATE shopify_shipments SET cust_name = ?, city = ?, phone = ?, cust_checked = 1 WHERE order_id = ?')
+          .bind(name, [a.city, a.province].filter(Boolean).join(', ') || null, a.phone || null, String(n.id).split('/').pop()));
+      });
+      if (!o || !o.pageInfo || !o.pageInfo.hasNextPage) break;
+      after = o.pageInfo.endCursor;
+    }
+  } catch (e) { console.warn('shopShipCustomers', e.message); return { custError: e.message.slice(0, 200), names: 0 }; }
+  for (let i = 0; i < stmts.length; i += 80) await env.DB.batch(stmts.slice(i, i + 80));
+  return { names: stmts.length };
 }
 
-async function shopShipRefresh(env, force) {
+async function shopShipRefresh(env, force, trackOnly) {
   const out = {};
-  try { Object.assign(out, await shopShipSync(env)); } catch (e) { out.syncError = e.message; }
+  if (!trackOnly) {
+    try { Object.assign(out, await shopShipSync(env)); } catch (e) { out.syncError = e.message; }
+    Object.assign(out, await shopShipCustomers(env));
+  }
   try { Object.assign(out, await shopShipTrack(env, force)); } catch (e) { out.trackError = e.message; }
-  await shopShipCustomers(env);
   await env.DB.prepare("INSERT OR REPLACE INTO tm_settings (key, value) VALUES ('shop_ship_refreshed', ?)").bind(new Date().toISOString()).run().catch(() => {});
+  // Still waiting for a first / fresh track (the page keeps calling while this is > 0)
+  const left = await env.DB.prepare(`SELECT COUNT(*) AS n FROM shopify_shipments WHERE received_at IS NULL
+    AND (track_stage IS NULL OR track_stage NOT IN ('Delivered','RTO Delivered','Cancelled','Lost'))
+    AND (tracked_at IS NULL OR tracked_at < datetime('now', '-10 minutes'))`).first().catch(() => null);
+  out.left = left ? left.n : 0;
   return out;
 }
 
