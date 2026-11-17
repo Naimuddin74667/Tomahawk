@@ -7864,6 +7864,7 @@ const SR_CLOSE_REASONS = {
   duplicate:      { label: 'Duplicate request',                   text: "You have another request open for the same product; we'll continue there" },
   not_covered:    { label: 'Not covered',                         text: 'This issue is not covered under our warranty / service' },
   // Delivery issues (DRN-) only, 17-Nov-2026
+  marketplace_return: { label: 'Return via marketplace', text: 'Please raise a return for this order in your {platform} app. They will collect it and refund you', drn: true },
   no_issue:       { label: 'No delivery issue found',             text: "Based on the photos and video you shared, we couldn't find a delivery issue with this item", drn: true },
   refund:         { label: 'Refund approved',                     text: 'Your refund has been approved and will be processed within 7 working days', drn: true },
   other:          { label: 'Other',                               text: '' }
@@ -7877,11 +7878,12 @@ async function srCloseRequest(env, user, b) {
   const rs = SR_CLOSE_REASONS[key];
   if (!rs) return { ok: false, error: 'Pick a reason' };
   if (rs.drn && !isDrnRow(row)) return { ok: false, error: 'That reason is only for delivery issues (DRN-)' };
+  if (key === 'marketplace_return' && !/^(Amazon|Flipkart)$/.test(row.platform || '')) return { ok: false, error: '"Return via marketplace" is only for Amazon / Flipkart orders' };
   // Refund on a delivery issue: Admin or Shikhar only (same people who approve refunds)
   if (key === 'refund' && !canApproveRefund(user)) return { ok: false, error: 'Only Admin or Shikhar can approve a refund.' };
   const other = String(b.other || '').replace(/\s+/g, ' ').trim().slice(0, 200);
   if (key === 'other' && !other) return { ok: false, error: 'Type the reason' };
-  const custText = key === 'other' ? other : rs.text;
+  const custText = key === 'other' ? other : rs.text.replace('{platform}', row.platform && row.platform !== 'Website (Shopify)' ? row.platform : 'Amazon / Flipkart');
   // 1) A live pickup / product still with us → can't close yet
   if (row.case_id) {
     const { rev, fwd } = await srCaseLegs(env.DB, row.case_id);
@@ -10464,9 +10466,55 @@ async function drnOrder(env, orderRaw, phoneRaw, emailRaw) {
 
 // Public lookup for the page (step 1 → item list). Drops the private block.
 async function drnLookup(env, b) {
-  const r = await drnOrder(env, b.order || b.order_id, b.phone, b.email);
+  const raw = b.order || b.order_id;
+  if (drnMarketplaceOf(raw)) return drnMarketOrder(env, raw, b.delivered_on);
+  const r = await drnOrder(env, raw, b.phone, b.email);
   if (r.ok) delete r._private;
   return r;
+}
+
+// ── Marketplace orders on the delivery issue page (17-Nov-2026) ──
+// Amazon / Flipkart customers may report delivery issues to us too; the team
+// then decides (FOC part, replace, or "return it via the marketplace").
+// The marketplace hides the buyer's mobile and address and we get no delivery
+// date, so: no mobile check, the customer types name / mobile / address, and
+// gives the DELIVERY DATE themselves — 7 days from that date, same rule as
+// website orders (shown to the team as "as per customer").
+function drnMarketplaceOf(raw) {
+  const oc = checkOrderId('', raw);
+  return oc.ok && (oc.platform === 'Amazon' || oc.platform === 'Flipkart') ? oc : null;
+}
+// delivered_on 'YYYY-MM-DD' → { ok, days } or { error }
+function drnCheckDeliveredOn(d, orderDate) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d || ''))) return { error: 'Please enter the date the parcel was delivered.' };
+  const days = istDaysSince(d + 'T12:00:00+05:30');
+  if (days == null) return { error: 'Please enter a valid delivery date.' };
+  if (days < 0) return { error: 'The delivery date cannot be in the future.' };
+  if (orderDate && d < String(orderDate).slice(0, 10)) return { error: 'The delivery date cannot be before the order date (' + fmtDateIN(orderDate) + ').' };
+  return { ok: true, days };
+}
+async function drnMarketOrder(env, raw, deliveredOn) {
+  const oc = drnMarketplaceOf(raw);
+  let w = { found: false };
+  try { w = await warrantyLookup(env, oc.order_id); } catch (e) { console.warn('drn marketplace lookup', e.message); }
+  if (w.found && w.cancelled) return { ok: false, code: 'cancelled', error: 'This order was cancelled, so there is nothing to report here.' };
+  await ensureServiceRequestCols(env.DB);
+  const orderKey = normOrderId(oc.order_id);
+  const prior = (await env.DB.prepare("SELECT claim_id, line_id FROM warranty_claims WHERE order_key = ? AND (request_type = 'DRN' OR claim_id LIKE 'DRN-%' OR prev_claim_id LIKE 'DRN-%')")
+    .bind(orderKey).all()).results || [];
+  let dd = null;
+  if (deliveredOn) { dd = drnCheckDeliveredOn(deliveredOn, w.order_date); if (dd.error) return { ok: false, code: 'bad_date', error: dd.error }; }
+  const mk = (line_id, sku, title, qty) => {
+    const done = prior.find(x => x.line_id === line_id);
+    const state = done ? 'reported' : dd && dd.days > DRN_WINDOW_DAYS ? 'expired' : 'open';
+    return { line_id, sku, title, qty, delivered_at: deliveredOn || null, days_since: dd ? dd.days : null,
+      days_left: dd && state === 'open' ? DRN_WINDOW_DAYS - dd.days : null, state, drn: done ? done.claim_id : null };
+  };
+  const items = w.found ? (w.items || []).map(it => mk('mp:' + it.sku, it.sku, it.name || it.sku, it.qty || 1)) : [];
+  // Not in our records (or the item isn't listed): the customer types the product — one "other" report per order
+  items.push(mk('mp:other', '', 'Other / not listed — type the product name', 1));
+  return { ok: true, marketplace: true, platform: oc.platform, order: oc.order_id, order_id: oc.order_id, found: !!w.found,
+    placed_at: w.order_date || null, window_days: DRN_WINDOW_DAYS, needs_contact: true, needs_delivered_on: true, items };
 }
 
 async function submitDeliveryIssue(env, b, ip) {
@@ -10485,9 +10533,30 @@ async function submitDeliveryIssue(env, b, ip) {
   if (f.description.length < 20) throw claimErr('Please describe the issue in a little more detail (at least 20 characters).');
   if (b.consent !== true) throw claimErr('Please tick the confirmation box.');
 
-  // Order + item checked again on our side (lookup_phone / lookup_email = what was typed on step 1)
-  const ord = await drnOrder(env, f.order_id, b.lookup_phone || f.phone, b.lookup_email || f.email);
-  if (!ord.ok) throw claimErr(ord.error);
+  // Order + item checked again on our side (lookup_phone / lookup_email = what was typed on step 1).
+  // Marketplace orders: delivery date + contact / address typed by the customer.
+  const mp = drnMarketplaceOf(f.order_id);
+  let ord;
+  if (mp) {
+    const dd = drnCheckDeliveredOn(clean(b.delivered_on, 10));
+    if (dd.error) throw claimErr(dd.error);
+    ord = await drnMarketOrder(env, f.order_id, clean(b.delivered_on, 10));
+    if (!ord.ok) throw claimErr(ord.error);
+    const name = clean(b.name, 80), address = clean(b.address, 300), pincode = clean(b.pincode, 6);
+    if (name.length < 2) throw claimErr('Please enter your full name.');
+    if (address.length < 10) throw claimErr('Please enter your full address.');
+    if (!/^[1-9]\d{5}$/.test(pincode)) throw claimErr('Please enter a valid 6-digit pincode.');
+    ord._private = { name, email: f.email, address, pincode, city: clean(b.city, 60), state: clean(b.state, 60) };
+    const other = ord.items.find(x => x.line_id === 'mp:other');
+    if (other && f.line_id === 'mp:other') {
+      const prod = clean(b.product, 120);
+      if (prod.length < 3) throw claimErr('Please type the product name.');
+      other.title = prod;
+    }
+  } else {
+    ord = await drnOrder(env, f.order_id, b.lookup_phone || f.phone, b.lookup_email || f.email);
+    if (!ord.ok) throw claimErr(ord.error);
+  }
   const it = ord.items.find(x => x.line_id === f.line_id);
   if (!it) throw claimErr('That item is not on this order.');
   if (it.state === 'reported') {
@@ -10496,7 +10565,8 @@ async function submitDeliveryIssue(env, b, ip) {
     throw claimErr('This item has already been reported. Track it on the Track Your Request page with the mobile number you gave then.');
   }
   if (it.state === 'not_delivered') throw claimErr('This item has not been delivered yet. You can track it on the Track Order page.');
-  if (it.state === 'expired') throw claimErr('This item was delivered more than ' + DRN_WINDOW_DAYS + ' days ago. Please raise a service request instead.');
+  if (it.state === 'expired') throw claimErr('This item was delivered more than ' + DRN_WINDOW_DAYS + ' days ago. ' +
+    (mp ? 'For a return or refund, please use your ' + mp.platform + ' app. For a fault, raise a service request.' : 'Please raise a service request instead.'));
   if (f.issue_type === 'Short quantity' && !(it.qty > 1)) throw claimErr('Short quantity is only for items ordered as 2 or more.');
 
   const files = (Array.isArray(b.files) ? b.files : []).slice(0, 4).map((x, i) => ({
@@ -10520,14 +10590,14 @@ async function submitDeliveryIssue(env, b, ip) {
       issue_type, description, address, pincode, city, state, warranty_status, order_date, warranty_until, order_skus, file_count, ip,
       request_type, line_id, issue_detail, delivered_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
-    id, ord.order_id, normOrderId(ord.order_id), 'Website (Shopify)', it.title, name, f.phone, email || null,
+    id, ord.order_id, normOrderId(ord.order_id), mp ? mp.platform : 'Website (Shopify)', it.title, name, f.phone, email || null,
     f.issue_type, f.description, p.address, p.pincode, p.city, p.state,
     'Delivery issue', orderDate, until, sku, files.length, ip,
     'DRN', it.line_id, f.issue_detail || null, it.delivered_at
   ));
   const deliveredDay = String(it.delivered_at).slice(0, 10);
   await srAddEvent(env.DB, claimId, { by: 'customer', kind: 'note',
-    note: 'Delivery issue · ' + f.issue_type + (f.issue_detail ? ' — ' + f.issue_detail : '') + ' · delivered ' + deliveredDay + ' (' + it.days_since + ' day(s) before reporting)' }, {});
+    note: 'Delivery issue · ' + f.issue_type + (f.issue_detail ? ' — ' + f.issue_detail : '') + ' · delivered ' + deliveredDay + (mp ? ' as per customer (' + mp.platform + ' order)' : '') + ' (' + it.days_since + ' day(s) before reporting)' }, {});
 
   // Team email (photos attached) — same mailbox as service requests
   const v = x => x ? String(x) : '-';
@@ -10535,7 +10605,8 @@ async function submitDeliveryIssue(env, b, ip) {
     'A new DELIVERY ISSUE was reported on the website (within ' + DRN_WINDOW_DAYS + ' days of delivery).', '',
     'Request ID      : ' + claimId,
     'Issue           : ' + f.issue_type + (f.issue_detail ? ' — ' + f.issue_detail : ''),
-    'Delivered       : ' + deliveredDay + ' (' + it.days_since + ' day(s) ago)', '',
+    'Delivered       : ' + deliveredDay + ' (' + it.days_since + ' day(s) ago)' + (mp ? ' — as per customer' : ''), '',
+    ...(mp ? ['Marketplace     : ' + mp.platform + ' order — if it should be returned, close with "Return via marketplace"', ''] : []),
     '— Customer —',
     'Name            : ' + name, 'Mobile          : ' + f.phone, 'Email           : ' + v(email),
     'Address         : ' + [p.address, p.city, p.state].filter(Boolean).join(', ') + ' - ' + p.pincode, '',

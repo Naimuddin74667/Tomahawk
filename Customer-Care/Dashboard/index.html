@@ -4594,6 +4594,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // Free like a warranty request: no payments. Outcomes: Send FOC part, Book pickup (replace),
   // Convert to WRN, or Close (No delivery issue found / Refund approved — Admin + Shikhar).
   function isDRN(r) { return /^DRN-/.test(r.claim_id || ''); }
+  // Marketplace delivery issue (17-Nov-2026): Amazon / Flipkart order; delivery date typed by the customer
+  function isMarketDRN(r) { return isDRN(r) && /^(Amazon|Flipkart)$/.test(r.platform || ''); }
   function isFreeReq(r) { return !!r && (r.warranty_status === 'Under warranty' || r.warranty_status === 'Delivery issue'); }
   function isToReview(r) { return (r.status || 'new') === 'new' && !isNV(r); }
   // Pickup booked (or booked and since closed) → it lives on as a normal case
@@ -4729,7 +4731,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var st = REQ_STATUS[r.status || 'new'] || [r.status, 'b-gray'];
       var cs = reqCaseStatus(r);
       return '<tr class="case-row' + ((r.status || 'new') === 'new' ? ' attn' : '') + '" data-id="' + esc(r.claim_id) + '">' +
-        '<td class="mono">' + esc(r.claim_id) + repeatChip(r) + '<div class="sub">' + esc(fmtWhen(r.created_at)) + (r.prev_claim_id ? ' · was ' + esc(r.prev_claim_id) : '') + '</div>' + stepsMini(computeSteps(reqCase(r), r, null)) + '</td>' +
+        '<td class="mono">' + esc(r.claim_id) + repeatChip(r) + (isMarketDRN(r) ? ' <span class="badge b-blue">' + esc(r.platform) + '</span>' : '') + '<div class="sub">' + esc(fmtWhen(r.created_at)) + (r.prev_claim_id ? ' · was ' + esc(r.prev_claim_id) : '') + '</div>' + stepsMini(computeSteps(reqCase(r), r, null)) + '</td>' +
         '<td>' + esc(r.name) + '</td>' +
         '<td>' + esc(r.platform || '\u2014') + '</td>' +
         '<td class="mono">' + esc(r.order_id || '\u2014') + '</td>' +
@@ -4933,7 +4935,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         cell('Purchase date', esc(r.order_date ? fmtDay(r.order_date) : '—')) +
         // Badge only — the end date is just purchase date + 6 months (03-Nov-2026)
         (isDRN(r)
-          ? cell('Delivered', '<span class="rq-wty ok">' + esc(r.delivered_at ? fmtDay(String(r.delivered_at).slice(0, 10)) : '—') + '</span>' +
+          ? cell(isMarketDRN(r) ? 'Delivered (as per customer)' : 'Delivered', '<span class="rq-wty ok">' + esc(r.delivered_at ? fmtDay(String(r.delivered_at).slice(0, 10)) : '—') + '</span>' +
               (r.delivered_at ? '<div class="pay-hint">reported ' + drnDaysAfter(r) + ' day(s) after delivery</div>' : ''))
           : cell('Warranty', '<span class="rq-wty ' + (under ? 'ok' : 'out') + '">' + (under ? '&#10003; Under warranty' : '&#10007; Out of warranty') + '</span>')) +
         '<div class="span-all">' + cell('Product', prodHtml) + '</div>' +
@@ -5148,6 +5150,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     ['duplicate', 'Duplicate request', "You have another request open for the same product; we'll continue there", '📑'],
     ['not_covered', 'Not covered', 'This issue is not covered under our warranty / service', '🚫'],
     // Delivery issues (DRN-) only — Refund approved: Admin + Shikhar only (17-Nov-2026)
+    ['marketplace_return', 'Return via marketplace', 'Please raise a return for this order in your Amazon / Flipkart app. They will collect it and refund you', '🛒', 'drn_mp'],
     ['no_issue', 'No delivery issue found', "Based on the photos and video you shared, we couldn't find a delivery issue with this item", '🔍', 'drn'],
     ['other', 'Other', '', '✏️']
   ];
@@ -5155,6 +5158,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     return CLOSE_REASONS.filter(function (x) {
       if (!x[4]) return true;
       if (!isDRN(r)) return false;
+      if (x[4] === 'drn_mp') return isMarketDRN(r);   // Amazon / Flipkart orders only
       return x[4] === 'drn' || canApproveRefund();
     });
   }
