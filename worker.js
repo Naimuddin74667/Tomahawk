@@ -9057,7 +9057,7 @@ async function ccHandOver(env, user, oid) {
 
 async function srCaseLegs(DB, caseId) {
   if (!caseId) return { rev: null, fwd: null };
-  const rev = await DB.prepare("SELECT order_id, waybill, courier, self_courier, track_stage, received_at, in_process_at, delivered_at, cancelled_at, linked_order_id, refunded_at, resolution, handed_over_at, created_at FROM delhivery_orders WHERE order_id = ? AND delhivery_ok = 1 ORDER BY id DESC LIMIT 1").bind(caseId).first();
+  const rev = await DB.prepare("SELECT order_id, waybill, courier, self_courier, track_stage, received_at, in_process_at, delivered_at, cancelled_at, linked_order_id, refunded_at, resolution, handed_over_at, created_at, direction, job_type FROM delhivery_orders WHERE order_id = ? AND delhivery_ok = 1 ORDER BY id DESC LIMIT 1").bind(caseId).first();
   let fwd = null;
   if (rev && rev.linked_order_id) {
     fwd = await DB.prepare("SELECT order_id, waybill, courier, track_stage, rtd_at, delivered_at, created_at FROM delhivery_orders WHERE order_id = ? AND delhivery_ok = 1 ORDER BY id DESC LIMIT 1").bind(rev.linked_order_id).first();
@@ -10151,10 +10151,17 @@ async function srWaMilestones(env, onlyClaimId) {
     const delivSent = have.includes('request_delivered') || have.includes('request_delivered_invoice');
     if (have.includes('product_received') && delivSent) continue;
     const { rev, fwd } = await srCaseLegs(env.DB, row.case_id);
-    if (rev && rev.received_at && rev.received_at >= SR_WA_FOLLOWUP_FROM && !have.includes('product_received'))
+    // Send-only case (Send FOC part, 17-Nov-2026): the case IS the forward parcel —
+    // nothing comes back to us, so no "Product received"; "Delivered" once it's delivered.
+    // (direction defaults to 'forward' on very old rows, so also require an FOC job / F… order ID)
+    const sendOnly = !!rev && String(rev.direction || '').toLowerCase() === 'forward' &&
+      (/^foc$/i.test(rev.job_type || '') || /^F/i.test(rev.order_id || ''));
+    if (sendOnly && delivSent) continue;
+    if (!sendOnly && rev && rev.received_at && rev.received_at >= SR_WA_FOLLOWUP_FROM && !have.includes('product_received'))
       if ((await srSendWhatsAppFollowup(env, row, 'product_received', {}, '')).sent) sent++;
     // Delivered back — or collected from us (self-ship, 14-Nov-2026)
-    const fd = fwd && fwd.track_stage === 'Delivered' ? (fwd.delivered_at || '') : (rev && rev.handed_over_at) || '';
+    const fd = sendOnly ? (rev.track_stage === 'Delivered' && !rev.cancelled_at ? (rev.delivered_at || '') : '')
+      : fwd && fwd.track_stage === 'Delivered' ? (fwd.delivered_at || '') : (rev && rev.handed_over_at) || '';
     if (fd && fd >= SR_WA_FOLLOWUP_FROM && !delivSent) {
       const fb = { 'Feedback Token': await srFeedbackToken(env, row) };
       // SRN (paid) cases: the same message + the final tax invoice (14-Nov-2026).
