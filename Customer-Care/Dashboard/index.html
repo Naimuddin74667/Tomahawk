@@ -3030,13 +3030,16 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
 
   // ── Book Pickup from a request (03-Nov-2026) — same confirm panel as Send back,
   // in "pickup" mode: reverse pickup from the customer to our warehouse.
-  function pickupOrder(r) {
+  // mode (DRN only, 17-Nov-2026): 'refund' = Return & Refund · 'replace' = Replace & send back
+  function pickupOrder(r, mode) {
     var sku = r.confirmed_sku || String(r.order_skus || '').split(',')[0].replace(/\s+x\d+$/, '').trim() || r.confirmed_product || r.product || '';
     return {
       name: r.name || '', phone: String(r.phone || '').replace(/\D/g, '').slice(-10),
       add: r.address || '', pin: String(r.pincode || ''), city: r.city || '', state: r.state || '',
-      // Delivery issue (DRN-): the item comes back and a new one goes out → job type Replace
-      products_desc: (isDRN(r) ? 'Replacement - ' : 'Repair - ') + sku, job_type: isDRN(r) ? 'Replace' : 'Repair',
+      // Delivery issue (DRN-): Return & Refund → job Refund (Start refund after Received);
+      // Replace & send back → job Replacement (Replacement ready → Send back). Same names as Create Parcel Pickup.
+      products_desc: (!isDRN(r) ? 'Repair - ' : mode === 'refund' ? 'Refund - ' : 'Replacement - ') + sku,
+      job_type: !isDRN(r) ? 'Repair' : mode === 'refund' ? 'Refund' : 'Replacement',
       remark: (r.claim_id + ' · ' + (r.issue_type || '')).slice(0, 300),
       direction: 'reverse', payment_mode: 'Pickup', quantity: '1', total_amount: '', hsn_code: '8467',
       weight: 2000, length: 30, width: 20, height: 15,          // replaced from the listing below when known
@@ -3051,8 +3054,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (info.length && info.width && info.height) { o.length = Math.ceil(info.length); o.width = Math.ceil(info.width); o.height = Math.ceil(info.height); }
     if (info.weight || (info.length && info.width && info.height)) o._pkgSrc = 'listing';
   }
-  async function startPickup(r, btn) {
-    var o = pickupOrder(r);
+  async function startPickup(r, btn, mode) {
+    var o = pickupOrder(r, mode);
     if (!o.name || !o.phone || !o.add || !/^\d{6}$/.test(o.pin)) { alert('The request is missing the name, number, address or PIN — fix it first.'); return; }
     btn.disabled = true; btn.textContent = 'Checking…';
     sb = { mode: 'pickup', r: r, o: o, btn: btn, sv: {}, refused: {}, note: '' };
@@ -3065,7 +3068,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       if (alt) { sb.note = o.courier + " can't pick up from " + o.pin + ' — using ' + alt + '.'; o.courier = alt; }
     }
     btn.style.display = 'none';
-    var fb = document.getElementById('req-foc'); if (fb) fb.style.display = 'none';
+    ['req-foc', 'req-drn-refund', 'req-drn-replace'].forEach(function (id) { var x = document.getElementById(id); if (x) x.style.display = 'none'; });
+    if (isDRN(r)) sb.note = (mode === 'refund' ? 'Return & Refund' : 'Replace & send back') + ' — pickup from the customer.' + (sb.note ? ' ' + sb.note : '');
     renderSendBack();
     var panel = document.getElementById('cm-confirm'); if (panel) panel.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
@@ -4749,18 +4753,20 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var drn = isDRN(r);
       // Book Pickup (03-Nov-2026): books the reverse pickup right here (confirm panel),
       // no more jumping to Create Parcel Pickup.
-      acts = (!r.case_id && !fin && !isNV(r) ? '<button type="button" class="case-act primary' + (oow ? ' locked' : '') + '" id="req-approve"' +
-                (drn ? ' title="Pick up the item and send a replacement"' : '') + '>' +
-                (oow ? '&#128274; Book pickup after payment' : drn ? 'Book pickup (replace)' : 'Book Pickup') + '</button>' : '') +
+      // Delivery issue (DRN-, 17-Nov-2026): two outcomes only — both pick the item up from the customer.
+      acts = (drn && !r.case_id && !fin
+        ? '<button type="button" class="case-act primary" id="req-drn-replace" title="Pick it up, then send a new unit (Replacement ready → Send back)">Replace &amp; send back</button>' +
+          '<button type="button" class="case-act" id="req-drn-refund" title="Pick it up, then refund (Start refund after Received)">Return &amp; Refund</button>' : '') +
+        (!drn && !r.case_id && !fin && !isNV(r) ? '<button type="button" class="case-act primary' + (oow ? ' locked' : '') + '" id="req-approve">' +
+                (oow ? '&#128274; Book pickup after payment' : 'Book Pickup') + '</button>' : '') +
         // Send FOC part (07-Nov-2026): under warranty only — a free part goes to the
         // customer instead of taking the machine back. Out of warranty stays chargeable.
-        (!r.case_id && !fin && !isNV(r) && !oow ? '<button type="button" class="case-act" id="req-foc">Send FOC part</button>' : '') +
+        (!drn && !r.case_id && !fin && !isNV(r) && !oow ? '<button type="button" class="case-act" id="req-foc">Send FOC part</button>' : '') +
         // Customer self-shipped (14-Nov-2026): the customer already sent it themselves →
         // save their courier + tracking no., no pickup and no pickup payment.
         // Out of warranty: it sits beside "Get quote & send link" in Payments instead (14-Nov-2026)
         (!r.case_id && !fin && !isNV(r) && !oow && !drn ? '<button type="button" class="case-act" id="req-self">Customer self-shipped</button>' : '') +
-        // Delivery issue that is really a product fault → becomes a WRN- (17-Nov-2026)
-        (drn && !r.case_id && !fin ? '<button type="button" class="case-act" id="req-drn-wrn">Convert to warranty request</button>' : '') +
+
         // Customer emails are off for the first go-live, so only status actions
         // are offered (Ask for info / Tip / Repair quote come back with the emails).
         // Ask for photos / video again (04-Nov-2026) — WhatsApp media_reupload with an upload link
@@ -4823,8 +4829,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (rap) rap.addEventListener('click', function () { if (!rap.classList.contains('locked')) startPickup(r, rap); });
     var rfoc = document.getElementById('req-foc');
     if (rfoc) rfoc.addEventListener('click', function () { startFoc(r, rfoc); });
-    var rdw = document.getElementById('req-drn-wrn');
-    if (rdw) rdw.addEventListener('click', function () { drnToWrn(r, rdw); });
+    var rdRep = document.getElementById('req-drn-replace');
+    if (rdRep) rdRep.addEventListener('click', function () { startPickup(r, rdRep, 'replace'); });
+    var rdRef = document.getElementById('req-drn-refund');
+    if (rdRef) rdRef.addEventListener('click', function () { startPickup(r, rdRef, 'refund'); });
     var rself = document.getElementById('req-self');
     if (rself) rself.addEventListener('click', function () { selfShipPanel(r); });
     var roc = document.getElementById('rq-open-case');
@@ -5112,7 +5120,6 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     ['not_covered', 'Not covered', 'This issue is not covered under our warranty / service', '🚫'],
     // Delivery issues (DRN-) only — Refund approved: Admin + Shikhar only (17-Nov-2026)
     ['no_issue', 'No delivery issue found', "Based on the photos and video you shared, we couldn't find a delivery issue with this item", '🔍', 'drn'],
-    ['refund', 'Refund approved', 'Your refund has been approved and will be processed within 7 working days', '💸', 'drn_refund'],
     ['other', 'Other', '', '✏️']
   ];
   function closeReasonsFor(r) {
