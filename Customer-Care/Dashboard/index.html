@@ -99,6 +99,23 @@ html[data-theme="light"]       .icon-moon { display: none; }
 .page-head { margin-bottom: 22px; }
 .page-title { font-family: var(--font-display); font-size: 22px; font-weight: 800; color: var(--text); }
 .page-sub { font-size: 12.5px; color: var(--text2); margin-top: 4px; }
+/* Global search (17-Nov-2026): one box that finds any request or case */
+.gs { position: relative; flex: 1; max-width: 520px; margin-left: auto; }
+.gs input { width: 100%; background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 8px;
+  padding: 10px 12px 10px 34px; font: inherit; font-size: 13.5px; }
+.gs input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.gs-ico { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--text2); pointer-events: none; font-size: 14px; }
+.gs-key { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: 11px; color: var(--text2);
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; pointer-events: none; }
+.gs-pop { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 60; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.18); max-height: 440px; overflow-y: auto; padding: 6px; }
+.gs-grp { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text2); padding: 8px 10px 4px; }
+.gs-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; text-align: left;
+  background: none; border: 0; border-radius: 7px; padding: 8px 10px; cursor: pointer; color: var(--text); font: inherit; font-size: 13px; }
+.gs-row:hover, .gs-row.on { background: var(--surface2); }
+.gs-row .mono { font-weight: 700; }
+.gs-row .gs-sub { color: var(--text2); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gs-empty { padding: 14px 10px; color: var(--text2); font-size: 13px; }
 
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: start; }
 @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
@@ -1183,6 +1200,13 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     <div>
       <div class="page-title">Dashboard</div>
       <div class="page-sub">Every pickup and shipment in one place — each case tracked from pickup to close</div>
+    </div>
+    <!-- Global search (17-Nov-2026) — any request or case, whichever tab you are on -->
+    <div class="gs" id="gs">
+      <span class="gs-ico">&#128269;</span>
+      <input type="search" id="gs-q" autocomplete="off" placeholder="Search everything — request ID, name, mobile, order ID, AWB, product">
+      <span class="gs-key" id="gs-key">/</span>
+      <div class="gs-pop" id="gs-pop" hidden></div>
     </div>
     <!-- Analysis page (04-Nov-2026) -->
     <a class="case-act" href="../Analysis/" style="text-decoration:none;white-space:nowrap">&#128202; Analysis</a>
@@ -5930,6 +5954,94 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   document.getElementById('req-q').addEventListener('input', function () { reqPage = 1; renderRequests(); });
   document.getElementById('req-refresh').addEventListener('click', function () { load(false).then(ccMarkFresh); });
 
+  // ══ GLOBAL SEARCH (17-Nov-2026) ═══════════════════════════════════════
+  // One box above the tiles: finds any request (DRN / NV / SRN / WRN, open or
+  // closed, last 90 days + everything still open) and any case (the latest 500
+  // shipments) by request ID, old ID, name, mobile, email, order ID, AWB,
+  // courier order no. or product. Every word typed must match. A request whose
+  // pickup is booked shows as its case. Enter opens the first result,
+  // ↑ ↓ move, Esc closes, "/" jumps to the box from anywhere on the page.
+  var gsHits = [], gsSel = 0;
+  function gsNorm(v) { return String(v == null ? '' : v).toLowerCase(); }
+  function gsMatch(hay, words) {
+    var digits = hay.replace(/\D/g, '');
+    return words.every(function (w) {
+      if (hay.indexOf(w) !== -1) return true;
+      var wd = w.replace(/\D/g, '');                     // "98201 27190" / "+91 98201…" still match a mobile
+      return wd.length >= 5 && digits.indexOf(wd) !== -1;
+    });
+  }
+  function gsSearch(q) {
+    var words = gsNorm(q).trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return [];
+    var out = [];
+    requests.forEach(function (r) {
+      if (isBooked(r) && reqCase(r)) return;             // shown as its case below
+      var hay = gsNorm([r.claim_id, r.prev_claim_id, r.name, r.phone, r.email, r.order_id, r.product, r.order_skus, r.confirmed_sku, r.issue_type, r.city].join(' '));
+      if (!gsMatch(hay, words)) return;
+      var st = REQ_STATUS[r.status || 'new'] || [r.status || '', 'b-gray'];
+      out.push({ kind: 'req', id: r.claim_id, title: r.claim_id, sub: [r.name, r.phone, r.product].filter(Boolean).join(' · '),
+        badge: st, at: r.created_at || '' });
+    });
+    cases.forEach(function (c) {
+      var r = caseRequest(c);
+      var hay = gsNorm(c.search + ' ' + (r ? [r.claim_id, r.prev_claim_id, r.email, r.order_id].join(' ') : ''));
+      if (!gsMatch(hay, words)) return;
+      out.push({ kind: 'case', id: c.id, title: c.caseNo, sub: [c.type, c.customer, c.product].filter(Boolean).join(' · '),
+        badge: [c.st ? c.st.label : '', c.st && c.st.tone === 'closed' ? 'b-gray' : 'b-blue'], at: c.created || '' });
+    });
+    // Exact ID / phone hits first, then newest
+    var w0 = words.join(' ');
+    out.sort(function (a, b) {
+      var ea = gsNorm(a.title) === w0 ? 0 : 1, eb = gsNorm(b.title) === w0 ? 0 : 1;
+      return ea - eb || String(b.at).localeCompare(String(a.at));
+    });
+    return out.slice(0, 30);
+  }
+  function gsRender() {
+    var q = document.getElementById('gs-q').value, pop = document.getElementById('gs-pop');
+    if (!q.trim()) { pop.hidden = true; gsHits = []; return; }
+    gsHits = gsSearch(q); if (gsSel >= gsHits.length) gsSel = 0;
+    var row = function (h, i) {
+      return '<button type="button" class="gs-row' + (i === gsSel ? ' on' : '') + '" data-i="' + i + '">' +
+        '<span class="mono">' + esc(h.title) + '</span><span class="gs-sub">' + esc(h.sub || '\u2014') + '</span>' +
+        (h.badge[0] ? '<span class="badge ' + h.badge[1] + '">' + esc(h.badge[0]) + '</span>' : '<span></span>') + '</button>';
+    };
+    var reqs = gsHits.filter(function (h) { return h.kind === 'req'; }), cs = gsHits.filter(function (h) { return h.kind === 'case'; });
+    pop.innerHTML = !gsHits.length ? '<div class="gs-empty">No request or case matches “' + esc(q.trim()) + '”.</div>' :
+      (reqs.length ? '<div class="gs-grp">Requests (' + reqs.length + ')</div>' + reqs.map(function (h) { return row(h, gsHits.indexOf(h)); }).join('') : '') +
+      (cs.length ? '<div class="gs-grp">Cases (' + cs.length + ')</div>' + cs.map(function (h) { return row(h, gsHits.indexOf(h)); }).join('') : '');
+    pop.hidden = false;
+    pop.querySelectorAll('.gs-row').forEach(function (b) {
+      b.addEventListener('mousedown', function (e) { e.preventDefault(); gsOpen(gsHits[+b.dataset.i]); });
+    });
+  }
+  function gsOpen(h) {
+    if (!h) return;
+    document.getElementById('gs-pop').hidden = true;
+    document.getElementById('gs-q').blur();
+    if (h.kind === 'req') openRequest(h.id);
+    else { var c = cases.filter(function (x) { return x.id === h.id; })[0]; if (c) openCase(c); }
+  }
+  (function wireGlobalSearch() {
+    var inp = document.getElementById('gs-q'), pop = document.getElementById('gs-pop');
+    inp.addEventListener('input', function () { gsSel = 0; gsRender(); });
+    inp.addEventListener('focus', function () { document.getElementById('gs-key').hidden = true; if (inp.value.trim()) gsRender(); });
+    inp.addEventListener('blur', function () { document.getElementById('gs-key').hidden = !!inp.value; setTimeout(function () { pop.hidden = true; }, 120); });
+    inp.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault(); if (!gsHits.length) return;
+        gsSel = (gsSel + (e.key === 'ArrowDown' ? 1 : -1) + gsHits.length) % gsHits.length; gsRender();
+        var on = pop.querySelector('.gs-row.on'); if (on) on.scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'Enter') { e.preventDefault(); gsOpen(gsHits[gsSel]); }
+      else if (e.key === 'Escape') { inp.value = ''; pop.hidden = true; inp.blur(); }
+    });
+    document.addEventListener('keydown', function (e) {
+      var a = document.activeElement;
+      if (e.key === '/' && !(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) && !e.ctrlKey && !e.metaKey) { e.preventDefault(); inp.focus(); inp.select(); }
+    });
+  })();
+
   async function load(force) {
     try {
       var reqP = loadRequests();
@@ -5974,7 +6086,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (['case-modal', 'esc-modal'].some(function (id) { var m = document.getElementById(id); return m && !m.hidden; })) return true;
     if (document.querySelector('.rq-lb:not([hidden])')) return true;          // photo viewer
     var a = document.activeElement;                                          // typing in a form (search boxes are fine)
-    return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && ['q', 'req-q'].indexOf(a.id) === -1);
+    return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && ['q', 'req-q', 'gs-q'].indexOf(a.id) === -1);
   }
   async function ccTick() {
     ccShowAge();
