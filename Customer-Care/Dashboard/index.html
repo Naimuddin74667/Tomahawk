@@ -3035,7 +3035,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     return {
       name: r.name || '', phone: String(r.phone || '').replace(/\D/g, '').slice(-10),
       add: r.address || '', pin: String(r.pincode || ''), city: r.city || '', state: r.state || '',
-      products_desc: 'Repair - ' + sku, job_type: 'Repair', remark: (r.claim_id + ' · ' + (r.issue_type || '')).slice(0, 300),
+      // Delivery issue (DRN-): the item comes back and a new one goes out → job type Replace
+      products_desc: (isDRN(r) ? 'Replacement - ' : 'Repair - ') + sku, job_type: isDRN(r) ? 'Replace' : 'Repair',
+      remark: (r.claim_id + ' · ' + (r.issue_type || '')).slice(0, 300),
       direction: 'reverse', payment_mode: 'Pickup', quantity: '1', total_amount: '', hsn_code: '8467',
       weight: 2000, length: 30, width: 20, height: 15,          // replaced from the listing below when known
       courier: 'Ekart', market_order_id: r.order_id || undefined, _sku: sku, _claim: r.claim_id, _pkgSrc: 'default'
@@ -3178,7 +3180,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   }
 
   // Self-shipped case → its request is out of warranty (charges apply)?
-  function selfOow(c) { var r = c && isSelfShip(c.reverse) ? caseRequest(c) : null; return !!r && r.warranty_status !== 'Under warranty' && !isNV(r); }
+  function selfOow(c) { var r = c && isSelfShip(c.reverse) ? caseRequest(c) : null; return !!r && !isFreeReq(r) && !isNV(r); }
   // Customer collects (14-Nov-2026): self-ship case, repair done → hand it over, case closed.
   async function handOverAction(c, btn) {
     if (!confirm(c.caseNo + ': the customer is collecting the product from us?\n\nNo send-back is booked and the case closes.' +
@@ -4141,7 +4143,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       // and the final invoice can be handled from the open case (03-Nov-2026).
       (casePaysShown(r) ? payBlockHtml() : '');
   }
-  function casePaysShown(r) { return !!r && !/^NV-/.test(r.claim_id || '') && r.warranty_status !== 'Under warranty'; }
+  function casePaysShown(r) { return !!r && !/^NV-/.test(r.claim_id || '') && !isFreeReq(r); }
 
   // ══ 7-STEP TRACKER (03-Nov-2026) ═══════════════════════════════════════
   // Every request / case is one of 7 steps; a step completes only after the
@@ -4170,7 +4172,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var rvOk = !!(rv && rv.delhivery_ok && !rv.cancelled_at);
     var fwOk = !!(fw && fw.delhivery_ok && !fw.cancelled_at && legStage(fw) !== 'Cancelled');
     var rs = rvOk ? legStage(rv) : '', fs = fwOk ? legStage(fw) : '';
-    var oow = !!r && r.warranty_status !== 'Under warranty' && !isNV(r);
+    var oow = !!r && !isFreeReq(r) && !isNV(r);
     var paid = function (k) { return pay && pay[k] && pay[k].status === 'paid'; };
     var self = rvOk && isSelfShip(rv), handed = rvOk && !!rv.handed_over_at;
     var done = [
@@ -4557,6 +4559,11 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // Once a pickup is booked the request moves to the cases list (case ID = request ID).
   // Old SN-/WN- IDs still match. Default tab = first of NV / Service / Warranty that has requests.
   function isSRN(r) { return /^SR?N-/.test(r.claim_id || ''); }
+  // Delivery issue (17-Nov-2026): DRN- = reported within 7 days of delivery (website orders).
+  // Free like a warranty request: no payments. Outcomes: Send FOC part, Book pickup (replace),
+  // Convert to WRN, or Close (No delivery issue found / Refund approved — Admin + Shikhar).
+  function isDRN(r) { return /^DRN-/.test(r.claim_id || ''); }
+  function isFreeReq(r) { return !!r && (r.warranty_status === 'Under warranty' || r.warranty_status === 'Delivery issue'); }
   function isToReview(r) { return (r.status || 'new') === 'new' && !isNV(r); }
   // Pickup booked (or booked and since closed) → it lives on as a normal case
   // under the same request ID, so it leaves New requests (29-Oct-2026).
@@ -4565,15 +4572,16 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     { key: 'all', label: 'All', test: function (r) { return !isBooked(r); } },
     // NV- = order not found when submitted → verified in its own tab first, then it becomes WRN-/SRN- and moves to its review tab
     { key: 'verify', label: 'Verify order (NV)', test: function (r) { return isNV(r) && ['closed', 'not_covered'].indexOf(r.status) === -1; } },
+    { key: 'delivery', label: 'Delivery issues', test: function (r) { return isToReview(r) && isDRN(r); } },
     { key: 'service', label: 'Service requests', test: function (r) { return isToReview(r) && isSRN(r); } },
-    { key: 'warranty', label: 'Warranty requests', test: function (r) { return isToReview(r) && !isSRN(r); } },
+    { key: 'warranty', label: 'Warranty requests', test: function (r) { return isToReview(r) && !isSRN(r) && !isDRN(r); } },
     { key: 'waiting', label: 'Waiting for customer', test: function (r) { return ['waiting_customer', 'tip_sent', 'quote_sent'].indexOf(r.status) !== -1; } },
     { key: 'done', label: 'Closed', test: function (r) { return !isBooked(r) && (r.status === 'closed' || r.status === 'not_covered'); } }
   ];
   function reqTest(key) { return REQ_FILTERS.filter(function (f) { return f.key === key; })[0].test; }
   // Pick the opening tab: NV first, then Service, then Warranty (falls back to Warranty if all empty).
   function pickDefaultReqTab() {
-    var order = ['verify', 'service', 'warranty'];
+    var order = ['delivery', 'verify', 'service', 'warranty'];
     for (var i = 0; i < order.length; i++) if (requests.some(reqTest(order[i]))) return order[i];
     return 'warranty';
   }
@@ -4597,7 +4605,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     payment_link: 'Payment link sent', payment_received: 'Payment received', payment_void: 'Invoice voided', verified: 'Order verified', consent: 'Customer agreed to charges',
     invoice_request: 'Asked for invoice again', invoice_uploaded: 'Customer uploaded invoice',
     media_request: 'Asked for photos / video again', media_uploaded: 'Customer uploaded photos / video', whatsapp: 'WhatsApp', closed: 'Closed', feedback: 'Customer feedback',
-    handed_over: 'Customer collected' };
+    handed_over: 'Customer collected', converted: 'Converted to warranty request' };
   function canActReq() { return window.TM_ROLE === 'admin' || window.TM_ROLE === 'manager'; }
   function isNV(r) { return /^NV-/.test(r.claim_id || ''); }
   // "New requests" tile = to review (SRN + WRN) + still to verify
@@ -4676,7 +4684,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       renderReqPager(0, 1); return;
     }
     // High-priority repeats first (still open), then the usual order
-    var hp = function (r) { return r.repeat_kind === 'priority' && ['closed', 'not_covered'].indexOf(r.status) === -1 ? 0 : 1; };
+    var hp = function (r) { return (r.repeat_kind === 'priority' || isDRN(r)) && ['closed', 'not_covered'].indexOf(r.status) === -1 ? 0 : 1; };
     rows = rows.map(function (r, i) { return [r, i]; }).sort(function (a, b) { return hp(a[0]) - hp(b[0]) || a[1] - b[1]; }).map(function (x) { return x[0]; });
     var total = rows.length, totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (reqPage > totalPages) reqPage = totalPages;
@@ -4694,7 +4702,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         '<td>' + esc(r.platform || '\u2014') + '</td>' +
         '<td class="mono">' + esc(r.order_id || '\u2014') + '</td>' +
         '<td class="req-prod" title="' + esc(r.product) + '">' + esc(r.product) + '</td>' +
-        '<td>' + esc(r.issue_type) + '</td>' +
+        '<td>' + esc(r.issue_type) + (isDRN(r) && r.issue_detail ? '<div class="sub">' + esc(r.issue_detail) + '</div>' : '') + '</td>' +
         '<td><span class="badge ' + st[1] + '">' + esc(st[0]) + '</span>' + payChip(r) + (cs ? '<div class="sub">' + esc(r.case_id + ' · ' + cs) + '</div>' : '') + '</td>' +
         '<td class="muted">' + (r.file_count || 0) + ' file(s)</td></tr>';
     }).join('');
@@ -4737,18 +4745,22 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var fin = r.status === 'closed' || r.status === 'not_covered';
       // Out of warranty: pickup can be booked only once pickup + delivery is paid
       // (unlocked by renderPayments once Step 1 shows Paid).
-      var oow = r.warranty_status !== 'Under warranty';
+      var oow = !isFreeReq(r);
+      var drn = isDRN(r);
       // Book Pickup (03-Nov-2026): books the reverse pickup right here (confirm panel),
       // no more jumping to Create Parcel Pickup.
-      acts = (!r.case_id && !fin && !isNV(r) ? '<button type="button" class="case-act primary' + (oow ? ' locked' : '') + '" id="req-approve">' +
-                (oow ? '&#128274; Book pickup after payment' : 'Book Pickup') + '</button>' : '') +
+      acts = (!r.case_id && !fin && !isNV(r) ? '<button type="button" class="case-act primary' + (oow ? ' locked' : '') + '" id="req-approve"' +
+                (drn ? ' title="Pick up the item and send a replacement"' : '') + '>' +
+                (oow ? '&#128274; Book pickup after payment' : drn ? 'Book pickup (replace)' : 'Book Pickup') + '</button>' : '') +
         // Send FOC part (07-Nov-2026): under warranty only — a free part goes to the
         // customer instead of taking the machine back. Out of warranty stays chargeable.
         (!r.case_id && !fin && !isNV(r) && !oow ? '<button type="button" class="case-act" id="req-foc">Send FOC part</button>' : '') +
         // Customer self-shipped (14-Nov-2026): the customer already sent it themselves →
         // save their courier + tracking no., no pickup and no pickup payment.
         // Out of warranty: it sits beside "Get quote & send link" in Payments instead (14-Nov-2026)
-        (!r.case_id && !fin && !isNV(r) && !oow ? '<button type="button" class="case-act" id="req-self">Customer self-shipped</button>' : '') +
+        (!r.case_id && !fin && !isNV(r) && !oow && !drn ? '<button type="button" class="case-act" id="req-self">Customer self-shipped</button>' : '') +
+        // Delivery issue that is really a product fault → becomes a WRN- (17-Nov-2026)
+        (drn && !r.case_id && !fin ? '<button type="button" class="case-act" id="req-drn-wrn">Convert to warranty request</button>' : '') +
         // Customer emails are off for the first go-live, so only status actions
         // are offered (Ask for info / Tip / Repair quote come back with the emails).
         // Ask for photos / video again (04-Nov-2026) — WhatsApp media_reupload with an upload link
@@ -4760,7 +4772,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var box = document.getElementById('case-body-modal');
     var nv = isNV(r);
     // Repair payment only once the order is verified and it's not under warranty
-    var showPay = !nv && r.warranty_status !== 'Under warranty';
+    var showPay = !nv && !isFreeReq(r);
     var oidWarn = orderIdWarning(r.order_id, r.platform, r.phone);
     stepsCtx = { c: reqCase(r), r: r, pay: null };
     box.innerHTML = '<div id="cc-steps"></div>' +
@@ -4780,6 +4792,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         '<div class="rq-rows">' +
           '<span class="rq-lbl">Product :</span><span class="rq-prod">' + esc(r.product || '\u2014') + (r.order_skus ? ' <span class="muted">[' + esc(r.order_skus) + ']</span>' : '') + '</span>' +
           '<span class="rq-lbl">Problem :</span><span><span class="rq-chip">' + esc(r.issue_type || '\u2014') + '</span></span>' +
+          (isDRN(r) && r.issue_detail ? '<span class="rq-lbl">Detail :</span><span>' + esc(r.issue_detail) + '</span>' : '') +
           (r.description ? '<span class="rq-lbl">Customer says :</span><span>' + descHtml(r.description, 'rq-quote') + '</span>' : '') +
         '</div>' +
       '</div><div class="rq-card"><div class="cm-k" style="display:flex;align-items:center;justify-content:space-between;gap:8px">' +
@@ -4810,6 +4823,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (rap) rap.addEventListener('click', function () { if (!rap.classList.contains('locked')) startPickup(r, rap); });
     var rfoc = document.getElementById('req-foc');
     if (rfoc) rfoc.addEventListener('click', function () { startFoc(r, rfoc); });
+    var rdw = document.getElementById('req-drn-wrn');
+    if (rdw) rdw.addEventListener('click', function () { drnToWrn(r, rdw); });
     var rself = document.getElementById('req-self');
     if (rself) rself.addEventListener('click', function () { selfShipPanel(r); });
     var roc = document.getElementById('rq-open-case');
@@ -4880,7 +4895,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
           (oidWarn ? '<div class="rq-warn">&#9888; ' + esc(oidWarn) + '</div>' : '')) +
         cell('Purchase date', esc(r.order_date ? fmtDay(r.order_date) : '—')) +
         // Badge only — the end date is just purchase date + 6 months (03-Nov-2026)
-        cell('Warranty', '<span class="rq-wty ' + (under ? 'ok' : 'out') + '">' + (under ? '&#10003; Under warranty' : '&#10007; Out of warranty') + '</span>') +
+        (isDRN(r)
+          ? cell('Delivered', '<span class="rq-wty ok">' + esc(r.delivered_at ? fmtDay(String(r.delivered_at).slice(0, 10)) : '—') + '</span>' +
+              (r.delivered_at ? '<div class="pay-hint">reported ' + drnDaysAfter(r) + ' day(s) after delivery</div>' : ''))
+          : cell('Warranty', '<span class="rq-wty ' + (under ? 'ok' : 'out') + '">' + (under ? '&#10003; Under warranty' : '&#10007; Out of warranty') + '</span>')) +
         '<div class="span-all">' + cell('Product', prodHtml) + '</div>' +
         (r.case_id ? '<div class="span-all"><div class="cm-k">Pickup case</div><div><b class="mono">' + esc(r.case_id) + '</b> · ' + esc(reqCaseStatus(r)) +
           (reqCase(r) ? ' <button class="co-edit" id="rq-open-case">Open case &#8594;</button>' : '') + '</div></div>' : '') +
@@ -5092,8 +5110,35 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     ['solved', 'Solved without pickup', 'Your issue was resolved with our support', '✅'],
     ['duplicate', 'Duplicate request', "You have another request open for the same product; we'll continue there", '📑'],
     ['not_covered', 'Not covered', 'This issue is not covered under our warranty / service', '🚫'],
+    // Delivery issues (DRN-) only — Refund approved: Admin + Shikhar only (17-Nov-2026)
+    ['no_issue', 'No delivery issue found', "Based on the photos and video you shared, we couldn't find a delivery issue with this item", '🔍', 'drn'],
+    ['refund', 'Refund approved', 'Your refund has been approved and will be processed within 7 working days', '💸', 'drn_refund'],
     ['other', 'Other', '', '✏️']
   ];
+  function closeReasonsFor(r) {
+    return CLOSE_REASONS.filter(function (x) {
+      if (!x[4]) return true;
+      if (!isDRN(r)) return false;
+      return x[4] === 'drn' || canApproveRefund();
+    });
+  }
+  // Days between delivery and the report (for the Order details card)
+  function drnDaysAfter(r) {
+    var a = Date.parse(r.delivered_at), b = Date.parse(String(r.created_at || '').replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(r.created_at || '') ? '' : 'Z'));
+    if (isNaN(a) || isNaN(b)) return '?';
+    return Math.max(0, Math.round((b - a) / 864e5));
+  }
+  // Delivery issue → warranty request (17-Nov-2026): DRN-… becomes WRN-… (old ID still works)
+  async function drnToWrn(r, btn) {
+    if (!confirm(r.claim_id + ': this is a product fault, not a delivery problem?\n\nIt becomes a warranty request (WRN-) and moves to the Warranty requests tab. The old ID keeps working.')) return;
+    btn.disabled = true; btn.textContent = 'Converting…';
+    try {
+      var x = await post('ccDrnToWrn', { claim_id: r.claim_id });
+      if (!x || !x.ok) throw new Error((x && x.error) || 'failed');
+      await loadRequests(); renderTiles(); renderRequests();
+      openRequest(x.claim_id);
+    } catch (e) { alert("Couldn't convert: " + e.message); btn.disabled = false; btn.textContent = 'Convert to warranty request'; }
+  }
   function wireClose(r) {
     var btn = document.getElementById('req-close'), box = document.getElementById('req-close-box');
     if (!btn || !box) return;
@@ -5102,7 +5147,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       btn.style.display = 'none';   // the panel has its own Close request button — don't show two
       box.innerHTML = '<div class="cm-sec-title" style="margin-bottom:8px">Close request</div>' +
         '<div class="cm-k" style="margin-bottom:6px">Reason</div>' +
-        '<select class="sb-input" id="cl-reason" style="max-width:360px"><option value="">— Pick a reason —</option>' + CLOSE_REASONS.map(function (x) {
+        '<select class="sb-input" id="cl-reason" style="max-width:360px"><option value="">— Pick a reason —</option>' + closeReasonsFor(r).map(function (x) {
           return '<option value="' + x[0] + '">' + x[3] + '  ' + esc(x[1]) + '</option>'; }).join('') + '</select>' +
         '<input class="sb-input" id="cl-other" placeholder="Type the reason (the customer sees this)" maxlength="200" style="width:100%;margin-top:8px" hidden>' +
         '<div class="pay-hint" id="cl-cust" style="margin-top:8px"></div>' +

@@ -1189,6 +1189,8 @@ const ACTION_TIERS = {
   warrantyClaimSubmit: 'public', // public warranty claim form — rate-limited, emails support
   requestTrack: 'public', // public 'track your request' page — request ID/order ID + mobile, steps only, rate-limited
   orderTrack: 'public', // public 'Track my order' (Shopify) — order no. + mobile, status/items/courier only, rate-limited
+  drnLookup: 'public', // public 'Report a delivery issue' (DRN) — order no. + mobile/email must match, item list only, rate-limited
+  ccDrnToWrn: 'manager_up', // Customer Care: delivery issue → warranty request
   orderCancel: 'public', // public 'Cancel order' on Track Order — order no. + mobile/email must match, only before courier pickup, rate-limited
   invoiceUploadInfo: 'public', invoiceUploadSubmit: 'public', // customer re-uploads the invoice — single-use link token, rate-limited
   ccAnalyticsData: 'viewer_read',  // Customer Care Analysis page (04-Nov-2026)
@@ -1467,7 +1469,7 @@ const ACTION_TIERS = {
 
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
-const ALWAYS_GATED = new Set(['ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
+const ALWAYS_GATED = new Set(['ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
   'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccPaymentWaive', 'ccLogisticsQuote', 'ccVersion',
   'shopShipList', 'shopShipRefresh', 'shopShipReceived']);
 
@@ -2076,6 +2078,18 @@ export default {
           return json({ ok: false, code: 'error', error: 'Something went wrong — please try again, or chat with us on WhatsApp.' }, 500);
         }
       }
+      // ── REPORT A DELIVERY ISSUE (public, DRN-) — 17-Nov-2026 ──
+      // POST { action:'drnLookup', order:'3101', phone? | email? } → the order's items,
+      // each with state open | not_delivered | expired | reported. Submit goes to
+      // warrantyClaimSubmit with request_type:'DRN'. See drnOrder().
+      if (request.method === 'POST' && act === 'drnLookup') {
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        if (!(await warrantyRateOk(env.DB, 'drn:' + ip, 30))) {
+          return json({ ok: false, code: 'rate_limited', error: 'Too many tries — please try again in an hour, or chat with us on WhatsApp.' }, 429);
+        }
+        try { const r = await drnLookup(env, body || {}); return json(r, r.ok ? 200 : 400); }
+        catch (e) { console.error('drnLookup failed:', e.message); return json({ ok: false, code: 'error', error: 'Something went wrong — please try again later.' }, 500); }
+      }
       if (request.method === 'GET' && action === 'requestTrack') {
         const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
         if (!(await warrantyRateOk(env.DB, 'track:' + ip, 30))) {
@@ -2088,7 +2102,7 @@ export default {
         await ensureServiceRequestCols(env.DB);
         const days = Math.min(365, Math.max(1, parseInt(url.searchParams.get('days') || '90', 10) || 90));
         const rows = (await env.DB.prepare(
-          "SELECT claim_id, created_at, updated_at, order_id, platform, product, name, phone, email, issue_type, description, address, pincode, city, state, warranty_status, order_date, warranty_until, order_skus, file_count, status, case_id, events_json, prev_claim_id, confirmed_sku, confirmed_product, repeat_of, repeat_kind, repeat_delivered_at FROM warranty_claims WHERE created_at > datetime('now', ?) OR COALESCE(status, 'new') NOT IN ('closed','not_covered') ORDER BY created_at DESC LIMIT 500"
+          "SELECT claim_id, created_at, updated_at, order_id, platform, product, name, phone, email, issue_type, description, address, pincode, city, state, warranty_status, order_date, warranty_until, order_skus, file_count, status, case_id, events_json, prev_claim_id, confirmed_sku, confirmed_product, repeat_of, repeat_kind, repeat_delivered_at, request_type, issue_detail, delivered_at, line_id FROM warranty_claims WHERE created_at > datetime('now', ?) OR COALESCE(status, 'new') NOT IN ('closed','not_covered') ORDER BY created_at DESC LIMIT 500"
         ).bind('-' + days + ' days').all()).results || [];
         // Payment chip for the list (16-Nov-2026): latest advance per step →
         // 'free' (Free service) | 'pending' (a link is out) | 'paid' (all sent links paid)
@@ -2122,6 +2136,12 @@ export default {
         const row = await env.DB.prepare('SELECT files_json FROM warranty_claims WHERE claim_id = ? OR prev_claim_id = ?').bind(qid, qid).first();
         if (!row) return json({ ok: false, error: 'No such request' }, 404);
         return json({ ok: true, files: await srSignedFiles(env, row) });
+      }
+      if (request.method === 'POST' && act === 'ccDrnToWrn') {
+        const user = authResult.user || (await resolveSession(request, env.DB));
+        if (!user) return json({ ok: false, error: 'Please log in again' }, 401);
+        const r = await srDrnToWrn(env, user, body || {});
+        return json(r, r.ok ? 200 : 400);
       }
       if (request.method === 'POST' && act === 'ccClaimVerify') {
         const user = authResult.user || (await resolveSession(request, env.DB));
@@ -5269,7 +5289,7 @@ export default {
               let selfOow = false;
               if (rv.courier === 'Self-ship') {
                 const cl = await env.DB.prepare('SELECT warranty_status FROM warranty_claims WHERE claim_id = ?').bind(rv.claim_id).first();
-                selfOow = !!cl && cl.warranty_status !== 'Under warranty';
+                selfOow = !!cl && !srIsFree(cl);
               }
               if (selfOow || (l && l.doc_type === 'retainer' && l.status !== 'void')) {
                 const rp = await rpLatest(env.DB, rv.claim_id, 'repair');
@@ -7598,7 +7618,10 @@ async function ensureServiceRequestCols(DB) {
                      'inv_token_hash TEXT', 'inv_token_expires TEXT', 'inv_request_note TEXT',
                      'med_token_hash TEXT', 'med_token_expires TEXT', 'med_request_note TEXT', 'med_prev_status TEXT',
                      'close_reason TEXT', 'closed_at TEXT',
-                     'fb_token_hash TEXT', 'fb_token_expires TEXT', 'fb_rating INTEGER', 'fb_comment TEXT', 'fb_recommend INTEGER', 'fb_at TEXT']) {
+                     'fb_token_hash TEXT', 'fb_token_expires TEXT', 'fb_rating INTEGER', 'fb_comment TEXT', 'fb_recommend INTEGER', 'fb_at TEXT',
+                     // Delivery issue requests (17-Nov-2026): request_type 'DRN' (or 'WRN_FROM_DRN' once converted),
+                     // line_id = Shopify line item, issue_detail = what's missing / received / damaged, delivered_at = parcel delivered
+                     'request_type TEXT', 'line_id TEXT', 'issue_detail TEXT', 'delivered_at TEXT']) {
     try { await DB.prepare('ALTER TABLE warranty_claims ADD COLUMN ' + col).run(); } catch (e) { /* exists */ }
   }
 }
@@ -7840,6 +7863,9 @@ const SR_CLOSE_REASONS = {
   solved:         { label: 'Solved without pickup',               text: 'Your issue was resolved with our support' },
   duplicate:      { label: 'Duplicate request',                   text: "You have another request open for the same product; we'll continue there" },
   not_covered:    { label: 'Not covered',                         text: 'This issue is not covered under our warranty / service' },
+  // Delivery issues (DRN-) only, 17-Nov-2026
+  no_issue:       { label: 'No delivery issue found',             text: "Based on the photos and video you shared, we couldn't find a delivery issue with this item", drn: true },
+  refund:         { label: 'Refund approved',                     text: 'Your refund has been approved and will be processed within 7 working days', drn: true },
   other:          { label: 'Other',                               text: '' }
 };
 async function srCloseRequest(env, user, b) {
@@ -7850,6 +7876,9 @@ async function srCloseRequest(env, user, b) {
   const key = String(b.reason || '');
   const rs = SR_CLOSE_REASONS[key];
   if (!rs) return { ok: false, error: 'Pick a reason' };
+  if (rs.drn && !isDrnRow(row)) return { ok: false, error: 'That reason is only for delivery issues (DRN-)' };
+  // Refund on a delivery issue: Admin or Shikhar only (same people who approve refunds)
+  if (key === 'refund' && !canApproveRefund(user)) return { ok: false, error: 'Only Admin or Shikhar can approve a refund.' };
   const other = String(b.other || '').replace(/\s+/g, ' ').trim().slice(0, 200);
   if (key === 'other' && !other) return { ok: false, error: 'Type the reason' };
   const custText = key === 'other' ? other : rs.text;
@@ -8082,7 +8111,7 @@ async function srVerify(env, user, b) {
 
   // One open request per order — don't let a corrected order ID collide.
   const other = await env.DB.prepare(
-    "SELECT claim_id FROM warranty_claims WHERE order_key = ? AND claim_id <> ? AND COALESCE(status, 'new') NOT IN ('closed','not_covered') LIMIT 1"
+    "SELECT claim_id FROM warranty_claims WHERE order_key = ? AND claim_id <> ? AND COALESCE(request_type, '') <> 'DRN' AND COALESCE(status, 'new') NOT IN ('closed','not_covered') LIMIT 1"
   ).bind(orderKey, row.claim_id).first();
   if (other) return { ok: false, error: 'Order ' + orderId + ' already has an open request: ' + other.claim_id };
 
@@ -8438,7 +8467,7 @@ async function rpCreate(env, user, b) {
   const consent = ['call', 'whatsapp', 'website'].includes(String(b.consent || '').toLowerCase()) ? String(b.consent).toLowerCase() : 'website';
   const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
   if (!row) return { ok: false, error: 'No such request' };
-  if (row.warranty_status === 'Under warranty') return { ok: false, error: 'This request is under warranty — no payment needed.' };
+  if (srIsFree(row)) return { ok: false, error: 'This request is ' + (row.warranty_status === 'Delivery issue' ? 'a delivery issue' : 'under warranty') + ' — no payment needed.' };
   const open = await env.DB.prepare("SELECT status FROM repair_payments WHERE claim_id = ? AND COALESCE(kind, 'repair') = ? AND status IN ('pending','paid','skipped')").bind(claimId, kind).first();
   if (await rpIsWaived(env.DB, claimId)) return { ok: false, error: 'This request is marked Free service — no payment needed. Undo that first.' };
   if (open && open.status === 'skipped') return { ok: false, error: 'Step 2 is marked "Not repaired". Undo that first.' };
@@ -8644,7 +8673,7 @@ async function rpWaive(env, user, claimId, reason, undo) {
   await ensureRepairPaymentsTable(env.DB);
   const row = await env.DB.prepare('SELECT claim_id, warranty_status FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
   if (!row) return { ok: false, error: 'No such request' };
-  if (row.warranty_status === 'Under warranty') return { ok: false, error: 'This request is under warranty — it is already free.' };
+  if (srIsFree(row)) return { ok: false, error: 'This request is ' + (row.warranty_status === 'Delivery issue' ? 'a delivery issue' : 'under warranty') + ' — it is already free.' };
   if (await rpLatest(env.DB, claimId, 'final')) return { ok: false, error: 'The final invoice is already made — change it in Zoho Books instead.' };
   const by = (user && user.username) || 'unknown';
   const latest = {};
@@ -8999,7 +9028,7 @@ async function ccHandOver(env, user, oid) {
   if (rv.claim_id) {
     await ensureRepairPaymentsTable(env.DB);
     claim = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(rv.claim_id).first();
-    if (claim && claim.warranty_status !== 'Under warranty') {
+    if (claim && !srIsFree(claim)) {
       const rp = await rpLatest(env.DB, rv.claim_id, 'repair');
       if (!rp || !['paid', 'skipped'].includes(rp.status)) return { ok: false, error: 'The service & spare parts payment is not settled yet (Payments).' };
       const l = await rpLatest(env.DB, rv.claim_id, 'logistics');
@@ -9013,7 +9042,7 @@ async function ccHandOver(env, user, oid) {
     await srAddEvent(env.DB, rv.claim_id, { by, kind: 'handed_over', note: 'Customer collected the product from us — case closed' },
       { status: 'closed', m_delivered_at: new Date().toISOString() });
     // Final invoice from whatever was paid (service & parts) — same as a send-back
-    if (claim && claim.warranty_status !== 'Under warranty' && zbConfigured(env)) {
+    if (claim && !srIsFree(claim) && zbConfigured(env)) {
       const paid = (await env.DB.prepare("SELECT 1 FROM repair_payments WHERE claim_id = ? AND status = 'paid' AND doc_type = 'retainer' LIMIT 1").bind(rv.claim_id).first());
       if (paid && !(await rpLatest(env.DB, rv.claim_id, 'final'))) {
         try { const f = await rpFinal(env, user, rv.claim_id); if (!f.ok) out.finalError = f.error; else if (f.applyError) out.finalError = f.applyError; }
@@ -9491,7 +9520,7 @@ function fmtDateIN(iso) {
 }
 async function srSendReceivedEmail(env, r) {
   const first = String(r.name || '').trim().split(/\s+/)[0] || 'there';
-  const warrantyLine =
+  const warrantyLine = r.drn ? 'Delivered on ' + fmtDateIN(r.delivered) :
     r.warrantyStatus === 'Under warranty' ? 'Under warranty until ' + fmtDateIN(r.until) :
     r.warrantyStatus === 'Out of warranty' ? 'Outside the 6-month warranty (ended ' + fmtDateIN(r.until) + '). Repair is chargeable; we will share the cost before doing anything.' :
     r.warrantyStatus === 'Order cancelled' ? 'This order shows as cancelled in our records. Our team will check and get back to you.' :
@@ -9500,14 +9529,14 @@ async function srSendReceivedEmail(env, r) {
   const subject = "We've received your request · " + r.claimId;
   const text = [
     'Hi ' + first + ',', '',
-    "We've received your service request.", '',
+    r.drn ? "We've received your delivery issue report." : "We've received your service request.", '',
     'Request ID : ' + r.claimId,
     'Product    : ' + (r.product || '-'),
     'Order ID   : ' + (r.orderId || '-'),
     'Issue      : ' + (r.issue || '-'),
-    'Warranty   : ' + warrantyLine, '',
+    (r.drn ? 'Delivery   : ' : 'Warranty   : ') + warrantyLine, '',
     'Our team will review it within 24 working hours and update you on WhatsApp and email.',
-    'Please keep the product and its accessories ready in case a pickup is arranged.', '',
+    r.drn ? 'Please keep the box and all packing material until we get back to you.' : 'Please keep the product and its accessories ready in case a pickup is arranged.', '',
     'Track your request anytime: ' + trackUrl, '',
     '—',
     "This is an automated email, please don't reply. Need help? WhatsApp us at " + SR_HELP_WHATSAPP + '.', '',
@@ -9522,12 +9551,12 @@ async function srSendReceivedEmail(env, r) {
       '<div style="color:#F5A800;font-weight:800;font-size:20px;letter-spacing:1px">TOMAHAWK</div>' +
       '<div style="color:#fff;font-size:18px;font-weight:700;margin-top:8px">✅ Request received</div></div>' +
     '<div style="padding:24px;color:#222;font-size:15px;line-height:1.5">' +
-      '<p style="margin:0 0 16px">Hi ' + esc(first) + ", we've received your service request.</p>" +
+      '<p style="margin:0 0 16px">Hi ' + esc(first) + ", we've received your " + (r.drn ? 'delivery issue report' : 'service request') + '.</p>' +
       '<table style="border-collapse:collapse;font-size:14px;margin-bottom:16px">' +
         row('Request ID', r.claimId) + row('Product', r.product || '-') + row('Order ID', r.orderId || '-') +
-        row('Issue', r.issue || '-') + row('Warranty', warrantyLine) + '</table>' +
+        row('Issue', r.issue || '-') + row(r.drn ? 'Delivery' : 'Warranty', warrantyLine) + '</table>' +
       '<p style="margin:0 0 8px">Our team will review it within <b>24 working hours</b> and update you on WhatsApp and email.</p>' +
-      '<p style="margin:0 0 20px;color:#555">Please keep the product and its accessories ready in case a pickup is arranged.</p>' +
+      '<p style="margin:0 0 20px;color:#555">' + (r.drn ? 'Please keep the box and all packing material until we get back to you.' : 'Please keep the product and its accessories ready in case a pickup is arranged.') + '</p>' +
       '<a href="' + esc(trackUrl) + '" style="display:inline-block;background:#F5A800;color:#111;font-weight:700;text-decoration:none;padding:12px 22px;border-radius:8px">Track your request</a>' +
     '</div>' +
     '<div style="padding:16px 24px;background:#faf9f6;color:#888;font-size:12px;border-top:1px solid #eee">' +
@@ -10145,6 +10174,8 @@ async function srWaMilestones(env, onlyClaimId) {
 }
 
 async function submitWarrantyClaim(env, b, ip) {
+  // Delivery issue (DRN-, 17-Nov-2026) — its own rules, same table. See submitDeliveryIssue.
+  if (String(b.request_type || '').toUpperCase() === 'DRN') return submitDeliveryIssue(env, b, ip);
   const clean = (v, max) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, max);
   const f = {
     name: clean(b.name, 80), phone: normPhone(clean(b.phone, 20)),
@@ -10183,7 +10214,7 @@ async function submitWarrantyClaim(env, b, ip) {
 
   // One open claim per order — return the existing one instead of a duplicate.
   const open = await env.DB.prepare(
-    "SELECT claim_id, phone FROM warranty_claims WHERE order_key = ? AND COALESCE(status, 'new') NOT IN ('closed','not_covered') AND created_at > datetime('now','-30 days') LIMIT 1"
+    "SELECT claim_id, phone FROM warranty_claims WHERE order_key = ? AND COALESCE(request_type, '') <> 'DRN' AND COALESCE(status, 'new') NOT IN ('closed','not_covered') AND created_at > datetime('now','-30 days') LIMIT 1"
   ).bind(orderKey).first();
   // Show the existing request ID only to the same customer (same mobile) — never reveal
   // someone else's request to a person who just typed their order ID.
@@ -10298,6 +10329,282 @@ async function submitWarrantyClaim(env, b, ip) {
     ...(repeat ? { repeat: repeat.kind, notice: repeat.kind === 'priority' ? SR_REPEAT_NOTICE : SR_USED_NOTICE } : {}) };
 }
 
+// ══════════════════════════════════════════════════════════════════
+// DELIVERY ISSUE REQUESTS — DRN- (17-Nov-2026)
+// ══════════════════════════════════════════════════════════════════
+// Website (Shopify) orders only, reported within 7 days of the parcel's
+// delivery: missing part, wrong product, damaged in transit, not working on
+// arrival, short quantity. Same table / files / Dashboard as WRN-/SRN-
+// (warranty_claims, request_type = 'DRN', warranty_status = 'Delivery issue',
+// handled free like a warranty request). One DRN per order + item, ever.
+// Customer page: tomahawk.tools/pages/delivery-issue (SK)
+//   1. POST drnLookup   { order, phone | email }         → items + whether each can be reported
+//   2. POST warrantyClaimSubmit { request_type:'DRN', … } → DRN-YYMMDD-NN
+// Amazon / Flipkart orders use the marketplace's own returns.
+const DRN_WINDOW_DAYS = 7;
+const DRN_ISSUES = ['Missing part / accessory', 'Wrong product', 'Damaged in transit', 'Not working on arrival', 'Short quantity'];
+const DRN_VIDEO_ISSUES = ['Damaged in transit', 'Not working on arrival'];   // unboxing / issue video required
+const DRN_DETAIL_ISSUES = ['Missing part / accessory', 'Wrong product', 'Damaged in transit', 'Short quantity'];
+
+function isDrnRow(row) { return !!row && (row.request_type === 'DRN' || /^DRN-/.test(row.claim_id || '')); }
+// Free requests: under warranty, or a delivery issue (no payments, no final invoice)
+function srIsFree(row) { return !!row && (row.warranty_status === 'Under warranty' || row.warranty_status === 'Delivery issue'); }
+
+// Whole calendar days (IST) between a delivered time and today.
+function istDaysSince(iso) {
+  const ms = Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : String(iso).replace(' ', 'T') + 'Z');
+  if (isNaN(ms)) return null;
+  const day = x => Math.floor((x + 5.5 * 3600 * 1000) / 864e5);
+  return day(Date.now()) - day(ms);
+}
+
+// Live courier check of one website parcel → { stage, delivered_at } (best effort).
+async function drnParcelDelivered(env, company, awb) {
+  const courier = /ekart/i.test(company || '') ? 'Ekart' : /delhivery/i.test(company || '') ? 'Delhivery' : '';
+  awb = String(awb || '').trim();
+  try {
+    if (courier === 'Delhivery' && /^\d{6,20}$/.test(awb) && env.DELHIVERY_API_TOKEN) {
+      const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
+      const r = await fetch(base + '/api/v1/packages/json/?waybill=' + awb, { headers: { 'Authorization': 'Token ' + env.DELHIVERY_API_TOKEN } });
+      const j = await r.json().catch(() => null);
+      const s = j && j.ShipmentData && j.ShipmentData[0] && j.ShipmentData[0].Shipment;
+      if (s) { const d = deriveDelhiveryStage(s, 'forward'); return { stage: d.stage, delivered_at: delhiveryDeliveredAt(s, d.stage) || null }; }
+    } else if (courier === 'Ekart' && /^[A-Za-z0-9]{6,40}$/.test(awb)) {
+      const r = await fetch(ekartBase(env) + '/api/v1/track/' + awb);
+      const j = await r.json().catch(() => null);
+      const tr = j && j.track;
+      if (tr) { const d = deriveEkartStage(tr, 'forward'); return { stage: d.stage, delivered_at: ekartDeliveredAt(tr, d.stage) || null }; }
+    }
+  } catch (e) { console.warn('drn parcel track', courier, awb, e.message); }
+  return { stage: null, delivered_at: null };
+}
+
+// Find the Shopify order (order no. + mobile OR email must match) and work out,
+// item by item, whether it can be reported. Never trusts the browser: the
+// submit runs this again. Same "not found" answer for no order / wrong contact.
+async function drnOrder(env, orderRaw, phoneRaw, emailRaw) {
+  const num = String(orderRaw || '').replace(/\D/g, '');
+  const phone = normPhone(phoneRaw);
+  const email = String(emailRaw || '').trim().toLowerCase();
+  if (!num || num.length > 10 || (!phone && !validEmail(email)))
+    return { ok: false, code: 'bad_input', error: 'Enter your order number and the mobile number or email used on the order.' };
+  if (!shopifyConfigured(env)) return { ok: false, code: 'not_configured', error: "This isn't available right now — please chat with us on WhatsApp " + SR_HELP_WHATSAPP + '.' };
+  const data = await shopifyGql(env, `query($q: String!) {
+    orders(first: 5, query: $q) { nodes {
+      id name createdAt cancelledAt email phone
+      shippingAddress { phone } billingAddress { phone }
+      lineItems(first: 50) { nodes { id title variantTitle sku quantity currentQuantity } }
+      fulfillments(first: 10) {
+        status deliveredAt displayStatus
+        trackingInfo(first: 3) { company number }
+        fulfillmentLineItems(first: 50) { nodes { quantity lineItem { id } } }
+      }
+    } } }`, { q: 'name:' + num });
+  const o = ((data && data.orders && data.orders.nodes) || []).find(x => String(x.name).replace(/\D/g, '') === num);
+  const notFound = { ok: false, code: 'not_found', error: "We couldn't find an order with these details. Check the order number and the mobile number or email used on the order." };
+  if (!o) return notFound;
+  const phones = [o.phone, o.shippingAddress && o.shippingAddress.phone, o.billingAddress && o.billingAddress.phone].map(normPhone).filter(Boolean);
+  const byPhone = !!phone && phones.includes(phone);
+  const byEmail = !!email && String(o.email || '').toLowerCase() === email;
+  if (!byPhone && !byEmail) return notFound;
+  if (o.cancelledAt) return { ok: false, code: 'cancelled', error: 'This order was cancelled, so there is nothing to report here.' };
+
+  // Parcels → delivered time (live courier scan first, Shopify's own as fallback)
+  const fuls = [];
+  for (const f of (o.fulfillments || []).filter(x => String(x.status || '').toUpperCase() !== 'CANCELLED')) {
+    const ti = (f.trackingInfo || [])[0] || {};
+    const live = await drnParcelDelivered(env, ti.company, ti.number);
+    let at = live.delivered_at || f.deliveredAt || null;
+    if (!at && String(f.displayStatus || '').toUpperCase() === 'DELIVERED') at = f.deliveredAt || null;
+    fuls.push({ at, lines: ((f.fulfillmentLineItems && f.fulfillmentLineItems.nodes) || []).map(n => n.lineItem && n.lineItem.id).filter(Boolean) });
+  }
+
+  await ensureServiceRequestCols(env.DB);
+  const orderKey = normOrderId(num);
+  const prior = (await env.DB.prepare("SELECT claim_id, line_id, order_skus FROM warranty_claims WHERE order_key = ? AND (request_type = 'DRN' OR claim_id LIKE 'DRN-%' OR prev_claim_id LIKE 'DRN-%')")
+    .bind(orderKey).all()).results || [];
+
+  const items = ((o.lineItems && o.lineItems.nodes) || []).map(li => {
+    const qty = li.currentQuantity == null ? li.quantity : li.currentQuantity;
+    const mine = fuls.filter(f => f.lines.includes(li.id));
+    const dates = mine.map(f => f.at).filter(Boolean).sort();
+    const deliveredAt = dates.length ? dates[dates.length - 1] : null;   // last parcel with this item
+    const days = deliveredAt ? istDaysSince(deliveredAt) : null;
+    const done = prior.find(p => p.line_id === li.id);
+    let state = 'open';
+    if (done) state = 'reported';
+    else if (!deliveredAt) state = 'not_delivered';
+    else if (days > DRN_WINDOW_DAYS) state = 'expired';
+    return { line_id: li.id, sku: li.sku || '', title: li.title + (li.variantTitle ? ' — ' + li.variantTitle : ''), qty,
+      delivered_at: deliveredAt, days_since: days, days_left: deliveredAt && state === 'open' ? DRN_WINDOW_DAYS - days : null,
+      state, drn: done ? done.claim_id : null };
+  }).filter(it => it.qty > 0);
+
+  // Name + address need Shopify's protected-customer-data (name, address) access —
+  // asked separately so a missing permission never breaks the lookup itself.
+  let sa = {};
+  try {
+    const ad = await shopifyGql(env, `query($id: ID!) { order(id: $id) {
+      shippingAddress { name address1 address2 city province zip } billingAddress { name } } }`, { id: o.id });
+    sa = Object.assign({}, ad && ad.order && ad.order.billingAddress, ad && ad.order && ad.order.shippingAddress);
+  } catch (e) { console.warn('drn address lookup', e.message); }
+  return { ok: true, order: o.name, order_id: num, placed_at: o.createdAt, window_days: DRN_WINDOW_DAYS, items,
+    // Prefill only what the customer typed to find the order
+    contact: { phone: byPhone ? phone : '', email: byEmail ? email : '' },
+    _private: { name: sa.name || '', email: String(o.email || '').toLowerCase(),
+      address: [sa.address1, sa.address2].filter(Boolean).join(', '), city: sa.city || '', state: sa.province || '', pincode: String(sa.zip || '').replace(/\D/g, '').slice(0, 6) } };
+}
+
+// Public lookup for the page (step 1 → item list). Drops the private block.
+async function drnLookup(env, b) {
+  const r = await drnOrder(env, b.order || b.order_id, b.phone, b.email);
+  if (r.ok) delete r._private;
+  return r;
+}
+
+async function submitDeliveryIssue(env, b, ip) {
+  const clean = (v, max) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, max);
+  const f = {
+    order_id: clean(b.order_id, 20), line_id: clean(b.line_id, 80),
+    phone: normPhone(clean(b.phone, 20)), email: clean(b.email, 120).toLowerCase(),
+    issue_type: clean(b.issue_type, 60), issue_detail: clean(b.issue_detail, 300),
+    description: String(b.description || '').trim().slice(0, 2000)
+  };
+  if (!/^[6-9]\d{9}$/.test(f.phone)) throw claimErr('Please enter a valid 10-digit mobile number.');
+  if (f.email && !validEmail(f.email)) throw claimErr('Please enter a valid email, or leave it empty.');
+  if (!f.line_id) throw claimErr('Please choose the item that has the issue.');
+  if (DRN_ISSUES.indexOf(f.issue_type) === -1) throw claimErr('Please choose the issue type.');
+  if (DRN_DETAIL_ISSUES.includes(f.issue_type) && !f.issue_detail) throw claimErr('Please fill in the issue details.');
+  if (f.description.length < 20) throw claimErr('Please describe the issue in a little more detail (at least 20 characters).');
+  if (b.consent !== true) throw claimErr('Please tick the confirmation box.');
+
+  // Order + item checked again on our side (lookup_phone / lookup_email = what was typed on step 1)
+  const ord = await drnOrder(env, f.order_id, b.lookup_phone || f.phone, b.lookup_email || f.email);
+  if (!ord.ok) throw claimErr(ord.error);
+  const it = ord.items.find(x => x.line_id === f.line_id);
+  if (!it) throw claimErr('That item is not on this order.');
+  if (it.state === 'reported') {
+    const ex = await env.DB.prepare('SELECT claim_id, phone FROM warranty_claims WHERE claim_id = ?').bind(it.drn).first();
+    if (ex && ex.phone === f.phone) return { ok: true, existing: true, claim_id: it.drn };
+    throw claimErr('This item has already been reported. Track it on the Track Your Request page with the mobile number you gave then.');
+  }
+  if (it.state === 'not_delivered') throw claimErr('This item has not been delivered yet. You can track it on the Track Order page.');
+  if (it.state === 'expired') throw claimErr('This item was delivered more than ' + DRN_WINDOW_DAYS + ' days ago. Please raise a service request instead.');
+  if (f.issue_type === 'Short quantity' && !(it.qty > 1)) throw claimErr('Short quantity is only for items ordered as 2 or more.');
+
+  const files = (Array.isArray(b.files) ? b.files : []).slice(0, 4).map((x, i) => ({
+    mime: String(x.type || ''), base64: String(x.data || ''), filename: String(x.name || ('file' + (i + 1))).slice(0, 80)
+  })).filter(x => x.base64 && /^(image|video)\//.test(x.mime));
+  const photos = files.filter(x => x.mime.startsWith('image/'));
+  if (photos.length < 2) throw claimErr('Please add a photo of the outer box and a photo of the product.');
+  if (photos.length > 3 || files.length - photos.length > 1) throw claimErr('Up to 3 photos and 1 video, please.');
+  if (DRN_VIDEO_ISSUES.includes(f.issue_type) && files.length === photos.length) throw claimErr('Please add a short video showing the issue.');
+  if (files.reduce((n, x) => n + x.base64.length, 0) > CLAIM_MAX_BYTES) throw claimErr('Files are too large — please use a shorter video or fewer photos.');
+
+  await ensureServiceRequestCols(env.DB);
+  const p = ord._private;
+  const orderDate = String(ord.placed_at || '').slice(0, 10) || null;
+  const until = orderDate ? warrantyFromDate(orderDate).until : null;
+  const name = p.name || 'Customer';
+  const email = f.email || p.email || '';
+  const sku = it.sku ? it.sku + (it.qty > 1 ? ' x' + it.qty : '') : '';
+  const claimId = await insertWithSerialId(env.DB, 'DRN', 'warranty_claims', 'claim_id', id => env.DB.prepare(
+    `INSERT INTO warranty_claims (claim_id, order_id, order_key, platform, product, name, phone, email,
+      issue_type, description, address, pincode, city, state, warranty_status, order_date, warranty_until, order_skus, file_count, ip,
+      request_type, line_id, issue_detail, delivered_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+    id, ord.order_id, normOrderId(ord.order_id), 'Website (Shopify)', it.title, name, f.phone, email || null,
+    f.issue_type, f.description, p.address, p.pincode, p.city, p.state,
+    'Delivery issue', orderDate, until, sku, files.length, ip,
+    'DRN', it.line_id, f.issue_detail || null, it.delivered_at
+  ));
+  const deliveredDay = String(it.delivered_at).slice(0, 10);
+  await srAddEvent(env.DB, claimId, { by: 'customer', kind: 'note',
+    note: 'Delivery issue · ' + f.issue_type + (f.issue_detail ? ' — ' + f.issue_detail : '') + ' · delivered ' + deliveredDay + ' (' + it.days_since + ' day(s) before reporting)' }, {});
+
+  // Team email (photos attached) — same mailbox as service requests
+  const v = x => x ? String(x) : '-';
+  const text = [
+    'A new DELIVERY ISSUE was reported on the website (within ' + DRN_WINDOW_DAYS + ' days of delivery).', '',
+    'Request ID      : ' + claimId,
+    'Issue           : ' + f.issue_type + (f.issue_detail ? ' — ' + f.issue_detail : ''),
+    'Delivered       : ' + deliveredDay + ' (' + it.days_since + ' day(s) ago)', '',
+    '— Customer —',
+    'Name            : ' + name, 'Mobile          : ' + f.phone, 'Email           : ' + v(email),
+    'Address         : ' + [p.address, p.city, p.state].filter(Boolean).join(', ') + ' - ' + p.pincode, '',
+    '— Order —',
+    'Order           : ' + ord.order, 'Item            : ' + it.title + ' · qty ' + it.qty, 'SKU             : ' + v(it.sku), '',
+    'Customer says   : ' + f.description, '',
+    'Attachments: ' + photos.length + ' photo(s)' + (files.length > photos.length ? ' + 1 video' : '') + '.', '',
+    'Review it in the Customer Care Dashboard → New requests → Delivery issues:',
+    'https://naimuddin74667.github.io/Tomahawk/Customer-Care/Dashboard/'
+  ].join('\n');
+  try {
+    await sendGmailMessage(env, {
+      to: CC_ORDER_EMAIL_TEST_MODE ? CC_ORDER_EMAIL_TEST_TO : SR_ALERT_EMAIL_TO, replyTo: email || undefined,
+      subject: (CC_ORDER_EMAIL_TEST_MODE ? '[TEST] ' : '') + `Delivery Issue ${claimId} · ${name} · ${ord.order} · ${f.issue_type}`,
+      text, attachments: files.map((x, i) => ({ ...x, filename: claimId + '_' + (i + 1) + '_' + x.filename }))
+    });
+    await env.DB.prepare("UPDATE warranty_claims SET emailed_at = datetime('now') WHERE claim_id = ?").bind(claimId).run();
+  } catch (e) { console.error('DRN team email failed:', e.message); }
+
+  try {
+    const saved = await srUploadFiles(env, claimId, files);
+    if (saved.length) await env.DB.prepare('UPDATE warranty_claims SET files_json = ? WHERE claim_id = ?').bind(JSON.stringify(saved), claimId).run();
+  } catch (e) { console.error('DRN file store failed:', e.message); }
+
+  try {
+    const wa = await srSendWhatsAppReceived(env, { claimId, name, phone: f.phone, email, product: it.title });
+    if (wa.sent || wa.error) await srAddEvent(env.DB, claimId, { by: 'system', kind: 'note',
+      note: wa.sent ? 'WhatsApp "Request received" sent to customer' : 'WhatsApp not sent (' + wa.error + ')' }, {});
+  } catch (e) { console.error('DRN WhatsApp failed:', e.message); }
+
+  if (email) {
+    try {
+      const via = await srSendReceivedEmail(env, { claimId, name, email, product: it.title, orderId: ord.order,
+        issue: f.issue_type, warrantyStatus: 'Delivery issue', drn: true, delivered: deliveredDay });
+      await srAddEvent(env.DB, claimId, { by: 'system', kind: 'note', note: 'Confirmation email sent to customer (' + via + ')' }, {});
+    } catch (e) { console.error('DRN confirmation email failed:', e.message); }
+  }
+  return { ok: true, claim_id: claimId, request_type: 'DRN' };
+}
+
+// Dashboard: "Convert to WRN" — the report turned out to be a product fault,
+// not a delivery problem. DRN-261117-01 → WRN-261117-NN (old ID kept in
+// prev_claim_id so tracking and links keep working). Warranty from the order date.
+async function srDrnToWrn(env, user, b) {
+  await ensureServiceRequestCols(env.DB);
+  const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(String(b.claim_id || '').trim()).first();
+  if (!row) return { ok: false, error: 'No such request' };
+  if (!/^DRN-/.test(row.claim_id)) return { ok: false, error: 'Only DRN- requests can be converted' };
+  if (['closed', 'not_covered'].includes(row.status)) return { ok: false, error: 'This request is closed' };
+  if (row.case_id) return { ok: false, error: 'A shipment is already booked on this request (' + row.case_id + ')' };
+  const other = await env.DB.prepare(
+    "SELECT claim_id FROM warranty_claims WHERE order_key = ? AND claim_id <> ? AND COALESCE(request_type, '') <> 'DRN' AND COALESCE(status, 'new') NOT IN ('closed','not_covered') LIMIT 1"
+  ).bind(row.order_key, row.claim_id).first();
+  if (other) return { ok: false, error: 'This order already has an open request: ' + other.claim_id };
+  const wd = row.order_date ? warrantyFromDate(row.order_date) : { under: true, until: row.warranty_until };
+  const warrantyStatus = wd.under ? 'Under warranty' : 'Out of warranty';
+  const prefix = srIdPrefix(warrantyStatus);
+  const base = prefix + '-' + (row.claim_id.split('-')[1] || istYYMMDD()) + '-';
+  const cnt = await env.DB.prepare('SELECT COUNT(*) AS n FROM warranty_claims WHERE claim_id LIKE ?').bind(base + '%').first();
+  let n = ((cnt && cnt.n) || 0) + 1, newId = null;
+  for (let attempt = 0; attempt < 5 && !newId; attempt++, n++) {
+    const cand = base + String(n).padStart(2, '0');
+    try {
+      await env.DB.prepare("UPDATE warranty_claims SET claim_id = ?, prev_claim_id = ?, request_type = 'WRN_FROM_DRN', warranty_status = ?, warranty_until = ? WHERE claim_id = ?")
+        .bind(cand, row.claim_id, warrantyStatus, wd.until || row.warranty_until, row.claim_id).run();
+      newId = cand;
+    } catch (e) { if (!/UNIQUE|PRIMARY KEY|constraint/i.test(e.message || '')) throw e; }
+  }
+  if (!newId) return { ok: false, error: 'Could not allocate a ' + prefix + ' ID — try again' };
+  const note = String(b.note || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  await srAddEvent(env.DB, newId, { by: (user && user.username) || 'unknown', kind: 'converted',
+    note: row.claim_id + ' → ' + newId + ' · delivery issue converted to a ' + (prefix === 'WRN' ? 'warranty' : 'service') + ' request' + (note ? ' · ' + note : '') }, {});
+  return { ok: true, claim_id: newId, prev_claim_id: row.claim_id, warranty_status: warrantyStatus };
+}
+
+
 // Repeat claims (14-Nov-2026)
 const SR_REPEAT_DAYS = 30;
 const SR_REPEAT_NOTICE = 'We see we serviced this product recently. Your request is marked high priority and our team will contact you soon.';
@@ -10309,7 +10616,8 @@ const SR_USED_NOTICE = 'You have already claimed warranty service for this order
 async function srLastDelivery(DB, orderKey) {
   if (!orderKey) return null;
   await ensureDelhiveryTable(DB);
-  const claims = ((await DB.prepare('SELECT claim_id, case_id FROM warranty_claims WHERE order_key = ? AND case_id IS NOT NULL').bind(orderKey).all()).results) || [];
+  // DRN (delivery issue) shipments don't count as a warranty repair (17-Nov-2026)
+  const claims = ((await DB.prepare("SELECT claim_id, case_id FROM warranty_claims WHERE order_key = ? AND case_id IS NOT NULL AND COALESCE(request_type, '') <> 'DRN'").bind(orderKey).all()).results) || [];
   const caseIds = claims.map(c => c.case_id);
   const refOf = {}; claims.forEach(c => { refOf[c.case_id] = c.claim_id; });
   // Reverse cases for this order: by request link, or by the saved customer order ID
@@ -10322,6 +10630,7 @@ async function srLastDelivery(DB, orderKey) {
     if (!isNaN(ms) && (!best || ms > best.ms)) best = { ms, at: new Date(ms).toISOString(), ref };
   };
   for (const r of revs) {
+    if (/^DRN-/.test(r.claim_id || '')) continue;
     const ref = r.claim_id || refOf[r.order_id] || r.order_id;
     if (r.handed_over_at) take(r.handed_over_at, ref);
     // Send-back (and any re-send after an RTO) delivered to the customer
