@@ -4562,7 +4562,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     tip_sent: ['Tip sent', 'b-blue'], quote_sent: ['Quote sent', 'b-blue'],
     approved: ['Pickup booked', 'b-green'], closed: ['Closed', 'b-gray'], not_covered: ['Not covered', 'b-gray']
   };
-  // Tab order: All → NV → Service (SRN-) → Warranty (WRN-) → Waiting → Closed.
+  // Tab order: All → Delivery issues (DRN-) → NV → Service (SRN-) → Warranty (WRN-) → Waiting → Closed.
   // Once a pickup is booked the request moves to the cases list (case ID = request ID).
   // Old SN-/WN- IDs still match. Default tab = first of NV / Service / Warranty that has requests.
   function isSRN(r) { return /^SR?N-/.test(r.claim_id || ''); }
@@ -4577,9 +4577,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   function isBooked(r) { return !!r.case_id && (r.status === 'approved' || r.status === 'closed'); }
   var REQ_FILTERS = [
     { key: 'all', label: 'All', test: function (r) { return !isBooked(r); } },
+    // Card order (17-Nov-2026): Delivery issues (DRN) first, then NV, Service, Warranty
+    { key: 'delivery', label: 'Delivery issues', test: function (r) { return isToReview(r) && isDRN(r); } },
     // NV- = order not found when submitted → verified in its own tab first, then it becomes WRN-/SRN- and moves to its review tab
     { key: 'verify', label: 'Verify order (NV)', test: function (r) { return isNV(r) && ['closed', 'not_covered'].indexOf(r.status) === -1; } },
-    { key: 'delivery', label: 'Delivery issues', test: function (r) { return isToReview(r) && isDRN(r); } },
     { key: 'service', label: 'Service requests', test: function (r) { return isToReview(r) && isSRN(r); } },
     { key: 'warranty', label: 'Warranty requests', test: function (r) { return isToReview(r) && !isSRN(r) && !isDRN(r); } },
     { key: 'waiting', label: 'Waiting for customer', test: function (r) { return ['waiting_customer', 'tip_sent', 'quote_sent'].indexOf(r.status) !== -1; } },
@@ -4590,7 +4591,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   function pickDefaultReqTab() {
     var order = ['delivery', 'verify', 'service', 'warranty'];
     for (var i = 0; i < order.length; i++) if (requests.some(reqTest(order[i]))) return order[i];
-    return 'warranty';
+    return 'delivery';
   }
   // Ready-made messages — the team picks one and edits it before sending.
   var REQ_TEMPLATES = {
