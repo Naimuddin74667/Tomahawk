@@ -2868,7 +2868,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (isSelfShip(r)) return btn('sendback', 'We deliver &#8594;') + btn('handover', 'Customer collects') +
       '<button class="case-act" data-act="repairundo">Reopen repair</button>' +
       '<button class="case-act" data-act="startrefund">Refund instead</button>';
-    return btn('sendback', 'Send back &#8594;') + '<button class="case-act" data-act="repairundo">Reopen repair</button>' +
+    // Out of warranty (17-Nov-2026): the customer may collect it themselves instead (no delivery charge)
+    var crq = caseRequest(c), oowCase = !!crq && !isFreeReq(crq) && !isNV(crq);
+    return btn('sendback', 'Send back &#8594;') + (oowCase ? '<button class="case-act" data-act="handover">Customer collects</button>' : '') +
+      '<button class="case-act" data-act="repairundo">Reopen repair</button>' +
       '<button class="case-act" data-act="startrefund">Refund instead</button>';
   }
 
@@ -2970,7 +2973,14 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         : 'Delivery is chargeable: send the delivery payment link first (Payments → Return delivery). Or use "Customer collects".' };
     }
     if (!l || l.doc_type !== 'retainer' || l.status === 'void') return { ok: true };   // in warranty / older billing — no lock
-    if (rp && (rp.status === 'paid' || rp.status === 'skipped')) return { ok: true, claim: claim };
+    if (rp && (rp.status === 'paid' || rp.status === 'skipped')) {
+      // Step 3 return delivery (17-Nov-2026) — unless Step 1 already included it (older requests)
+      var d = ps.delivery;
+      if (!forDispatch || payHasDelivery(l) || (d && d.status === 'paid')) return { ok: true, claim: claim };
+      return { ok: false, needDelivery: !d || d.status === 'void', msg: d && d.status === 'pending'
+        ? 'The return delivery payment is not paid yet. Send back unlocks once the customer pays (or use "Customer collects").'
+        : 'Delivery is chargeable: send the delivery payment link first (Payments → Return delivery). Or use "Customer collects".' };
+    }
     return { ok: false, msg: rp && rp.status === 'pending'
       ? 'Step 2 (service & spare parts) is not paid yet. Send back unlocks once the customer pays.'
       : 'Send the Step 2 repair quote first — or mark it "Not repaired" in Payments if there is no service charge.' };
@@ -3023,7 +3033,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     try { lock = await sendBackPayCheck(c, true); } catch (e) { lock = { ok: true }; }   // payment check down → don't block the warehouse
     if (!lock.ok) {
       alert(lock.msg);
-      if (lock.needDelivery) { var cr = caseRequest(c); if (cr) { payDetailsOpen = true; renderPaySummary(); logisticsForm(cr); var pl = document.getElementById('pay-logistics'); if (pl) pl.scrollIntoView({ block: 'center', behavior: 'smooth' }); } }
+      if (lock.needDelivery) { var cr = caseRequest(c); if (cr) { var dm = isSelfShip(c.reverse) ? 'logistics' : 'delivery';
+        payDetailsOpen = true; renderPaySummary(); logisticsForm(cr, null, dm); var pl = document.getElementById('pay-' + dm); if (pl) pl.scrollIntoView({ block: 'center', behavior: 'smooth' }); } }
       return;
     }
     var o = sendBackOrder(c.reverse);
@@ -3215,7 +3226,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // Customer collects (14-Nov-2026): self-ship case, repair done → hand it over, case closed.
   async function handOverAction(c, btn) {
     if (!confirm(c.caseNo + ': the customer is collecting the product from us?\n\nNo send-back is booked and the case closes.' +
-      (selfOow(c) ? ' The final invoice is made from what was paid (no delivery charge).' : ''))) return;
+      (selfOow(c) || (caseRequest(c) && !isFreeReq(caseRequest(c))) ? ' The final invoice is made from what was paid (no delivery charge).' : ''))) return;
     btn.disabled = true;
     try {
       var res = await post('ccHandOver', { order_id: c.reverse.order_id });
@@ -4236,7 +4247,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (cur === 0) notes[0] = r && r.status === 'waiting_customer' ? 'Waiting for customer' : 'Verify the order';
     if (cur === 1) {
       if (pay && oow && pay.logistics && pay.logistics.status === 'pending') notes[1] = 'Waiting for pickup payment · ' + rupees(pay.logistics.total);
-      else if (pay && oow && !paid('logistics') && !payWaived(pay)) notes[1] = 'Send pickup & delivery link';
+      else if (pay && oow && !paid('logistics') && !payWaived(pay)) notes[1] = 'Send pickup link';
       else notes[1] = 'Approve & book pickup';
       if (rv && rv.delhivery_ok === 0) { notes[1] = 'Booking failed · book again'; warn = true; }
     }
@@ -4254,7 +4265,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         : 'Inspect · send repair quote or Not repaired';
       else notes[4] = oow ? 'Inspection · repair payment' : 'Inspect & repair · mark Repair done';
     }
-    if (cur === 5) notes[5] = self ? (oow && pay && !paid('logistics') && !payWaived(pay) ? 'Customer collects · or delivery payment, then send back' : 'Customer collects · or send back') : 'Book send back';
+    if (cur === 5) notes[5] = self ? (oow && pay && !paid('logistics') && !payWaived(pay) ? 'Customer collects · or delivery payment, then send back' : 'Customer collects · or send back')
+      : oow && pay && pay.logistics && !payHasDelivery(pay.logistics) && !payWaived(pay) ? (paid('delivery') ? 'Book send back' : 'Customer collects · or delivery payment, then send back') : 'Book send back';
     if (cur === 6) {
       if (isRtoStage(fs) && fw.rto_closed_at) { notes[6] = 'Closed after RTO'; warn = true; }
       else if (isRtoStage(fs) && fw.received_at) { notes[6] = 'RTO back with us · send again or close'; warn = true; }
@@ -5333,9 +5345,13 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   //   Step 3 — ONE tax invoice (SRV/26-27/####) with every line; both
   //            advances are applied to it. This is what the accountant files.
   var PAY_STEP = {
-    logistics: { n: 1, title: 'Pickup & delivery', when: 'advance · paid before pickup is booked', btn: '&#8377; Get quote &amp; send link' },
+    // Pickup → repair → return delivery (17-Nov-2026): Step 1 is the pickup only.
+    // After the repair (or Not repaired) the customer collects it (no charge) or
+    // pays Step 3 and we send it back. Older requests: Step 1 = pickup & delivery, no Step 3.
+    logistics: { n: 1, title: 'Pickup', when: 'advance · paid before pickup is booked', btn: '&#8377; Get quote &amp; send pickup link' },
     repair:    { n: 2, title: 'Spare Parts & Service Charge', when: 'advance · sent after the technician inspects the product', btn: '&#8377; Send repair quote' },
-    final:     { n: 3, title: 'Final invoice', when: 'one tax invoice when the case closes · advances adjusted' }
+    delivery:  { n: 3, title: 'Return delivery', when: 'advance · after the repair · only if we deliver it — skip if the customer collects', btn: '&#8377; Get quote &amp; send delivery link' },
+    final:     { n: 4, title: 'Final invoice', when: 'one tax invoice when the case closes · advances adjusted' }
   };
   // Self-shipped case (14-Nov-2026): no pickup, so Step 1 = Spare Parts & Service
   // Charge and the 'logistics' advance becomes Step 2 = return delivery, only
@@ -5343,7 +5359,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   var PAY_STEP_SELF = {
     repair:    { n: 1, title: 'Spare Parts & Service Charge', when: 'advance · after inspection · add delivery here if we send it back (one link)', btn: '&#8377; Send repair quote' },
     logistics: { n: 2, title: 'Return delivery', when: 'only when delivery was not in Step 1 (e.g. Not repaired) · skip if the customer collects', btn: '&#8377; Get quote &amp; send delivery link' },
-    final:     PAY_STEP.final
+    final:     { n: 3, title: 'Final invoice', when: PAY_STEP.final.when }
   };
   // Repair advance that already carries the return delivery charge (self-ship, one link)
   function payHasDelivery(p) {
@@ -5351,7 +5367,17 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     try { return JSON.parse(p.lines_json || '[]').some(function (l) { return /deliver/i.test(l.label || ''); }); } catch (e) { return false; }
   }
   function paySelf() { return !!(stepsCtx && stepsCtx.c && isSelfShip(stepsCtx.c.reverse)); }
-  function payDef(kind) { return (paySelf() ? PAY_STEP_SELF : PAY_STEP)[kind]; }
+  // Step 3 (return delivery) applies: not self-ship, not free, and Step 1 didn't already include delivery
+  function payNeedsDelivery(ps) { ps = ps || payState; return !paySelf() && !payHasDelivery(ps.logistics) && !payWaived(ps); }
+  function payDef(kind) {
+    var d = (paySelf() ? PAY_STEP_SELF : PAY_STEP)[kind];
+    // Older request: Step 1 carried pickup + delivery, no Step 3 → final is Step 3
+    if (!paySelf() && payHasDelivery(payState.logistics)) {
+      if (kind === 'logistics') return Object.assign({}, d, { title: 'Pickup & delivery' });
+      if (kind === 'final') return Object.assign({}, d, { n: 3 });
+    }
+    return d;
+  }
   var payState = {};   // latest payments for the open request: { logistics, repair, final }
   // The Payments block shows in the request popup AND in the case popup
   // (03-Nov-2026). payView says which one is open, payClaim for which request.
@@ -5370,6 +5396,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       '<div id="pay-details">' +
         '<div class="pay-box pay-step" id="pay-logistics"><span class="pay-hint">Loading…</span></div>' +
         '<div class="pay-box pay-step" id="pay-repair"><span class="pay-hint">Loading…</span></div>' +
+        '<div class="pay-box pay-step" id="pay-delivery"><span class="pay-hint">Loading…</span></div>' +
         '<div class="pay-box pay-step" id="pay-final"><span class="pay-hint">Loading…</span></div>' +
       '</div>';
   }
@@ -5387,9 +5414,12 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // Done items move to the summary lines. "Show details" shows everything.
   function renderPaySummary() {
     var sum = document.getElementById('pay-sum'), tg = document.getElementById('pay-toggle');
-    var cards = { logistics: document.getElementById('pay-logistics'), repair: document.getElementById('pay-repair'), final: document.getElementById('pay-final') };
+    var cards = { logistics: document.getElementById('pay-logistics'), repair: document.getElementById('pay-repair'), delivery: document.getElementById('pay-delivery'), final: document.getElementById('pay-final') };
+    if (!cards.delivery) delete cards.delivery;
     if (!sum || !tg || !cards.logistics) return;
-    var l = payState.logistics, rp = payState.repair, f = payState.final;
+    var l = payState.logistics, rp = payState.repair, f = payState.final, d = payState.delivery;
+    var nd = payNeedsDelivery();
+    var collected = !!(stepsCtx && stepsCtx.c && stepsCtx.c.reverse && stepsCtx.c.reverse.handed_over_at);
     if (payWaived(payState)) {   // Free service: one line, no step cards
       var w = isWaived(l) ? l : rp;
       Object.keys(cards).forEach(function (k) { cards[k].hidden = true; });
@@ -5424,6 +5454,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       // Self-ship: delivery card only once Step 1 is settled (and the customer may still collect instead)
       logistics: self ? settled(rp) && !payHasDelivery(rp) && !settled(l) && stage <= 5 : !settled(l),
       repair: (stage >= 4 || has(rp)) && !settled(rp),
+      // Return delivery: once Step 2 is settled, until it's paid / sent back / collected
+      delivery: nd && (has(d) ? !settled(d) : settled(rp) && stage <= 5 && !collected),
       // Final invoice is made automatically when Send back is booked — its card
       // only shows if that left something to fix (made but advances not applied).
       final: !old && has(f) && f.status !== 'paid'
@@ -5437,6 +5469,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     } : {
       logistics: '',
       repair: settled(rp) || has(rp) ? '' : !settled(l) ? 'Unlocks after Step 1 is paid' : stage < 4 ? 'Unlocks once the product is received and inspected' : '',
+      delivery: has(d) || collected ? '' : !settled(rp) ? 'Unlocks after Step 2 is paid (or Not repaired)' : '',
       final: (f && has(f)) || old ? '' : !(settled(l) && settled(rp)) ? 'Unlocks after Steps 1 and 2 (or Not repaired)' : ''
     };
     var hidden = 0;
@@ -5444,6 +5477,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var show = all || need[k];
       // No manual "Create final invoice" — Send back makes it; the card only exists once there is one
       if (k === 'final' && !has(f)) show = false;
+      if (k === 'delivery' && !nd) show = false;   // older request / self-ship / free — no Step 3
       // only count hidden cards worth opening: ones with a payment on them
       cards[k].hidden = !show; if (!show && has(payState[k])) hidden++;
       cards[k].classList.toggle('pay-locked', !!lock[k]);
@@ -5460,11 +5494,12 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       // Slim bar: ①───②───✓ (03-Nov-2026); hover shows the step + its state
       // Line into step n: full green when n is done, half green when only the step before is done
       var prevSt = '';
+      var lastN = nd && !self ? 4 : 3;
       var seg = function (n, name, st, txt) {
         var ln = st === 'done' ? 'done' : prevSt === 'done' ? 'half' : 'todo';
         prevSt = st;
         return (n > 1 ? '<span class="pb-line pb-' + ln + '"></span>' : '') +
-          '<span class="pb-dot pb-' + st + '" title="' + name + ' · ' + txt + '">' + (n === 3 ? '&#10003;' : n) + '</span>'; };
+          '<span class="pb-dot pb-' + st + '" title="' + name + ' · ' + txt + '">' + (n === lastN ? '&#10003;' : n) + '</span>'; };
       var s1 = settled(l) ? ['done', 'Paid'] : has(l) ? ['cur', 'Payment pending'] : ['cur', 'Send link'];
       var s2 = rp && rp.status === 'skipped' ? ['done', 'Not repaired'] : settled(rp) ? ['done', 'Paid'] : has(rp) ? ['cur', 'Payment pending'] : lock.repair ? ['todo', 'Locked'] : ['cur', 'Send quote'];
       var s3 = f && f.status === 'paid' ? ['done', 'Settled'] : has(f) ? ['cur', 'Apply advances'] : lock.final ? ['todo', 'Locked'] : ['cur', 'At dispatch'];
@@ -5472,6 +5507,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         var d2 = settled(l) ? ['done', 'Paid'] : has(l) ? ['cur', 'Payment pending'] : payHasDelivery(rp) ? [settled(rp) ? 'done' : 'todo', 'Included in Step 1'] : lock.logistics ? ['todo', 'Locked'] : ['cur', 'Only if we deliver'];
         s2[0] = s2[0] === 'todo' ? 'cur' : s2[0];
         bar.innerHTML = old ? '' : seg(1, 'Spare Parts &amp; Service Charge', s2[0], s2[1]) + seg(2, 'Return delivery', d2[0], d2[1]) + seg(3, 'Final invoice', s3[0], s3[1]);
+      } else if (nd) {   // 1 pickup · 2 service & parts · 3 return delivery (or collected) · ✓ final
+        var d3 = settled(d) ? ['done', 'Paid'] : has(d) ? ['cur', 'Payment pending'] : collected ? ['done', 'Customer collected'] : lock.delivery ? ['todo', 'Locked'] : ['cur', 'Only if we deliver'];
+        bar.innerHTML = old ? '' : seg(1, 'Pickup', s1[0], s1[1]) + seg(2, 'Spare Parts &amp; Service Charge', s2[0], s2[1]) + seg(3, 'Return delivery', d3[0], d3[1]) + seg(4, 'Final invoice', s3[0], s3[1]);
       } else
       bar.innerHTML = old ? '' : seg(1, 'Pickup &amp; delivery', s1[0], s1[1]) + seg(2, 'Spare Parts &amp; Service Charge', s2[0], s2[1]) + seg(3, 'Final invoice', s3[0], s3[1]);
       bar.hidden = old;
@@ -5482,15 +5520,16 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       if (has(rp)) rows += paySumLine('Spare Parts &amp; Service Charge', rp);
       if (has(l)) rows += paySumLine('Return delivery charges', l);
     } else {
-    if (has(l)) rows += paySumLine('Pickup &amp; delivery charges', l);
+    if (has(l)) rows += paySumLine(nd ? 'Pickup charges' : 'Pickup &amp; delivery charges', l);
     if (has(rp)) rows += paySumLine('Spare Parts &amp; Service Charge', rp);
+    if (nd && has(d)) rows += paySumLine('Return delivery charges', d);
     }
     // Final invoice — appears only once Send back has created it
     if (has(f)) rows += '<div class="pay-sum-row"><span class="pay-sum-n">Final invoice</span>' +
       '<span class="pay-total">' + money(f.total) + '</span>' +
       (f.status === 'paid' ? '<span class="bt-green">' + esc(f.invoice_number || '') + ' ✓</span>'
         : '<span class="bt-amber">' + esc(f.invoice_number || '') + ' · advances not applied</span>') + '</div>';
-    var paidTot = [l, rp].reduce(function (s, x) { return s + (x && x.status === 'paid' ? Number(x.total || 0) : 0); }, 0);
+    var paidTot = [l, rp, d].reduce(function (s, x) { return s + (x && x.status === 'paid' ? Number(x.total || 0) : 0); }, 0);
     if (paidTot > 0 && (has(rp) || stage >= 4) && !self) rows +=
       '<div class="pay-sum-row pay-sum-tot"><span class="pay-sum-n">Total settled</span><span class="pay-total">' + money(paidTot) + '</span>' +
       (f && f.status === 'paid' ? '<span class="bt-green">Settled</span>'
@@ -5522,7 +5561,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   }
 
   function loadPayment(r, refresh) {
-    ['logistics', 'repair', 'final'].forEach(function (k) {
+    ['logistics', 'repair', 'delivery', 'final'].forEach(function (k) {
       var el = document.getElementById('pay-' + k);
       if (el && refresh) el.innerHTML = stepHead(k) + '<span class="pay-hint">Checking Zoho…</span>';
     });
@@ -5533,6 +5572,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       payState = res.payments || { logistics: null, repair: res.payment || null };
       renderPayStep(r, 'logistics', payState.logistics, res.checkError);
       renderPayStep(r, 'repair', payState.repair, res.checkError);
+      renderPayStep(r, 'delivery', payState.delivery, res.checkError);
       renderFinal(r, payState.final, res.checkError);
       renderPaySummary();
       if (stepsCtx && stepsCtx.r && stepsCtx.r.claim_id === r.claim_id) { stepsCtx.pay = payState; drawSteps(); }
@@ -5540,7 +5580,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       setApproveLock(payWaived(payState) || (payState.logistics && payState.logistics.status === 'paid') ||
         (!payState.logistics && payState.repair && payState.repair.status === 'paid'));
     }).catch(function (e) {
-      ['logistics', 'repair', 'final'].forEach(function (k) {
+      ['logistics', 'repair', 'delivery', 'final'].forEach(function (k) {
         var x = document.getElementById('pay-' + k); if (x) x.innerHTML = stepHead(k) + '<span class="pay-hint">Could not load payment: ' + esc(e.message) + '</span>';
       });
     });
@@ -5579,7 +5619,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       return;
     }
     if (!p || p.status === 'void') {
-      var hint = paySelf() && kind === 'logistics' ? ' Send only if the customer wants it delivered — if they collect, use "Customer collects".' : '';
+      var hint = (paySelf() && kind === 'logistics') || kind === 'delivery' ? ' Send only if the customer wants it delivered — if they collect, use "Customer collects".' : '';
       el.innerHTML = stepHead(kind) +
         '<div class="pay-row"><span class="pay-hint">' + (p ? esc(p.invoice_number || '') + ' was voided. ' : '') + 'No payment link yet.' + hint + '</span>' +
         (canActReq() && !fin && !payState.final ? '<button class="case-act primary" data-new="' + kind + '">' + payDef(kind).btn + '</button>' : '') +
@@ -5595,7 +5635,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
           ![payState.logistics, payState.repair].some(function (x) { return x && (x.status === 'paid' || x.status === 'pending'); })
           ? '<button class="case-act" data-waive>Free service</button>' : '') + '</div>';
       var b = el.querySelector('[data-new]');
-      if (b) b.addEventListener('click', function () { kind === 'logistics' ? logisticsForm(r) : repairForm(r); });
+      if (b) b.addEventListener('click', function () { kind === 'repair' ? repairForm(r) : logisticsForm(r, null, kind); });
       var ss = el.querySelector('[data-self]');
       if (ss) ss.addEventListener('click', function () { selfShipPanel(r); });
       var wv = el.querySelector('[data-waive]');
@@ -5642,11 +5682,11 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var c = el.querySelector('[data-copy]');
     if (c) c.addEventListener('click', function () {
       var first = String(r.name || '').split(' ')[0] || '';
-      var msg = kind === 'logistics' && paySelf()
-        ? 'Hi ' + first + ', the delivery charges to send your repaired product back for request ' + r.claim_id + ' are ' + money(p.total) +
+      var msg = (kind === 'logistics' && paySelf()) || kind === 'delivery'
+        ? 'Hi ' + first + ', the delivery charges to send your product back for request ' + r.claim_id + ' are ' + money(p.total) +
           ' (incl. GST). Please pay here: ' + p.invoice_url + ' — we dispatch it as soon as it is paid. — Team TOMAHAWK Tools'
         : kind === 'logistics'
-        ? 'Hi ' + first + ', as discussed, the pickup and return delivery charges for your request ' + r.claim_id + ' are ' + money(p.total) +
+        ? 'Hi ' + first + ', as discussed, the pickup charges for your request ' + r.claim_id + ' are ' + money(p.total) +
           ' (incl. GST). Please pay here: ' + p.invoice_url + ' — we book the pickup as soon as it is paid. Service and spare-part charges, if any, are shared after inspection. — Team TOMAHAWK Tools'
         : 'Hi ' + first + ', the repair cost for your request ' + r.claim_id + ' is ' + money(p.total) +
           ' (incl. GST). Please pay here: ' + p.invoice_url + ' — Team TOMAHAWK Tools';
@@ -5670,7 +5710,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // when the case closes (after Step 2 is paid, or skipped if no repair cost).
   function renderFinal(r, p, checkError) {
     var el = document.getElementById('pay-final'); if (!el) return;
-    var adv = [payState.logistics, payState.repair].filter(function (x) { return x && x.status !== 'void' && x.status !== 'skipped'; });
+    var adv = [payState.logistics, payState.repair, payState.delivery].filter(function (x) { return x && x.status !== 'void' && x.status !== 'skipped'; });
     if (adv.some(function (x) { return x.doc_type !== 'retainer'; })) {   // billed before 02-Nov-2026 — normal invoices already
       el.innerHTML = stepHead('final') + '<span class="pay-hint">Billed the old way (separate invoices) — no final invoice needed.</span>';
       return;
@@ -5692,7 +5732,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         '</div>';
     } else {
       var l = payState.logistics, rp = payState.repair;
-      var ready = l && l.status === 'paid' && !(rp && rp.status === 'pending');
+      var ready = l && l.status === 'paid' && !(rp && rp.status === 'pending') && !(payState.delivery && payState.delivery.status === 'pending');
       if (paySelf()) {   // self-ship: whatever was paid; made at send back / Customer collects
         var pend = [l, rp].some(function (x) { return x && x.status === 'pending'; });
         var anyPaid = [l, rp].filter(function (x) { return x && x.status === 'paid'; });
@@ -5757,32 +5797,36 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   }
 
   // ── Step 1 form: quote from pincode + package size, consent, send ──
-  function logisticsForm(r, ov) {
-    var el = document.getElementById('pay-logistics'); if (!el) return;
-    el.innerHTML = stepHead('logistics') + '<span class="pay-hint">Getting Delhivery and Ekart rates for pincode ' + esc(r.pincode || '') + '…</span>';
+  // mode: 'logistics' (Step 1 pickup; self-ship: return delivery) | 'delivery' (Step 3 return delivery)
+  function logisticsForm(r, ov, mode) {
+    mode = mode === 'delivery' ? 'delivery' : 'logistics';
+    var el = document.getElementById('pay-' + mode); if (!el) return;
+    el.innerHTML = stepHead(mode) + '<span class="pay-hint">Getting Delhivery and Ekart rates for pincode ' + esc(r.pincode || '') + '…</span>';
     var qs = 'ccLogisticsQuote&claim_id=' + encodeURIComponent(r.claim_id);
     if (ov) Object.keys(ov).forEach(function (k) { if (ov[k]) qs += '&' + k + '=' + encodeURIComponent(ov[k]); });
     api(qs).then(function (q) {
       if (!payOpen(r)) return;
       if (!q || !q.ok) throw new Error((q && q.error) || 'failed');
-      drawLogisticsForm(r, q);
+      drawLogisticsForm(r, q, mode);
     }).catch(function (e) {
-      el.innerHTML = stepHead('logistics') + '<div class="pay-hint">Could not get courier rates: ' + esc(e.message) + '. You can still enter the charges by hand.</div>';
-      drawLogisticsForm(r, null);
+      el.innerHTML = stepHead(mode) + '<div class="pay-hint">Could not get courier rates: ' + esc(e.message) + '. You can still enter the charges by hand.</div>';
+      drawLogisticsForm(r, null, mode);
     });
   }
 
-  function drawLogisticsForm(r, q) {
-    var el = document.getElementById('pay-logistics'); if (!el) return;
+  function drawLogisticsForm(r, q, mode) {
+    mode = mode === 'delivery' ? 'delivery' : 'logistics';
+    var el = document.getElementById('pay-' + mode); if (!el) return;
     var sz = q && q.size, sug = (q && q.suggested) || { pickup: '', delivery: '' };
-    var self = paySelf();   // self-ship: return delivery only, no pickup charge
+    var self = paySelf() || mode === 'delivery';   // return delivery only, no pickup charge
+    var pickOnly = !self;                            // Step 1 = pickup only (17-Nov-2026)
     var srcTxt = !sz ? '' : sz.source === 'amazon' ? 'Amazon ' + esc(sz.asin || '') : sz.source === 'team' ? 'entered by team' : 'default size — Amazon has no size for this product';
     var kg = function (g) { return (Math.round(g / 100) / 10) + ' kg'; };
     // Layout (03-Nov-2026): 1 package line (+ Edit size row) · 2 compact courier rates ·
     // 3 charges side by side with "Customer pays" big on the right.
     var chip = !sz ? '' : sz.suspect ? '<span class="lq-chip">&#9888; Amazon size looks too small</span>'
       : sz.source === 'default' ? '<span class="lq-chip">&#9888; Default size — check the box</span>' : '';
-    el.innerHTML = stepHead('logistics') +
+    el.innerHTML = stepHead(mode) +
       (sz ? '<div class="lq-pkg"><span class="lq-k">Package</span><b>' + Math.round(sz.length) + '×' + Math.round(sz.width) + '×' + Math.round(sz.height) + ' cm · ' + kg(sz.weight) + '</b>' +
           '<span class="pay-hint">→ chargeable <b>' + kg(sz.chargeable) + '</b> · ' + esc(q.city || '') + ' ' + esc(q.pincode) + '</span>' + chip +
           '<button type="button" class="linkish" id="lq-edit">Edit size</button></div>' +
@@ -5801,7 +5845,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
           }).join('') + '</div>' : '') +
       '<div class="lq-charges">' +
         '<label class="lq-f"' + (self ? ' hidden' : '') + '><span>Pickup charge</span><input class="sb-input" id="lq-pick" type="number" min="0" step="1" value="' + (self ? 0 : sug.pickup) + '"></label>' +
-        '<label class="lq-f"><span>Delivery charge</span><input class="sb-input" id="lq-del" type="number" min="0" step="1" value="' + sug.delivery + '"></label>' +
+        '<label class="lq-f"' + (pickOnly ? ' hidden' : '') + '><span>Delivery charge</span><input class="sb-input" id="lq-del" type="number" min="0" step="1" value="' + (pickOnly ? 0 : sug.delivery) + '"></label>' +
         '<div class="lq-pay"><span>Customer pays</span><b class="pay-total" id="lq-tot">—</b><small>incl. ' + PAY_GST + '% GST</small></div>' +
       '</div>' +
       '<div class="pay-hint lq-foot">Charges are before GST' + (q && q.suggested ? ' · prefilled = higher courier + ₹' + q.bufferRs + ' buffer' : '') +
@@ -5825,16 +5869,16 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var rc = document.getElementById('lq-recalc');
     if (rc) rc.addEventListener('click', function () {
       logisticsForm(r, { length: document.getElementById('lq-l').value, width: document.getElementById('lq-w').value,
-        height: document.getElementById('lq-h').value, weight: Math.round(parseFloat(document.getElementById('lq-kg').value || 0) * 1000) || '' });
+        height: document.getElementById('lq-h').value, weight: Math.round(parseFloat(document.getElementById('lq-kg').value || 0) * 1000) || '' }, mode);
     });
     zohoFromLine(r, 'lq-from', function () { ready = true; upd(); });
     upd();
     send.addEventListener('click', function () {
       var lines = [{ label: 'Pickup charge', amount: parseFloat(pick.value) || 0 }, { label: 'Return delivery charge', amount: parseFloat(del.value) || 0 }]
         .filter(function (l) { return l.amount > 0; });
-      if (!lines.length) { alert(self ? 'Enter the delivery charge.' : 'Enter the pickup and delivery charges.'); return; }
-      createPayment(r, send, { kind: 'logistics', lines: lines, consent: consent(),
-        description: (self ? 'Return delivery' : 'Pickup & return delivery') + (q && q.size ? ' · ' + Math.round(q.size.chargeable / 100) / 10 + ' kg · ' + q.pincode : '') }, self ? 'return delivery' : 'pickup & delivery');
+      if (!lines.length) { alert(self ? 'Enter the delivery charge.' : 'Enter the pickup charge.'); return; }
+      createPayment(r, send, { kind: mode, lines: lines, consent: consent(),
+        description: (self ? 'Return delivery' : 'Pickup') + (q && q.size ? ' · ' + Math.round(q.size.chargeable / 100) / 10 + ' kg · ' + q.pincode : '') }, self ? 'return delivery' : 'pickup');
     });
   }
 

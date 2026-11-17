@@ -8403,7 +8403,7 @@ async function rpPostFinalInvoice(env, inv) {
 // Advance number: SRN-261031-01-A (Step 1) / -B (Step 2). A re-sent advance
 // after a cancelled link becomes -A2, -A3 … (max 16 characters).
 function rpAdvanceNumber(claimId, kind, attempt) {
-  const base = claimId + '-' + (kind === 'logistics' ? 'A' : 'B') + (attempt > 1 ? attempt : '');
+  const base = claimId + '-' + (kind === 'logistics' ? 'A' : kind === 'delivery' ? 'C' : 'B') + (attempt > 1 ? attempt : '');
   return base.length <= 16 ? base : base.slice(-16);
 }
 
@@ -8416,12 +8416,22 @@ function rpDoc(p) {
 
 // Amount + 18% GST, to the paisa (matches Zoho's per-line tax on the final invoice).
 function rpWithGst(v) { return Math.round(Number(v) * (100 + ZB_GST_RATE)) / 100; }
-const RP_KINDS = ['logistics', 'repair'];
-function rpKind(k) { return k === 'logistics' ? 'logistics' : 'repair'; }
+// Return delivery after the repair (17-Nov-2026): Step 1 is now the PICKUP only.
+// Once repaired (or "Not repaired"), the customer either collects it themselves
+// (no charge) or pays the return delivery — 'delivery' advance, <request ID>-C —
+// before we send it back. Older requests whose Step 1 already included delivery
+// skip this step. Self-ship cases keep using 'logistics' for the return delivery.
+const RP_KINDS = ['logistics', 'repair', 'delivery'];
+function rpKind(k) { return k === 'logistics' || k === 'delivery' ? k : 'repair'; }
+// Step 1 advance that already carried the return delivery (requests before 17-Nov-2026)
+function rpHasDeliveryLine(p) {
+  if (!p || p.status === 'void' || p.status === 'skipped') return false;
+  try { return JSON.parse(p.lines_json || '[]').some(l => /deliver/i.test(l.label || '')); } catch (e) { return false; }
+}
 // SAC for the pickup + delivery lines (courier services). Override with the
 // ZB_LOGISTICS_SAC Worker var if accounts want a different code.
 function rpLogisticsSac(env) { return env.ZB_LOGISTICS_SAC || '996812'; }
-const RP_STEP_NAME = { logistics: 'Pickup & delivery', repair: 'Repair', final: 'Final invoice' };
+const RP_STEP_NAME = { logistics: 'Pickup', repair: 'Repair', delivery: 'Return delivery', final: 'Final invoice' };
 
 // Shown when the team opens the payment panel: is Zoho connected, which
 // GSTIN we bill from, and the tax lines that will apply.
@@ -8461,7 +8471,7 @@ async function rpCreate(env, user, b) {
   const amount = Math.round(lines.reduce((t, l) => t + l.amount, 0) * 100) / 100;
   const desc = (clean(b.description) || lines.map(l => l.label).filter(Boolean).join(', ')).slice(0, 300);
   if (!claimId) return { ok: false, error: 'claim_id is required' };
-  if (!lines.length || !(amount > 0) || amount > 200000) return { ok: false, error: kind === 'logistics' ? 'Enter the pickup and delivery charges (before GST).' : 'Enter the repair cost (before GST).' };
+  if (!lines.length || !(amount > 0) || amount > 200000) return { ok: false, error: kind === 'logistics' ? 'Enter the pickup charge (before GST).' : kind === 'delivery' ? 'Enter the delivery charge (before GST).' : 'Enter the repair cost (before GST).' };
   if (lines.some(l => !l.label)) return { ok: false, error: 'Every charge line needs a name.' };
   if (!desc) return { ok: false, error: 'Describe the repair work in a few words.' };
   // Consent: 'call' | 'whatsapp' from older dashboards; now 'website' (03-Nov-2026) —
@@ -8473,7 +8483,7 @@ async function rpCreate(env, user, b) {
   const open = await env.DB.prepare("SELECT status FROM repair_payments WHERE claim_id = ? AND COALESCE(kind, 'repair') = ? AND status IN ('pending','paid','skipped')").bind(claimId, kind).first();
   if (await rpIsWaived(env.DB, claimId)) return { ok: false, error: 'This request is marked Free service — no payment needed. Undo that first.' };
   if (open && open.status === 'skipped') return { ok: false, error: 'Step 2 is marked "Not repaired". Undo that first.' };
-  if (open) return { ok: false, error: 'A ' + (kind === 'logistics' ? 'pickup & delivery' : 'repair') + ' payment link already exists for this request. Refresh to see it.' };
+  if (open) return { ok: false, error: 'A ' + (kind === 'logistics' ? 'pickup' : kind === 'delivery' ? 'return delivery' : 'repair') + ' payment link already exists for this request. Refresh to see it.' };
   if (await rpLatest(env.DB, claimId, 'final')) return { ok: false, error: 'The final invoice is already made for this request — no new advances.' };
 
   // Self-ship (14-Nov-2026): the 'logistics' advance is the return delivery only,
@@ -8483,6 +8493,15 @@ async function rpCreate(env, user, b) {
     const rp = await rpLatest(env.DB, claimId, 'repair');
     if (!rp || !['paid', 'skipped'].includes(rp.status)) return { ok: false, error: 'Settle the service & spare parts payment (or Not repaired) first — delivery is charged after that.' };
   }
+  if (kind === 'delivery') {
+    if (selfShip) return { ok: false, error: 'Self-shipped case — send the delivery link from the Return delivery step.' };
+    const l1 = await rpLatest(env.DB, claimId, 'logistics');
+    if (rpHasDeliveryLine(l1)) return { ok: false, error: 'The return delivery was already paid in Step 1 (' + (l1.invoice_number || '') + ').' };
+    const rp = await rpLatest(env.DB, claimId, 'repair');
+    if (!rp || !['paid', 'skipped'].includes(rp.status)) return { ok: false, error: 'Settle the service & spare parts payment (or Not repaired) first — delivery is charged after that.' };
+  }
+  // Return delivery link = 'delivery' advance, or the self-ship 'logistics' one
+  const isDeliveryLink = kind === 'delivery' || (selfShip && kind === 'logistics');
   const z = await rpZohoContext(env, row);
   if (z.error) return { ok: false, error: z.error };
   // Line SAC is carried into the final invoice (lines_json keeps label + amount).
@@ -8494,7 +8513,7 @@ async function rpCreate(env, user, b) {
     // where the advance is adjusted.
     line_items: lines.map((l, i) => ({ description: l.label + ' (incl. ' + ZB_GST_RATE + '% GST) · ' + (kind === 'repair' ? (row.product || '') + ' · ' : '') + claimId,
       item_order: i + 1, rate: rpWithGst(l.amount) })),
-    notes: 'Advance for ' + (kind === 'logistics' ? (selfShip ? 'return delivery' : 'pickup and return delivery') : lines.some(l => /deliver/i.test(l.label)) ? 'service, spare parts and return delivery' : 'service and spare parts') + ', service request ' + claimId +
+    notes: 'Advance for ' + (isDeliveryLink ? 'return delivery' : kind === 'logistics' ? (rpHasDeliveryLine({ lines_json: JSON.stringify(lines) }) ? 'pickup and return delivery' : 'pickup') : lines.some(l => /deliver/i.test(l.label)) ? 'service, spare parts and return delivery' : 'service and spare parts') + ', service request ' + claimId +
       '. The full tax invoice is issued when your request is closed. Thank you for choosing TOMAHAWK® Tools.',
     payment_options: { payment_gateways: [{ gateway_name: 'razorpay', configured: true }] }
   };
@@ -8520,16 +8539,16 @@ async function rpCreate(env, user, b) {
   let emailed = false;
   if (url) {
     const tot = '₹' + total.toFixed(2);
-    emailed = await srEmailCustomer(env, row, kind === 'logistics' ? (selfShip ? 'Delivery payment' : 'Pickup & delivery payment') : 'Repair payment', kind === 'logistics' && selfShip ? [
-      'Please pay the delivery charges to send your repaired product back to you. Total payable (incl. 18% GST): ' + tot + '.',
+    emailed = await srEmailCustomer(env, row, isDeliveryLink ? 'Delivery payment' : kind === 'logistics' ? 'Pickup payment' : 'Repair payment', isDeliveryLink ? [
+      'Please pay the delivery charges to send your product back to you. Total payable (incl. 18% GST): ' + tot + '.',
       'Advance no.: ' + number,
       'Pay securely online here: ' + url,
       'We dispatch your product as soon as the payment is received. You get one full tax invoice when your request is closed.'
     ] : kind === 'logistics' ? [
-      'As agreed, please pay the pickup and return delivery charges for your product. Total payable (incl. 18% GST): ' + tot + '.',
+      'As agreed, please pay the pickup charges for your product. Total payable (incl. 18% GST): ' + tot + '.',
       'Advance no.: ' + number,
       'Pay securely online here: ' + url,
-      'We book the pickup as soon as the payment is received. Service and spare-part charges (if any) are shared after our technician inspects the product. You get one full tax invoice when your request is closed.'
+      'We book the pickup as soon as the payment is received. Service and spare-part charges (if any) are shared after our technician inspects the product. After the repair you can collect it from us, or we deliver it back for a delivery charge. You get one full tax invoice when your request is closed.'
     ] : [
       'Your repair cost is ready. Total payable (incl. 18% GST): ' + tot + '.',
       'Advance no.: ' + number,
@@ -8538,13 +8557,13 @@ async function rpCreate(env, user, b) {
     ]);
   }
   await srAddEvent(env.DB, claimId, { by, kind: 'payment_link',
-    note: (selfShip && kind === 'logistics' ? 'Return delivery' : RP_STEP_NAME[kind]) + ' advance · ' + number + ' · ₹' + total.toFixed(2) + ' (₹' + amount.toFixed(2) + ' + GST) · ' + desc, emailed }, {});
+    note: (isDeliveryLink ? 'Return delivery' : RP_STEP_NAME[kind]) + ' advance · ' + number + ' · ₹' + total.toFixed(2) + ' (₹' + amount.toFixed(2) + ' + GST) · ' + desc, emailed }, {});
   // WhatsApp payment_pickup / payment_repair with the Pay Now link (best effort)
   let wa = { sent: false };
   const tok = rpPayToken(url);
   if (tok) {
     const f = { 'Payment Amount': total.toFixed(2), 'Payment Token': tok };
-    if (kind !== 'logistics' || selfShip) f['Repair Details'] = kind === 'logistics' ? 'Return delivery charges' : (desc || 'Service & spare parts');
+    if (kind !== 'logistics' || selfShip) f['Repair Details'] = isDeliveryLink ? 'Return delivery charges' : (desc || 'Service & spare parts');
     try { wa = await srSendWhatsAppFollowup(env, row, kind === 'logistics' && !selfShip ? 'payment_pickup' : 'payment_repair', f, number, by); }
     catch (e) { wa = { sent: false, error: e.message }; }
   }
@@ -9017,7 +9036,6 @@ async function srIsSelfShip(DB, caseId) {
 async function ccHandOver(env, user, oid) {
   const rv = await env.DB.prepare("SELECT * FROM delhivery_orders WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1").bind(oid).first();
   if (!rv) return { ok: false, error: 'No case with that Order ID' };
-  if (rv.courier !== 'Self-ship') return { ok: false, error: 'Customer collect is only for self-shipped cases.' };
   if (rv.handed_over_at) return { ok: true, already: true };
   if (!rv.received_at) return { ok: false, error: 'Mark the parcel Received first' };
   if (!rv.repair_done_at) return { ok: false, error: 'Mark "Repair done" first' };
@@ -9033,8 +9051,10 @@ async function ccHandOver(env, user, oid) {
     if (claim && !srIsFree(claim)) {
       const rp = await rpLatest(env.DB, rv.claim_id, 'repair');
       if (!rp || !['paid', 'skipped'].includes(rp.status)) return { ok: false, error: 'The service & spare parts payment is not settled yet (Payments).' };
-      const l = await rpLatest(env.DB, rv.claim_id, 'logistics');
-      if (l && l.status === 'pending') return { ok: false, error: 'A delivery payment link is open — cancel it under Payments first (no delivery when the customer collects).' };
+      // Customer collects (17-Nov-2026: any case, not only self-ship) — no return delivery is charged
+      const dl = await rpLatest(env.DB, rv.claim_id, rv.courier === 'Self-ship' ? 'logistics' : 'delivery');
+      if (dl && dl.status === 'pending') return { ok: false, error: 'A delivery payment link is open — cancel it under Payments first (no delivery when the customer collects).' };
+      if (dl && dl.status === 'paid') return { ok: false, error: 'The customer already paid for delivery (' + (dl.invoice_number || '') + ') — book the send back instead.' };
     }
   }
   const by = (user && user.username) || 'unknown';
