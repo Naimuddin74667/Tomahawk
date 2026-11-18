@@ -7706,6 +7706,14 @@ function sbBase(env) { return env.SUPABASE_URL.replace(/\/$/, '') + '/storage/v1
 
 // opts.prefix keeps later uploads (e.g. a re-uploaded invoice) from overwriting
 // the first ones; opts.kind tags them (shown on the dashboard).
+// base64 → bytes with a plain loop. Uint8Array.from(str, fn) calls a function per
+// byte and ran out of CPU on a video (DRN-261118-02, 18-Nov-2026), killing the request.
+function b64ToBytes(b64) {
+  const s = atob(b64), out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+
 async function srUploadFiles(env, claimId, files, opts) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY || !files.length) return [];
   opts = opts || {};
@@ -7714,7 +7722,7 @@ async function srUploadFiles(env, claimId, files, opts) {
     const f = files[i];
     const safe = String(f.filename || 'file').replace(/[^A-Za-z0-9._-]/g, '_').slice(-60);
     const path = claimId + '/' + (opts.prefix || '') + (i + 1) + '_' + safe;
-    const bin = Uint8Array.from(atob(f.base64), c => c.charCodeAt(0));
+    const bin = b64ToBytes(f.base64);
     const put = () => fetch(sbBase(env) + '/object/' + SR_BUCKET + '/' + path, {
       method: 'POST', body: bin,
       headers: sbStorageHeaders(env, { 'Content-Type': f.mime || 'application/octet-stream', 'x-upsert': 'true' })
