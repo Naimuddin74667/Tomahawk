@@ -77,6 +77,22 @@ body{
 .preview{margin-top:16px;padding:12px;border:1px dashed #b89a6a;border-radius:10px;font-size:1.05rem;color:var(--green-d);background:rgba(255,255,255,.35)}
 .preview b{font-family:'Great Vibes',cursive;font-weight:400;font-size:1.6rem;display:block;color:var(--green)}
 .copied{color:var(--green);font-size:.95rem;min-height:1.2em;margin-top:6px}
+.tabs{display:flex;gap:6px;margin:-6px 0 16px;background:rgba(29,74,48,.08);padding:4px;border-radius:12px}
+.tab{flex:1;padding:9px;border:none;border-radius:9px;background:transparent;font-family:inherit;font-size:1.05rem;font-weight:700;color:var(--green);cursor:pointer}
+.tab.active{background:var(--green);color:#f3e3b5}
+.totals{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.totals div{padding:10px 4px;border:1px solid #b89a6a;border-radius:10px;background:rgba(255,255,255,.4)}
+.totals b{display:block;font-size:1.7rem;line-height:1.1;color:var(--green)}
+.totals small{font-size:.85rem;color:var(--muted)}
+.headcount{margin:10px 0 12px;font-size:1.05rem;color:var(--green-d)}
+.glist{list-style:none;text-align:left;max-height:55vh;overflow-y:auto;margin-top:10px}
+.glist li{display:flex;align-items:center;gap:8px;padding:8px 2px;border-bottom:1px solid rgba(150,110,70,.25)}
+.glist .gn{flex:1;font-weight:600;font-size:1.05rem;line-height:1.2}
+.glist .gn small{display:block;font-weight:500;color:var(--muted);font-size:.85rem}
+.glist .tag{font-size:.8rem;font-weight:700;padding:3px 9px;border-radius:12px;background:rgba(29,74,48,.12);color:var(--green);white-space:nowrap}
+.glist .del{border:none;background:none;color:#a3302b;font-size:1.1rem;cursor:pointer;padding:4px 6px;font-family:inherit}
+.glist .del.sure{font-size:.85rem;font-weight:700;background:#a3302b;color:#fff;border-radius:8px}
+.empty{color:var(--muted);padding:14px 0;text-align:center}
 .history{margin-top:18px;text-align:left;font-size:1rem}
 .history h4{font-size:1rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px}
 .history li{list-style:none;padding:6px 0;border-bottom:1px solid rgba(150,110,70,.25);display:flex;justify-content:space-between;gap:8px}
@@ -180,7 +196,12 @@ body{
   <div class="panel wood">
     <svg class="corner tl"><use href="#orn"/></svg><svg class="corner tr"><use href="#orn"/></svg>
     <svg class="corner bl"><use href="#orn"/></svg><svg class="corner br"><use href="#orn"/></svg>
-    <h2>Invite a Guest</h2>
+    <h2 id="hostTitle">Invite a Guest</h2>
+    <div class="tabs">
+      <button class="tab active" data-t="invite">Invite</button>
+      <button class="tab" data-t="list">Guest List</button>
+    </div>
+    <div id="inviteView">
     <p class="sub">Type the guest's name, choose who is invited, then share</p>
     <input id="hostName" class="field" placeholder="e.g. Rahim Bhai" maxlength="40">
     <div class="opt-row" id="hostOpts">
@@ -193,7 +214,19 @@ body{
     <button class="btn ghost" id="copyBtn" disabled>Copy invitation link</button>
     <div class="copied" id="copied"></div>
     <a class="btn ghost" id="openBtn" href="#" aria-disabled="true">Preview card</a>
-    <div class="history"><h4>Sent from this phone</h4><ul id="hist"></ul></div>
+    <div class="copied" id="saveMsg"></div>
+    </div>
+    <div id="listView" class="hidden">
+      <div class="totals">
+        <div><b id="tS">0</b><small>1 Person</small></div>
+        <div><b id="tD">0</b><small>2 Persons</small></div>
+        <div><b id="tF">0</b><small>Families</small></div>
+      </div>
+      <div class="headcount" id="headcount"></div>
+      <input id="search" class="field" placeholder="Search guest name">
+      <ul class="glist" id="glist"><li class="empty">Loading…</li></ul>
+      <button class="btn ghost" id="refreshBtn">↻ Refresh</button>
+    </div>
     <button class="link-sm" id="logoutBtn">Logout</button>
   </div>
 </section>
@@ -266,8 +299,9 @@ body{
 /* ===== Settings ===== */
 // Public link of this invitation (set after publishing). Guest links = BASE_URL + "#f-name" / "#s-name".
 const BASE_URL = 'https://naimuddin74667.github.io/Tomahawk/Test/walima/';
-// Simple client-side check only — keeps casual visitors out of the host panel, not real security.
-const HOST_PASSWORD = 'Saban@123';
+// Guest list lives in the Tomahawk Worker (D1 table walima_invites).
+// The password is checked by the Worker — it is not stored in this page.
+const WORKER = 'https://tomahawk-returns.naimuddin.workers.dev/';
 const EVENT_TIME = new Date('2026-12-01T19:00:00+05:30');
 
 const $ = id => document.getElementById(id);
@@ -294,9 +328,9 @@ function greeting(name, mode){
 // Who the card is valid for: s = 1 person, d = 2 persons, f = entire family
 // Soft wording — conveys the count without sounding like a limit
 function validFor(mode){
-  return mode === 'd' ? 'We warmly await the two of you'
-       : mode === 'f' ? 'We warmly await you with your family'
-       : 'We warmly await you — this invitation is personally for you';
+  return mode === 'd' ? 'Invitation for 2 Persons Only'
+       : mode === 'f' ? 'Invitation With Family'
+       : 'Invitation for 1 Person Only';
 }
 
 /* ===== Guest flow ===== */
@@ -394,31 +428,91 @@ function refreshHost(){
 bindOpts('hostOpts', v => { hostMode = v; refreshHost(); });
 $('hostName').addEventListener('input', refreshHost);
 
-function logSent(){
+/* ---- Worker calls ---- */
+async function api(action, payload){
+  const res = await fetch(WORKER, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(Object.assign({ action, key: store.get('walima_key') }, payload || {}))
+  });
+  const data = await res.json().catch(() => ({ ok:false, error:'Bad response' }));
+  if(!data.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+// Save the guest to the shared list when the invite is shared/copied
+async function logSent(){
   const n = properCase($('hostName').value); if(!n) return;
-  const h = store.lget('walima_sent_v1');
-  h.unshift({ who: hostGreeting() + ' · ' + (hostMode==='d'?'2':hostMode==='f'?'Family':'1'), t: new Date().toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) });
-  store.lset('walima_sent_v1', h.slice(0,50));
-  renderHist();
+  $('saveMsg').textContent = 'Saving to guest list…';
+  try{ await api('walimaSave', { name:n, mode:hostMode, link:guestLink() }); $('saveMsg').textContent = '✓ ' + n + ' added to guest list'; }
+  catch(e){ $('saveMsg').textContent = '⚠ Not saved to list (' + e.message + ')'; }
 }
-function renderHist(){
-  const h = store.lget('walima_sent_v1');
-  $('hist').innerHTML = h.length ? '' : '<li><span>Nothing sent yet</span></li>';
-  h.forEach(x => { const li = document.createElement('li'); li.textContent = x.who; const s = document.createElement('span'); s.textContent = x.t; li.appendChild(s); $('hist').appendChild(li); });
+
+/* ---- Guest list tab ---- */
+const MODE_LABEL = { s:'1 Person', d:'2 Persons', f:'Family' };
+let allRows = [];
+async function loadList(){
+  $('glist').innerHTML = '<li class="empty">Loading…</li>';
+  try{ allRows = (await api('walimaList')).rows; renderList(); }
+  catch(e){ $('glist').innerHTML = ''; const li=document.createElement('li'); li.className='empty'; li.textContent='Could not load: '+e.message; $('glist').appendChild(li); }
 }
+function renderList(){
+  const c = { s:0, d:0, f:0 };
+  allRows.forEach(r => c[r.mode] = (c[r.mode]||0) + 1);
+  $('tS').textContent = c.s; $('tD').textContent = c.d; $('tF').textContent = c.f;
+  $('headcount').textContent = 'Total invites: ' + allRows.length + ' · Fixed guests: ' + (c.s + c.d*2) + ' + ' + c.f + ' families';
+  const q = $('search').value.trim().toLowerCase();
+  const rows = q ? allRows.filter(r => r.guest_name.toLowerCase().includes(q)) : allRows;
+  $('glist').innerHTML = '';
+  if(!rows.length){ $('glist').innerHTML = '<li class="empty">' + (q ? 'No match' : 'No guests yet') + '</li>'; return; }
+  rows.forEach(r => {
+    const li = document.createElement('li');
+    const gn = document.createElement('div'); gn.className = 'gn'; gn.textContent = r.guest_name;
+    const sm = document.createElement('small'); sm.textContent = fmtDate(r.sent_at); gn.appendChild(sm);
+    const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = MODE_LABEL[r.mode] || r.mode;
+    const del = document.createElement('button'); del.className = 'del'; del.textContent = '✕'; del.title = 'Delete';
+    // Two taps to delete: first tap asks "Sure?", second deletes
+    del.addEventListener('click', async () => {
+      if(!del.classList.contains('sure')){ del.classList.add('sure'); del.textContent = 'Sure?'; setTimeout(() => { del.classList.remove('sure'); del.textContent = '✕'; }, 3000); return; }
+      del.textContent = '…';
+      try{ await api('walimaDelete', { id:r.id }); allRows = allRows.filter(x => x.id !== r.id); renderList(); }
+      catch(e){ del.textContent = '✕'; $('headcount').textContent = 'Delete failed: ' + e.message; }
+    });
+    li.append(gn, tag, del);
+    $('glist').appendChild(li);
+  });
+}
+function fmtDate(t){
+  if(!t) return '';
+  const d = new Date(t.replace(' ', 'T') + '+05:30');
+  return isNaN(d) ? t : d.toLocaleString('en-IN', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', timeZone:'Asia/Kolkata' });
+}
+$('search').addEventListener('input', renderList);
+$('refreshBtn').addEventListener('click', loadList);
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
+  const list = t.dataset.t === 'list';
+  $('inviteView').classList.toggle('hidden', list);
+  $('listView').classList.toggle('hidden', !list);
+  $('hostTitle').textContent = list ? 'Guest List' : 'Invite a Guest';
+  if(list) loadList();
+}));
 $('waBtn').addEventListener('click', logSent);
 $('copyBtn').addEventListener('click', async () => {
   try{ await navigator.clipboard.writeText(waMessage(guestLink())); $('copied').textContent = 'Copied — paste it in WhatsApp'; logSent(); }
   catch(e){ $('copied').textContent = 'Copy blocked — link: ' + guestLink(); }
 });
 
-$('loginBtn').addEventListener('click', () => {
-  if($('pw').value === HOST_PASSWORD){ store.set('walima_host','1'); $('pw').value=''; $('loginErr').textContent=''; enterHost(); }
-  else $('loginErr').textContent = 'Wrong password';
+$('loginBtn').addEventListener('click', async () => {
+  const pw = $('pw').value;
+  if(!pw){ $('loginErr').textContent = 'Enter password'; return; }
+  $('loginErr').textContent = 'Checking…';
+  store.set('walima_key', pw);
+  try{ await api('walimaList'); store.set('walima_host','1'); $('pw').value=''; $('loginErr').textContent=''; enterHost(); }
+  catch(e){ store.del('walima_key'); $('loginErr').textContent = e.message === 'Wrong password' ? 'Wrong password' : 'Could not connect: ' + e.message; }
 });
 $('pw').addEventListener('keydown', e => { if(e.key === 'Enter') $('loginBtn').click(); });
-$('logoutBtn').addEventListener('click', () => { store.del('walima_host'); show('loginScreen'); });
-function enterHost(){ show('hostScreen'); refreshHost(); renderHist(); }
+$('logoutBtn').addEventListener('click', () => { store.del('walima_host'); store.del('walima_key'); show('loginScreen'); });
+function enterHost(){ show('hostScreen'); refreshHost(); }
 
 /* ===== Router (hash) =====
    #host        → host login / panel

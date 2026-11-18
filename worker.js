@@ -1190,6 +1190,7 @@ const ACTION_TIERS = {
   requestTrack: 'public', // public 'track your request' page — request ID/order ID + mobile, steps only, rate-limited
   orderTrack: 'public', // public 'Track my order' (Shopify) — order no. + mobile, status/items/courier only, rate-limited
   drnLookup: 'public', // public 'Report a delivery issue' (DRN) — order no. + mobile/email must match, item list only, rate-limited
+  walimaSave: 'public', walimaList: 'public', walimaDelete: 'public', // Test/walima invitation guest list — own password check inside handler (18-Nov-2026)
   ccDrnToWrn: 'manager_up', // Customer Care: delivery issue → warranty request
   orderCancel: 'public', // public 'Cancel order' on Track Order — order no. + mobile/email must match, only before courier pickup, rate-limited
   invoiceUploadInfo: 'public', invoiceUploadSubmit: 'public', // customer re-uploads the invoice — single-use link token, rate-limited
@@ -1851,6 +1852,61 @@ async function refreshFlipkartImages(env) {
   return { total: rows.length, refreshed, failed, wentDormant };
 }
 
+// ── WALIMA INVITATION (Test/walima) — guest list ─────────────────────
+// Personal (non-business) page. The three walima* actions are 'public' in
+// ACTION_TIERS but each one checks the page's host password itself.
+// Only the SHA-256 of 'walima-2026:' + password is stored here.
+const WALIMA_KEY_HASH = '3b3e09ae9975a0e1e1d48ecffdfc74c9d7573749804da863d1955ca5c507d43f';
+
+async function walimaKeyOk(key) {
+  if (!key) return false;
+  const enc = new TextEncoder().encode('walima-2026:' + String(key));
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  const hex = [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+  return hex === WALIMA_KEY_HASH;
+}
+
+async function ensureWalimaTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS walima_invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guest_name TEXT NOT NULL,
+    mode TEXT NOT NULL,          -- 's' = 1 person, 'd' = 2 persons, 'f' = with family
+    link TEXT,
+    sent_at TEXT DEFAULT (datetime('now', '+5 hours', '+30 minutes'))
+  )`).run();
+}
+
+// Returns a Response for walima* actions, or null for anything else.
+async function handleWalima(act, body, url, env) {
+  if (act !== 'walimaSave' && act !== 'walimaList' && act !== 'walimaDelete') return null;
+  const key = (body && body.key) || url.searchParams.get('key');
+  if (!(await walimaKeyOk(key))) return json({ ok: false, error: 'Wrong password' }, 401);
+  await ensureWalimaTable(env.DB);
+
+  if (act === 'walimaSave') {
+    const name = String((body && body.name) || '').trim().slice(0, 60);
+    const mode = ['s', 'd', 'f'].includes(body && body.mode) ? body.mode : '';
+    if (!name || !mode) return json({ ok: false, error: 'name and mode required' }, 400);
+    const link = String((body && body.link) || '').slice(0, 300);
+    await env.DB.prepare('INSERT INTO walima_invites (guest_name, mode, link) VALUES (?, ?, ?)')
+      .bind(name, mode, link).run();
+    return json({ ok: true });
+  }
+
+  if (act === 'walimaDelete') {
+    const id = parseInt(body && body.id, 10);
+    if (!id) return json({ ok: false, error: 'id required' }, 400);
+    await env.DB.prepare('DELETE FROM walima_invites WHERE id = ?').bind(id).run();
+    return json({ ok: true });
+  }
+
+  // walimaList
+  const rows = (await env.DB.prepare(
+    'SELECT id, guest_name, mode, link, sent_at FROM walima_invites ORDER BY id DESC'
+  ).all()).results || [];
+  return json({ ok: true, rows });
+}
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') {
@@ -1878,6 +1934,10 @@ export default {
       if (!authResult.ok) {
         return json({ ok: false, error: authResult.error, authError: true }, authResult.status || 401);
       }
+
+      // ── WALIMA INVITATION — guest list (walima* actions) ──
+      const walimaResp = await handleWalima(act, body, url, env);
+      if (walimaResp) return walimaResp;
 
       // ── G4 STOCK — own gatepass module (g4gp* actions) ──
       const g4gpResp = await handleG4Gatepass(act, body, url, env, authResult.user);
