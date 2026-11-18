@@ -152,9 +152,63 @@ body{
   padding:8px 18px;border-radius:20px;font-family:inherit;font-size:1rem;cursor:pointer}
 #cardScreen{flex-direction:column}
 
+/* ---------- curtain (opens after the envelope) ---------- */
+.curtain{position:fixed;inset:0;z-index:60;pointer-events:none;overflow:hidden}
+.curtain .half{position:absolute;top:0;bottom:0;width:51%;
+  background:
+    repeating-linear-gradient(90deg, rgba(0,0,0,.28) 0 6px, rgba(255,255,255,.05) 14px, rgba(0,0,0,.22) 26px, rgba(0,0,0,.35) 34px),
+    linear-gradient(180deg,#24563a,#163d28 60%,#0f2c1d);
+  box-shadow:inset 0 0 40px rgba(0,0,0,.5);
+  transition:transform 2.2s cubic-bezier(.65,.05,.3,1)}
+.curtain .half.l{left:0;transform-origin:left top;border-right:3px solid var(--gold)}
+.curtain .half.r{right:0;transform-origin:right top;border-left:3px solid var(--gold)}
+/* gold fringe along the bottom of each half */
+.curtain .half::after{content:'';position:absolute;left:0;right:0;bottom:0;height:22px;
+  background:repeating-linear-gradient(90deg,var(--gold) 0 2px,transparent 2px 6px);opacity:.9}
+/* valance (top band) */
+.curtain .valance{position:absolute;top:0;left:0;right:0;height:62px;z-index:2;
+  background:radial-gradient(ellipse at 50% 0,#2b6444,#173e29 70%);border-bottom:3px solid var(--gold);
+  box-shadow:0 6px 14px rgba(0,0,0,.45);transition:transform 1.4s ease 1.6s}
+.curtain .valance::after{content:'';position:absolute;left:0;right:0;bottom:-14px;height:14px;
+  background:radial-gradient(circle at 10px 0,var(--gold) 0 5px,transparent 6px) 0 0/20px 14px repeat-x}
+.curtain .tie{position:absolute;top:46%;width:16px;height:46px;border-radius:8px;background:linear-gradient(180deg,#e7cf8a,#b8913a);box-shadow:0 2px 6px rgba(0,0,0,.4)}
+.curtain .half.l .tie{left:14px}.curtain .half.r .tie{right:14px}
+.curtain .mono{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:3;color:#f3e3b5;text-align:center;transition:opacity .6s}
+.curtain .mono b{display:block;font-family:'Great Vibes',cursive;font-weight:400;font-size:2.6rem;white-space:nowrap;text-shadow:0 2px 8px rgba(0,0,0,.5)}
+.curtain .mono small{letter-spacing:.3em;text-transform:uppercase;font-size:.85rem;opacity:.85}
+.curtain.open .half.l{transform:translateX(-96%) skewY(-3deg) scaleX(.6)}
+.curtain.open .half.r{transform:translateX(96%) skewY(3deg) scaleX(.6)}
+.curtain.open .mono{opacity:0}
+.curtain.open .valance{transform:translateY(-110%)}
+
+/* ---------- calendar (just before the date) ---------- */
+.cal{width:240px;margin:20px auto 8px;padding:12px 12px 10px;border:1.5px solid var(--gold);border-radius:12px;background:rgba(255,255,255,.45);box-shadow:0 4px 12px rgba(80,60,30,.12)}
+.cal-head{font-family:'Great Vibes',cursive;font-size:1.9rem;line-height:1;color:var(--green);margin-bottom:6px}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;font-size:.95rem}
+.cal-grid .wd{font-weight:700;color:var(--muted);font-size:.78rem;letter-spacing:.05em;padding-bottom:3px;border-bottom:1px solid rgba(201,162,74,.5);margin-bottom:3px}
+.cal-grid .d{height:28px;line-height:28px;color:var(--green-d);position:relative}
+.cal-grid .d.mark{color:#fff;font-weight:700;z-index:0}
+.cal-grid .d.mark::before{content:'';position:absolute;left:50%;top:50%;width:28px;height:28px;transform:translate(-50%,-50%);border-radius:50%;
+  background:radial-gradient(circle at 35% 30%,#2f6b47,#173a27);border:2px solid var(--gold);z-index:-1}
+.cal-grid .d.mark::after{content:'';position:absolute;left:50%;top:50%;width:28px;height:28px;transform:translate(-50%,-50%);border-radius:50%;
+  border:2px solid var(--gold);z-index:-1;animation:ring 2s ease-out infinite}
+.cal-grid .d.mark .heart{position:absolute;right:-4px;top:-8px;font-size:.8rem;line-height:1;color:#b3364a}
+@keyframes ring{0%{transform:translate(-50%,-50%) scale(1);opacity:.9}100%{transform:translate(-50%,-50%) scale(1.8);opacity:0}}
+
 /* falling petals */
-.petal{position:fixed;top:-20px;width:10px;height:14px;border-radius:60% 0 60% 0;background:var(--gold-l);opacity:.7;pointer-events:none;animation:fall linear forwards;z-index:50}
-@keyframes fall{to{transform:translateY(110vh) rotate(540deg);opacity:0}}
+/* rose petals: curved petal shape, pink-red gradient, sway while falling */
+.petal{position:fixed;top:-30px;width:var(--w,14px);height:calc(var(--w,14px) * 1.25);pointer-events:none;z-index:50;
+  border-radius:150% 0 150% 0;opacity:.9;
+  background:radial-gradient(ellipse at 30% 30%,#ffd0d8 0%,#f27a92 45%,#c2334f 100%);
+  box-shadow:inset -2px -2px 4px rgba(120,0,30,.25);
+  animation:fall var(--dur,8s) linear forwards}
+.petal.dark{background:radial-gradient(ellipse at 30% 30%,#ff9aa9 0%,#d6385a 50%,#8f1530 100%)}
+@keyframes fall{
+  0%  {transform:translate(0,0) rotate(0deg) rotateX(0deg)}
+  25% {transform:translate(var(--sx,30px),27vh) rotate(120deg) rotateX(60deg)}
+  50% {transform:translate(calc(var(--sx,30px) * -1),55vh) rotate(220deg) rotateX(140deg)}
+  75% {transform:translate(var(--sx,30px),82vh) rotate(320deg) rotateX(220deg)}
+  100%{transform:translate(0,112vh) rotate(420deg) rotateX(300deg);opacity:.6}}
 </style>
 </head>
 <body>
@@ -317,6 +371,14 @@ body{
   </div>
 </section>
 
+<!-- CURTAIN — shown over the card right after the envelope opens -->
+<div class="curtain hidden" id="curtain">
+  <div class="valance"></div>
+  <div class="half l"><span class="tie"></span></div>
+  <div class="half r"><span class="tie"></span></div>
+  <div class="mono"><small>Dawat-e-Walima</small><b>Saban &amp; Arshiya</b></div>
+</div>
+
 <!-- 5. INVITATION CARD -->
 <section id="cardScreen" class="screen hidden">
   <article class="card wood" id="card">
@@ -347,6 +409,10 @@ body{
 
     <div class="reveal event-title">Insha Allah Dawat-e-Walima</div>
     <div class="reveal urdu">ان شاء اللہ دعوتِ ولیمہ</div>
+    <div class="reveal cal" aria-label="Calendar, December 2026, 1st marked">
+      <div class="cal-head">December 2026</div>
+      <div class="cal-grid" id="calGrid"></div>
+    </div>
     <div class="reveal when">On Tuesday 1st December 2026</div>
     <div class="reveal when2">Dinner after Namaz-e-Maghrib at 7:00 p.m.</div>
 
@@ -423,29 +489,59 @@ function validFor(mode){
 /* ===== Guest flow ===== */
 let guest = { name:'', mode:'s' };
 
+// Build the December 2026 calendar once (1 Dec 2026 = Tuesday)
+(function buildCalendar(){
+  const g = $('calGrid');
+  ['S','M','T','W','T','F','S'].forEach(w => { const e = document.createElement('div'); e.className = 'wd'; e.textContent = w; g.appendChild(e); });
+  const first = new Date(2026, 11, 1).getDay();      // 0 = Sunday
+  for(let i = 0; i < first; i++) g.appendChild(document.createElement('div'));
+  for(let d = 1; d <= 31; d++){
+    const e = document.createElement('div'); e.className = 'd'; e.textContent = d;
+    if(d === 1){ e.classList.add('mark'); const h = document.createElement('span'); h.className = 'heart'; h.textContent = '♥'; e.appendChild(h); }
+    g.appendChild(e);
+  }
+})();
+
+// Curtain: cover the screen, then draw the two halves apart
+function playCurtain(){
+  const c = $('curtain');
+  c.classList.remove('hidden', 'open');
+  setTimeout(() => c.classList.add('open'), 700);
+  setTimeout(() => c.classList.add('hidden'), 3600);
+}
+
 function openCard(){
+  playCurtain();
   $('dearWho').textContent = greeting(guest.name, guest.mode);
   $('validFor').textContent = validFor(guest.mode);
   $('validFor').classList.toggle('hidden', !guest.name);
   show('cardScreen');
   const card = $('card');
   card.classList.remove('show');
-  card.querySelectorAll('.reveal').forEach((el,i) => el.style.transitionDelay = (0.5 + i*0.12) + 's');
+  card.querySelectorAll('.reveal').forEach((el,i) => el.style.transitionDelay = (1.6 + i*0.12) + 's');
   requestAnimationFrame(() => requestAnimationFrame(() => card.classList.add('show')));
-  petals();
+  setTimeout(petals, 1500);
 }
 
+// Rose petals fall from top to bottom for ~18 seconds after the card opens
+let petalTimer = null;
 function petals(){
-  for(let i=0;i<28;i++){
-    const p = document.createElement('div');
-    p.className = 'petal';
-    p.style.left = Math.random()*100 + 'vw';
-    p.style.animationDuration = (4 + Math.random()*4) + 's';
-    p.style.animationDelay = (Math.random()*2.5) + 's';
-    if(i%3===0) p.style.background = '#8fbf9a';
-    document.body.appendChild(p);
-    setTimeout(() => p.remove(), 11000);
-  }
+  clearInterval(petalTimer);
+  const stopAt = Date.now() + 18000;
+  petalTimer = setInterval(() => {
+    if(Date.now() > stopAt){ clearInterval(petalTimer); return; }
+    for(let k = 0; k < 2; k++){
+      const p = document.createElement('div');
+      p.className = 'petal' + (Math.random() < .35 ? ' dark' : '');
+      const dur = 7 + Math.random()*5;                       // 7–12 s to reach the bottom
+      p.style.left = (Math.random()*100) + 'vw';
+      p.style.setProperty('--w', (10 + Math.random()*10) + 'px');
+      p.style.setProperty('--dur', dur + 's');
+      p.style.setProperty('--sx', (15 + Math.random()*45) * (Math.random() < .5 ? -1 : 1) + 'px');
+      document.body.appendChild(p);
+      setTimeout(() => p.remove(), dur*1000 + 200);
+    }
+  }, 300);
 }
 
 $('envelope').addEventListener('click', () => {
