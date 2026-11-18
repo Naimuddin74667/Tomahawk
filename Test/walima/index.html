@@ -117,10 +117,14 @@ body{
 .history li span{color:var(--muted);font-size:.9rem}
 
 /* ---------- invitation card ---------- */
-.card{max-width:440px;width:100%;padding:52px 34px 44px;text-align:center;opacity:0;transform:translateY(30px) scale(.97);transition:opacity 1s, transform 1s}
-.card.show{opacity:1;transform:none}
-.card .reveal{opacity:0;transform:translateY(12px);transition:opacity .8s, transform .8s}
-.card.show .reveal{opacity:1;transform:none}
+/* The whole card unrolls as one piece, top to bottom, as the curtain parts */
+.card{max-width:440px;width:100%;padding:52px 34px 44px;text-align:center;
+  opacity:0;clip-path:inset(0 0 100% 0 round 16px)}
+.card.show{animation:unroll 2.6s cubic-bezier(.45,.05,.25,1) 1.1s forwards}
+@keyframes unroll{
+  0%  {opacity:.2;clip-path:inset(0 0 100% 0 round 16px)}
+  15% {opacity:1}
+  100%{opacity:1;clip-path:inset(0 0 0 0 round 16px)}}
 .num{font-size:1.1rem;font-weight:700;line-height:1;display:inline-block}
 .num span{display:block;border-top:1.5px solid var(--ink);margin-top:2px;padding-top:2px}
 .bismillah{font-family:'Amiri',serif;font-size:1.7rem;margin:8px 0 2px;direction:rtl}
@@ -582,8 +586,8 @@ function openCard(){
   show('cardScreen');
   const card = $('card');
   card.classList.remove('show');
-  card.querySelectorAll('.reveal').forEach((el,i) => el.style.transitionDelay = (1.6 + i*0.12) + 's');
-  requestAnimationFrame(() => requestAnimationFrame(() => card.classList.add('show')));
+  void card.offsetWidth;            // restart the unroll animation on replay
+  card.classList.add('show');
   setTimeout(petals, 1500);
 }
 
