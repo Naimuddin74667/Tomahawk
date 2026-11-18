@@ -85,6 +85,11 @@ body{
 .preview{margin-top:16px;padding:12px;border:1px dashed #b89a6a;border-radius:10px;font-size:1.05rem;color:var(--green-d);background:rgba(255,255,255,.35)}
 .preview b{font-family:'Great Vibes',cursive;font-weight:400;font-size:1.6rem;display:block;color:var(--green)}
 .copied{color:var(--green);font-size:.95rem;min-height:1.2em;margin-top:6px}
+.optlbl{text-align:left;font-size:.85rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:14px 0 -6px}
+.preview .pl{display:block;font-size:.98rem}
+.totals-h{text-align:left;font-size:.85rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:10px 0 6px}
+.evfor{font-size:1.15rem;font-style:italic;color:var(--green-d);margin:2px 0 4px}
+.ev-sep{width:120px;height:1px;background:var(--gold);margin:22px auto 4px;opacity:.7}
 .tabs{display:flex;gap:6px;margin:-6px 0 16px;background:rgba(29,74,48,.08);padding:4px;border-radius:12px}
 .tab{flex:1;padding:9px;border:none;border-radius:9px;background:transparent;font-family:inherit;font-size:1.05rem;font-weight:700;color:var(--green);cursor:pointer}
 .tab.active{background:var(--green);color:#f3e3b5}
@@ -97,7 +102,7 @@ body{
 .glist li{display:flex;align-items:center;gap:8px;padding:8px 2px;border-bottom:1px solid rgba(150,110,70,.25)}
 .glist .gn{flex:1;font-weight:600;font-size:1.05rem;line-height:1.2}
 .glist .gn small{display:block;font-weight:500;color:var(--muted);font-size:.85rem}
-.glist .tag{font-size:.8rem;font-weight:700;padding:3px 9px;border-radius:12px;background:rgba(29,74,48,.12);color:var(--green);white-space:nowrap}
+.glist .tag{font-size:.78rem;font-weight:700;padding:3px 9px;border-radius:12px;max-width:150px;text-align:center;white-space:normal !important;line-height:1.25;background:rgba(29,74,48,.12);color:var(--green);white-space:nowrap}
 .glist .del{border:none;background:none;color:#a3302b;font-size:1.1rem;cursor:pointer;padding:4px 6px;font-family:inherit}
 .glist .del.sure{font-size:.85rem;font-weight:700;background:#a3302b;color:#fff;border-radius:8px}
 .empty{color:var(--muted);padding:14px 0;text-align:center}
@@ -342,8 +347,22 @@ body{
       <button class="tab" data-t="list">Guest List</button>
     </div>
     <div id="inviteView">
-    <p class="sub">Type the guest's name, choose who is invited, then share</p>
+    <p class="sub">Type the guest's name, choose the events and members, then share</p>
     <input id="hostName" class="field" placeholder="e.g. Rahim Bhai" maxlength="40">
+    <div class="optlbl">Invite for</div>
+    <div class="opt-row" id="eventOpts">
+      <button class="opt active" data-v="w">Walima only<small>1 Dec</small></button>
+      <button class="opt" data-v="bw">Barat + Walima<small>30 Nov + 1 Dec</small></button>
+    </div>
+    <div id="baratBox" class="hidden">
+      <div class="optlbl">Barat members</div>
+      <div class="opt-row" id="baratOpts">
+        <button class="opt active" data-v="s">1 Person<small>Only guest</small></button>
+        <button class="opt" data-v="d">2 Persons<small>Guest + 1</small></button>
+        <button class="opt" data-v="f">Family<small>Guest &amp; family</small></button>
+      </div>
+    </div>
+    <div class="optlbl">Walima members</div>
     <div class="opt-row" id="hostOpts">
       <button class="opt" data-v="s">1 Person<small>Only guest</small></button>
       <button class="opt" data-v="d">2 Persons<small>Guest + 1</small></button>
@@ -357,10 +376,17 @@ body{
     <div class="copied" id="saveMsg"></div>
     </div>
     <div id="listView" class="hidden">
+      <div class="totals-h">Walima</div>
       <div class="totals">
         <div><b id="tS">0</b><small>1 Person</small></div>
         <div><b id="tD">0</b><small>2 Persons</small></div>
         <div><b id="tF">0</b><small>Families</small></div>
+      </div>
+      <div class="totals-h">Barat</div>
+      <div class="totals">
+        <div><b id="bS">0</b><small>1 Person</small></div>
+        <div><b id="bD">0</b><small>2 Persons</small></div>
+        <div><b id="bF">0</b><small>Families</small></div>
       </div>
       <div class="headcount" id="headcount"></div>
       <input id="search" class="field" placeholder="Search guest name">
@@ -376,7 +402,7 @@ body{
   <div class="valance"></div>
   <div class="half l"><span class="tie"></span></div>
   <div class="half r"><span class="tie"></span></div>
-  <div class="mono"><small>Dawat-e-Walima</small><b>Saban &amp; Arshiya</b></div>
+  <div class="mono"><small id="curtainLbl">Dawat-e-Walima</small><b>Saban &amp; Arshiya</b></div>
 </div>
 
 <!-- 5. INVITATION CARD -->
@@ -407,8 +433,27 @@ body{
     <div class="reveal name">Arshiya Khan</div>
     <div class="reveal rel">D/o. Afroz Khan</div>
 
+    <!-- BARAT (shown only when the guest is invited to Barat) — details as on the bride's side card -->
+    <div id="baratSec" class="hidden">
+      <div class="reveal event-title">Insha Allah Barat &amp; Nikah</div>
+      <div class="reveal urdu">ان شاء اللہ بارات و نکاح</div>
+      <div class="reveal evfor" id="baratFor"></div>
+      <div class="reveal cal" aria-label="Calendar, November 2026, 30th marked">
+        <div class="cal-head">November 2026</div>
+        <div class="cal-grid" id="calGridNov"></div>
+      </div>
+      <div class="reveal when">On Monday 30th November 2026</div>
+      <div class="reveal when2">Nikah after Namaz-e-Maghrib</div>
+      <div class="reveal venue">Venue: Royal Garden, Near Golden Hotel,<br>Bhandari Compound Road, Bhiwandi</div>
+      <div class="reveal btn-row">
+        <a class="btn" target="_blank" rel="noopener" href="https://maps.app.goo.gl/cfQ3GP2z2RR5bfjBA">📍 Open in Maps</a>
+      </div>
+      <div class="reveal ev-sep"></div>
+    </div>
+
     <div class="reveal event-title">Insha Allah Dawat-e-Walima</div>
     <div class="reveal urdu">ان شاء اللہ دعوتِ ولیمہ</div>
+    <div class="reveal evfor" id="walimaFor"></div>
     <div class="reveal cal" aria-label="Calendar, December 2026, 1st marked">
       <div class="cal-head">December 2026</div>
       <div class="cal-grid" id="calGrid"></div>
@@ -455,7 +500,9 @@ const BASE_URL = 'https://naimuddin74667.github.io/Tomahawk/Test/walima/';
 // Guest list lives in the Tomahawk Worker (D1 table walima_invites).
 // The password is checked by the Worker — it is not stored in this page.
 const WORKER = 'https://tomahawk-returns.naimuddin.workers.dev/';
-const EVENT_TIME = new Date('2026-12-01T19:00:00+05:30');
+const WALIMA_TIME = new Date('2026-12-01T19:00:00+05:30');
+const BARAT_TIME  = new Date('2026-11-30T18:00:00+05:30');   // Nikah after Maghrib (approx.)
+let EVENT_TIME = WALIMA_TIME;                                  // countdown target
 
 const $ = id => document.getElementById(id);
 const screens = ['envScreen','loginScreen','hostScreen','cardScreen'];
@@ -474,10 +521,14 @@ const store = {
 function toSlug(name){ return name.trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,''); }
 function fromSlug(slug){ return slug.split('-').filter(Boolean).map(w => w[0].toUpperCase()+w.slice(1)).join(' '); }
 function properCase(name){ return name.trim().replace(/\s+/g,' ').split(' ').map(w => w ? w[0].toUpperCase()+w.slice(1) : '').join(' '); }
-function greeting(name, mode){
+// b = Barat members ('' if not invited), w = Walima members. s/d/f = 1 / 2 / family
+function greeting(name, b, w){
   if(!name) return 'Guest';
-  return mode === 'f' ? name + ' & Family' : name;
+  return (b === 'f' || w === 'f') ? name + ' & Family' : name;
 }
+// Stored/linked mode: 'f' = Walima only (family); 'bsf' = Barat 1 person + Walima family
+function packMode(b, w){ return b ? 'b' + b + w : w; }
+function unpackMode(m){ return (m && m.length === 3 && m[0] === 'b') ? { b:m[1], w:m[2] } : { b:'', w:m }; }
 // Who the card is valid for: s = 1 person, d = 2 persons, f = entire family
 // Soft wording — conveys the count without sounding like a limit
 function validFor(mode){
@@ -487,20 +538,23 @@ function validFor(mode){
 }
 
 /* ===== Guest flow ===== */
-let guest = { name:'', mode:'s' };
+let guest = { name:'', b:'', w:'s' };
 
-// Build the December 2026 calendar once (1 Dec 2026 = Tuesday)
-(function buildCalendar(){
-  const g = $('calGrid');
+// Month calendar with one day marked (month is 0-based: 10 = Nov, 11 = Dec)
+function buildCalendar(gridId, year, month, markDay){
+  const g = $(gridId);
   ['S','M','T','W','T','F','S'].forEach(w => { const e = document.createElement('div'); e.className = 'wd'; e.textContent = w; g.appendChild(e); });
-  const first = new Date(2026, 11, 1).getDay();      // 0 = Sunday
+  const first = new Date(year, month, 1).getDay();             // 0 = Sunday
+  const days  = new Date(year, month + 1, 0).getDate();
   for(let i = 0; i < first; i++) g.appendChild(document.createElement('div'));
-  for(let d = 1; d <= 31; d++){
+  for(let d = 1; d <= days; d++){
     const e = document.createElement('div'); e.className = 'd'; e.textContent = d;
-    if(d === 1){ e.classList.add('mark'); const h = document.createElement('span'); h.className = 'heart'; h.textContent = '♥'; e.appendChild(h); }
+    if(d === markDay){ e.classList.add('mark'); const h = document.createElement('span'); h.className = 'heart'; h.textContent = '♥'; e.appendChild(h); }
     g.appendChild(e);
   }
-})();
+}
+buildCalendar('calGrid', 2026, 11, 1);      // Walima — Tue 1 Dec 2026
+buildCalendar('calGridNov', 2026, 10, 30);  // Barat  — Mon 30 Nov 2026
 
 // Curtain: cover the screen, then draw the two halves apart
 function playCurtain(){
@@ -512,9 +566,14 @@ function playCurtain(){
 
 function openCard(){
   playCurtain();
-  $('dearWho').textContent = greeting(guest.name, guest.mode);
-  $('validFor').textContent = validFor(guest.mode);
-  $('validFor').classList.toggle('hidden', !guest.name);
+  $('dearWho').textContent = greeting(guest.name, guest.b, guest.w);
+  $('validFor').classList.add('hidden');
+  // Barat section only for Barat guests; member line only on personal links
+  $('baratSec').classList.toggle('hidden', !guest.b);
+  $('baratFor').textContent = guest.name && guest.b ? validFor(guest.b) : '';
+  $('walimaFor').textContent = guest.name ? validFor(guest.w) : '';
+  $('curtainLbl').textContent = guest.b ? 'Barat & Walima' : 'Dawat-e-Walima';
+  EVENT_TIME = guest.b ? BARAT_TIME : WALIMA_TIME; tick();
   show('cardScreen');
   const card = $('card');
   card.classList.remove('show');
@@ -578,29 +637,39 @@ function tick(){
 tick(); setInterval(tick, 1000);
 
 /* ===== Host flow ===== */
-let hostMode = 'f';
-// Hash: #s-name (1 person), #d-name (2 persons), #f-name (family)
+let hostMode = 'f';      // Walima members
+let hostEvent = 'w';     // 'w' = Walima only, 'bw' = Barat + Walima
+let baratMode = 's';     // Barat members
+function hostB(){ return hostEvent === 'bw' ? baratMode : ''; }
+// Hash: #f-name (Walima only) or #bsf-name (Barat 1 person + Walima family)
 function guestHash(){
   const a = toSlug($('hostName').value);
-  return a ? hostMode + '-' + a : '';
+  return a ? packMode(hostB(), hostMode) + '-' + a : '';
 }
 function guestLink(){ const h = guestHash(); return h ? BASE_URL + '#' + h : ''; }
-function hostGreeting(){ return greeting(properCase($('hostName').value), hostMode); }
+function hostGreeting(){ return greeting(properCase($('hostName').value), hostB(), hostMode); }
 function waMessage(link){
-  const who = hostGreeting();
+  const who = hostGreeting(), b = hostB();
+  const barat = b ?
+    `*🕌 Barat & Nikah* — ${validFor(b)}\n` +
+    `📅 Monday, 30th November 2026\n🕖 Nikah after Namaz-e-Maghrib\n` +
+    `📍 Royal Garden, Near Golden Hotel, Bhandari Compound Road, Bhiwandi\n\n` : '';
   return `Assalamu Alaikum ${who} 🌙\n\n` +
-    `${validFor(hostMode)} 🤍\n\n` +
-    `With great joy, Mr. & Mrs. Mohd. Israil Khan invite you to the *Dawat-e-Walima* of their son\n` +
-    `*Saban Khan* weds *Arshiya Khan*\n\n` +
+    `With great joy, Mr. & Mrs. Mohd. Israil Khan invite you to the wedding of their son\n` +
+    `*Saban Khan* weds *Arshiya Khan*\n\n` + barat +
+    `*🍽️ Dawat-e-Walima* — ${validFor(hostMode)}\n` +
     `📅 Tuesday, 1st December 2026\n🕖 Dinner after Namaz-e-Maghrib, 7:00 PM\n` +
     `📍 Inayat Marriage Hall, Global Complex, Vitthal Nagar, Narpoli, Bhiwandi\n\n` +
     `Open your invitation 👇\n${link}\n\n— Khan Family`;
 }
 function refreshHost(){
   const link = guestLink();
+  $('baratBox').classList.toggle('hidden', hostEvent !== 'bw');
   $('hostPreview').innerHTML = 'Card will say:<b></b>';
   $('hostPreview').querySelector('b').textContent = 'Dear ' + hostGreeting();
-  $('hostPreview').append(validFor(hostMode));
+  const addLine = t => { const e = document.createElement('span'); e.className = 'pl'; e.textContent = t; $('hostPreview').appendChild(e); };
+  if(hostB()) addLine('Barat: ' + validFor(hostB()));
+  addLine('Walima: ' + validFor(hostMode));
   const ok = !!link;
   ['waBtn','openBtn'].forEach(id => $(id).setAttribute('aria-disabled', ok ? 'false' : 'true'));
   $('copyBtn').disabled = !ok;
@@ -609,6 +678,8 @@ function refreshHost(){
   $('copied').textContent = '';
 }
 bindOpts('hostOpts', v => { hostMode = v; refreshHost(); });
+bindOpts('eventOpts', v => { hostEvent = v; refreshHost(); });
+bindOpts('baratOpts', v => { baratMode = v; refreshHost(); });
 $('hostName').addEventListener('input', refreshHost);
 
 /* ---- Worker calls ---- */
@@ -630,7 +701,7 @@ async function api(action, payload){
 async function logSent(){
   const n = properCase($('hostName').value); if(!n) return;
   $('saveMsg').textContent = 'Saving to guest list…';
-  try{ await api('walimaSave', { name:n, mode:hostMode, link:guestLink() }); $('saveMsg').textContent = '✓ ' + n + ' added to guest list'; }
+  try{ await api('walimaSave', { name:n, mode:packMode(hostB(), hostMode), link:guestLink() }); $('saveMsg').textContent = '✓ ' + n + ' added to guest list'; }
   catch(e){ $('saveMsg').textContent = '⚠ Not saved to list (' + e.message + ')'; }
 }
 
@@ -643,10 +714,13 @@ async function loadList(){
   catch(e){ $('glist').innerHTML = ''; const li=document.createElement('li'); li.className='empty'; li.textContent='Could not load: '+e.message; $('glist').appendChild(li); }
 }
 function renderList(){
-  const c = { s:0, d:0, f:0 };
-  allRows.forEach(r => c[r.mode] = (c[r.mode]||0) + 1);
+  const c = { s:0, d:0, f:0 }, bc = { s:0, d:0, f:0 };
+  allRows.forEach(r => { const m = unpackMode(r.mode); c[m.w] = (c[m.w]||0) + 1; if(m.b) bc[m.b] = (bc[m.b]||0) + 1; });
   $('tS').textContent = c.s; $('tD').textContent = c.d; $('tF').textContent = c.f;
-  $('headcount').textContent = 'Total invites: ' + allRows.length + ' · Fixed guests: ' + (c.s + c.d*2) + ' + ' + c.f + ' families';
+  $('bS').textContent = bc.s; $('bD').textContent = bc.d; $('bF').textContent = bc.f;
+  $('headcount').textContent = 'Total invites: ' + allRows.length +
+    ' · Walima: ' + (c.s + c.d*2) + ' + ' + c.f + ' families' +
+    ' · Barat: ' + (bc.s + bc.d*2) + ' + ' + bc.f + ' families';
   const q = $('search').value.trim().toLowerCase();
   const rows = q ? allRows.filter(r => r.guest_name.toLowerCase().includes(q)) : allRows;
   $('glist').innerHTML = '';
@@ -655,7 +729,8 @@ function renderList(){
     const li = document.createElement('li');
     const gn = document.createElement('div'); gn.className = 'gn'; gn.textContent = r.guest_name;
     const sm = document.createElement('small'); sm.textContent = fmtDate(r.sent_at); gn.appendChild(sm);
-    const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = MODE_LABEL[r.mode] || r.mode;
+    const tag = document.createElement('span'); tag.className = 'tag'; const um = unpackMode(r.mode);
+    tag.textContent = um.b ? 'B: ' + MODE_LABEL[um.b] + ' · W: ' + MODE_LABEL[um.w] : 'Walima: ' + (MODE_LABEL[um.w] || r.mode);
     const del = document.createElement('button'); del.className = 'del'; del.textContent = '✕'; del.title = 'Delete';
     // Two taps to delete: first tap asks "Sure?", second deletes
     del.addEventListener('click', async () => {
@@ -706,14 +781,16 @@ function enterHost(){ show('hostScreen'); refreshHost(); }
    #f-name      → "Name & Family"
    #s-name      → "Name" only
    #d-name      → "Name", valid for 2 persons
+   #bsf-name    → Barat 1 person + Walima family (b + barat code + walima code)
    (none)       → envelope, card says "Dear Guest"            */
 function route(){
   const h = decodeURIComponent(location.hash.slice(1));
   if(h === 'host'){ (store.get('walima_host') && store.get('walima_key')) ? enterHost() : show('loginScreen'); return; }
-  const m = h.match(/^([fsd])-(.+)$/);
-  guest = m ? { name: fromSlug(m[2]), mode: m[1] } : { name:'', mode:'s' };
+  // New links: #bsf-name (Barat + Walima). Old links: #f-name (Walima only) still work.
+  const m = h.match(/^(b[sdf][sdf]|[sdf])-(.+)$/);
+  guest = m ? Object.assign({ name: fromSlug(m[2]) }, unpackMode(m[1])) : { name:'', b:'', w:'s' };
   const g = $('envGreet');
-  if(guest.name){ g.textContent = 'Dear ' + greeting(guest.name, guest.mode); g.classList.remove('hidden'); }
+  if(guest.name){ g.textContent = 'Dear ' + greeting(guest.name, guest.b, guest.w); g.classList.remove('hidden'); }
   else g.classList.add('hidden');
   show('envScreen');
 }

@@ -1870,7 +1870,7 @@ async function ensureWalimaTable(DB) {
   await DB.prepare(`CREATE TABLE IF NOT EXISTS walima_invites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guest_name TEXT NOT NULL,
-    mode TEXT NOT NULL,          -- 's' = 1 person, 'd' = 2 persons, 'f' = with family
+    mode TEXT NOT NULL,          -- walima: 's' 1 person, 'd' 2 persons, 'f' family; 'bXY' = Barat X + Walima Y
     link TEXT,
     sent_at TEXT DEFAULT (datetime('now', '+5 hours', '+30 minutes'))
   )`).run();
@@ -1885,7 +1885,8 @@ async function handleWalima(act, body, url, env) {
 
   if (act === 'walimaSave') {
     const name = String((body && body.name) || '').trim().slice(0, 60);
-    const mode = ['s', 'd', 'f'].includes(body && body.mode) ? body.mode : '';
+    // 's'/'d'/'f' = Walima only; 'b' + barat code + walima code (e.g. 'bsf') = Barat + Walima
+    const mode = /^(b[sdf])?[sdf]$/.test(String((body && body.mode) || '')) ? body.mode : '';
     if (!name || !mode) return json({ ok: false, error: 'name and mode required' }, 400);
     const link = String((body && body.link) || '').slice(0, 300);
     await env.DB.prepare('INSERT INTO walima_invites (guest_name, mode, link) VALUES (?, ?, ?)')
