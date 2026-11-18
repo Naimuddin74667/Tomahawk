@@ -10431,6 +10431,11 @@ async function submitWarrantyClaim(env, b, ip) {
 //   2. POST warrantyClaimSubmit { request_type:'DRN', … } → DRN-YYMMDD-NN
 // Amazon / Flipkart orders use the marketplace's own returns.
 const DRN_WINDOW_DAYS = 7;
+// Orders accepted past the 7-day window on an exceptional basis (team decision).
+// Key = website order number (digits only). Remove the line once the DRN is raised.
+const DRN_LATE_OK = {
+  '2971': 'Accepted on exceptional basis — 18-Nov-2026',
+};
 const DRN_ISSUES = ['Missing part / accessory', 'Wrong product', 'Damaged in transit', 'Not working on arrival', 'Short quantity'];
 const DRN_VIDEO_ISSUES = ['Damaged in transit', 'Not working on arrival'];   // unboxing / issue video required
 const DRN_DETAIL_ISSUES = ['Missing part / accessory', 'Wrong product', 'Damaged in transit', 'Short quantity'];
@@ -10523,9 +10528,9 @@ async function drnOrder(env, orderRaw, phoneRaw, emailRaw) {
     let state = 'open';
     if (done) state = 'reported';
     else if (!deliveredAt) state = 'not_delivered';
-    else if (days > DRN_WINDOW_DAYS) state = 'expired';
+    else if (days > DRN_WINDOW_DAYS && !DRN_LATE_OK[num]) state = 'expired';
     return { line_id: li.id, sku: li.sku || '', title: li.title + (li.variantTitle ? ' — ' + li.variantTitle : ''), qty,
-      delivered_at: deliveredAt, days_since: days, days_left: deliveredAt && state === 'open' ? DRN_WINDOW_DAYS - days : null,
+      delivered_at: deliveredAt, days_since: days, days_left: deliveredAt && state === 'open' ? Math.max(0, DRN_WINDOW_DAYS - days) : null,
       state, drn: done ? done.claim_id : null };
   }).filter(it => it.qty > 0);
 
@@ -10677,7 +10682,7 @@ async function submitDeliveryIssue(env, b, ip) {
   ));
   const deliveredDay = String(it.delivered_at).slice(0, 10);
   await srAddEvent(env.DB, claimId, { by: 'customer', kind: 'note',
-    note: 'Delivery issue · ' + f.issue_type + (f.issue_detail ? ' — ' + f.issue_detail : '') + ' · delivered ' + deliveredDay + (mp ? ' as per customer (' + mp.platform + ' order)' : '') + ' (' + it.days_since + ' day(s) before reporting)' }, {});
+    note: 'Delivery issue · ' + f.issue_type + (f.issue_detail ? ' — ' + f.issue_detail : '') + ' · delivered ' + deliveredDay + (mp ? ' as per customer (' + mp.platform + ' order)' : '') + ' (' + it.days_since + ' day(s) before reporting)' + (!mp && DRN_LATE_OK[ord.order_id] ? ' · LATE — ' + DRN_LATE_OK[ord.order_id] : '') }, {});
 
   // Team email (photos attached) — same mailbox as service requests
   const v = x => x ? String(x) : '-';
