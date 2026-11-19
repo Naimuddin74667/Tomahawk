@@ -563,7 +563,8 @@ async function ensureFbaApptManualTable(DB) {
   )`).run();
 }
 
-async function fbaTrackerData(env) {
+async function fbaTrackerData(env, opts) {
+  opts = opts || {};
   await ensureFbaTrackerTable(env.DB);
   await ensureFbaApptManualTable(env.DB);
   await ensureAmazonShipmentsTable(env.DB);
@@ -583,6 +584,24 @@ async function fbaTrackerData(env) {
       .catch(() => [])  // freshness label only — never block the page on it
   ]);
 
+  // Refresh button (&live=1): Supabase gets UC gatepasses only hourly, so
+  // ask UC live (SK's lookup) for every not-yet-CLOSED gatepass of an open
+  // shipment and use that status. Any failure keeps the Supabase status.
+  let liveChecked = 0, liveUpdated = 0;
+  if (opts.live) {
+    const openSids = new Set(ships.filter(s => !/^(CLOSED|CANCELLED|DELETED|ERROR)$/.test(s.shipment_status || '')).map(s => s.shipment_id));
+    const todo = gatepasses.filter(gp => !/^(CLOSED|DISCARDED|CANCELLED)$/i.test(gp.status || '')
+      && fbaIdsInText(gp.reference).some(sid => openSids.has(sid))).slice(0, 40);
+    await Promise.all(todo.map(async gp => {
+      try {
+        const d = await g4gpSkFetch(env, gp.gatepass_code);
+        const hit = d && (d.gatepasses || []).find(g => String(g.code).toUpperCase() === String(gp.gatepass_code).toUpperCase());
+        liveChecked++;
+        if (hit && hit.status && hit.status !== gp.status) { gp.status = hit.status; gp.live = true; liveUpdated++; }
+      } catch (e) { /* keep Supabase status */ }
+    }));
+  }
+
   const ucSkuOf = new Map(skuMap.map(m => [m.seller_sku, m.uniware_sku]));
   const stockOf = new Map(((invData && invData.rows) || []).map(r => [r.skuCode, { g4: Number(r.G4_stock) || 0, e3: Number(r.E3_stock) || 0 }]));
   const invRowOf = new Map(((invData && invData.rows) || []).map(r => [r.skuCode, r]));
@@ -597,7 +616,7 @@ async function fbaTrackerData(env) {
   gatepasses.forEach(gp => {
     new Set(fbaIdsInText(gp.reference)).forEach(sid => {
       if (!gpBySid.has(sid)) gpBySid.set(sid, []);
-      gpBySid.get(sid).push({ code: gp.gatepass_code, facility: gp.facility, status: gp.status, type: gp.type, qty: gp.quantity, created: gp.created,
+      gpBySid.get(sid).push({ code: gp.gatepass_code, facility: gp.facility, status: gp.status, live: !!gp.live, type: gp.type, qty: gp.quantity, created: gp.created,
         // SKU lines with name + Qty/Box — used by the Pack Sheet print
         items: (gp.items || []).map(it => {
           const r = invRowOf.get(it.sku) || {};
@@ -703,7 +722,7 @@ async function fbaTrackerData(env) {
   });
 
   const last = lastSync && lastSync[0];
-  return { shipments, syncedAt: last ? last.finished_at : null, syncStatus: last ? last.status : null, changed: stmts.length };
+  return { shipments, syncedAt: last ? last.finished_at : null, syncStatus: last ? last.status : null, changed: stmts.length, liveChecked, liveUpdated };
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3445,7 +3464,9 @@ export default {
 
         if (action === 'fbaTrackerList') {
           try {
-            return json(Object.assign({ ok: true, source: 'supabase' }, await fbaTrackerData(env)));
+            const live = url.searchParams.get('live') === '1';
+            const out = await fbaTrackerData(env, { live });
+            return json(Object.assign({ ok: true, source: live ? 'supabase+uc-live' : 'supabase' }, out));
           } catch (e) {
             return json({ ok: false, error: e.message }, 502);
           }

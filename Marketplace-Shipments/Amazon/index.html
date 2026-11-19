@@ -949,7 +949,7 @@ html .site-header { background: var(--tmh-bg); }
       <div style="flex-shrink:0;padding:.7rem 1.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.8rem;background:var(--surface)">
         <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-family:'DM Mono',monospace;flex:1">&#128666; FBA Tracker <span id="fbaSyncInfo" style="color:var(--muted);font-weight:500;letter-spacing:.04em;text-transform:none;margin-left:.6rem"></span></div>
         <input type="text" id="fbaSearch" placeholder="Search Shipment ID / FC / SKU / Gatepass..." oninput="_fbaPage=1;fbaRender()" style="width:280px;font-size:11px;padding:5px 10px">
-        <button class="btn btn-secondary btn-sm" onclick="fbaLoad()" style="width:auto">&#8635; Refresh</button>
+        <button class="btn btn-secondary btn-sm" onclick="fbaLoad(true)" style="width:auto" title="Reload now + check open gatepasses live in UC">&#8635; Refresh</button>
       </div>
 
       <div class="ro-stats-row" id="fbaCards">
@@ -2130,10 +2130,17 @@ function fbaChecks(s) {
   return out;
 }
 
-function fbaLoad() {
+// live=true (Refresh button) → Worker also asks UC live for every open
+// gatepass, since Supabase only gets gatepasses hourly.
+var _fbaAutoTimer = null;
+function fbaLoad(live) {
   var tbody = document.getElementById('fbaTbody');
-  if (tbody) tbody.innerHTML = skRows(9, 6);
-  fetch(getWorkerBase() + '?action=fbaTrackerList')
+  if (tbody && !live) tbody.innerHTML = skRows(9, 6);
+  var info0 = document.getElementById('fbaSyncInfo');
+  if (live && info0) info0.textContent = '· checking UC gatepasses live…';
+  // Auto re-read every 15 min while the page is open (matches SK's sync)
+  if (!_fbaAutoTimer) _fbaAutoTimer = setInterval(function () { if (!document.hidden) fbaLoad(); }, 15 * 60 * 1000);
+  fetch(getWorkerBase() + '?action=fbaTrackerList' + (live ? '&live=1' : ''))
     .then(function (r) { return r.json(); })
     .then(function (data) {
       if (!data || !data.ok) throw new Error((data && data.error) || 'Load failed');
@@ -2155,6 +2162,7 @@ function fbaLoad() {
       });
       var info = document.getElementById('fbaSyncInfo');
       if (info) info.textContent = data.syncedAt ? '· Amazon sync ' + fbaAgo(data.syncedAt) + (data.syncStatus && data.syncStatus !== 'ok' ? ' (' + data.syncStatus + ')' : '') : '';
+      if (info && live) info.textContent += ' · UC gatepasses live: ' + (data.liveChecked || 0) + ' checked, ' + (data.liveUpdated || 0) + ' updated';
       _fbaPage = 1;
       fbaRender();
     })
