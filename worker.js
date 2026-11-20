@@ -2125,7 +2125,7 @@ export default {
         } catch (e) {
           if (e.userError) return json({ ok: false, error: e.message }, 400);
           console.error('warranty claim failed:', e.message);
-          return json({ ok: false, error: 'Something went wrong — please try again, or email support@bullet.co.in.' }, 500);
+          return json({ ok: false, error: 'Something went wrong — please try again, or email support@tomahawk.tools.' }, 500);
         }
       }
 
@@ -2425,7 +2425,7 @@ export default {
         catch (e) {
           if (e.userError) return json({ ok: false, error: e.message }, 400);
           console.error('warranty registration failed:', e.message);
-          return json({ ok: false, error: 'Something went wrong — please try again, or email support@bullet.co.in.' }, 500);
+          return json({ ok: false, error: 'Something went wrong — please try again, or email support@tomahawk.tools.' }, 500);
         }
       }
 
@@ -7344,7 +7344,11 @@ async function createDelhiveryOrder(env, o) {
 // TEST MODE: while true, every email goes ONLY to the test address.
 // Flip to false to send to the real support recipients.
 const CC_ORDER_EMAIL_TEST_MODE = false;   // LIVE since 05-Oct-2026
-const CC_ORDER_EMAIL_TO = ['support@bullet.co.in', 'faique@bullet.co.in'];
+// Order alert emails (new forward order + customer order cancel) — OFF since
+// 20-Nov-2026: support@bullet.co.in fed Zoho Desk, so every alert became a ticket,
+// and nobody else needs them by email. Flip to true + fill the list to re-enable.
+const CC_ORDER_EMAILS_ON = false;
+const CC_ORDER_EMAIL_TO = [];
 // Customer Care: non-admin usernames allowed to mark a reverse pickup
 // "Received" (admins always can). Keep in sync with CC_RECEIVE_USERS in
 // Customer-Care/Dashboard/index.html.
@@ -7431,6 +7435,7 @@ async function sendGmailMessage(env, { to, subject, text, attachment, attachment
 }
 
 async function sendForwardOrderEmail(env, row, pdfBase64, filename) {
+  if (!CC_ORDER_EMAILS_ON) return { to: [], attached: false, skipped: true };
   let sh = {};
   try { sh = (JSON.parse(row.payload_json || '{}').shipments || [])[0] || {}; } catch (e) { /* keep empty */ }
   const courier = row.courier || 'Delhivery';
@@ -7671,6 +7676,7 @@ const SR_BUCKET = 'service-requests';
 // Customer Care Dashboard. Flip to true once the emails + tracking page are signed off.
 const SR_CUSTOMER_EMAILS = false;
 const SR_TRACK_URL = 'https://tomahawk.tools/pages/track-request';
+const SR_HELP_WHATSAPP = '+91 89289 49415';   // customer help line in no-reply emails
 const SR_FINAL = ['closed', 'not_covered'];
 const SR_KINDS = {
   //  kind          new status          email subject (null = no email)
@@ -7792,21 +7798,21 @@ async function srEmailCustomer(env, row, subject, bodyLines) {
     ...bodyLines, '',
     'Request ID : ' + row.claim_id,
     'Product    : ' + (row.product || '-'), '',
-    'Follow your request any time: ' + SR_TRACK_URL + '?id=' + encodeURIComponent(row.claim_id),
-    'Questions? Just reply to this email and quote your request ID.', '',
+    'Follow your request any time: ' + SR_TRACK_URL + '?id=' + encodeURIComponent(row.claim_id), '',
+    '—', "This is an automated email, please don't reply. Need help? WhatsApp us at " + SR_HELP_WHATSAPP + '.', '',
     'Team TOMAHAWK® Tools', 'Industrial Tools & Hardware'
   ].join('\n');
   try {
-    await sendGmailMessage(env, { to: [row.email], replyTo: 'support@bullet.co.in',
-      subject: subject + ' · ' + row.claim_id, text });
+    // no-reply@tomahawk.tools via Resend only (20-Nov-2026) — never from a Gmail mailbox
+    await sendNoReplyEmail(env, { to: row.email, subject: subject + ' · ' + row.claim_id, text });
     return true;
   } catch (e) { console.error('service request email failed', row.claim_id, e.message); return false; }
 }
 
 const SR_DEFAULT_TEXT = {
-  ask_info: 'To check your product, we need a little more from you. Please reply to this email with it.',
+  ask_info: 'To check your product, we need a little more from you. Please send it to us on WhatsApp at ' + SR_HELP_WHATSAPP + '.',
   tip: 'Many problems can be fixed in a minute. Please try this:',
-  quote: 'Your product is outside the 6-month warranty, so the repair is chargeable. Nothing is done without your OK. Please reply YES to go ahead.',
+  quote: 'Your product is outside the 6-month warranty, so the repair is chargeable. Nothing is done without your OK. Please confirm on WhatsApp at ' + SR_HELP_WHATSAPP + ' to go ahead.',
   not_covered: 'We have checked your request. Unfortunately this is not covered by the warranty.',
   approve: 'Good news: we have booked a pickup from your address. Please keep the product packed with its accessories. ' +
            'So you know what to expect: a few days for the courier to bring it to us, 5 to 7 working days for the repair, ' +
@@ -9382,8 +9388,9 @@ async function orderCancel(env, b) {
     return { ok: false, status: 409, code: 'cancel_failed', error: "We couldn't cancel this order online — please chat with us on WhatsApp and we'll do it for you." };
   }
 
-  // 5. Tell the team straight away (never blocks the customer's answer)
-  try {
+  // 5. Tell the team straight away (never blocks the customer's answer).
+  //    Email alert is OFF (CC_ORDER_EMAILS_ON) — no recipients since 20-Nov-2026.
+  if (CC_ORDER_EMAILS_ON) try {
     const warn = ucState ? '⚠️ ALREADY ' + ucState + ' in Unicommerce — HOLD THE PARCEL and cancel the AWB / sale order.\n\n' : '';
     await sendGmailMessage(env, {
       to: CC_ORDER_EMAIL_TEST_MODE ? CC_ORDER_EMAIL_TEST_TO : CC_ORDER_EMAIL_TO,
@@ -9511,7 +9518,7 @@ async function srMilestoneEmails(env) {
         'Courier: ' + (fwd.courier || 'Delhivery') + (fwd.waybill ? ' · tracking no. ' + fwd.waybill : '')]]);
     if (!row.m_delivered_at && fwd && fwd.track_stage === 'Delivered')
       todo.push(['m_delivered_at', 'Delivered', ['Your product has been delivered. We hope it is working perfectly.',
-        'If anything is still not right, just reply to this email.']]);
+        'If anything is still not right, WhatsApp us at ' + SR_HELP_WHATSAPP + '.']]);
     for (const [col, subject, lines] of todo) {
       const emailed = await srEmailCustomer(env, row, subject, lines);
       await srAddEvent(env.DB, row.claim_id, { by: 'system', kind: col.slice(2, -3), emailed }, { [col]: new Date().toISOString() });
@@ -9624,7 +9631,6 @@ async function sendNoReplyEmail(env, { to, subject, text, html }) {
   if (!res.ok) throw new Error('Resend refused (' + res.status + '): ' + (await res.text().catch(() => '')).slice(0, 200));
   return 'no-reply';
 }
-const SR_HELP_WHATSAPP = '+91 89289 49415';
 function fmtDateIN(iso) {
   if (!iso) return '';
   const [y, m, d] = String(iso).slice(0, 10).split('-').map(Number);
@@ -10442,7 +10448,10 @@ async function submitWarrantyClaim(env, b, ip) {
       const via = await srSendReceivedEmail(env, { claimId, name: f.name, email: f.email, product: f.product,
         orderId: f.order_id, issue: f.issue_type, warrantyStatus, until: w.warranty_until });
       await srAddEvent(env.DB, claimId, { by: 'system', kind: 'note', note: 'Confirmation email sent to customer (' + via + ')' }, {});
-    } catch (e) { console.error('claim confirmation email failed:', e.message); }
+    } catch (e) {
+      console.error('claim confirmation email failed:', e.message);
+      await srAddEvent(env.DB, claimId, { by: 'system', kind: 'note', note: 'Confirmation email NOT sent: ' + String(e.message).slice(0, 200) }, {}).catch(() => {});
+    }
   }
   return { ok: true, claim_id: claimId, warranty_status: warrantyStatus,
     ...(repeat ? { repeat: repeat.kind, notice: repeat.kind === 'priority' ? SR_REPEAT_NOTICE : SR_USED_NOTICE } : {}) };
@@ -10757,7 +10766,10 @@ async function submitDeliveryIssue(env, b, ip) {
       const via = await srSendReceivedEmail(env, { claimId, name, email, product: it.title, orderId: ord.order,
         issue: f.issue_type, warrantyStatus: 'Delivery issue', drn: true, delivered: deliveredDay });
       await srAddEvent(env.DB, claimId, { by: 'system', kind: 'note', note: 'Confirmation email sent to customer (' + via + ')' }, {});
-    } catch (e) { console.error('DRN confirmation email failed:', e.message); }
+    } catch (e) {
+      console.error('DRN confirmation email failed:', e.message);
+      await srAddEvent(env.DB, claimId, { by: 'system', kind: 'note', note: 'Confirmation email NOT sent: ' + String(e.message).slice(0, 200) }, {}).catch(() => {});
+    }
   }
   return { ok: true, claim_id: claimId, request_type: 'DRN' };
 }
