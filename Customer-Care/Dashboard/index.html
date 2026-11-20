@@ -3635,6 +3635,41 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   //   Panels open in the popup's confirm area (#cm-confirm).
   var REFUND_REASONS = ['Not repairable', 'Replacement out of stock', 'Customer asked for refund', 'Other'];
   var REFUND_PAGE = 'https://naimuddin74667.github.io/Tomahawk/Refund/';
+  var REFUND_REASON_MIN = 20;   // refund reason must be at least this many characters (20-Nov-2026)
+
+  // Live "n/20" counter on a reason box; keeps the save button disabled until
+  // the minimum length is reached.
+  function bindReasonCounter(box, counter, btn) {
+    var upd = function () {
+      var n = box.value.trim().length, ok = n >= REFUND_REASON_MIN;
+      counter.textContent = n + '/' + REFUND_REASON_MIN;
+      counter.style.color = ok ? '' : 'var(--danger, #d33)';
+      btn.disabled = !ok;
+    };
+    box.addEventListener('input', upd); upd();
+  }
+  // Edit the refund reason from the Refund info card (locked once refunded).
+  function refundReasonEdit(c) {
+    var r = c.reverse, cell = document.getElementById('rf-reason-cell');
+    if (!cell) return;
+    cell.innerHTML = '<div class="cm-k">Reason <span class="cm-muted" id="rfe-count"></span></div>' +
+      '<textarea class="sb-input" id="rfe-box" rows="2" maxlength="300" style="resize:vertical">' + esc(r.refund_reason || '') + '</textarea>' +
+      '<div style="display:flex;gap:6px;margin-top:6px"><button class="co-edit" id="rfe-save">Save</button><button class="co-edit" id="rfe-cancel">Cancel</button></div>';
+    var box = document.getElementById('rfe-box'), save = document.getElementById('rfe-save');
+    bindReasonCounter(box, document.getElementById('rfe-count'), save);
+    box.focus();
+    document.getElementById('rfe-cancel').addEventListener('click', function () { reopenCase(c.id); });
+    save.addEventListener('click', async function () {
+      var reason = box.value.trim();
+      if (reason.length < REFUND_REASON_MIN) return;
+      save.disabled = true; save.textContent = 'Saving…';
+      try {
+        var res = await post('refundEditReason', { order_id: r.order_id, reason: reason });
+        if (!res.ok) throw new Error(res.error || 'failed');
+        await reopenCase(c.id);
+      } catch (e) { alert("Couldn't save the reason: " + e.message); save.disabled = false; save.textContent = 'Save'; }
+    });
+  }
 
   async function reopenCase(id) {
     await load(false);
@@ -3664,10 +3699,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       '<div class="cm-sec-title" style="margin-bottom:8px">' + (isRefundCase ? 'Start refund' : 'Refund instead of ' + (c.type === 'Replace' ? 'replacement' : 'repair')) + '</div>' +
       refundDetailsGrid(c) +
       '<div class="cm-summary" style="margin-top:10px">' +
-        '<div class="span2"><div class="cm-k">Reason' + (isRefundCase ? ' (optional)' : '') + '</div>' +
-          '<select class="sb-input" id="rf-reason"><option value="">' + (isRefundCase ? 'Refund case' : '— Pick a reason —') + '</option>' +
-          REFUND_REASONS.map(function (x) { return '<option>' + esc(x) + '</option>'; }).join('') + '</select>' +
-          '<input class="sb-input" id="rf-other" placeholder="Describe the reason" style="display:none;margin-top:6px"></div>' +
+        '<div class="span2"><div class="cm-k">Reason <span class="cm-muted" id="rf-count">0/' + REFUND_REASON_MIN + '</span></div>' +
+          '<select class="sb-input" id="rf-reason"><option value="">— Quick fill —</option>' +
+          REFUND_REASONS.filter(function (x) { return x !== 'Other'; }).map(function (x) { return '<option>' + esc(x) + '</option>'; }).join('') + '</select>' +
+          '<textarea class="sb-input" id="rf-other" rows="2" maxlength="300" placeholder="Write the reason (at least ' + REFUND_REASON_MIN + ' characters)" style="margin-top:6px;resize:vertical"></textarea></div>' +
       '</div>' +
       '<div class="cm-acts" style="border-top:none;padding-top:0;margin-top:12px">' +
         '<button class="case-act primary" id="rf-yes">Start refund</button><button class="case-act" data-x>Cancel</button>' +
@@ -3676,10 +3711,16 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     panelCancel(panel);
     refreshRefundOrder(c);   // Order ID + Purchase price cells
     var sel = document.getElementById('rf-reason'), other = document.getElementById('rf-other');
-    sel.addEventListener('change', function () { other.style.display = sel.value === 'Other' ? '' : 'none'; });
-    document.getElementById('rf-yes').addEventListener('click', async function () {
-      var reason = sel.value === 'Other' ? other.value.trim() : sel.value;
-      if (!isRefundCase && !reason) { alert('Pick a reason.'); return; }
+    var yes = document.getElementById('rf-yes');
+    bindReasonCounter(other, document.getElementById('rf-count'), yes);
+    // Quick fill: drops the picked reason into the box so it can be added to.
+    sel.addEventListener('change', function () {
+      if (sel.value) { other.value = sel.value + ' — '; other.focus(); other.dispatchEvent(new Event('input')); }
+      sel.value = '';
+    });
+    yes.addEventListener('click', async function () {
+      var reason = other.value.trim();
+      if (reason.length < REFUND_REASON_MIN) { alert('Write the reason — at least ' + REFUND_REASON_MIN + ' characters.'); return; }
       this.disabled = true; this.textContent = 'Saving…';
       try {
         // No amount any more — the refund value comes from Purchase price (to be added)
@@ -4129,7 +4170,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       '<div class="cm-summary"><div class="rf-h">Refund info</div>' +
       f('Address', addr, 'span2') +
       f('Declared value', sh.total_amount ? '₹' + sh.total_amount : '') +
-      (r.resolution === 'refund' ? f('Reason', r.refund_reason) + f('Started by', [r.refund_marked_by, fmtWhen(r.refund_marked_at)].filter(Boolean).join(' · ')) : '') +
+      (r.resolution === 'refund' ? '<div id="rf-reason-cell"><div class="cm-k">Reason' +
+          (!r.refunded_at && canEditOrder() ? ' <button class="co-edit" data-act="rf-reason-edit" style="margin-left:6px">Edit</button>' : '') +
+          '</div><div>' + (r.refund_reason ? esc(r.refund_reason) : '&#8212;') + '</div></div>' + f('Started by', [r.refund_marked_by, fmtWhen(r.refund_marked_at)].filter(Boolean).join(' · ')) : '') +
       (r.refund_amount ? f('Amount (older entry)', '₹' + r.refund_amount) : '') +
       (r.refund_approved_at ? f('Approved', ['₹' + r.refund_approved_amount, r.refund_approved_by, fmtWhen(r.refund_approved_at)].filter(Boolean).join(' · '), 'span2') : '') +
       bank +
@@ -4392,6 +4435,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var cr = caseRequest(c);
     if (casePaysShown(cr)) { payView = 'case'; payClaim = cr.claim_id; loadPayment(cr, false); } else { payView = null; payClaim = null; }
     fillRefundBank(c);   // refund details: load masked bank details, if submitted
+    var rfe = modal.querySelector('[data-act="rf-reason-edit"]');
+    if (rfe) rfe.addEventListener('click', function () { refundReasonEdit(c); });
     wireCustomerOrder(c);  // Order ID: edit + load order details
   }
 

@@ -1446,7 +1446,7 @@ const ACTION_TIERS = {
   ccMarkCalled: 'manager_up',
   // Refund flow — customer bank-details form (NEFT). The two public actions
   // are gated by a single-use, 7-day link token + phone last-4 check.
-  delhiveryStartRefund: 'manager_up', refundCreateLink: 'manager_up', refundGetBank: 'manager_up',
+  delhiveryStartRefund: 'manager_up', refundEditReason: 'manager_up', refundCreateLink: 'manager_up', refundGetBank: 'manager_up',
   refundFormInfo: 'public', refundSubmitBank: 'public',
 
   // — Returns Verifier (/Returns-Verifier/): handwritten returns slip
@@ -5403,8 +5403,8 @@ export default {
           if (r.refunded_at) return json({ ok: false, error: 'Already refunded' }, 400);
           if (amount !== null && !(amount > 0)) return json({ ok: false, error: 'Refund amount must be more than 0' }, 400);
           const isRefundCase = r.job_type === 'Refund';
-          const reason = String(body.reason || '').trim().slice(0, 300) || (isRefundCase ? 'Refund case' : '');
-          if (!reason) return json({ ok: false, error: 'Pick a reason' }, 400);
+          const reason = String(body.reason || '').trim().slice(0, 300);
+          if (reason.length < 20) return json({ ok: false, error: 'Reason must be at least 20 characters' }, 400);
           if (r.linked_order_id) {
             const f = await env.DB.prepare("SELECT track_stage, cancelled_at FROM delhivery_orders WHERE order_id = ? AND delhivery_ok = 1").bind(r.linked_order_id).first();
             if (f && f.track_stage !== 'Cancelled' && !f.cancelled_at)
@@ -5414,6 +5414,21 @@ export default {
           await env.DB.prepare(
             "UPDATE delhivery_orders SET resolution = 'refund', refund_reason = ?, refund_amount = ?, refund_marked_by = ?, refund_marked_at = datetime('now'), in_process_at = COALESCE(in_process_at, datetime('now')) WHERE order_id = ? AND direction = 'reverse'"
           ).bind(reason, amount, who, oid).run();
+          return json({ ok: true });
+        }
+
+        // ── Edit the refund reason (20-Nov-2026). Min 20 chars; locked once refunded.
+        //   Body: { order_id, reason }.
+        if (act === 'refundEditReason') {
+          await ensureDelhiveryTable(env.DB);
+          const oid = String(body.order_id || '').trim();
+          const reason = String(body.reason || '').trim().slice(0, 300);
+          if (reason.length < 20) return json({ ok: false, error: 'Reason must be at least 20 characters' }, 400);
+          const r = await env.DB.prepare("SELECT resolution, refunded_at FROM delhivery_orders WHERE order_id = ? AND direction = 'reverse' AND delhivery_ok = 1").bind(oid).first();
+          if (!r) return json({ ok: false, error: 'Pickup not found' }, 404);
+          if (r.resolution !== 'refund') return json({ ok: false, error: 'Refund not started' }, 400);
+          if (r.refunded_at) return json({ ok: false, error: 'Already refunded — reason is locked' }, 400);
+          await env.DB.prepare("UPDATE delhivery_orders SET refund_reason = ? WHERE order_id = ? AND direction = 'reverse'").bind(reason, oid).run();
           return json({ ok: true });
         }
 
