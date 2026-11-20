@@ -1433,6 +1433,8 @@ const ACTION_TIERS = {
   delhiveryReplaceSwitch: 'manager_up', // Repair → Replacement (can't be repaired) / back to repair (14-Nov-2026)
   // Customer's own order ID (Flipkart / Amazon / Shopify) on a case + live lookup.
   ccSetOrderId: 'manager_up', ccOrderLookup: 'viewer_read',
+  // Internal notes on requests / cases (20-Nov-2026)
+  ccNotesList: 'viewer_read', ccNoteAdd: 'manager_up',
   // Dashboard "Raise ticket" — record (or clear) a courier escalation ticket on one leg.
   ccMarkEscalation: 'manager_up',
   // RTO received → close the case instead of re-sending (06-Nov-2026).
@@ -1489,7 +1491,7 @@ const ACTION_TIERS = {
 
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
-const ALWAYS_GATED = new Set(['ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
+const ALWAYS_GATED = new Set(['ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
   'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccPaymentWaive', 'ccLogisticsQuote', 'ccVersion',
   'shopShipList', 'shopShipRefresh', 'shopShipReceived']);
 
@@ -2216,6 +2218,28 @@ export default {
         const row = await env.DB.prepare('SELECT files_json FROM warranty_claims WHERE claim_id = ? OR prev_claim_id = ?').bind(qid, qid).first();
         if (!row) return json({ ok: false, error: 'No such request' }, 404);
         return json({ ok: true, files: await srSignedFiles(env, row) });
+      }
+      // ── Internal notes (20-Nov-2026): team-only, many per request / case,
+      //   keyed by Request ID (manual cases: case ID). No edit / delete.
+      if (action === 'ccNotesList' || act === 'ccNoteAdd') {
+        await env.DB.prepare("CREATE TABLE IF NOT EXISTS cc_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, case_key TEXT NOT NULL, note TEXT NOT NULL, by_user TEXT, created_at TEXT DEFAULT (datetime('now')))").run();
+        await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_cc_notes_key ON cc_notes (case_key)").run();
+        if (request.method === 'GET' && action === 'ccNotesList') {
+          const keys = String(url.searchParams.get('keys') || '').split(',').map(function (k) { return k.trim(); }).filter(Boolean).slice(0, 5);
+          if (!keys.length) return json({ ok: true, notes: [] });
+          const rows = (await env.DB.prepare('SELECT id, case_key, note, by_user, created_at FROM cc_notes WHERE case_key IN (' + keys.map(function () { return '?'; }).join(',') + ') ORDER BY created_at DESC, id DESC')
+            .bind(...keys).all()).results || [];
+          return json({ ok: true, notes: rows });
+        }
+        if (request.method === 'POST' && act === 'ccNoteAdd') {
+          const key = String((body && body.case_key) || '').trim().slice(0, 60);
+          const note = String((body && body.note) || '').trim().slice(0, 1000);
+          if (!key || !note) return json({ ok: false, error: 'Note is empty' }, 400);
+          const user = authResult.user || (await resolveSession(request, env.DB));
+          const who = (user && user.username) || 'admin';
+          const row = await env.DB.prepare("INSERT INTO cc_notes (case_key, note, by_user) VALUES (?, ?, ?) RETURNING id, case_key, note, by_user, created_at").bind(key, note, who).first();
+          return json({ ok: true, note: row });
+        }
       }
       if (request.method === 'POST' && act === 'ccDrnToWrn') {
         const user = authResult.user || (await resolveSession(request, env.DB));

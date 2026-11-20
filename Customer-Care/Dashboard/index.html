@@ -457,6 +457,14 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .co-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .co-edit { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text2); cursor: pointer; }
 .co-edit:hover { border-color: var(--accent); color: var(--accent); }
+/* Internal notes (20-Nov-2026) */
+.nt-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--surface2); }
+.nt-item { padding: 8px 0; border-bottom: 1px dashed var(--border); }
+.nt-item:last-of-type { border-bottom: none; }
+.nt-meta { font-size: 11px; color: var(--text2); margin-bottom: 2px; }
+.nt-text { white-space: pre-wrap; word-break: break-word; }
+.nt-add { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; }
+.nt-add textarea { flex: 1; resize: vertical; }
 .co-input { font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); min-width: 240px; }
 .co-warn { color: var(--red); font-weight: 600; }
 .co-ok { color: var(--green); font-weight: 600; }
@@ -4204,6 +4212,58 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     return [c.reverse && c.reverse.order_id].concat((c.prev || []).map(function (p) { return p.order_id; }), [c.forward && c.forward.order_id]).filter(Boolean).join(' \u00b7 ');
   }
   // The website request behind a case (an NV- ID verified later still matches).
+  // ══ INTERNAL NOTES (20-Nov-2026) — team-only notes on a request / case.
+  //   Stored in D1 cc_notes, keyed by Request ID (manual cases: case ID), so a
+  //   note added on the request still shows on its case. Older notes saved in
+  //   the request History (kind 'note') are merged in. Open = list + add box;
+  //   closed = folded to "Internal notes (n) · Show", no add box.
+  var notesCtx = null;
+  function notesHtml() { return '<div id="cc-notes"></div>'; }
+  async function loadNotes(keys, legacy, closed) {
+    keys = keys.filter(Boolean).filter(function (k, i, a) { return a.indexOf(k) === i; });
+    var ctx = notesCtx = { keys: keys, legacy: legacy || [], closed: !!closed, list: null };
+    drawNotes();
+    try {
+      var res = await api('ccNotesList&keys=' + encodeURIComponent(keys.join(',')));
+      if (notesCtx !== ctx) return;   // popup changed meanwhile
+      if (!res.ok) throw new Error(res.error || 'failed');
+      ctx.list = res.notes || [];
+    } catch (e) { if (notesCtx === ctx) { ctx.list = []; ctx.err = e.message; } }
+    drawNotes();
+  }
+  function drawNotes() {
+    var el = document.getElementById('cc-notes'), ctx = notesCtx;
+    if (!el || !ctx) return;
+    var all = (ctx.list || []).map(function (n) { return { at: n.created_at, by: n.by_user, note: n.note }; })
+      .concat(ctx.legacy.filter(function (e) { return e.kind === 'note' && e.by !== 'system' && e.note; }))
+      .sort(function (a, b) { return String(b.at).localeCompare(String(a.at)); });   // newest first
+    var items = all.map(function (n) {
+      return '<div class="nt-item"><div class="nt-meta">' + esc([n.by, fmtWhen(n.at)].filter(Boolean).join(' · ')) + '</div><div class="nt-text">' + esc(n.note) + '</div></div>';
+    }).join('');
+    var loading = ctx.list === null;
+    var body = (loading ? '<div class="cm-muted">Loading…</div>' : '') +
+      (!loading && !all.length ? '<div class="cm-muted">No notes yet.</div>' : '') +
+      (ctx.err ? '<div class="cm-muted">Couldn\'t load notes (' + esc(ctx.err) + ')</div>' : '') + items +
+      (!ctx.closed && canEditOrder() ? '<div class="nt-add"><textarea class="sb-input" id="nt-box" rows="2" maxlength="1000" placeholder="Add an internal note (team only)"></textarea>' +
+        '<button class="case-act primary" id="nt-save">Add note</button></div>' : '');
+    el.innerHTML = '<div class="cm-sec"><div class="cm-sec-title">Internal notes' + (all.length ? ' (' + all.length + ')' : '') + '</div>' +
+      (ctx.closed && all.length ? '<button type="button" class="linkish pay-toggle" id="nt-toggle">' + (ctx.open ? 'Hide' : 'Show') + '</button>' : '') + '</div>' +
+      (ctx.closed && !ctx.open ? '' : '<div class="nt-card">' + body + '</div>');
+    var tg = document.getElementById('nt-toggle');
+    if (tg) tg.addEventListener('click', function () { ctx.open = !ctx.open; drawNotes(); });
+    var save = document.getElementById('nt-save');
+    if (save) save.addEventListener('click', async function () {
+      var box = document.getElementById('nt-box'), txt = box.value.trim();
+      if (!txt) { box.focus(); return; }
+      save.disabled = true; save.textContent = 'Saving…';
+      try {
+        var res = await post('ccNoteAdd', { case_key: ctx.keys[0], note: txt });
+        if (!res.ok) throw new Error(res.error || 'failed');
+        if (notesCtx === ctx) { ctx.list = (ctx.list || []).concat([res.note]); drawNotes(); }
+      } catch (e) { alert("Couldn't save the note: " + e.message); save.disabled = false; save.textContent = 'Add note'; }
+    });
+  }
+
   function caseRequest(c) {
     if (!c.claim) return null;
     return requests.filter(function (r) { return r.claim_id === c.claim || r.prev_claim_id === c.claim; })[0] || null;
@@ -4406,7 +4466,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var acts = labelBtn + actionsHtml(c) + tkBtn + (trackBtns ? '<span style="margin-left:auto;display:flex;gap:8px">' + trackBtns + '</span>' : '');
     var box = document.getElementById('case-body-modal');
     stepsCtx = { c: c, r: caseRequest(c), pay: null };
-    box.innerHTML = '<div id="cc-steps"></div>' + summary + caseRequestHtml(c) + customerOrderHtml(c) +
+    box.innerHTML = '<div id="cc-steps"></div>' + summary + notesHtml() + caseRequestHtml(c) + customerOrderHtml(c) +
       legs.map(function (l, i) { return legHtml(l[0], l[1], i); }).join('') +
       refundInfoHtml(c) +
       '<div id="cm-confirm" style="margin-top:18px" hidden></div>' +
@@ -4435,6 +4495,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var cr = caseRequest(c);
     if (casePaysShown(cr)) { payView = 'case'; payClaim = cr.claim_id; loadPayment(cr, false); } else { payView = null; payClaim = null; }
     fillRefundBank(c);   // refund details: load masked bank details, if submitted
+    var ncr = caseRequest(c);
+    loadNotes([c.claim || c.caseNo, ncr && ncr.prev_claim_id, c.claim ? null : c.id], ncr ? ncr.events : [], c.st && c.st.tone === 'closed');
     var rfe = modal.querySelector('[data-act="rf-reason-edit"]');
     if (rfe) rfe.addEventListener('click', function () { refundReasonEdit(c); });
     wireCustomerOrder(c);  // Order ID: edit + load order details
@@ -4860,8 +4922,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         // Ask for photos / video again (04-Nov-2026) — WhatsApp media_reupload with an upload link
         // Close request with a reason (04-Nov-2026) — replaces Resolved / Not covered
         (!fin ? '<button class="case-act danger" id="req-close">Close request</button>'
-              : '<button class="case-act" data-k="reopen">Reopen</button>') +
-        '<button class="case-act" data-k="note">Internal note</button>';
+              : '<button class="case-act" data-k="reopen">Reopen</button>');
     }
     var box = document.getElementById('case-body-modal');
     var nv = isNV(r);
@@ -4897,6 +4958,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         '</div>' +
         '<div class="req-files" id="req-files"><span class="muted">Loading…</span></div></div></div>' +
       '<div id="req-media-box" style="margin-top:12px" hidden></div>' +
+      notesHtml() +
       // R3 — order details (verified SRN/WRN only; NV shows them in the Verify box)
       (!nv ? reqOrderDetailsHtml(r, oidWarn) : '') +
       // R3 — verify (NV only)
@@ -4927,6 +4989,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (roc) roc.addEventListener('click', function () { var c = reqCase(r); if (c) openCase(c); });
     modal.hidden = false;
     if (isNV(r)) wireVerify(r);
+    // Request closed, or its case is closed → notes folded
+    var nCase = r.case_id ? cases.filter(function (x) { return x.claim === r.claim_id || x.claim === r.prev_claim_id; })[0] : null;
+    loadNotes([r.claim_id, r.prev_claim_id], r.events, r.status === 'closed' || r.status === 'not_covered' || !!(nCase && nCase.st && nCase.st.tone === 'closed'));
     var ht = document.getElementById('hist-toggle');
     if (ht) ht.addEventListener('click', function () {
       var all = document.getElementById('hist-all');
