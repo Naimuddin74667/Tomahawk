@@ -10,9 +10,9 @@
      • shows a day-wise summary: trips, Uber earnings, cash the driver collected, Drive Pass fees, bank payouts
      • finds the bank payouts (rows "so.payout") — the money Uber sent to the manager's bank
      • each payout not yet in the Driver Ledger is added as  kind 'credit', platform 'Uber'
-   A payout counts as "already entered" if the ledger has an Uber credit on the same date for the
-   same amount (±1 paisa), or one whose note has the payout's reference — so the same file can be
-   uploaded again safely.
+   A payout counts as "already entered" if the ledger has an Uber credit with its reference in the note,
+   or on the same date for the same amount, or one typed by hand within ±2 days and ±₹1 (e.g. ₹2,124
+   for ₹2,124.33) — so the same file can be uploaded again safely and hand entries aren't doubled.
    ═══════════════════════════════════════════════════════════════════ */
 const UberReport = (() => {
   // Minimal CSV reader: handles quoted fields, commas and new lines inside quotes
@@ -100,8 +100,11 @@ const UberReport = (() => {
     const ub = (entries || []).filter(e => e.kind === 'credit' && String(e.platform || '').toLowerCase() === 'uber');
     return report.payouts.map(p => {
       const tag = p.ref ? p.ref.slice(0, 8) : '';
-      const dup = ub.find(e => (tag && String(e.note || '').includes(tag)) || (e.date === p.date && Math.abs(n(e.amount) - p.amount) < 0.011));
-      return { ...p, tag, exists: !!dup };
+      // Exact: same reference, or same date + same amount.  Close: typed by hand, rounded (±₹1) and/or dated ±2 days.
+      const days = e => Math.abs((new Date(e.date) - new Date(p.date)) / 864e5);
+      const dup = ub.find(e => (tag && String(e.note || '').includes(tag)) || (e.date === p.date && Math.abs(n(e.amount) - p.amount) < 0.011))
+               || ub.find(e => days(e) <= 2 && Math.abs(n(e.amount) - p.amount) <= 1);
+      return { ...p, tag, exists: !!dup, match: dup && (dup.date !== p.date || Math.abs(n(dup.amount) - p.amount) >= 0.011) ? dup : null };
     });
   }
 
@@ -129,7 +132,7 @@ const UberReport = (() => {
         </table></div></details>
       <div style="font-weight:700;font-size:14px;margin-bottom:6px">Uber payouts to bank (${items.length})</div>
       ${items.map(i => `<div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px">
-          <span>${fd(i.date)} <span style="color:var(--text2);font-size:11px">${i.exists ? '· already entered' : '· new'}</span></span>
+          <span>${fd(i.date)} <span style="color:var(--text2);font-size:11px">${i.match ? '· already entered as ' + inr(n(i.match.amount)) + ' on ' + fd(i.match.date) : i.exists ? '· already entered' : '· new'}</span></span>
           <b class="${i.exists ? '' : 'pos'}" style="${i.exists ? 'color:var(--text2);font-weight:500' : ''}">${inr(i.amount)}</b></div>`).join('') || '<div style="color:var(--text2);font-size:13px">No payouts in this file.</div>'}
       ${fresh.length ? `<div class="field" style="margin-top:12px"><label>Add to driver</label>
           <select id="urDriver">${drivers.length > 1 && !selId ? '<option value="">— choose —</option>' : ''}${drivers.map(d => `<option value="${esc(d.id)}" ${d.id === selId ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></div>
