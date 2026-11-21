@@ -46,6 +46,13 @@
      POST   /ledger/entry/delete {id}                                          owner, manager
      POST   /ledger/login    {driverId}    owner, manager → new PIN for that driver's login
    GET /state also returns the claims still waiting, so the owner app can ask "Received?".
+
+   Uber API connection (owner only) — Client ID + Secret from developer.uber.com
+     The secret stays in D1 and is never sent back to the app (only its last 4 characters).
+     GET    /integrations/uber             → {clientId, hasSecret, secretEnd, scopes, updatedAt, lastTest…}
+     POST   /integrations/uber  {clientId, clientSecret?, scopes?}   blank secret = keep the saved one
+     DELETE /integrations/uber             forget the keys and any saved token
+     POST   /integrations/uber/test        asks Uber for an access token with the saved keys
    ═══════════════════════════════════════════════════════════════════ */
 
 const CORS = {
@@ -92,6 +99,9 @@ async function setupTables(DB) {
   // Driver Ledger: drivers under a manager + their entries (platform credits, cash given, waived days)
   await DB.batch([
     DB.prepare('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)'),
+    // API keys for outside services (Uber now; Ola/Rapido later) — one row per provider
+    DB.prepare('CREATE TABLE IF NOT EXISTS integrations (provider TEXT PRIMARY KEY, client_id TEXT, client_secret TEXT, scopes TEXT, ' +
+               'access_token TEXT, token_expires TEXT, updated_at TEXT, last_test_at TEXT, last_test_ok INTEGER, last_test_msg TEXT)'),
     DB.prepare('CREATE TABLE IF NOT EXISTS ld_drivers (id TEXT PRIMARY KEY, name TEXT NOT NULL, mobile TEXT, rent REAL NOT NULL, ' +
                'start_date TEXT NOT NULL, end_date TEXT, manager_mobile TEXT, created_at TEXT)'),
     DB.prepare('CREATE TABLE IF NOT EXISTS ld_entries (id TEXT PRIMARY KEY, driver_id TEXT NOT NULL, date TEXT NOT NULL, kind TEXT NOT NULL, ' +
@@ -144,6 +154,33 @@ async function linkLedgerDriver(DB, m, name, body) {
   await DB.prepare('INSERT INTO ld_drivers (id, name, mobile, rent, start_date, end_date, manager_mobile, created_at) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7)')
     .bind(id, String(nd.name || name || 'Driver').slice(0, 60), m, rent, nd.startDate, mgr || null, now()).run();
   return { id };
+}
+
+/* ── Uber API ──
+   Uber's fleet (Vehicle Suppliers) APIs use the client-credentials login: Client ID + Secret → access token.
+   Scopes are switched on by Uber after they approve the request; until then Uber answers "invalid_scope". */
+const UBER_TOKEN_URL = 'https://auth.uber.com/oauth/v2/token';
+const uberPublic = r => !r ? { clientId: '', hasSecret: false } : {
+  clientId: r.client_id || '', hasSecret: !!r.client_secret, secretEnd: r.client_secret ? String(r.client_secret).slice(-4) : '',
+  scopes: r.scopes || '', updatedAt: r.updated_at || '', tokenExpires: r.token_expires || '',
+  lastTestAt: r.last_test_at || '', lastTestOk: r.last_test_ok === null || r.last_test_ok === undefined ? null : !!r.last_test_ok, lastTestMsg: r.last_test_msg || '' };
+
+// Turn Uber's error codes into plain words for the owner
+function uberErrorText(code, desc) {
+  if (code === 'invalid_client') return 'Uber did not accept the Client ID or Client Secret. Copy both again from the Uber dashboard.';
+  if (code === 'invalid_scope') return 'Keys are correct, but Uber has not switched on the fleet API for this app yet. Waiting for Uber’s approval.';
+  if (code === 'unauthorized_client') return 'Keys are correct, but this app is not allowed to use this login type yet. Waiting for Uber’s approval.';
+  return 'Uber said: ' + (desc || code || 'unknown error');
+}
+
+async function uberToken(r) {
+  const form = new URLSearchParams({ client_id: r.client_id, client_secret: r.client_secret, grant_type: 'client_credentials' });
+  if (r.scopes) form.set('scope', r.scopes);
+  const res = await fetch(UBER_TOKEN_URL, { method: 'POST', body: form,
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' } });
+  const b = await res.json().catch(() => ({}));
+  if (res.ok && b.access_token) return { ok: true, token: b.access_token, expires: new Date(Date.now() + (Number(b.expires_in) || 0) * 1000).toISOString(), scope: b.scope || '' };
+  return { ok: false, msg: uberErrorText(b.error, b.error_description || (res.status + '')) };
 }
 
 export default {
@@ -351,6 +388,47 @@ export default {
       }
 
       /* ── Driver Manager view: only his own rent to the owner ── */
+      /* ── Uber API connection (owner only) ── */
+      if (path.startsWith('/integrations/uber')) {
+        if (!me) return needLogin();
+        if (!isOwner) return notAllowed();
+        const get = () => DB.prepare("SELECT * FROM integrations WHERE provider = 'uber'").first();
+
+        if (path === '/integrations/uber' && req.method === 'GET') return json(uberPublic(await get()));
+
+        if (path === '/integrations/uber' && req.method === 'POST') {
+          const id = String(body.clientId || '').trim(), secret = String(body.clientSecret || '').trim();
+          const scopes = String(body.scopes || '').trim().replace(/\s+/g, ' ').slice(0, 500);
+          const old = await get();
+          if (!id || id.length > 200 || /\s/.test(id)) return err('Paste the Client ID (Application ID) from the Uber dashboard', 400);
+          if (secret && (secret.length > 300 || /\s/.test(secret))) return err('The Client Secret looks wrong — copy it again', 400);
+          if (!secret && !(old && old.client_secret)) return err('Paste the Client Secret too', 400);
+          const changed = !old || old.client_id !== id || !!secret || (old.scopes || '') !== scopes;
+          await DB.prepare("INSERT INTO integrations (provider, client_id, client_secret, scopes, updated_at) VALUES ('uber', ?1, ?2, ?3, ?4) " +
+            'ON CONFLICT(provider) DO UPDATE SET client_id = excluded.client_id, client_secret = excluded.client_secret, scopes = excluded.scopes, updated_at = excluded.updated_at' +
+            (changed ? ', access_token = NULL, token_expires = NULL, last_test_at = NULL, last_test_ok = NULL, last_test_msg = NULL' : ''))
+            .bind(id, secret || old.client_secret, scopes, now()).run();
+          return json({ ok: true, ...uberPublic(await get()) });
+        }
+
+        if (path === '/integrations/uber' && req.method === 'DELETE') {
+          await DB.prepare("DELETE FROM integrations WHERE provider = 'uber'").run();
+          return json({ ok: true });
+        }
+
+        if (path === '/integrations/uber/test' && req.method === 'POST') {
+          const r = await get();
+          if (!r || !r.client_id || !r.client_secret) return err('Save the Client ID and Secret first', 400);
+          let t;
+          try { t = await uberToken(r); } catch (e) { t = { ok: false, msg: 'Could not reach Uber: ' + (e.message || e) }; }
+          const msg = t.ok ? 'Connected. Uber gave an access token' + (t.scope ? ' for: ' + t.scope : '') + '.' : t.msg;
+          await DB.prepare("UPDATE integrations SET last_test_at = ?1, last_test_ok = ?2, last_test_msg = ?3, access_token = ?4, token_expires = ?5 WHERE provider = 'uber'")
+            .bind(now(), t.ok ? 1 : 0, msg, t.ok ? t.token : null, t.ok ? t.expires : null).run();
+          return json({ ok: t.ok, ...uberPublic(await get()) });
+        }
+        return err('Not found', 404);
+      }
+
       if (path === '/driver' && req.method === 'GET') {
         if (!me) return needLogin();
         if (!isManager || !me.driverId) return notAllowed();

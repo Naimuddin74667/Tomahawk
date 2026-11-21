@@ -210,3 +210,17 @@ It is built for phones, since about 99% of use is on a phone. It has its own lig
 **Worker:** new tables `meta`, `ld_drivers`, `ld_entries`; endpoints `/ledger`, `/ledger/driver`, `/ledger/entry`, `/ledger/entry/delete`, `/ledger/login`. One-time: role rename + Siddique's ledger seeded from 16 Oct with Uber credits ₹39.89 (19th), ₹614.45 (20th), ₹151.42 (21st).
 
 **Platforms:** editable list in Setup → Platforms (default Uber, Ola, Rapido, Other), stored in `settings.platforms`.
+
+---
+
+## 9. Uber API connection (21 Nov 2026)
+
+**Why:** pull Uber fleet data (driver payments, transactions, performance) straight into the app instead of typing Uber credits by hand.
+
+**Uber side (done by the owner):** developer.uber.com → app **"MNS Tours and Travels Fleet"** (PROD APP, API suite "Others", organization "MNS Tours and Travels"). Fleet API access requested from Uber via Supplier Portal → Help. Uber must approve and switch on scopes before data can flow.
+
+**App:** Setup → **🔌 Uber API** (owner only; Uncle doesn't see it). Paste Client ID + Client Secret → Save keys → Test connection. Status: ✅ connected · ⏳ keys correct, waiting for Uber approval (`invalid_scope`) · ❌ wrong keys (`invalid_client`). "Advanced: scopes" field for the scope names Uber gives later.
+
+**Worker:** table `integrations` (one row per provider, ready for Ola/Rapido). Endpoints `GET/POST/DELETE /integrations/uber`, `POST /integrations/uber/test` (client-credentials token from `https://auth.uber.com/oauth/v2/token`; token stored server-side for later sync). The secret is stored only in D1 and never returned (only last 4 chars).
+
+**Next:** once Uber approves → add a daily sync that pulls driver payments into the Driver Ledger as Uber credits.

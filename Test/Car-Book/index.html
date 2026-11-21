@@ -168,6 +168,13 @@ td.num, th.num { text-align:right; white-space:nowrap; }
 .sec-body { display:none; padding:14px 16px 16px; border-top:1px solid var(--border); }
 .sec.open .sec-body { display:block; }
 .sec-sub { font-size:14px; margin:18px 0 10px; }
+/* Uber API section */
+.ubr-status { display:flex; gap:8px; align-items:flex-start; padding:10px 12px; border-radius:8px; font-size:13px; margin-bottom:12px; background:var(--surface2); }
+.ubr-status.ok { background:rgba(22,163,74,.12); }
+.ubr-status.bad { background:rgba(220,38,38,.10); }
+.ubr-status.wait { background:rgba(234,179,8,.14); }
+.ubr-secret { display:flex; gap:6px; }
+.ubr-secret input { flex:1; }
 /* Change log */
 .log .lrow .s { white-space:normal; }
 .log-undone { text-decoration:line-through; color:var(--text2); font-weight:500; }
@@ -697,6 +704,7 @@ function toggleSec(key) {
   const el = document.querySelector('.sec[data-sec="' + key + '"]'); if (!el) return;
   const open = !el.classList.contains('open');
   if (open && key === 'log') refreshLogSection();   // always show the latest changes
+  if (open && key === 'ubr') loadUber();            // fetch the saved Uber keys status from the server
   el.classList.toggle('open', open); el.querySelector('.sec-head').setAttribute('aria-expanded', open);
   if (open) OPEN_SECS.add(key); else OPEN_SECS.delete(key);
 }
@@ -940,6 +948,7 @@ setup() {
       ${sec('par', '🤝', 'Partners', partSum, parBody)}
       ${sec('plt', '📱', 'Platforms', platforms().join(' · '), pltBody)}
       ${sec('usr', '🔑', 'Logins &amp; users', usrSum, loginCardInner(true))}
+      ${isViewer() ? '' : sec('ubr', '🔌', 'Uber API', uberSum(), '<div id="uberBox">' + uberInner() + '</div>')}
       ${sec('log', '🕘', 'Change log', logSum, changeLogHtml())}
       ${sec('bak', '💾', 'Backup &amp; testing', bakSum, bakBody)}
     </div>
@@ -1864,6 +1873,82 @@ function resetData() {
   if (viewOnly()) return;
   if (prompt('Type DELETE to erase all data in this browser.') === 'DELETE') { DB = defaultData(); logResetBase(); refresh(); toast('All data cleared'); }
 }
+
+/* ════════════ Uber API connection (owner only) ════════════
+   Client ID + Client Secret from developer.uber.com → app "MNS Tours and Travels Fleet".
+   Both are saved on our Worker (D1), NOT in this phone's data, backups or change log.
+   The server never sends the secret back — only "saved, ending ••1234".
+   "Test connection" asks Uber for an access token. Until Uber approves the fleet API,
+   the test says "keys are correct, waiting for Uber's approval". */
+let UBER = null, uberBusy = false;
+async function loadUber() {
+  if (!cloudCfg() || isViewer()) return;
+  try {
+    const r = await cloudFetch('/integrations/uber');
+    UBER = r.status === 404 ? { notReady: true } : r.status >= 400 ? { error: r.body.error || ('Error ' + r.status) } : r.body;
+  } catch (e) { UBER = { error: e.message }; }
+  redrawUber();
+}
+function uberSum() {
+  if (!UBER) return 'Connect the app to Uber with your API keys';
+  if (UBER.notReady) return 'Server needs updating';
+  if (!UBER.clientId) return 'Not connected';
+  if (UBER.lastTestOk === true) return 'Connected ✓';
+  if (UBER.lastTestOk === false) return 'Keys saved · not connected yet';
+  return 'Keys saved · not tested';
+}
+function uberStatusHtml() {
+  if (!UBER) return '<div class="ubr-status">Loading…</div>';
+  if (UBER.notReady) return `<div class="ubr-status wait">⚠️ <div>The server doesn't have the Uber part yet. Paste the new <b>mns-worker.js</b> into Cloudflare (Worker <b>mns-enterprises</b> → Edit code → Deploy), then reopen this section.</div></div>`;
+  if (UBER.error) return `<div class="ubr-status bad">⚠️ <div>${esc(UBER.error)}</div></div>`;
+  if (!UBER.clientId) return '<div class="ubr-status">Not connected. Paste the keys from your Uber developer dashboard below.</div>';
+  if (UBER.lastTestOk === null || UBER.lastTestOk === undefined) return '<div class="ubr-status">Keys saved. Tap <b>Test connection</b> to check them with Uber.</div>';
+  const when = UBER.lastTestAt ? new Date(UBER.lastTestAt).toLocaleString('en-IN', { day:'numeric', month:'short', hour:'numeric', minute:'2-digit' }) : '';
+  const waiting = /approval/i.test(UBER.lastTestMsg || '');
+  const cls = UBER.lastTestOk ? 'ok' : waiting ? 'wait' : 'bad', ico = UBER.lastTestOk ? '✅' : waiting ? '⏳' : '❌';
+  return `<div class="ubr-status ${cls}">${ico} <div>${esc(UBER.lastTestMsg)}<div class="muted" style="font-size:11px;margin-top:2px">Checked ${esc(when)}</div></div></div>`;
+}
+function uberInner() {
+  const u = UBER && !UBER.notReady && !UBER.error ? UBER : {};
+  const dis = !UBER || UBER.notReady ? 'disabled' : '';
+  return `${uberStatusHtml()}
+    <div class="field"><label>Client ID (Application ID)</label>
+      <input id="ubrId" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(u.clientId || '')}" placeholder="Paste from Uber dashboard → Setup" ${dis}></div>
+    <div class="field"><label>Client Secret</label>
+      <div class="ubr-secret"><input id="ubrSecret" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false"
+        placeholder="${u.hasSecret ? 'Saved, ending ••' + esc(u.secretEnd) + ' — leave blank to keep' : 'Paste the Client Secret'}" ${dis}>
+        <button type="button" class="btn sm" onclick="const i=document.getElementById('ubrSecret');i.type=i.type==='password'?'text':'password'" ${dis}>👁</button></div>
+      <div class="help">Kept only on your server. It is never shown again, and never goes into backups.</div></div>
+    <details style="margin-bottom:12px"><summary class="muted" style="font-size:12px;cursor:pointer">Advanced: scopes</summary>
+      <div class="field" style="margin-top:8px"><input id="ubrScopes" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(u.scopes || '')}" placeholder="Leave blank until Uber gives you scope names" ${dis}>
+        <div class="help">Uber tells you these after approving your request. Separate with spaces.</div></div></details>
+    <div class="btn-row">
+      <button class="btn sm primary" onclick="saveUber()" ${dis}>Save keys</button>
+      <button class="btn sm" onclick="testUber()" ${dis || (u.clientId ? '' : 'disabled')}>Test connection</button>
+      ${u.clientId ? '<button class="btn sm danger" onclick="removeUber()">Remove</button>' : ''}</div>`;
+}
+function redrawUber() {
+  const b = document.getElementById('uberBox'); if (b) b.innerHTML = uberInner();
+  const s = document.getElementById('sum_ubr'); if (s) s.textContent = uberSum();
+}
+async function uberCall(path, method, body, okMsg) {
+  if (uberBusy) return; uberBusy = true;
+  try {
+    const r = await cloudFetch(path, { method, ...(body ? { body: JSON.stringify(body) } : {}) });
+    if (r.status >= 400 && !('lastTestOk' in (r.body || {}))) { toast(r.body.error || 'Something went wrong'); return; }
+    if (method === 'DELETE') UBER = { clientId: '', hasSecret: false }; else UBER = r.body;
+    redrawUber(); if (okMsg) toast(typeof okMsg === 'function' ? okMsg(r.body) : okMsg);
+  } catch (e) { toast('No internet? ' + e.message); }
+  finally { uberBusy = false; }
+}
+function saveUber() {
+  const clientId = document.getElementById('ubrId').value.trim(), clientSecret = document.getElementById('ubrSecret').value.trim();
+  const scopes = document.getElementById('ubrScopes').value.trim();
+  if (!clientId) { toast('Paste the Client ID'); return; }
+  uberCall('/integrations/uber', 'POST', { clientId, clientSecret, scopes }, 'Uber keys saved').then(() => { if (UBER && UBER.clientId && !UBER.lastTestAt) testUber(); });
+}
+function testUber() { toast('Checking with Uber…'); uberCall('/integrations/uber/test', 'POST', {}, b => b.ok ? 'Connected to Uber ✓' : 'Not connected yet — see the message'); }
+function removeUber() { if (confirm('Remove the Uber keys from the app? You can paste them again any time.')) uberCall('/integrations/uber', 'DELETE', null, 'Uber keys removed'); }
 
 /* ════════════ Platforms (Uber, Ola, Rapido…) ════════════ */
 const DEFAULT_PLATFORMS = ['Uber', 'Ola', 'Rapido', 'Other'];
