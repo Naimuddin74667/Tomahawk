@@ -1981,7 +1981,11 @@ export default {
       // Open Mon–Sat, 9:00 AM – 5:00 PM India time. Returns open: true/false
       // so the bot only creates a ticket during working hours.
       if (act === 'isOpen') {
-        return json(customerCareOpenStatus(new Date()));
+        const st = customerCareOpenStatus(new Date());
+        // &http=1 → HTTP 200 when open, 423 when closed, so a GC Webhook
+        // block can branch on "200 / others" without a Fork block.
+        const code = (url.searchParams.get('http') === '1' && !st.open) ? 423 : 200;
+        return json(st, code);
       }
 
       // ── WALIMA INVITATION — guest list (walima* actions) ──
