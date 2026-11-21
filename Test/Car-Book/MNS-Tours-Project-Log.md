@@ -224,3 +224,16 @@ It is built for phones, since about 99% of use is on a phone. It has its own lig
 **Worker:** table `integrations` (one row per provider, ready for Ola/Rapido). Endpoints `GET/POST/DELETE /integrations/uber`, `POST /integrations/uber/test` (client-credentials token from `https://auth.uber.com/oauth/v2/token`; token stored server-side for later sync). The secret is stored only in D1 and never returned (only last 4 chars).
 
 **Next:** once Uber approves → add a daily sync that pulls driver payments into the Driver Ledger as Uber credits.
+
+**Update (22 Nov 2026):** Uber keys saved in the app; test result "⏳ keys correct, waiting for Uber's approval". Uber offers no online way to request fleet API access (Fleet Hub Help → articles only; developer dashboard Agreements empty), so the API stays parked.
+
+## 10. Upload Uber report (22 Nov 2026)
+
+**Instead of the API:** Fleet Hub → Reports → Generate Report → type **Payments Transaction** → Download CSV → in the app, Driver ledger → **⬆ Uber report** (owner, index.html) or **⬆ Upload Uber report** (Driver Manager, driver.html).
+
+- `uber-report.js` (shared by both pages) reads the CSV in the browser. Preview: trips, Uber earnings, cash the driver collected, Drive Pass fees, day-wise table, and every bank payout (`so.payout` rows, column "Transferred To Bank Account") marked **new** / **already entered**.
+- Import adds only new payouts as ledger `credit`, platform `Uber`, date = Uber's processed date (= bank SMS date), note `Uber payout (report) · <first 8 chars of transaction UUID>`.
+- Duplicate check (all drivers): same date + amount (±1 paisa) for an Uber credit, or the UUID tag in the note → re-uploading the same file adds nothing.
+- Payout rows have no driver; import goes to the driver whose trips are in the file (one ledger driver → him; otherwise matched by first name; else "choose").
+- Wrong report type → clear message. No worker change. Service worker cache → `mns-tours-v10`.
+- First file (16–28 Oct): 63 trips, ₹29,268 earnings, ₹23,457 cash with driver, ₹2,122 Drive Pass, payouts ₹2,930.09 (19, 20, 21 Oct already in ledger; 26 Oct ₹2,124.33 new).

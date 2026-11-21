@@ -317,6 +317,7 @@ body.readonly .lrow.click { cursor:default; }
 <div class="undo-bar" id="undoBar" role="status"><span id="undoText"></span><button type="button" onclick="undoRent()">Undo</button></div>
 <div id="printArea"></div>
 
+<script src="uber-report.js"></script>
 <script>
 /* ════════════════════════════════════════════════════════════
    STORAGE LAYER
@@ -2019,6 +2020,7 @@ function ledgerHtml() {
           ${edit ? `<button class="btn primary sm" onclick="openLdEntry('${drv.id}','cash')">+ Cash from ${first}</button>
           <button class="btn sm" onclick="openLdEntry('${drv.id}','credit')">+ Platform money</button>
           <button class="btn sm" onclick="openLdEntry('${drv.id}','waive')">Rent off day</button>
+          <button class="btn sm" onclick="openUberImport('${drv.id}')">⬆ Uber report</button>
           <button class="btn sm" onclick="shareLdWhatsApp('${drv.id}')">WhatsApp</button>
           <button class="btn sm" onclick="openLdDriverForm('${drv.id}')">Edit</button>` : ''}
           <button class="btn sm" onclick="loadLedger()">↻</button></div></div>
@@ -2120,6 +2122,28 @@ function openLdEntry(id, kind, entryId, date) {
   ], e || {}, d => {
     ldPost('/ledger/entry', { ...d, id: e ? e.id : undefined, driverId: id, kind }).then(ok => ok && toast('Saved'));
   }, e ? () => { ldPost('/ledger/entry/delete', { id: e.id }); } : null);
+}
+/* ── Upload Uber report → Uber payouts into the ledger (parser in uber-report.js, shared with driver.html) ── */
+async function openUberImport(drvId) {
+  if (isViewer()) return;
+  const f = await UberReport.pickFile(); if (!f) return;
+  let rep; try { rep = UberReport.parse(f.text); } catch (e) { alert(e.message); return; }
+  const items = UberReport.plan(rep, LEDGER.entries), fresh = items.filter(i => !i.exists).length;
+  const sel = drvId || UberReport.guessDriver(rep, LEDGER.drivers);
+  document.getElementById('modal').innerHTML = `<h3>Uber report</h3>${UberReport.previewHtml(rep, items, LEDGER.drivers, sel)}
+    <div class="modal-actions"><div class="right"><button class="btn" onclick="closeModal()">${fresh ? 'Cancel' : 'Close'}</button>
+      ${fresh ? `<button class="btn primary" id="urGo">Add ${fresh} payout${fresh > 1 ? 's' : ''}</button>` : ''}</div></div>`;
+  document.getElementById('overlay').classList.add('open');
+  if (!fresh) return;
+  document.getElementById('urGo').onclick = async ev => {
+    const btn = ev.currentTarget, id = document.getElementById('urDriver').value;
+    if (!id) { toast('Choose the driver'); return; }
+    btn.disabled = true; btn.textContent = 'Adding…';
+    const post = async body => { const r = await cloudFetch('/ledger/entry', { method:'POST', body: JSON.stringify(body) }).catch(() => null); return !!(r && r.status < 400); };
+    const n = await UberReport.importNew(items, id, post);
+    closeModal(); await loadLedger();
+    toast(n === fresh ? 'Added ' + n + ' Uber payout' + (n > 1 ? 's' : '') : 'Added ' + n + ' of ' + fresh + ' — check internet and upload again');
+  };
 }
 async function openLdDriverForm(id) {
   const d = id ? ldDrv(id) : null;

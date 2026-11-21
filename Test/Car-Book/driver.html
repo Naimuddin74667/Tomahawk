@@ -123,6 +123,7 @@ body { font-family:var(--font-body); background:var(--bg); color:var(--text); fo
 </div>
 <div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
 
+<script src="uber-report.js"></script>
 <script>
 /* ── Drivers log in on the main page (mobile + PIN). This screen uses that login. ── */
 const WORKER_URL = 'https://mns-enterprises.naimuddinshaikh74667.workers.dev';
@@ -420,6 +421,7 @@ function renderLedger(tabs) {
         ${mgr ? `<div class="ld-acts"><button class="pay alt" onclick="openEntry('${drv.id}','credit')">+ Platform money</button>
             <button class="pay" onclick="openEntry('${drv.id}','cash')">+ Cash from ${esc(first)}</button></div>
           <div class="ld-links"><button class="more" onclick="openEntry('${drv.id}','waive')">Rent off day</button>
+            <button class="more" onclick="uberImport('${drv.id}')">⬆ Upload Uber report</button>
             <button class="more" onclick="shareLedger('${drv.id}')">Send on WhatsApp</button>
             <button class="more" onclick="driverLogin('${drv.id}')">${drv.hasLogin ? 'New PIN' : 'Send login'}</button>
             <button class="more" onclick="openLdDriver('${drv.id}')">Edit</button></div>`
@@ -548,6 +550,28 @@ async function deleteEntry(id) {
   closeSheet(); flash('Deleted'); loadData();
 }
 
+/* ── Upload Uber report → Uber payouts into the ledger (parser in uber-report.js, shared with index.html) ── */
+async function uberImport(drvId) {
+  if (!canEditLedger()) return;
+  const f = await UberReport.pickFile(); if (!f) return;
+  let rep; try { rep = UberReport.parse(f.text); } catch (e) { alert(e.message); return; }
+  const items = UberReport.plan(rep, L.entries), fresh = items.filter(i => !i.exists).length;
+  const sel = drvId || UberReport.guessDriver(rep, L.drivers);
+  sheet(`<h3>Uber report</h3>${UberReport.previewHtml(rep, items, L.drivers, sel)}
+    <div class="err" id="urErr"></div>
+    ${fresh ? `<button class="pay" id="urGo" style="margin-top:12px">Add ${fresh} payout${fresh > 1 ? 's' : ''}</button>` : ''}
+    <button class="more cf-cancel" onclick="closeSheet()">${fresh ? 'Cancel' : 'Close'}</button>`);
+  if (!fresh) return;
+  document.getElementById('urGo').onclick = async ev => {
+    const btn = ev.currentTarget, id = document.getElementById('urDriver').value;
+    if (!id) { document.getElementById('urErr').textContent = 'Choose the driver'; return; }
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Adding…';
+    const post = async body => { const r = await api('/ledger/entry', { method: 'POST', body: JSON.stringify(body) }).catch(() => null); return !!(r && r.ok); };
+    const n = await UberReport.importNew(items, id, post);
+    closeSheet(); await loadData();
+    flash(n === fresh ? '✓ Added ' + n + ' Uber payout' + (n > 1 ? 's' : '') : 'Added ' + n + ' of ' + fresh + ' — check internet and upload again');
+  };
+}
 /* Add / edit a driver under the manager */
 function openLdDriver(id) {
   const d = id ? ldDriver(id) : null;
