@@ -6,7 +6,7 @@
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, X-Tomahawk-Session',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Tomahawk-Session, X-Customer-Session',
   'Content-Type': 'application/json'
 };
 
@@ -1212,6 +1212,7 @@ const ACTION_TIERS = {
   drnLookup: 'public', // public 'Report a delivery issue' (DRN) — order no. + mobile/email must match, item list only, rate-limited
   walimaSave: 'public', walimaList: 'public', walimaDelete: 'public', // Test/walima invitation guest list — own password check inside handler (18-Nov-2026)
   ccDrnToWrn: 'manager_up', // Customer Care: delivery issue → warranty request
+  otpSend: 'public', otpVerify: 'public', custSession: 'public', custLogout: 'public', custOrders: 'public', // website customer login (19-Nov-2026) — own OTP/session checks + rate limits inside handleCustomerLogin
   orderCancel: 'public', // public 'Cancel order' on Track Order — order no. + mobile/email must match, only before courier pickup, rate-limited
   invoiceUploadInfo: 'public', invoiceUploadSubmit: 'public', // customer re-uploads the invoice — single-use link token, rate-limited
   ccAnalyticsData: 'viewer_read',  // Customer Care Analysis page (04-Nov-2026)
@@ -1987,6 +1988,11 @@ export default {
         const code = (url.searchParams.get('http') === '1' && !st.open) ? 423 : 200;
         return json(st, code);
       }
+
+      // ── WEBSITE CUSTOMER LOGIN — WhatsApp/email OTP, sessions, My Orders ──
+      await custFillFromSession(act, request, body, url, env);
+      const custResp = await handleCustomerLogin(act, request, body, env);
+      if (custResp) return custResp;
 
       // ── WALIMA INVITATION — guest list (walima* actions) ──
       const walimaResp = await handleWalima(act, body, url, env);
@@ -9475,7 +9481,7 @@ async function orderCancel(env, b) {
   } catch (e) { console.error('orderCancel team email failed', o.name, e.message); }
 
   return { ok: true, order: o.name, payment, amount,
-    message: 'Your order has been cancelled.' + (isCod ? '' : ' Your refund will be processed within 7 working days.') };
+    message: 'Your order has been cancelled.' + (isCod ? '' : ' Your refund will be processed within 7–10 working days.') };
 }
 
 async function orderTrack(env, orderRaw, phoneRaw) {
@@ -10464,16 +10470,26 @@ async function submitWarrantyClaim(env, b, ip) {
   //   > 30 days               → warranty claim already used → chargeable (SRN)
   let repeat = null;
   try { repeat = await srLastDelivery(env.DB, orderKey); } catch (e) { console.error('repeat check failed:', e.message); }
+  // Rule change (19-Nov-2026, Naimuddin): ONE free warranty claim per order.
+  // Any earlier warranty request on this order (repaired or not) → this one is a
+  // chargeable service request (SRN). The old 30-day "priority" exception is gone.
+  if (!repeat) {
+    try {
+      const prev = await env.DB.prepare(
+        "SELECT claim_id, created_at FROM warranty_claims WHERE order_key = ? AND COALESCE(request_type, '') <> 'DRN' AND (claim_id LIKE 'WRN-%' OR warranty_status = 'Under warranty') ORDER BY created_at DESC LIMIT 1"
+      ).bind(orderKey).first();
+      if (prev) repeat = { ref: prev.claim_id, at: String(prev.created_at || ''), ms: Date.now() };
+    } catch (e) { console.error('earlier-claim check failed:', e.message); }
+  }
   if (repeat) {
-    const days = (Date.now() - repeat.ms) / 864e5;
-    repeat.kind = days <= SR_REPEAT_DAYS ? 'priority' : 'used';
-    warrantyStatus = repeat.kind === 'priority' ? 'Under warranty' : 'Out of warranty';
+    repeat.kind = 'used';
+    warrantyStatus = 'Out of warranty';
   }
   const skus = w.found ? (w.items || []).map(it => it.sku + (it.qty > 1 ? ' x' + it.qty : '')).join(', ') : '';
   // Out-of-warranty charges agreement (website checkbox, field charges_consent: true).
   // Enforced only once the website sends it — turn on with Worker var REQUIRE_CHARGES_CONSENT = '1'.
   const chargesConsent = b.charges_consent === true;
-  if (warrantyStatus === 'Out of warranty' && !chargesConsent && env.REQUIRE_CHARGES_CONSENT === '1' && !repeat)
+  if (warrantyStatus === 'Out of warranty' && !chargesConsent && env.REQUIRE_CHARGES_CONSENT === '1')
     throw claimErr('Your product is out of warranty. Please tick that you agree to pay the pickup, delivery, service and spare-part charges.');
 
   // Claim ID: <prefix>-YYMMDD-NN (IST date, per-day serial per prefix).
@@ -10524,7 +10540,7 @@ async function submitWarrantyClaim(env, b, ip) {
         .bind(repeat.ref, repeat.kind, repeat.at, claimId).run();
       await srAddEvent(env.DB, claimId, { by: 'system', kind: 'note', note: repeat.kind === 'priority'
         ? 'REPEAT — HIGH PRIORITY: same order came back within ' + SR_REPEAT_DAYS + ' days of our delivery (' + repeat.ref + ', delivered ' + repeat.at.slice(0, 10) + ')'
-        : 'Warranty claim already used on this order (' + repeat.ref + ', delivered ' + repeat.at.slice(0, 10) + ') — chargeable service request' }, {});
+        : 'Warranty claim already used on this order (' + repeat.ref + ', ' + repeat.at.slice(0, 10) + ') — chargeable service request (one free claim per order)' }, {});
     } catch (e) { console.error('repeat mark failed:', e.message); }
   }
   if (chargesConsent) {
@@ -13264,6 +13280,396 @@ async function g4gpGetFull(DB, id) {
 }
 
 // Returns a Response for g4gp* actions, or null if the action isn't ours.
+// ══════════════════════════════════════════════════════════════════
+// CUSTOMER LOGIN — mobile-first OTP for tomahawk.tools (19-Nov-2026)
+// Used by /pages/login(-test) and /pages/my-orders(-test) on the website.
+//
+//   POST { action:'otpSend',   mobile:'98xxxxxxxx' }  or { email:'a@b.in' }
+//   POST { action:'otpVerify', mobile | email, code:'123456' }
+//        → { ok, token, expires_at, customer:{ mobile, email } }
+//   GET  ?action=custSession   (header X-Customer-Session: <token>)
+//   POST { action:'custLogout' } (same header)
+//   GET  ?action=custOrders    (same header) → the customer's website orders
+//
+// Codes: 6 digits, valid 10 min, stored only as a SHA-256 hash.
+// Limits: resend after 30 s · max 3 codes per mobile/email per 15 min ·
+//   max 20 codes per IP per hour · 5 wrong tries locks that mobile/email
+//   for 15 min. Replies never say whether an account exists.
+// Session: 30 days, in D1 cust_sessions (separate from staff tm_sessions).
+//
+// Sending:
+//   email  → Resend, from no-reply@tomahawk.tools (sendNoReplyEmail).
+//   mobile → WhatsApp via Zoho Desk (same number as support), template
+//            CUST_OTP_WA_TEMPLATE. Same route as the service-request WhatsApp:
+//            find/create Desk contact → write code to "Login Code" field →
+//            apply template → initiateSession → clear the field.
+//            Template body must use ${Contacts.Login Code}.
+//   Mode: Worker var CUST_OTP_WA_MODE = 'off' | 'test' (default — only
+//         SR_WA_TEST_PHONES get a WhatsApp) | 'live'.
+// ══════════════════════════════════════════════════════════════════
+const CUST_OTP_WA_TEMPLATE = 'tomahawk_login_otp';
+const CUST_OTP_TTL_MIN = 10;
+const CUST_OTP_RESEND_SEC = 30;
+const CUST_OTP_MAX_PER_15 = 3;
+const CUST_OTP_MAX_PER_IP_HR = 20;
+const CUST_OTP_MAX_TRIES = 5;
+const CUST_OTP_LOCK_MIN = 15;
+const CUST_SESSION_DAYS = 30;
+
+async function ensureCustLoginTables(DB) {
+  await DB.batch([
+    DB.prepare(`CREATE TABLE IF NOT EXISTS cust_otp (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ident TEXT NOT NULL,            -- 'm:9876543210' or 'e:name@mail.com'
+      code_hash TEXT NOT NULL,
+      created_at INTEGER NOT NULL,    -- ms
+      expires_at INTEGER NOT NULL,    -- ms
+      tries INTEGER DEFAULT 0,
+      used INTEGER DEFAULT 0,
+      ip TEXT,
+      sent_ok INTEGER DEFAULT 0,
+      send_note TEXT
+    )`),
+    DB.prepare('CREATE INDEX IF NOT EXISTS idx_cust_otp_ident ON cust_otp (ident, created_at)'),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS cust_otp_lock (ident TEXT PRIMARY KEY, until INTEGER NOT NULL)`),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS cust_sessions (
+      token_hash TEXT PRIMARY KEY,
+      mobile TEXT DEFAULT '',
+      email TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      expires_at TEXT NOT NULL,
+      last_seen TEXT
+    )`)
+  ]);
+}
+
+// mobile / email from the request body → { ident, mobile, email } or null
+function custIdent(b) {
+  const mobile = normPhone(b && b.mobile);
+  const email = String((b && b.email) || '').trim().toLowerCase();
+  if (mobile) return { ident: 'm:' + mobile, mobile, email: '' };
+  if (email && validEmail(email) && email.length <= 120) return { ident: 'e:' + email, mobile: '', email };
+  return null;
+}
+async function custCodeHash(env, ident, code) {
+  return sha256Hex((env.CUST_OTP_PEPPER || 'tomahawk-cust-otp') + '|' + ident + '|' + code);
+}
+function custOtpCode() {
+  // 6 digits, uniform (rejection sampling avoids modulo bias)
+  const buf = new Uint32Array(1);
+  let n;
+  do { crypto.getRandomValues(buf); n = buf[0]; } while (n >= 4294000000);
+  return String(n % 1000000).padStart(6, '0');
+}
+function custLockMsg(until, now) {
+  return { ok: false, status: 429, code: 'locked', retry_after: Math.ceil((until - now) / 1000),
+    error: 'Too many wrong codes. Please try again in ' + Math.ceil((until - now) / 60000) + ' minutes.' };
+}
+
+async function custOtpSend(env, b, ip) {
+  const id = custIdent(b);
+  if (!id) return { ok: false, status: 400, code: 'bad_input', error: b && b.email != null ? 'Enter a valid email address.' : 'Enter a valid 10-digit mobile number.' };
+  await ensureCustLoginTables(env.DB);
+  const now = Date.now();
+
+  const lock = await env.DB.prepare('SELECT until FROM cust_otp_lock WHERE ident = ?').bind(id.ident).first();
+  if (lock && lock.until > now) return custLockMsg(lock.until, now);
+  const last = await env.DB.prepare('SELECT created_at FROM cust_otp WHERE ident = ? ORDER BY created_at DESC LIMIT 1').bind(id.ident).first();
+  if (last && now - last.created_at < CUST_OTP_RESEND_SEC * 1000) {
+    const wait = Math.ceil((CUST_OTP_RESEND_SEC * 1000 - (now - last.created_at)) / 1000);
+    return { ok: false, status: 429, code: 'too_soon', retry_after: wait, error: 'Please wait ' + wait + ' seconds before asking for a new code.' };
+  }
+  const recent = await env.DB.prepare('SELECT COUNT(*) AS n FROM cust_otp WHERE ident = ? AND created_at > ?').bind(id.ident, now - 15 * 60000).first();
+  if (recent && recent.n >= CUST_OTP_MAX_PER_15) {
+    return { ok: false, status: 429, code: 'too_many', retry_after: 900, error: 'Too many codes asked. Please try again in 15 minutes.' };
+  }
+  const ipCount = await env.DB.prepare('SELECT COUNT(*) AS n FROM cust_otp WHERE ip = ? AND created_at > ?').bind(ip, now - 3600000).first();
+  if (ipCount && ipCount.n >= CUST_OTP_MAX_PER_IP_HR) {
+    return { ok: false, status: 429, code: 'too_many', retry_after: 3600, error: 'Too many codes asked from this connection. Please try again later.' };
+  }
+
+  const code = custOtpCode();
+  const ins = await env.DB.prepare('INSERT INTO cust_otp (ident, code_hash, created_at, expires_at, ip) VALUES (?, ?, ?, ?, ?)')
+    .bind(id.ident, await custCodeHash(env, id.ident, code), now, now + CUST_OTP_TTL_MIN * 60000, ip).run();
+  const rowId = ins.meta && ins.meta.last_row_id;
+
+  let sent = { sent: false, error: 'not sent' };
+  try {
+    sent = id.mobile ? await custSendWhatsAppOtp(env, id.mobile, code) : await custSendEmailOtp(env, id.email, code);
+  } catch (e) { sent = { sent: false, error: e.message }; }
+  await env.DB.prepare('UPDATE cust_otp SET sent_ok = ?, send_note = ? WHERE id = ?')
+    .bind(sent.sent ? 1 : 0, String(sent.error || sent.skipped || 'ok').slice(0, 300), rowId).run();
+  if (Math.random() < 0.05) await env.DB.prepare('DELETE FROM cust_otp WHERE created_at < ?').bind(now - 2 * 86400000).run();
+
+  if (!sent.sent) {
+    console.error('otpSend failed', id.ident.slice(0, 2), sent.error || sent.skipped);
+    return { ok: false, status: 503, code: 'send_failed',
+      error: id.mobile ? "We couldn't send the code on WhatsApp right now. Please try email instead, or try again in a few minutes."
+                       : "We couldn't send the code to your email right now. Please try again in a few minutes." };
+  }
+  return { ok: true, channel: id.mobile ? 'whatsapp' : 'email', expires_in: CUST_OTP_TTL_MIN * 60, resend_after: CUST_OTP_RESEND_SEC };
+}
+
+async function custOtpVerify(env, b) {
+  const id = custIdent(b);
+  const code = String((b && b.code) || '').replace(/\D/g, '');
+  if (!id || code.length !== 6) return { ok: false, status: 400, code: 'bad_input', error: 'Enter the 6-digit code.' };
+  await ensureCustLoginTables(env.DB);
+  const now = Date.now();
+  const lock = await env.DB.prepare('SELECT until FROM cust_otp_lock WHERE ident = ?').bind(id.ident).first();
+  if (lock && lock.until > now) return custLockMsg(lock.until, now);
+  const row = await env.DB.prepare('SELECT * FROM cust_otp WHERE ident = ? AND used = 0 AND sent_ok = 1 ORDER BY created_at DESC LIMIT 1').bind(id.ident).first();
+  if (!row || row.expires_at < now) return { ok: false, status: 400, code: 'expired', error: 'This code has expired. Please ask for a new one.' };
+
+  if ((await custCodeHash(env, id.ident, code)) !== row.code_hash) {
+    const tries = (row.tries || 0) + 1;
+    await env.DB.prepare('UPDATE cust_otp SET tries = ? WHERE id = ?').bind(tries, row.id).run();
+    if (tries >= CUST_OTP_MAX_TRIES) {
+      await env.DB.batch([
+        env.DB.prepare('UPDATE cust_otp SET used = 1 WHERE ident = ? AND used = 0').bind(id.ident),
+        env.DB.prepare('INSERT INTO cust_otp_lock (ident, until) VALUES (?, ?) ON CONFLICT(ident) DO UPDATE SET until = excluded.until')
+          .bind(id.ident, now + CUST_OTP_LOCK_MIN * 60000)
+      ]);
+      return custLockMsg(now + CUST_OTP_LOCK_MIN * 60000, now);
+    }
+    return { ok: false, status: 400, code: 'wrong_code', tries_left: CUST_OTP_MAX_TRIES - tries, error: 'That code is not right. ' + (CUST_OTP_MAX_TRIES - tries) + ' tries left.' };
+  }
+
+  // Single use: only the request that flips used 0 → 1 gets a session
+  const claim = await env.DB.prepare('UPDATE cust_otp SET used = 1 WHERE id = ? AND used = 0').bind(row.id).run();
+  if (!claim.meta || !claim.meta.changes) return { ok: false, status: 400, code: 'expired', error: 'This code has already been used. Please ask for a new one.' };
+  await env.DB.prepare('DELETE FROM cust_otp_lock WHERE ident = ?').bind(id.ident).run();
+
+  const token = genToken();
+  const expires = new Date(now + CUST_SESSION_DAYS * 86400000).toISOString();
+  await env.DB.prepare("INSERT INTO cust_sessions (token_hash, mobile, email, expires_at, last_seen) VALUES (?, ?, ?, ?, datetime('now'))")
+    .bind(await sha256Hex(token), id.mobile, id.email, expires).run();
+  return { ok: true, token, expires_at: expires, customer: { mobile: id.mobile, email: id.email } };
+}
+
+// X-Customer-Session header (or ?cs=) → { mobile, email, token_hash } or null
+async function custResolveSession(request, env) {
+  let token = request.headers.get('X-Customer-Session') || new URL(request.url).searchParams.get('cs') || '';
+  token = String(token).trim();
+  if (!/^[a-f0-9]{64}$/.test(token)) return null;
+  await ensureCustLoginTables(env.DB);
+  const th = await sha256Hex(token);
+  const s = await env.DB.prepare('SELECT * FROM cust_sessions WHERE token_hash = ?').bind(th).first();
+  if (!s) return null;
+  if (new Date(s.expires_at).getTime() < Date.now()) {
+    await env.DB.prepare('DELETE FROM cust_sessions WHERE token_hash = ?').bind(th).run();
+    return null;
+  }
+  if (Math.random() < 0.1) await env.DB.prepare("UPDATE cust_sessions SET last_seen = datetime('now') WHERE token_hash = ?").bind(th).run();
+  return { mobile: s.mobile || '', email: s.email || '', token_hash: th, expires_at: s.expires_at };
+}
+
+// The customer's website orders: matched by the mobile OR email they logged in with.
+// Email → Shopify order search. Mobile → Shopify customer search (needs read_customers);
+// plus a scan of the latest 250 orders' phone fields for guest checkouts.
+async function custOrders(env, cust) {
+  if (!shopifyConfigured(env)) return { ok: false, status: 503, code: 'not_configured', error: 'Orders are not available right now.' };
+  const FIELDS = `id name createdAt cancelledAt email phone displayFinancialStatus displayFulfillmentStatus paymentGatewayNames
+    totalPriceSet { shopMoney { amount } }
+    shippingAddress { phone } billingAddress { phone }
+    lineItems(first: 20) { nodes { title variantTitle quantity sku image { url(transform: { maxWidth: 200 }) } } }
+    fulfillments(first: 5) { status trackingInfo(first: 1) { company number url } }`;
+  const found = new Map();
+  const add = list => (list || []).forEach(o => { if (o && o.id) found.set(o.id, o); });
+  const notes = [];
+  const trusted = new Set();   // orders of the Shopify customer whose phone matched
+
+  if (cust.email) {
+    const d = await shopifyGql(env, `query($q: String!) { orders(first: 50, sortKey: CREATED_AT, reverse: true, query: $q) { nodes { ${FIELDS} } } }`,
+      { q: 'email:' + JSON.stringify(cust.email) });
+    add(d && d.orders && d.orders.nodes);
+  }
+  if (cust.mobile) {
+    let viaCustomers = false;
+    try {
+      const d = await shopifyGql(env, `query($q: String!) { customers(first: 5, query: $q) { nodes { id phone
+        orders(first: 50, sortKey: CREATED_AT, reverse: true) { nodes { ${FIELDS} } } } } }`, { q: 'phone:+91' + cust.mobile });
+      ((d && d.customers && d.customers.nodes) || [])
+        .filter(c => normPhone(c.phone) === cust.mobile)
+        .forEach(c => ((c.orders && c.orders.nodes) || []).forEach(o => { trusted.add(o.id); add([o]); }));
+      viaCustomers = true;
+    } catch (e) { notes.push('customer search unavailable: ' + e.message.slice(0, 120)); }
+    // Guest checkouts (and stores without read_customers): match the phone on recent orders
+    const d2 = await shopifyGql(env, `{ orders(first: 250, sortKey: CREATED_AT, reverse: true) { nodes { ${FIELDS} } } }`);
+    add(((d2 && d2.orders && d2.orders.nodes) || []).filter(o =>
+      [o.phone, o.shippingAddress && o.shippingAddress.phone, o.billingAddress && o.billingAddress.phone].map(normPhone).includes(cust.mobile)));
+    if (!viaCustomers) notes.push('mobile matched on the latest 250 orders only');
+  }
+
+  // Safety net: keep only orders whose email / phone really match this login
+  const ok = o => trusted.has(o.id) || (cust.email && String(o.email || '').toLowerCase() === cust.email) ||
+    (cust.mobile && [o.phone, o.shippingAddress && o.shippingAddress.phone, o.billingAddress && o.billingAddress.phone].map(normPhone).includes(cust.mobile));
+  const orders = [...found.values()]
+    .filter(ok)
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+    .map(o => {
+      const amount = Number(o.totalPriceSet && o.totalPriceSet.shopMoney && o.totalPriceSet.shopMoney.amount) || 0;
+      const live = (o.fulfillments || []).filter(f => String(f.status || '').toUpperCase() !== 'CANCELLED');
+      const t = live[0] && (live[0].trackingInfo || [])[0];
+      return {
+        order: o.name, number: String(o.name).replace(/\D/g, ''), created_at: o.createdAt,
+        cancelled: !!o.cancelledAt, amount, foc: amount === 0,
+        payment: (o.paymentGatewayNames || []).some(g => /cod|cash on delivery/i.test(g)) ? 'cod' : 'prepaid',
+        financial_status: o.displayFinancialStatus, fulfillment_status: o.displayFulfillmentStatus,
+        shipped: live.length > 0,
+        courier: t ? t.company || '' : '', awb: t ? t.number || '' : '', track_url: t ? t.url || '' : '',
+        items: ((o.lineItems && o.lineItems.nodes) || []).map(li => ({ title: li.title, variant: li.variantTitle || '', qty: li.quantity, sku: li.sku || '', image: (li.image && li.image.url) || '' }))
+      };
+    });
+  return { ok: true, customer: { mobile: cust.mobile, email: cust.email }, orders, ...(notes.length ? { notes } : {}) };
+}
+
+async function custSendEmailOtp(env, email, code) {
+  const text = [
+    code + ' is your Tomahawk login code.', '',
+    'It is valid for ' + CUST_OTP_TTL_MIN + ' minutes. Do not share it with anyone — Tomahawk will never ask for it.', '',
+    "If you didn't try to log in, you can ignore this email.", '', '— Tomahawk Tools · tomahawk.tools'
+  ].join('\n');
+  const html = '<div style="font-family:Arial,sans-serif;font-size:15px;color:#222">' +
+    '<p>Your Tomahawk login code is</p><p style="font-size:30px;font-weight:700;letter-spacing:6px;margin:8px 0 16px">' + code + '</p>' +
+    '<p>It is valid for ' + CUST_OTP_TTL_MIN + ' minutes. Do not share it with anyone — Tomahawk will never ask for it.</p>' +
+    '<p style="color:#777">If you didn\'t try to log in, you can ignore this email.</p><p style="color:#777">— Tomahawk Tools · tomahawk.tools</p></div>';
+  await sendNoReplyEmail(env, { to: email, subject: code + ' is your Tomahawk login code', text, html });
+  return { sent: true };
+}
+
+// Finds the OTP template's ID in Zoho Desk (cached in tm_settings).
+async function custOtpTemplateId(env, cfg, force) {
+  const KEY = 'zoho_desk_otp_template';
+  if (!force) {
+    const row = await env.DB.prepare('SELECT value FROM tm_settings WHERE key = ?').bind(KEY).first();
+    if (row && row.value) return row.value;
+  }
+  for (const type of ['TEMPLATE', 'TEMPLATE_MESSAGE', 'WHATSAPP_TEMPLATE', 'CANNED', 'CANNED_MESSAGE']) {
+    for (let page = 0, from = 0; page < 6; page++, from += 50) {
+      const tp = await zdCall(env, 'GET', '/im/cannedMessages', { orgId: cfg.orgId,
+        query: { departmentId: String(cfg.departmentId || ''), type, from: String(from), limit: '50' } });
+      const list = (tp.json && tp.json.data) || [];
+      const hit = list.find(t => Object.values(t).some(v => typeof v === 'string' && v.trim().toLowerCase() === CUST_OTP_WA_TEMPLATE));
+      if (hit) {
+        await env.DB.prepare("INSERT INTO tm_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+          .bind(KEY, String(hit.id)).run();
+        return String(hit.id);
+      }
+      if (!tp.ok || list.length < 50) break;
+    }
+  }
+  throw new Error('template "' + CUST_OTP_WA_TEMPLATE + '" not found in Zoho Desk (not created / not approved yet?)');
+}
+
+async function custSendWhatsAppOtp(env, mobile, code) {
+  const mode = String(env.CUST_OTP_WA_MODE || 'test').toLowerCase();
+  if (mode === 'off') return { sent: false, skipped: 'whatsapp off' };
+  if (mode !== 'live' && SR_WA_TEST_PHONES.indexOf(mobile) === -1) return { sent: false, skipped: 'test mode' };
+  const logId = 'OTP:…' + mobile.slice(-4);     // never log the full number or the code
+  const mask = s => String(s).split(code).join('******');
+  let step = 'setup', contactId = null, kCode = null, orgId = null;
+  const trace = {};
+  try {
+    const cfg = await zdWaSetup(env);
+    orgId = cfg.orgId;
+    const templateId = await custOtpTemplateId(env, cfg);
+    step = 'contact';
+    const contact = await zdFindOrCreateContact(env, orgId, { phone: mobile, name: '' });
+    contactId = contact.id;
+    step = 'field';
+    const full = await zdCall(env, 'GET', '/contacts/' + contactId, { orgId });
+    const keys = Object.keys((full.json && full.json.cf) || {});
+    kCode = keys.find(k => /login.?code|otp/i.test(k));
+    if (!kCode) throw new Error('contact custom field "Login Code" not found (cf keys: ' + keys.join(', ') + ')');
+    const upd = await zdCall(env, 'PATCH', '/contacts/' + contactId, { orgId, body: { cf: { [kCode]: code } } });
+    if (!upd.ok) throw new Error('contact update ' + upd.status);
+    step = 'apply';
+    const ap = await zdCall(env, 'POST', '/im/cannedMessages/' + templateId + '/apply', { orgId, query: { contactId: String(contactId), language: 'en' } });
+    if (!ap.ok) throw new Error('apply ' + ap.status + ': ' + JSON.stringify(ap.json).slice(0, 200));
+    // Any placeholder left (Zoho sometimes returns the raw template) → the code
+    const message = String(ap.json.message || ap.json.displayMessage || '').replace(/\$\{[^}]+\}|\{\{\s*1\s*\}\}/g, code);
+    if (!message || message.indexOf(code) === -1) throw new Error('apply returned no usable message text');
+    step = 'send';
+    const id = String(templateId);
+    // Copy-code button: Meta wants the code as the button value too → try urlMessage = code first.
+    const variants = [{ tag: 'num-id+btn', numeric: true, btn: true }, { tag: 'str-id+btn', numeric: false, btn: true }, { tag: 'num-id', numeric: true, btn: false }];
+    let sent = null;
+    trace.sendTries = [];
+    for (const v of variants) {
+      const body = { receiverId: '+91' + mobile, receiverType: 'PHONENUMBER', cannedMessageId: id, language: 'en', message };
+      if (v.btn) body.urlMessage = code;
+      const raw = JSON.stringify(body);
+      const rawBody = v.numeric ? raw.replace('"cannedMessageId":"' + id + '"', '"cannedMessageId":' + id) : raw;
+      sent = await zdCall(env, 'POST', '/im/channels/' + cfg.channelId + '/initiateSession', { orgId, rawBody });
+      trace.sendTries.push({ tag: v.tag, status: sent.status, reply: mask(JSON.stringify(sent.json).slice(0, 200)) });
+      if (sent.ok) { trace.winner = v.tag; break; }
+    }
+    if (!sent.ok) throw new Error('initiateSession ' + sent.status);
+    await srWaLog(env, logId, true, 'otp-sent', JSON.stringify(trace));
+    return { sent: true };
+  } catch (e) {
+    await srWaLog(env, logId, false, 'otp-' + step, mask(e.message) + ' | ' + JSON.stringify(trace));
+    return { sent: false, error: step + ': ' + mask(e.message) };
+  } finally {
+    // Don't leave the code sitting on the Desk contact
+    if (contactId && kCode && orgId) {
+      try { await zdCall(env, 'PATCH', '/contacts/' + contactId, { orgId, body: { cf: { [kCode]: '' } } }); } catch (e) { /* best effort */ }
+    }
+  }
+}
+
+// Logged-in customers skip the "enter your mobile" step (19-Nov-2026): on these
+// public actions a valid X-Customer-Session fills in the verified mobile/email,
+// so the existing "order phone must match" checks work unchanged. A mobile
+// login always overrides whatever phone the page sent (it's locked on screen).
+const CUST_SESSION_FILL = new Set(['drnLookup', 'warrantyClaimSubmit', 'warrantyRegister', 'orderCancel', 'orderTrack']);
+async function custFillFromSession(act, request, body, url, env) {
+  if (!CUST_SESSION_FILL.has(act)) return;
+  if (!request.headers.get('X-Customer-Session')) return;
+  const c = await custResolveSession(request, env);
+  if (!c) return;
+  if (body) {
+    if (c.mobile) body.phone = c.mobile;
+    if (c.email && !body.email) body.email = c.email;
+    body._cust_login = true;
+  } else if (url && c.mobile) {
+    url.searchParams.set('phone', c.mobile);   // GET orderTrack
+  }
+}
+
+// Router for the customer-login actions. Returns a Response, or null if not ours.
+async function handleCustomerLogin(act, request, body, env) {
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const send = r => json(r, r.ok ? 200 : (r.status || 400));
+  try {
+    if (request.method === 'POST' && act === 'otpSend') return send(await custOtpSend(env, body || {}, ip));
+    if (request.method === 'POST' && act === 'otpVerify') {
+      if (!(await warrantyRateOk(env.DB, 'otpv:' + ip, 60))) return json({ ok: false, code: 'rate_limited', error: 'Too many tries — please try again in an hour.' }, 429);
+      return send(await custOtpVerify(env, body || {}));
+    }
+    if (act === 'custSession') {
+      const c = await custResolveSession(request, env);
+      return c ? json({ ok: true, customer: { mobile: c.mobile, email: c.email }, expires_at: c.expires_at }) : json({ ok: false, code: 'no_session', error: 'Please log in.' }, 401);
+    }
+    if (request.method === 'POST' && act === 'custLogout') {
+      const c = await custResolveSession(request, env);
+      if (c) await env.DB.prepare('DELETE FROM cust_sessions WHERE token_hash = ?').bind(c.token_hash).run();
+      return json({ ok: true });
+    }
+    if (act === 'custOrders') {
+      const c = await custResolveSession(request, env);
+      if (!c) return json({ ok: false, code: 'no_session', error: 'Please log in.' }, 401);
+      if (!(await warrantyRateOk(env.DB, 'corders:' + ip, 120))) return json({ ok: false, code: 'rate_limited', error: 'Too many requests — please try again later.' }, 429);
+      return send(await custOrders(env, c));
+    }
+  } catch (e) {
+    console.error('customer login', act, e.message);
+    return json({ ok: false, code: 'error', error: 'Something went wrong — please try again.' }, 500);
+  }
+  return null;
+}
+
 async function handleG4Gatepass(act, body, url, env, user) {
   if (!act || act.indexOf('g4gp') !== 0) return null;
   await ensureG4GpTables(env.DB);
