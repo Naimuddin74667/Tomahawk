@@ -2032,8 +2032,10 @@ function ledgerHtml() {
       </div>
       ${Object.keys(byPlat).length ? `<div class="muted" style="font-size:12px;margin:-4px 0 10px">${Object.keys(byPlat).sort().map(p => esc(p) + ' ' + inr2(byPlat[p])).join(' · ')}</div>` : ''}
       <div class="btn-row" style="margin-bottom:8px"><button class="btn sm ${view === 'days' ? 'primary' : ''}" onclick="setLdView('${drv.id}','days')">Day-wise</button>
-        <button class="btn sm ${view === 'entries' ? 'primary' : ''}" onclick="setLdView('${drv.id}','entries')">Month-wise entries</button></div>
-      ${view === 'entries' ? ldMonthHtml(drv, days, es, edit) : `
+        <button class="btn sm ${view === 'entries' ? 'primary' : ''}" onclick="setLdView('${drv.id}','entries')">Month-wise entries</button>
+        <button class="btn sm ${view === 'uber' ? 'primary' : ''}" onclick="setLdView('${drv.id}','uber')">Uber</button></div>
+      ${view === 'uber' ? UberReport.viewHtml(drv.id, (LEDGER.uber || []).filter(r => r.driverId === drv.id), redrawLedger)
+      : view === 'entries' ? ldMonthHtml(drv, days, es, edit) : `
       <table><thead><tr><th>Day</th><th class="num">Rent</th><th class="num">Platform</th><th class="num">Cash</th><th class="num">Balance</th></tr></thead><tbody>
         ${shown.map(d => `<tr ${edit ? `style="cursor:pointer" onclick="openLdDay('${drv.id}','${d.date}')"` : ''}><td style="white-space:nowrap">${fmtShort(d.date)}</td><td class="num">${d.waive && !d.rent ? 'off' : inr2(d.rent)}</td><td class="num">${d.credit ? inr2(d.credit) : '—'}</td>
           <td class="num">${d.cash ? inr2(d.cash) : '—'}</td><td class="num ${d.bal > 0.004 ? 'neg' : d.bal < -0.004 ? 'pos' : ''}"><b>${inr2(d.bal)}</b></td></tr>`).join('')}
@@ -2131,18 +2133,18 @@ async function openUberImport(drvId) {
   const items = UberReport.plan(rep, LEDGER.entries), fresh = items.filter(i => !i.exists).length;
   const sel = drvId || UberReport.guessDriver(rep, LEDGER.drivers);
   document.getElementById('modal').innerHTML = `<h3>Uber report</h3>${UberReport.previewHtml(rep, items, LEDGER.drivers, sel)}
-    <div class="modal-actions"><div class="right"><button class="btn" onclick="closeModal()">${fresh ? 'Cancel' : 'Close'}</button>
-      ${fresh ? `<button class="btn primary" id="urGo">Add ${fresh} payout${fresh > 1 ? 's' : ''}</button>` : ''}</div></div>`;
+    <div class="modal-actions"><div class="right"><button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn primary" id="urGo">${fresh ? 'Add ' + fresh + ' payout' + (fresh > 1 ? 's' : '') + ' + save trips' : 'Save trips'}</button></div></div>`;
   document.getElementById('overlay').classList.add('open');
-  if (!fresh) return;
   document.getElementById('urGo').onclick = async ev => {
     const btn = ev.currentTarget, id = document.getElementById('urDriver').value;
     if (!id) { toast('Choose the driver'); return; }
-    btn.disabled = true; btn.textContent = 'Adding…';
-    const post = async body => { const r = await cloudFetch('/ledger/entry', { method:'POST', body: JSON.stringify(body) }).catch(() => null); return !!(r && r.status < 400); };
-    const n = await UberReport.importNew(items, id, post);
-    closeModal(); await loadLedger();
-    toast(n === fresh ? 'Added ' + n + ' Uber payout' + (n > 1 ? 's' : '') : 'Added ' + n + ' of ' + fresh + ' — check internet and upload again');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    const call = async (path, body) => { const r = await cloudFetch(path, { method:'POST', body: JSON.stringify(body) }).catch(() => null); return r ? { ok: r.status < 400, status: r.status, body: r.body } : null; };
+    const saved = await UberReport.saveRows(rep, id, call);
+    const n = await UberReport.importNew(items, id, async body => !!(await call('/ledger/entry', body) || {}).ok);
+    closeModal(); ledgerView[id] = 'uber'; await loadLedger();
+    toast((fresh ? 'Payouts added ' + n + '/' + fresh + ' · ' : '') + (saved.ok ? saved.added + ' new Uber rows saved' : 'Trips not saved — update the worker in Cloudflare'));
   };
 }
 async function openLdDriverForm(id) {

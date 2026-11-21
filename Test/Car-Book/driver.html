@@ -61,7 +61,7 @@ body { font-family:var(--font-body); background:var(--bg); color:var(--text); fo
 .badge { display:inline-block; padding:3px 9px; border-radius:20px; font-size:11px; font-weight:700; }
 .b-paid { background:var(--green-soft); color:var(--green); } .b-due { background:var(--red-soft); color:var(--red); }
 .b-part { background:var(--accent-soft); color:var(--accent); } .b-off { background:var(--surface2); color:var(--text2); }
-.tabs { display:grid; grid-template-columns:1fr 1fr; gap:6px; background:var(--surface2); padding:4px; border-radius:12px; margin-top:14px; }
+.tabs { display:grid; grid-auto-flow:column; grid-auto-columns:1fr; gap:6px; background:var(--surface2); padding:4px; border-radius:12px; margin-top:14px; }
 .tabs button { border:0; background:none; padding:10px; border-radius:9px; font-family:inherit; font-weight:600; font-size:14px; color:var(--text2); }
 .tabs button.on { background:var(--surface); color:var(--text); box-shadow:0 1px 2px rgba(0,0,0,.06); }
 .more { background:none; border:0; color:var(--accent); font-weight:600; font-size:14px; padding:12px 0 2px; font-family:inherit; }
@@ -428,8 +428,10 @@ function renderLedger(tabs) {
           : `<div class="note">Platform money = what Uber/Ola/Rapido sent to the manager's bank for your trips.</div>`}
       </div>
       <div class="tabs"><button class="${ldTab === 'days' ? 'on' : ''}" onclick="ldTab='days';render()">Day-wise</button>
-        <button class="${ldTab === 'entries' ? 'on' : ''}" onclick="ldTab='entries';render()">Entries</button></div>
-      <div class="card">${ldTab === 'days'
+        <button class="${ldTab === 'entries' ? 'on' : ''}" onclick="ldTab='entries';render()">Entries</button>
+        <button class="${ldTab === 'uber' ? 'on' : ''}" onclick="ldTab='uber';render()">Uber</button></div>
+      <div class="card">${ldTab === 'uber' ? UberReport.viewHtml(drv.id, (L.uber || []).filter(r => r.driverId === drv.id), render)
+        : ldTab === 'days'
         ? `<table class="dtable"><thead><tr><th>Day</th><th>Rent</th><th>Online</th><th>Cash</th><th>Balance</th></tr></thead><tbody>
             ${shown.map(d => `<tr${mgr ? ` class="click" onclick="openDay('${drv.id}','${d.date}')"` : ''}><td>${fmtShort(d.date)}</td>
               <td${d.rent ? '' : ' class="z"'}>${d.waive && !d.rent ? 'off' : inr2(d.rent)}</td>
@@ -559,17 +561,17 @@ async function uberImport(drvId) {
   const sel = drvId || UberReport.guessDriver(rep, L.drivers);
   sheet(`<h3>Uber report</h3>${UberReport.previewHtml(rep, items, L.drivers, sel)}
     <div class="err" id="urErr"></div>
-    ${fresh ? `<button class="pay" id="urGo" style="margin-top:12px">Add ${fresh} payout${fresh > 1 ? 's' : ''}</button>` : ''}
-    <button class="more cf-cancel" onclick="closeSheet()">${fresh ? 'Cancel' : 'Close'}</button>`);
-  if (!fresh) return;
+    <button class="pay" id="urGo" style="margin-top:12px">${fresh ? 'Add ' + fresh + ' payout' + (fresh > 1 ? 's' : '') + ' + save trips' : 'Save trips'}</button>
+    <button class="more cf-cancel" onclick="closeSheet()">Cancel</button>`);
   document.getElementById('urGo').onclick = async ev => {
     const btn = ev.currentTarget, id = document.getElementById('urDriver').value;
     if (!id) { document.getElementById('urErr').textContent = 'Choose the driver'; return; }
-    btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Adding…';
-    const post = async body => { const r = await api('/ledger/entry', { method: 'POST', body: JSON.stringify(body) }).catch(() => null); return !!(r && r.ok); };
-    const n = await UberReport.importNew(items, id, post);
-    closeSheet(); await loadData();
-    flash(n === fresh ? '✓ Added ' + n + ' Uber payout' + (n > 1 ? 's' : '') : 'Added ' + n + ' of ' + fresh + ' — check internet and upload again');
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Saving…';
+    const call = (path, body) => api(path, { method: 'POST', body: JSON.stringify(body) }).catch(() => null);
+    const saved = await UberReport.saveRows(rep, id, call);
+    const n = await UberReport.importNew(items, id, async body => !!(await call('/ledger/entry', body) || {}).ok);
+    closeSheet(); ldTab = 'uber'; await loadData();
+    flash((fresh ? '✓ Payouts ' + n + '/' + fresh + ' · ' : '✓ ') + (saved.ok ? saved.added + ' new Uber rows saved' : 'trips not saved — ask the owner to update the server'));
   };
 }
 /* Add / edit a driver under the manager */

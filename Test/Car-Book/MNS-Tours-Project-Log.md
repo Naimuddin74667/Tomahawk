@@ -237,3 +237,13 @@ It is built for phones, since about 99% of use is on a phone. It has its own lig
 - Payout rows have no driver; import goes to the driver whose trips are in the file (one ledger driver → him; otherwise matched by first name; else "choose").
 - Wrong report type → clear message. No worker change. Service worker cache → `mns-tours-v10`.
 - First file (16–28 Oct): 63 trips, ₹29,268 earnings, ₹23,457 cash with driver, ₹2,122 Drive Pass, payouts ₹2,930.09 (19, 20, 21 Oct already in ledger; 26 Oct ₹2,124.33 new).
+
+## 11. Uber tab — all trips, cash, tolls, Drive Pass in one place (22 Nov 2026)
+
+**Goal (owner):** Siddique sees all his Uber transactions — cash collected, tolls, Drive Pass fees, Uber payouts to Naushad's bank — and what he still has to pay Naushad. Uber payouts go to **Naushad's** bank (confirmed 22 Nov), so the ledger balance stays "Siddique owes Naushad" = ₹600/day − Uber → bank − cash given.
+
+- Upload (owner ⬆ Uber report / Naushad ⬆ Upload Uber report) now saves **every row** of the Payments Transaction report (trip, Drive Pass, payout) for the chosen driver, plus adds new payouts to the ledger as before. Button: "Add N payouts + save trips" or "Save trips".
+- **Worker:** table `uber_txns` (id = Uber transaction UUID, driver_id, date, time, kind trip/pass/payout, trip_id, descr, paid, earnings, fare, tip, toll, cash, pass, payout, uploaded_by, created_at). `POST /ledger/uber {driverId, rows}` (owner/manager, own drivers; INSERT OR IGNORE → re-upload safe). `GET /ledger` returns `uber` (last 180 days, same visibility as ledger: driver sees only his own).
+- **Uber tab** (Driver ledger: Day-wise · Entries/Month-wise · **Uber**) in index.html and driver.html (Siddique + Naushad): month nav, totals (trips, fare earned, cash he collected, tolls, Drive Pass fees, Uber → bank), day table; tap a day → its trips (time, cash/online, fare, +tip, cash, toll). Renderer `UberReport.viewHtml` in uber-report.js.
+- Fleet Hub reports are limited to **32 days** each → upload month by month. Generated in Fleet Hub on 22 Nov: Payments Transaction 1–21 Nov (Payments Driver 21 Oct–21 Nov not confirmed).
+- driver.html `.tabs` now fit any number of tabs. SW cache `mns-tours-v12`. **Worker must be pasted into Cloudflare again.**

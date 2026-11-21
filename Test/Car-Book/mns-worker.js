@@ -47,6 +47,11 @@
      POST   /ledger/login    {driverId}    owner, manager → new PIN for that driver's login
    GET /state also returns the claims still waiting, so the owner app can ask "Received?".
 
+   Uber trips & payments (from the Fleet Hub "Payments Transaction" report, uploaded in the app)
+     POST   /ledger/uber     {driverId, rows:[{id, date, time, kind, tripId, desc, paid, earnings, fare, tip, toll, cash, pass, payout}]}
+                             owner, manager — rows already saved (same Uber transaction id) are skipped
+     GET /ledger also returns  uber: [...]  — the last 180 days, only for the drivers that login may see
+
    Uber API connection (owner only) — Client ID + Secret from developer.uber.com
      The secret stays in D1 and is never sent back to the app (only its last 4 characters).
      GET    /integrations/uber             → {clientId, hasSecret, secretEnd, scopes, updatedAt, lastTest…}
@@ -104,6 +109,10 @@ async function setupTables(DB) {
                'access_token TEXT, token_expires TEXT, updated_at TEXT, last_test_at TEXT, last_test_ok INTEGER, last_test_msg TEXT)'),
     DB.prepare('CREATE TABLE IF NOT EXISTS ld_drivers (id TEXT PRIMARY KEY, name TEXT NOT NULL, mobile TEXT, rent REAL NOT NULL, ' +
                'start_date TEXT NOT NULL, end_date TEXT, manager_mobile TEXT, created_at TEXT)'),
+    // One row per Uber transaction (trip, Drive Pass fee, bank payout), keyed by Uber's own transaction id
+    DB.prepare('CREATE TABLE IF NOT EXISTS uber_txns (id TEXT PRIMARY KEY, driver_id TEXT NOT NULL, date TEXT NOT NULL, time TEXT, kind TEXT NOT NULL, ' +
+               'trip_id TEXT, descr TEXT, paid REAL, earnings REAL, fare REAL, tip REAL, toll REAL, cash REAL, pass REAL, payout REAL, ' +
+               'uploaded_by TEXT, created_at TEXT)'),
     DB.prepare('CREATE TABLE IF NOT EXISTS ld_entries (id TEXT PRIMARY KEY, driver_id TEXT NOT NULL, date TEXT NOT NULL, kind TEXT NOT NULL, ' +
                'platform TEXT, amount REAL NOT NULL, note TEXT, created_by TEXT, created_at TEXT, deleted INTEGER DEFAULT 0)'),
   ]);
@@ -477,7 +486,11 @@ export default {
           const r = await row(), st = r ? (JSON.parse(r.data).settings || {}) : {};
           const platforms = Array.isArray(st.platforms) && st.platforms.length ? st.platforms : DEFAULT_PLATFORMS;
           const users = canEdit ? ((await DB.prepare("SELECT mobile, driver_id AS driverId FROM users WHERE role = 'driver'").all()).results || []) : [];
-          return json({ role: me.role, platforms,
+          const since = new Date(Date.now() - 180 * 864e5).toISOString().slice(0, 10);
+          const uber = ids.length ? ((await DB.prepare('SELECT id, driver_id AS driverId, date, time, kind, trip_id AS tripId, descr AS "desc", paid, earnings, fare, tip, toll, cash, pass, payout ' +
+            'FROM uber_txns WHERE date >= ?1 AND driver_id IN (' + ids.map((_, i) => '?' + (i + 2)).join(',') + ') ORDER BY date, time')
+            .bind(since, ...ids).all()).results || []) : [];
+          return json({ role: me.role, platforms, uber,
             drivers: drivers.map(d => ({ id: d.id, name: d.name, mobile: d.mobile || '', rent: d.rent, startDate: d.start_date, endDate: d.end_date || '',
               managerMobile: d.manager_mobile || '', hasLogin: users.some(u => u.driverId === d.id) })),
             entries });
@@ -521,6 +534,21 @@ export default {
           await DB.prepare('INSERT INTO ld_entries (id, driver_id, date, kind, platform, amount, note, created_by, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)')
             .bind(id, String(body.driverId), body.date, kind, platform, amount, note, me.name || me.mobile, now()).run();
           return json({ ok: true, id });
+        }
+
+        if (path === '/ledger/uber' && req.method === 'POST') {           // save Uber report rows for one driver
+          if (!await ownDriver(String(body.driverId || ''))) return notAllowed();
+          const rows = Array.isArray(body.rows) ? body.rows.slice(0, 3000) : [];
+          const KINDS_U = ['trip', 'pass', 'payout', 'other'], num = v => money(v) || 0, t = now(), by = me.name || me.mobile;
+          const stmts = rows.filter(r => r && /^[\w-]{8,64}$/.test(String(r.id || '')) && isYmd(r.date) && KINDS_U.includes(r.kind)).map(r =>
+            DB.prepare('INSERT OR IGNORE INTO uber_txns (id, driver_id, date, time, kind, trip_id, descr, paid, earnings, fare, tip, toll, cash, pass, payout, uploaded_by, created_at) ' +
+                       'VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)')
+              .bind(String(r.id), String(body.driverId), r.date, String(r.time || '').slice(0, 5), r.kind, String(r.tripId || '').slice(0, 64) || null,
+                    String(r.desc || '').slice(0, 120), num(r.paid), num(r.earnings), num(r.fare), num(r.tip), num(r.toll), num(r.cash), num(r.pass), num(r.payout), by, t));
+          const before = (await DB.prepare('SELECT COUNT(*) AS n FROM uber_txns').first()).n;
+          for (let i = 0; i < stmts.length; i += 50) await DB.batch(stmts.slice(i, i + 50));
+          const after = (await DB.prepare('SELECT COUNT(*) AS n FROM uber_txns').first()).n;
+          return json({ ok: true, added: after - before, skipped: stmts.length - (after - before), invalid: rows.length - stmts.length });
         }
 
         if (path === '/ledger/entry/delete' && req.method === 'POST') {
