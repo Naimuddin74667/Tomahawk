@@ -1200,6 +1200,7 @@ function parseCSVRow(row) {
 const ACTION_TIERS = {
   // — Public: no session needed —
   ping: 'public', login: 'public', logout: 'public', authStatus: 'public',
+  isOpen: 'public', // WhatsApp bot (Zoho GC webhook) — is customer care open right now? No data, just true/false
   scannerLogin: 'public', // legacy phone-app login, not yet migrated to portal auth
   scannerListPickers: 'public', // phone app's name-picker list — read-only, usernames only
   scannerPickSession: 'public', // phone app "tap your name" login — locked to picker_packer role only, see handler
@@ -1929,6 +1930,25 @@ async function handleWalima(act, body, url, env) {
   return json({ ok: true, rows });
 }
 
+// Customer care hours: Mon–Sat, 9:00–17:00 IST (Sunday off).
+// Holidays not handled yet — add a list here later if needed.
+const CC_OPEN_DAYS = [1, 2, 3, 4, 5, 6]; // 0 = Sunday
+const CC_OPEN_FROM_MIN = 9 * 60;  // 09:00
+const CC_OPEN_TO_MIN = 17 * 60;   // 17:00
+function customerCareOpenStatus(now) {
+  // Shift UTC to IST (+5:30); India has no daylight saving.
+  const ist = new Date(now.getTime() + 330 * 60 * 1000);
+  const day = ist.getUTCDay();
+  const mins = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+  const open = CC_OPEN_DAYS.includes(day) && mins >= CC_OPEN_FROM_MIN && mins < CC_OPEN_TO_MIN;
+  return {
+    ok: true,
+    open,
+    status: open ? 'open' : 'closed', // plain string, easy to match in a GC Fork block
+    ist: ist.toISOString().slice(0, 16).replace('T', ' ')
+  };
+}
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') {
@@ -1955,6 +1975,13 @@ export default {
       const authResult = await checkAuth(request, env.DB, request.method, act);
       if (!authResult.ok) {
         return json({ ok: false, error: authResult.error, authError: true }, authResult.status || 401);
+      }
+
+      // ── CUSTOMER CARE OPEN CHECK — used by Chat Bot V1 (Zoho GC webhook) ──
+      // Open Mon–Sat, 9:00 AM – 5:00 PM India time. Returns open: true/false
+      // so the bot only creates a ticket during working hours.
+      if (act === 'isOpen') {
+        return json(customerCareOpenStatus(new Date()));
       }
 
       // ── WALIMA INVITATION — guest list (walima* actions) ──
