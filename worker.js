@@ -8298,13 +8298,11 @@ async function srVerify(env, user, b) {
     skus = [confSku].concat(rest).join(', ');
   }
 
-  // New ID keeps the NV request's date: NV-261027-01 → WRN-261027-NN.
-  const datePart = (row.claim_id.split('-')[1] || istYYMMDD());
-  const base = prefix + '-' + datePart + '-';
-  const cnt = await env.DB.prepare('SELECT COUNT(*) AS n FROM warranty_claims WHERE claim_id LIKE ?').bind(base + '%').first();
-  let n = ((cnt && cnt.n) || 0) + 1, newId = null;
-  for (let attempt = 0; attempt < 5 && !newId; attempt++, n++) {
-    const cand = base + String(n).padStart(2, '0');
+  // Same number, new prefix: NV-261121-05 → WRN-261121-05 (21-Nov-2026)
+  const cands = await typeChangeIdCandidates(env.DB, prefix, row.claim_id);
+  let newId = null;
+  for (const cand of cands) {
+    if (newId) break;
     try {
       await env.DB.prepare(`UPDATE warranty_claims SET claim_id = ?, prev_claim_id = ?, order_id = ?, order_key = ?, platform = ?,
         warranty_status = ?, order_date = ?, warranty_until = ?, order_skus = ?, confirmed_sku = ?, confirmed_product = ? WHERE claim_id = ?`)
@@ -9657,13 +9655,51 @@ function istYYMMDD() {
   return ist.slice(2, 4) + ist.slice(5, 7) + ist.slice(8, 10);
 }
 
+// Request IDs share ONE running number per day across all types (21-Nov-2026):
+//   SRN-261121-01, WRN-261121-02, SRN-261121-03, DRN-261121-04, NV-261121-05 …
+// Returns the next free number for that date (highest used today + 1).
+// prev_claim_id is checked too, so a number freed by a type change is never reused.
+async function nextSharedClaimNumber(DB, datePart) {
+  const rows = await DB.prepare('SELECT claim_id, prev_claim_id FROM warranty_claims WHERE claim_id LIKE ? OR prev_claim_id LIKE ?')
+    .bind('%-' + datePart + '-%', '%-' + datePart + '-%').all();
+  const re = new RegExp('^[A-Z]+-' + datePart + '-(\\d+)$');
+  let max = 0;
+  for (const r of rows.results || []) {
+    for (const id of [r.claim_id, r.prev_claim_id]) {
+      const m = String(id || '').match(re);
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    }
+  }
+  return max + 1;
+}
+
+// When a request changes type (NV → WRN/SRN, DRN → WRN/SRN) it keeps its
+// number and only the prefix changes: NV-261121-05 → WRN-261121-05.
+// Older days may have the same number under two prefixes; if the kept ID is
+// already taken, fall back to the next free shared number.
+async function typeChangeIdCandidates(DB, prefix, oldId) {
+  const parts = String(oldId).split('-');
+  const datePart = parts[1] || istYYMMDD();
+  const keep = parts[2] && /^\d+$/.test(parts[2]) ? prefix + '-' + datePart + '-' + parts[2] : null;
+  let n = await nextSharedClaimNumber(DB, datePart);
+  const out = keep ? [keep] : [];
+  while (out.length < 5) out.push(prefix + '-' + datePart + '-' + String(n++).padStart(2, '0'));
+  return out;
+}
+
 // Make a <prefix>-YYMMDD-NN ID and run the INSERT built by makeStmt(id).
 // Two submissions at the same moment can pick the same NN; on a duplicate
 // key we simply try the next number (up to 5 times) instead of failing.
 async function insertWithSerialId(DB, prefix, table, col, makeStmt) {
   const base = prefix + '-' + istYYMMDD() + '-';
-  const cnt = await DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${col} LIKE ?`).bind(base + '%').first();
-  let n = ((cnt && cnt.n) || 0) + 1;
+  let n;
+  if (table === 'warranty_claims') {
+    // Requests share one daily counter across SRN/WRN/DRN/NV (21-Nov-2026)
+    n = await nextSharedClaimNumber(DB, istYYMMDD());
+  } else {
+    const cnt = await DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${col} LIKE ?`).bind(base + '%').first();
+    n = ((cnt && cnt.n) || 0) + 1;
+  }
   for (let attempt = 0; attempt < 5; attempt++, n++) {
     const id = base + String(n).padStart(2, '0');
     try { await makeStmt(id).run(); return id; }
@@ -10861,11 +10897,11 @@ async function srDrnToWrn(env, user, b) {
   const wd = row.order_date ? warrantyFromDate(row.order_date) : { under: true, until: row.warranty_until };
   const warrantyStatus = wd.under ? 'Under warranty' : 'Out of warranty';
   const prefix = srIdPrefix(warrantyStatus);
-  const base = prefix + '-' + (row.claim_id.split('-')[1] || istYYMMDD()) + '-';
-  const cnt = await env.DB.prepare('SELECT COUNT(*) AS n FROM warranty_claims WHERE claim_id LIKE ?').bind(base + '%').first();
-  let n = ((cnt && cnt.n) || 0) + 1, newId = null;
-  for (let attempt = 0; attempt < 5 && !newId; attempt++, n++) {
-    const cand = base + String(n).padStart(2, '0');
+  // Same number, new prefix: DRN-261121-04 → WRN-261121-04 (21-Nov-2026)
+  const cands = await typeChangeIdCandidates(env.DB, prefix, row.claim_id);
+  let newId = null;
+  for (const cand of cands) {
+    if (newId) break;
     try {
       await env.DB.prepare("UPDATE warranty_claims SET claim_id = ?, prev_claim_id = ?, request_type = 'WRN_FROM_DRN', warranty_status = ?, warranty_until = ? WHERE claim_id = ?")
         .bind(cand, row.claim_id, warrantyStatus, wd.until || row.warranty_until, row.claim_id).run();
