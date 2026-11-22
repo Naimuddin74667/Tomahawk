@@ -270,3 +270,11 @@ It is built for phones, since about 99% of use is on a phone. It has its own lig
 - `UberReport.takeShared()` reads + deletes it. Owner (index.html) → Earnings + import preview; manager/driver logins are forwarded to `driver.html?shared=1` → manager gets the preview on Earnings; driver/viewer get a "not allowed" message.
 - Daily flow: Fleet Hub (phone) → Reports → yesterday's "MNS Transaction" report → Download → open the download → Share → MNS Tours & Travels → **Save trips**.
 - Long-term: keep pushing Uber for Supplier API approval (Uber Driver app → Help, or Greenlight Hub), keys already saved in the app.
+
+## 14. Naushad's rent: car off 16–17 Nov, calendar days from 18 Nov (22 Nov 2026)
+
+Owner confirmed: 8 PM → 8 PM periods until "15–16 Nov", but **16 Nov day off** (₹600 for that period); **16 Nov night + 17 Nov day off** ("16–17 Nov" = ₹0); 17 Nov night not charged; **from 18 Nov each date = 12 AM → 11:59 PM, ₹1,200**.
+
+- New driver field `calendarFrom` (Rent → Edit driver → "Calendar days from"). Daily periods on/after it = that date's day + night, label "18 Nov"; before it unchanged (night + day, "16–17 Oct"). `periodHalves(day, drv)` in index.html, `halves()`/`label()` in driver.html.
+- One-time migration `migrateCalendarCutover()` (owner app, flag `settings.cutover_20261118`): for Naushad's daily rent sets `calendarFrom = 2026-11-18` and car-off halves 16 Nov day, 16 Nov night, 17 Nov day. Shows in Change log (undoable).
+- Worker `/driver` now sends `calendarFrom` so Naushad's "My rent" shows the same periods (paste worker). Siddique's ₹600 ledger unchanged (owner didn't ask). SW cache `mns-tours-v16`.

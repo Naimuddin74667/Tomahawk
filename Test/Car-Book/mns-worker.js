@@ -454,7 +454,7 @@ export default {
           car: { name: veh.name || '', regNo: veh.regNo || '' },
           upi: { id: st.upiId || d.car?.upiId || '', name: st.upiName || d.car?.upiName || 'MNS Tours and Travels' },
           driver: { id: drv.id, name: drv.name, rentCycle: drv.rentCycle, rentAmount: drv.rentAmount,
-                    startDate: drv.startDate, endDate: drv.endDate || '' },
+                    startDate: drv.startDate, endDate: drv.endDate || '', calendarFrom: drv.calendarFrom || '' },
           payments: (d.payments || []).filter(p => p.driverId === drv.id).map(p => ({ date: p.date, amount: p.amount, mode: p.mode })),
           offs: (d.offs || []).filter(o => o.driverId === drv.id).map(o => ({ date: o.date, half: o.half })),
           claims: ((await DB.prepare('SELECT id, amount, label, status, created_at AS createdAt, resolved_at AS resolvedAt FROM claims ' +

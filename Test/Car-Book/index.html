@@ -543,7 +543,7 @@ function rentPeriods(drv) {
     const p = { from: ymd(from), to: ymd(addDays(next, -1)), due: num(drv.rentAmount), paid: 0, off: [] };
     if (drv.rentCycle === 'daily') {
       // Each daily period = previous night + this day; each half is half the rent.
-      const halves = periodHalves(p.from);
+      const halves = periodHalves(p.from, drv);
       p.off = halves.filter(x => isOff(drv.id, x.date, x.half));
       p.due = num(drv.rentAmount) * (2 - p.off.length) / 2;
     }
@@ -564,7 +564,12 @@ function driverLedger(drv) {
 }
 
 /* ── Car off / out of service, tracked per half day (night or day) ── */
-function periodHalves(day) {   // the two halves a daily period covers
+/* The two halves a daily period covers.
+   Normal: 8 PM → 8 PM = previous night + this day ("16–17 Oct").
+   From drv.calendarFrom on: calendar day 12 AM → 11:59 PM = this day + this night ("18 Nov"). */
+const isCalDay = (drv, day) => !!(drv && drv.calendarFrom && day >= drv.calendarFrom);
+function periodHalves(day, drv) {
+  if (isCalDay(drv, day)) return [{ date: day, half: 'day' }, { date: day, half: 'night' }];
   return [{ date: ymd(addDays(parseYmd(day), -1)), half: 'night' }, { date: day, half: 'day' }];
 }
 function isOff(driverId, date, half) { return (DB.offs || []).some(o => o.driverId === driverId && o.date === date && o.half === half); }
@@ -578,7 +583,7 @@ function halfLabel(x) { return fmtShort(x.date) + ' ' + x.half; }
 function openPeriod(driverId, day) {
   if (viewOnly()) return;
   const drv = DB.drivers.find(d => d.id === driverId); if (!drv) return;
-  const halves = periodHalves(day), half = num(drv.rentAmount) / 2;
+  const halves = periodHalves(day, drv), half = num(drv.rentAmount) / 2;
   const ran = halves.map(x => !isOff(driverId, x.date, x.half));
   const draw = () => {
     const n = ran.filter(Boolean).length, amt = half * n;
@@ -1010,8 +1015,8 @@ function lrow(title, sub, amount, extra, onclick) {
 /* Daily rent at 8 PM covers the previous night + that day, shown as "16–17 Oct". */
 function periodLabel(drv, p) {
   if (drv.rentCycle === 'daily') {
-    // "16–17 Oct" = 16th night + 17th day
-    const base = fmtRange(ymd(addDays(parseYmd(p.from), -1)), p.from);
+    // "16–17 Oct" = 16th night + 17th day; calendar-day periods are just "18 Nov"
+    const base = isCalDay(drv, p.from) ? fmtDate(p.from) : fmtRange(ymd(addDays(parseYmd(p.from), -1)), p.from);
     return p.off && p.off.length === 1 ? base + ' (' + p.off[0].half + ' off)' : base;
   }
   return fmtRange(p.from, p.to);
@@ -1598,6 +1603,7 @@ function openDriver(id) {
     { k:'rentAmount', label:'Rent per cycle (₹)', type:'number', req:true },
     { k:'startDate', label:'Rent starts from', type:'date', req:true, def: todayStr() },
     { k:'endDate', label:'Left on (blank if still driving)', type:'date' },
+    { k:'calendarFrom', label:'Calendar days from (daily rent)', type:'date', help:'From this date each day is 12 AM → 11:59 PM. Before it, days run 8 PM → 8 PM (night + day). Leave blank to keep 8 PM → 8 PM.' },
     { k:'note', label:'Note (licence, address, deposit…)', type:'textarea' }
   ], existing || { rentCycle:'daily', vehicleId: (curVeh() || DB.vehicles[0]).id },
   d => { d.rentAmount = num(d.rentAmount); d.vehicleId = d.vehicleId || (existing && existing.vehicleId) || (curVeh() || DB.vehicles[0]).id;
@@ -2246,7 +2252,22 @@ try { const t = localStorage.getItem(THEME_KEY); if (t) document.documentElement
 // First open of this version: everything entered so far is real — snapshot it and start testing mode
 try { if (!localStorage.getItem(TESTFLOW_KEY) && !getSnapshot() && localStorage.getItem(STORE_KEY)) { startTesting(); localStorage.setItem(TESTFLOW_KEY, 'started'); } } catch {}
 // With cloud sync, get the latest copy first, then auto-mark EMIs and show the rent popup
+/* One-time change asked by the owner on 22 Nov 2026 for Naushad's ₹1,200 daily rent:
+   8 PM → 8 PM until the 15–16 Nov period; car off 16 Nov day + 16 Nov night + 17 Nov day;
+   from 18 Nov each day is a calendar day (12 AM → 11:59 PM). Runs once, on the owner's app; shows in the Change log (undoable). */
+function migrateCalendarCutover() {
+  if (isViewer() || (DB.settings || {}).cutover_20261118) return;
+  const daily = DB.drivers.filter(d => d.rentCycle === 'daily' && (!d.endDate || d.endDate >= '2026-11-18') && d.startDate && d.startDate <= '2026-11-15');
+  const drv = daily.find(d => /naushad/i.test(d.name)) || (daily.length === 1 ? daily[0] : null);
+  DB.settings = DB.settings || {}; DB.settings.cutover_20261118 = todayStr();
+  if (!drv) return;
+  drv.calendarFrom = '2026-11-18';
+  [['2026-11-16', 'day'], ['2026-11-16', 'night'], ['2026-11-17', 'day']].forEach(([date, half]) => setOff(drv.id, date, half, true));
+  save(); PAGES[currentPage]();
+  setTimeout(() => toast(drv.name.split(' ')[0] + ': car off 16–17 Nov, calendar days from 18 Nov'), 400);
+}
 function afterLoad() {
+  migrateCalendarCutover();
   const n = autoMarkEmis();
   if (n) { PAGES[currentPage](); setTimeout(() => toast(n + ' EMI' + (n > 1 ? 's' : '') + ' marked paid'), 300); }
   // No automatic rent popup — confirm from the "rent pending" banner (fewer mistaken taps)

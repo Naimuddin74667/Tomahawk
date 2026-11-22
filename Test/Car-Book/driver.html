@@ -159,7 +159,10 @@ function fmtRange(a, b) {
   return A.getMonth() === B.getMonth() ? A.getDate() + '–' + fmtShort(b) : fmtShort(a) + ' – ' + fmtShort(b);
 }
 const isOff = (date, half) => D.offs.some(o => o.date === date && o.half === half);
-const halves = day => [{ date: ymd(addDays(parseYmd(day), -1)), half: 'night' }, { date: day, half: 'day' }];
+// 8 PM → 8 PM = previous night + this day; from driver.calendarFrom on, a calendar day = this day + this night
+const isCalDay = day => !!(D.driver.calendarFrom && day >= D.driver.calendarFrom);
+const halves = day => isCalDay(day) ? [{ date: day, half: 'day' }, { date: day, half: 'night' }]
+  : [{ date: ymd(addDays(parseYmd(day), -1)), half: 'night' }, { date: day, half: 'day' }];
 
 function periods() {
   const drv = D.driver; if (!drv.startDate || !drv.rentAmount) return [];
@@ -260,7 +263,7 @@ function flash(msg) { const el = document.createElement('div'); el.className = '
 const timeShort = s => new Date(s).toLocaleString('en-IN', { day:'numeric', month:'short', hour:'numeric', minute:'2-digit' });
 function label(p) {
   if (D.driver.rentCycle !== 'daily') return fmtRange(p.from, p.to);
-  const base = fmtRange(ymd(addDays(parseYmd(p.from), -1)), p.from);
+  const base = isCalDay(p.from) ? fmtDate(p.from) : fmtRange(ymd(addDays(parseYmd(p.from), -1)), p.from);
   return p.off.length === 1 ? base + ' (' + p.off[0].half + ' off)' : base;
 }
 function status(p) {
