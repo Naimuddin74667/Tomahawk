@@ -288,3 +288,4 @@ Owner approved the demos (Siddique + Naushad screens). Shared maths `UberReport.
 - Top card lists each open day ("21 Nov · you give ₹919.13", "22 Nov · Naushad gives you −₹400", Balance) — wording per viewer (driver / manager "Collect from Siddique" / owner).
 - Earnings settlement box: "✓ Settled" for days ≤ settled-till; otherwise give/get + "Adjusted against earlier days (₹X not paid yet)" + "Balance after <day>". Manager sees "your bank".
 - Tested: settled till 20 Nov, real 21 Nov (−₹319.13 → ₹919.13) + sample 22 Nov (+₹1,000 → −₹400) ⇒ balance ₹519.13. No worker change. SW cache `mns-tours-v17`.
+- **Fix (22 Nov):** entries dated today (e.g. the 22 Nov settlement) were dropped because days count till yesterday — entries now always count (rent still till yesterday). Settlement detection relaxed: any Cash entry whose note contains "settle" or "clear". SW cache `mns-tours-v18`.

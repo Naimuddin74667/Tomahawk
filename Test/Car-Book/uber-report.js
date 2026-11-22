@@ -367,9 +367,9 @@ const UberReport = (() => {
        (online − Uber's share of cash fares − Drive Pass; can be negative). Uber payout entries
        typed by hand for those days are then ignored, so nothing is counted twice.
      Other platforms (Ola, Rapido…) still come from "+ Platform money" entries.
-     Settlement: a "Cash" entry whose note starts with "Settled" closes everything up to its date → balance 0.
+     Settlement: a "Cash" entry whose note has "settle" or "clear" in it closes everything up to its date → balance 0.
      Each row: { date, rent, waive, uber, other, credit (= uber + other), cash, net, bal, settled } */
-  const isSettle = e => e.kind === 'cash' && /^\s*settled/i.test(String(e.note || ''));
+  const isSettle = e => e.kind === 'cash' && /settle|clear/i.test(String(e.note || ''));   // e.g. "Settled manually: balance cleared"
   const ymdL = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   function ledgerRows(drv, entries, uberRows) {
     const es = (entries || []).filter(e => e.driverId === drv.id);
@@ -382,7 +382,7 @@ const UberReport = (() => {
     const covered = date => uFrom && date >= uFrom && date <= uTo;
     const dates = new Set();
     for (let d = new Date(drv.startDate + 'T00:00:00'), i = 0; ymdL(d) <= last && i < 3000; d.setDate(d.getDate() + 1), i++) dates.add(ymdL(d));
-    es.forEach(e => { if (e.date <= last || isSettle(e)) dates.add(e.date); });
+    es.forEach(e => dates.add(e.date));   // entries always count, even if dated today (rent only till yesterday)
     let bal = 0;
     return [...dates].sort().map(date => {
       const of = (k, f) => r2(es.filter(e => e.date === date && e.kind === k && (!f || f(e))).reduce((t, e) => t + n(e.amount), 0));
