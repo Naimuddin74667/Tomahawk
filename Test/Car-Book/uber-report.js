@@ -243,8 +243,11 @@ const UberReport = (() => {
      Day:       online (Uber holds) = Σ paid of trips = earned + tolls − cash
                 Uber → manager's bank = online − Drive Pass
                 driver gives = rent − Uber → bank   (negative → manager gives the driver)   */
-  const rentDay = r => {                       // a trip finished at/after 20:00 belongs to the next rent day
-    if (String(r.time || '') < '20:00') return r.date;
+  // Day split. For now each day = calendar day (12 AM → 11:59 PM), same as Uber's daily report.
+  // To go back to 8 PM → 8 PM rent days, set SPLIT_AT = '20:00'.
+  const SPLIT_AT = '';
+  const rentDay = r => {                       // with SPLIT_AT set, a trip finished at/after that time belongs to the next day
+    if (!SPLIT_AT || String(r.time || '') < SPLIT_AT) return r.date;
     const d = new Date(r.date + 'T00:00:00'); d.setDate(d.getDate() + 1);
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   };
@@ -276,7 +279,8 @@ const UberReport = (() => {
     const give = r2(n(rent) - d.toBank), drv = esc(who.driver || 'Driver'), mgr = esc(who.manager || 'Manager');
     const isDrv = who.me === 'driver', isMgr = who.me === 'manager';
     const prev = new Date(d.day + 'T00:00:00'); prev.setDate(prev.getDate() - 1);
-    const range = prev.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) + ' 8 PM → ' + fd(d.day) + ' 8 PM';
+    const range = SPLIT_AT ? prev.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) + ' 8 PM → ' + fd(d.day) + ' 8 PM'
+      : new Date(d.day + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'long' }) + ' · 12 AM → 11:59 PM';
     const nav = (dir, ok) => `<button type="button" onclick="UberReport.eday('${esc(key)}',${dir})" ${ok ? '' : 'disabled'} style="border:1px solid var(--border);background:var(--surface);border-radius:8px;padding:6px 14px;font:inherit;font-size:16px;${ok ? 'cursor:pointer' : 'opacity:.3'}">${dir < 0 ? '‹' : '›'}</button>`;
     const line = (l, v, opt = {}) => `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;${opt.top ? 'border-top:1px solid var(--border);margin-top:4px;padding-top:8px;' : ''}font-size:${opt.big ? 15 : 13}px">
         <span style="${opt.muted ? 'color:var(--text2)' : ''}">${l}</span><b class="${opt.cls || ''}" style="white-space:nowrap">${v}</b></div>`;
@@ -325,7 +329,7 @@ const UberReport = (() => {
           <tbody>${days.slice().reverse().map(x => { const g = r2(n(rent) - x.toBank); return `<tr style="cursor:pointer;border-top:1px solid var(--border)" onclick="UberReport.eset('${esc(key)}','${x.day}')">
             <td style="padding:6px 3px">${fd(x.day)}</td><td style="text-align:right;padding:6px 3px">${x.trips.length}</td><td style="text-align:right;padding:6px 3px">${inr(x.earned)}</td><td style="text-align:right;padding:6px 3px">${inr(x.cash)}</td>
             <td style="text-align:right;padding:6px 3px">${x.pass ? inr(x.pass) : '—'}</td><td style="text-align:right;padding:6px 3px" class="${x.toBank < 0 ? 'neg' : 'pos'}">${inr(x.toBank)}</td><td style="text-align:right;padding:6px 3px" class="${g > 0 ? 'neg' : 'pos'}"><b>${inr(g)}</b></td></tr>`; }).join('')}</tbody></table></div>
-        <div style="font-size:11px;color:var(--text2);margin-top:6px">Each day runs 8 PM to 8 PM. These are per-day figures; the running balance (incl. cash already given) is in the Driver ledger.</div></details>`;
+        <div style="font-size:11px;color:var(--text2);margin-top:6px">${SPLIT_AT ? 'Each day runs 8 PM to 8 PM.' : 'Each day = 12 AM to 11:59 PM.'} These are per-day figures; the running balance (incl. cash already given) is in the Driver ledger.</div></details>`;
   }
   function eday(key, dir) { const st = ST['e:' + key]; if (!st) return; st.move = dir; st.redraw && (st._dir = dir, st.redraw()); }
   function eset(key, day) { const st = ST['e:' + key]; if (!st) return; st.day = day; st.redraw && st.redraw(); window.scrollTo(0, 0); }
