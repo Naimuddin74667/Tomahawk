@@ -384,7 +384,7 @@ const UberReport = (() => {
     for (let d = new Date(drv.startDate + 'T00:00:00'), i = 0; ymdL(d) <= last && i < 3000; d.setDate(d.getDate() + 1), i++) dates.add(ymdL(d));
     es.forEach(e => dates.add(e.date));   // entries always count, even if dated today (rent only till yesterday)
     let bal = 0;
-    return [...dates].sort().map(date => {
+    const rows = [...dates].sort().map(date => {
       const of = (k, f) => r2(es.filter(e => e.date === date && e.kind === k && (!f || f(e))).reduce((t, e) => t + n(e.amount), 0));
       const rentDay = date >= drv.startDate && date <= last ? n(drv.rent) : 0;
       const waive = Math.min(of('waive'), rentDay), rent = r2(rentDay - waive);
@@ -394,8 +394,12 @@ const UberReport = (() => {
       const net = r2(rent - uber - other - cash);
       const settled = !!settledTill && date <= settledTill;
       bal = settled ? 0 : r2(bal + net);
-      return { date, rent, waive, uber, other, credit: r2(uber + other), cash, net, bal, settled, covered: !!covered(date) };
+      return { date, rent, waive, uber, other, credit: r2(uber + other), cash, net, bal, settled, covered: !!covered(date), paidDay: of('cash') > 0 };
     });
+    // A cash payment that brings the balance to exactly ₹0 also settles everything up to that day
+    const zero = rows.filter(r => r.paidDay && Math.abs(r.bal) < 0.005).map(r => r.date).pop() || '';
+    if (zero > settledTill) rows.forEach(r => { if (r.date <= zero) r.settled = true; });
+    return rows;
   }
   function ledgerInfo(drv, entries, uberRows) {
     const rows = ledgerRows(drv, entries, uberRows);
@@ -413,7 +417,7 @@ const UberReport = (() => {
       <span style="${bold ? 'font-weight:700' : 'color:var(--text2)'}">${l}</span><b class="${cls}">${v}</b></div>`;
     const say = net => net > 0 ? (isMgr ? drv + ' gives you' : who.me === 'driver' ? 'you give' : drv + ' gives ' + mgr)
                                : (isMgr ? 'you give ' + drv : who.me === 'driver' ? mgr + ' gives you' : mgr + ' gives ' + drv);
-    if (!pick.length) return '';
+    if (!pick.length || Math.abs(info.balance) < 0.005) return '';   // all settled → nothing to explain
     return `<div style="margin-top:8px;text-align:left">${days.length > pick.length ? row('Earlier days', inr(r2(days.slice(0, -6).reduce((t, r) => t + r.net, 0))), '') : ''}
       ${pick.map(r => row(fd(r.date) + ' · ' + say(r.net), (r.net < 0 ? '−' : '') + inr(Math.abs(r.net)), r.net > 0 ? 'neg' : 'pos')).join('')}
       ${row('Balance', inr(Math.abs(info.balance)), info.balance > 0.004 ? 'neg' : 'pos', true)}</div>`;
