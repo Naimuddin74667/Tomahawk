@@ -411,7 +411,7 @@ const UberReport = (() => {
     let left = B;
     for (let i = rows.length - 1; i >= 0; i--) {
       const r = rows[i];
-      if (r.settled) { r.status = r.net < -0.004 ? 'adjusted' : 'paid'; continue; }
+      if (r.settled) { r.status = 'paid'; continue; }
       if (r.net > 0.004) {
         if (left > 0.004) { r.status = left >= r.net - 0.004 ? 'pending' : 'part'; r.pendingAmt = r2(Math.min(left, r.net)); left = r2(left - r.net); }
         else r.status = 'paid';
