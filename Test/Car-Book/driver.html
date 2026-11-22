@@ -104,6 +104,7 @@ body { font-family:var(--font-body); background:var(--bg); color:var(--text); fo
 .dtable { width:100%; border-collapse:collapse; font-size:13px; }
 .dtable th { text-align:right; color:var(--text2); font-weight:600; font-size:11px; padding:0 4px 8px; text-transform:uppercase; letter-spacing:.02em; }
 .dtable th:first-child, .dtable td:first-child { text-align:left; padding-left:0; }
+.dtable th, .dtable td { padding-left:3px; padding-right:3px; } .dtable th { font-size:10px; } .dtable td { font-size:12px; }
 .dtable td { text-align:right; padding:10px 4px; border-top:1px solid var(--border); white-space:nowrap; }
 .dtable td:last-child, .dtable th:last-child { padding-right:0; }
 .dtable tr.click td { cursor:pointer; }
@@ -436,15 +437,17 @@ function renderLedger(tabs) {
       <div class="card">${ldTab === 'uber' ? UberReport.viewHtml(drv.id, (L.uber || []).filter(r => r.driverId === drv.id), render)
         : ldTab === 'days'
         ? `${T.settledTill ? `<div class="settled-line"><span>✓ <b>Settled till ${fmtShort(T.settledTill)}</b></span><b>₹0</b></div>` : ''}
-          <table class="dtable"><thead><tr><th>Day</th><th>Rent</th><th>Uber</th><th>Cash</th><th>Balance</th></tr></thead><tbody>
+          <table class="dtable"><thead><tr><th>Day</th><th>Earning</th><th>Cash</th><th>Online</th><th>Other</th><th>Settlement</th></tr></thead><tbody>
             ${shown.map(d => `<tr${mgr ? ` class="click" onclick="openDay('${drv.id}','${d.date}')"` : ''}><td>${fmtShort(d.date)}<div style="margin-top:3px">${UberReport.tag(d)}</div></td>
-              <td${d.rent ? '' : ' class="z"'}>${d.waive && !d.rent ? 'off' : inr2(d.rent)}</td>
-              <td class="${d.credit < -0.004 ? 'neg' : d.credit > 0.004 ? 'pos' : 'z'}">${d.credit ? (d.credit > 0 ? '+' : '') + inr2(d.credit) : '—'}</td>
-              <td${d.cash ? '' : ' class="z"'}>${d.cash ? inr2(d.cash) : '—'}</td>
-              <td class="${d.settled ? 'pos' : d.bal > 0.004 ? 'neg' : d.bal < -0.004 ? 'pos' : ''}"><b>${d.settled ? '✓' : inr2(d.bal)}</b></td></tr>`).join('') || '<tr><td colspan="5">No days yet</td></tr>'}
+              <td${d.earned ? '' : ' class="z"'}>${d.earned ? inr2(d.earned) : '—'}</td>
+              <td${d.cashColl ? '' : ' class="z"'}>${d.cashColl ? inr2(d.cashColl) : '—'}</td>
+              <td class="${d.online ? 'pos' : 'z'}">${d.covered ? inr2(d.online) : '—'}</td>
+              <td class="${d.otherU < -0.004 ? 'neg' : d.otherU > 0.004 ? 'pos' : 'z'}">${d.otherU ? (d.otherU > 0 ? '+' : '') + inr2(d.otherU) : '—'}</td>
+              <td><b class="${d.due > 0.004 ? 'neg' : d.due < -0.004 ? 'pos' : ''}" style="white-space:nowrap">${d.due > 0.004 ? (mgr ? 'Collect ' : 'You give ') + inr2(d.due)
+                : d.due < -0.004 ? (mgr ? 'Give ' : 'Get ') + inr2(-d.due) : (d.rent ? '₹0' : 'off')}</b></td></tr>`).join('') || '<tr><td colspan="6">No days yet</td></tr>'}
           </tbody></table>
-          <div class="note">Uber = what Uber sends to ${mgr ? 'your' : 'the manager’s'} bank for that day (from the daily report). Plus = it reduces what ${mgr ? esc(first) + ' gives' : 'you give'}. Minus = Uber takes it back later (Drive Pass, Uber’s share of cash fares), so ${mgr ? esc(first) + ' covers' : 'you cover'} it.
-            Balance in red = ${mgr ? esc(first) + ' still has to give' : 'you still have to give'}. Green = ${mgr ? 'you owe ' + esc(first) : 'you get back'}.</div>`
+          <div class="note"><b>Earning</b> = ${mgr ? esc(first) + '’s' : 'your'} fares · <b>Cash</b> = cash ${mgr ? esc(first) : 'you'} collected · <b>Online</b> = paid to Uber by riders · <b>Other</b> = Drive Pass + Uber’s share of cash fares.
+            <b>Settlement</b> = rent ${inr2(drv.rent)} − (Online + Other)${mgr ? '' : ' → what you give ' + esc((drv.managerName || 'the manager').split(' ')[0]) + ', or get back'}. Paid / Pending shows whether it’s been settled.</div>`
         : monthBlock(drv, T, es, mgr)}
       </div>`;
   }).join('<div style="height:18px"></div>');

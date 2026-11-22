@@ -377,7 +377,7 @@ const UberReport = (() => {
     const yest = new Date(); yest.setDate(yest.getDate() - 1);
     const last = drv.endDate && drv.endDate < ymdL(yest) ? drv.endDate : ymdL(yest);
     const settledTill = es.filter(isSettle).map(e => e.date).sort().pop() || '';
-    const uDays = {}; earnDays(ub).forEach(d => { if (d.trips.length || d.pass) uDays[d.day] = d.toBank; });
+    const uDays = {}, uDet = {}; earnDays(ub).forEach(d => { if (d.trips.length || d.pass) { uDays[d.day] = d.toBank; uDet[d.day] = d; } });
     const uKeys = Object.keys(uDays).sort(), uFrom = uKeys[0] || '', uTo = uKeys[uKeys.length - 1] || '';
     const covered = date => uFrom && date >= uFrom && date <= uTo;
     const dates = new Set();
@@ -394,7 +394,10 @@ const UberReport = (() => {
       const net = r2(rent - uber - other - cash);
       const settled = !!settledTill && date <= settledTill;
       bal = settled ? 0 : r2(bal + net);
-      return { date, rent, waive, uber, other, credit: r2(uber + other), cash, net, bal, settled, covered: !!covered(date), paidDay: of('cash') > 0 };
+      const u = covered(date) ? uDet[date] : null;   // Uber detail for the day: earning, cash collected, online, other (Drive Pass + Uber's share)
+      return { date, rent, waive, uber, other, credit: r2(uber + other), cash, net, bal, settled, covered: !!covered(date), paidDay: of('cash') > 0,
+        due: r2(rent - uber - other),                 // the day's settlement before any cash given: rent − Uber − other platforms
+        earned: u ? u.earned : 0, cashColl: u ? u.cash : 0, online: u ? u.onl : 0, otherU: u ? r2(u.adj - u.pass) : 0, trips: u ? u.trips.length : 0 };
     });
     // A cash payment that brings the balance to exactly ₹0 also settles everything up to that day
     const zero = rows.filter(r => r.paidDay && Math.abs(r.bal) < 0.005).map(r => r.date).pop() || '';
