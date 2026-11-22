@@ -2148,10 +2148,10 @@ function drawEarnings() {
 }
 
 /* ── Upload Uber report → Uber payouts into the ledger (parser in uber-report.js, shared with driver.html) ── */
-async function openUberImport(drvId) {
+async function openUberImport(drvId, preloaded) {
   if (isViewer()) return;
   if (!LEDGER) { await loadLedger(); if (!LEDGER) { toast('No connection — try again'); return; } }
-  const f = await UberReport.pickFile(); if (!f) return;
+  const f = preloaded || await UberReport.pickFile(); if (!f) return;
   let rep; try { rep = UberReport.parse(f.text); } catch (e) { alert(e.message); return; }
   const items = UberReport.plan(rep, LEDGER.entries), fresh = items.filter(i => !i.exists).length;
   const sel = drvId || UberReport.guessDriver(rep, LEDGER.drivers);
@@ -2252,7 +2252,13 @@ function afterLoad() {
   // No automatic rent popup — confirm from the "rent pending" banner (fewer mistaken taps)
 }
 go('dashboard');
-if (SCREEN_ROLES.includes((cloudCfg() || {}).role)) location.replace('driver.html');
+if (SCREEN_ROLES.includes((cloudCfg() || {}).role)) location.replace('driver.html' + location.search);   // keeps ?shared=1
+// Opened from Android's Share menu with an Uber report → show it ready to save
+else if (UberReport.isShared()) UberReport.takeShared().then(f => {
+  if (!f) return;
+  if (!cloudCfg() || isViewer()) { toast('Log in as owner to add Uber reports'); return; }
+  go('earnings'); openUberImport('', f);
+});
 applyRole();
 try { localStorage.removeItem('mnscar_cloud_v1'); } catch {}   // old manual connection, replaced by login
 if (cloudCfg()) pullCloud().then(afterLoad).then(startLive); else showLogin();

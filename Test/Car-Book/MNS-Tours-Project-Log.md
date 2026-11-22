@@ -260,3 +260,13 @@ It is built for phones, since about 99% of use is on a phone. It has its own lig
 - At the 8 PM handover, figures can be taken from the driver's Uber app (proposed "Handover" screen — not built); next morning's report gives exact numbers.
 - Worker: `/ledger` drivers now include `managerName`. SW cache `mns-tours-v13`.
 - **Update (22 Nov, later):** owner asked to keep it simple — Earnings now uses the **calendar day (12 AM → 11:59 PM)**, same as Uber's daily report; the 8 PM → 8 PM split is parked (`SPLIT_AT` in uber-report.js, set to '20:00' to bring it back). 21 Nov check: 5 trips, cash ₹3,517.50, fares ₹2,827.89, Uber diff on cash trips −₹107.91, Drive Pass ₹211.22 (price up from ₹188.80) → Uber −₹319.13 → Siddique gives ₹919.13. First automatic schedule report (21 Nov) arrived 22 Nov. SW cache `mns-tours-v14`.
+
+## 13. One-tap share of Uber reports (22 Nov 2026)
+
+**Why:** Uber doesn't email scheduled reports (checked 22 Nov), the API isn't approved, and the owner's PC isn't always on — so no fully automatic route yet. Next best: share the downloaded CSV straight into the app from the phone.
+
+- `manifest.json` → `share_target` (POST multipart, file field `file`, accepts csv/plain). App appears in Android's **Share** menu as "MNS Tours & Travels" once **installed** (reinstall the app so Chrome picks up the new manifest).
+- `sw.js` catches the POST (`?share-target=1`), stores the file in cache `mns-share` (`./shared-file`), redirects to `index.html?shared=1`. Cache `mns-tours-v15`.
+- `UberReport.takeShared()` reads + deletes it. Owner (index.html) → Earnings + import preview; manager/driver logins are forwarded to `driver.html?shared=1` → manager gets the preview on Earnings; driver/viewer get a "not allowed" message.
+- Daily flow: Fleet Hub (phone) → Reports → yesterday's "MNS Transaction" report → Download → open the download → Share → MNS Tours & Travels → **Save trips**.
+- Long-term: keep pushing Uber for Supplier API approval (Uber Driver app → Help, or Greenlight Hub), keys already saved in the app.

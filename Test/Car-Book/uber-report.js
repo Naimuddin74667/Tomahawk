@@ -164,6 +164,19 @@ const UberReport = (() => {
     return added;
   }
 
+  // File shared to the app from Android's Share menu (saved by sw.js) → {name, text}, or null. Removed once taken.
+  async function takeShared() {
+    if (!/[?&]shared=1/.test(location.search) || !('caches' in window)) return null;
+    try { history.replaceState(null, '', location.pathname); } catch {}
+    try {
+      const c = await caches.open('mns-share'), r = await c.match('./shared-file');
+      if (!r) return null;
+      const text = await r.text(); await c.delete('./shared-file');
+      return { name: decodeURIComponent(r.headers.get('X-Name') || 'report.csv'), text };
+    } catch { return null; }
+  }
+  const isShared = () => /[?&]shared=1/.test(location.search);
+
   // Ask the browser for a .csv file → its text
   function pickFile() {
     return new Promise(resolve => {
@@ -334,5 +347,5 @@ const UberReport = (() => {
   function eday(key, dir) { const st = ST['e:' + key]; if (!st) return; st.move = dir; st.redraw && (st._dir = dir, st.redraw()); }
   function eset(key, day) { const st = ST['e:' + key]; if (!st) return; st.day = day; st.redraw && st.redraw(); window.scrollTo(0, 0); }
 
-  return { parse, plan, guessDriver, previewHtml, importNew, pickFile, viewHtml, toggle, month, saveRows, earningsHtml, eday, eset, earnDays };
+  return { parse, plan, guessDriver, previewHtml, importNew, pickFile, viewHtml, toggle, month, saveRows, earningsHtml, eday, eset, earnDays, takeShared, isShared };
 })();

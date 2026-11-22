@@ -578,9 +578,9 @@ function renderEarnings(tabs) {
 }
 
 /* ── Upload Uber report → Uber payouts into the ledger (parser in uber-report.js, shared with index.html) ── */
-async function uberImport(drvId) {
+async function uberImport(drvId, preloaded) {
   if (!canEditLedger()) return;
-  const f = await UberReport.pickFile(); if (!f) return;
+  const f = preloaded || await UberReport.pickFile(); if (!f) return;
   let rep; try { rep = UberReport.parse(f.text); } catch (e) { alert(e.message); return; }
   const items = UberReport.plan(rep, L.entries), fresh = items.filter(i => !i.exists).length;
   const sel = drvId || UberReport.guessDriver(rep, L.drivers);
@@ -653,6 +653,13 @@ function shareLedger(id) {
 }
 loadData();
 // Keep it fresh while open: every 30 s, and whenever he comes back to the app
+// Opened from Android's Share menu with an Uber report (manager only) → open it once the ledger has loaded
+if (UberReport.isShared()) UberReport.takeShared().then(async f => {
+  if (!f) return;
+  for (let i = 0; i < 40 && !L; i++) await new Promise(r => setTimeout(r, 250));
+  if (!canEditLedger()) { flash('Only the manager or owner can add Uber reports'); return; }
+  setMainTab('earnings'); uberImport('', f);
+});
 setInterval(() => { if (!document.hidden && (D || L)) loadData(); }, 30000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden && (D || L)) loadData(); });
 // Recheck at 8 PM if left open
