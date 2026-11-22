@@ -2013,7 +2013,7 @@ function ledgerHtml() {
     const s = k => info[k], bal = info.balance, hist = days.filter(d => d.settled);
     const byPlat = {}; if (info.uber) byPlat.Uber = info.uber;
     if (info.other) byPlat['Other platforms'] = info.other;
-    const rev = (ledgerAll[drv.id] ? days : info.open).slice().reverse(), shown = rev;
+    const rev = days.slice().reverse(), shown = ledgerAll[drv.id] ? rev : rev.slice(0, 7);   // latest 7 days, with Paid / Pending tags
     const view = ledgerView[drv.id] || 'days', first = esc(drv.name.split(' ')[0]);
     const mgr = (USERS.find(u => u.mobile === drv.managerMobile) || {}).name;
     return `<div class="card section">
@@ -2043,10 +2043,10 @@ function ledgerHtml() {
       : view === 'entries' ? ldMonthHtml(drv, days, es, edit) : `
       ${info.settledTill ? `<div style="background:var(--green-soft,rgba(21,128,61,.1));border-radius:8px;padding:8px 12px;font-size:13px;display:flex;justify-content:space-between;margin-bottom:6px"><span>✓ <b>Settled till ${fmtShort(info.settledTill)}</b></span><b>₹0</b></div>` : ''}
       <table><thead><tr><th>Day</th><th class="num">Rent</th><th class="num">Uber</th><th class="num">Cash</th><th class="num">Balance</th></tr></thead><tbody>
-        ${shown.map(d => `<tr ${edit ? `style="cursor:pointer${d.settled ? ';opacity:.55' : ''}" onclick="openLdDay('${drv.id}','${d.date}')"` : d.settled ? 'style="opacity:.55"' : ''}><td style="white-space:nowrap">${fmtShort(d.date)}${d.settled ? ' ✓' : ''}</td><td class="num">${d.waive && !d.rent ? 'off' : inr2(d.rent)}</td><td class="num ${d.credit < -0.004 ? 'neg' : d.credit > 0.004 ? 'pos' : ''}">${d.credit ? (d.credit > 0 ? '+' : '') + inr2(d.credit) : '—'}</td>
+        ${shown.map(d => `<tr ${edit ? `style="cursor:pointer" onclick="openLdDay('${drv.id}','${d.date}')"` : ''}><td style="white-space:nowrap">${fmtShort(d.date)} ${UberReport.tag(d)}</td><td class="num">${d.waive && !d.rent ? 'off' : inr2(d.rent)}</td><td class="num ${d.credit < -0.004 ? 'neg' : d.credit > 0.004 ? 'pos' : ''}">${d.credit ? (d.credit > 0 ? '+' : '') + inr2(d.credit) : '—'}</td>
           <td class="num">${d.cash ? inr2(d.cash) : '—'}</td><td class="num ${d.bal > 0.004 ? 'neg' : d.bal < -0.004 ? 'pos' : ''}"><b>${inr2(d.bal)}</b></td></tr>`).join('')}
       </tbody></table>
-      ${hist.length ? `<button class="link-btn" onclick="ledgerAll['${drv.id}']=!ledgerAll['${drv.id}'];redrawLedger()">${ledgerAll[drv.id] ? 'Hide old history ▴' : 'Show old history (' + fmtShort(hist[0].date) + ' – ' + fmtShort(info.settledTill) + ') ▾'}</button>` : ''}
+      ${rev.length > 7 ? `<button class="link-btn" onclick="ledgerAll['${drv.id}']=!ledgerAll['${drv.id}'];redrawLedger()">${ledgerAll[drv.id] ? 'Show last 7 days only' : 'Show all ' + rev.length + ' days'}</button>` : ''}
       <div class="muted" style="font-size:11px;margin-top:6px">Days count once over (till yesterday). Uber = Uber’s figure for the day from the daily report (− = Uber takes it back later). A “Cash” entry with “Settled” in its note clears everything up to its date.</div>
       ${edit ? '<div class="muted" style="font-size:11px;margin-top:6px">Tap a day to see or change its entries.</div>' : ''}`}
     </div>`;

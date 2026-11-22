@@ -410,7 +410,7 @@ function renderLedger(tabs) {
       ? (owe ? 'Collect from ' + esc(first) : back ? 'You owe ' + esc(first) : 'All settled with ' + esc(first))
       : (owe ? 'You need to give' : back ? 'You will get back' : 'All settled');
     const plats = Object.keys(T.byPlat).sort();
-    const days = (ldShowAll[drv.id] ? T.days : T.open).slice().reverse(), shown = days;
+    const days = T.days.slice().reverse(), shown = ldShowAll[drv.id] ? days : days.slice(0, 7);   // latest 7 days, with Paid / Pending tags
     const hist = T.days.filter(d => d.settled);
     const es = ldEntries(drv.id).slice().sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || ''));
     return `
@@ -437,13 +437,13 @@ function renderLedger(tabs) {
         : ldTab === 'days'
         ? `${T.settledTill ? `<div class="settled-line"><span>✓ <b>Settled till ${fmtShort(T.settledTill)}</b></span><b>₹0</b></div>` : ''}
           <table class="dtable"><thead><tr><th>Day</th><th>Rent</th><th>Uber</th><th>Cash</th><th>Balance</th></tr></thead><tbody>
-            ${shown.map(d => `<tr${mgr ? ` class="click" onclick="openDay('${drv.id}','${d.date}')"` : ''}${d.settled ? ' style="opacity:.55"' : ''}><td>${fmtShort(d.date)}${d.settled ? ' ✓' : ''}</td>
+            ${shown.map(d => `<tr${mgr ? ` class="click" onclick="openDay('${drv.id}','${d.date}')"` : ''}><td>${fmtShort(d.date)}<div style="margin-top:3px">${UberReport.tag(d)}</div></td>
               <td${d.rent ? '' : ' class="z"'}>${d.waive && !d.rent ? 'off' : inr2(d.rent)}</td>
               <td class="${d.credit < -0.004 ? 'neg' : d.credit > 0.004 ? 'pos' : 'z'}">${d.credit ? (d.credit > 0 ? '+' : '') + inr2(d.credit) : '—'}</td>
               <td${d.cash ? '' : ' class="z"'}>${d.cash ? inr2(d.cash) : '—'}</td>
               <td class="${d.bal > 0.004 ? 'neg' : d.bal < -0.004 ? 'pos' : ''}"><b>${inr2(d.bal)}</b></td></tr>`).join('') || '<tr><td colspan="5">No days yet</td></tr>'}
           </tbody></table>
-          ${hist.length ? `<button class="more" onclick="ldShowAll['${drv.id}']=!ldShowAll['${drv.id}'];render()">${ldShowAll[drv.id] ? 'Hide old history ▴' : 'Show old history (' + fmtShort(hist[0].date) + ' – ' + fmtShort(T.settledTill) + ') ▾'}</button>` : ''}
+          ${days.length > 7 ? `<button class="more" onclick="ldShowAll['${drv.id}']=!ldShowAll['${drv.id}'];render()">${ldShowAll[drv.id] ? 'Show last 7 days only ▴' : 'Show all ' + days.length + ' days ▾'}</button>` : ''}
           <div class="note">Uber = what Uber sends to ${mgr ? 'your' : 'the manager’s'} bank for that day (from the daily report). Plus = it reduces what ${mgr ? esc(first) + ' gives' : 'you give'}. Minus = Uber takes it back later (Drive Pass, Uber’s share of cash fares), so ${mgr ? esc(first) + ' covers' : 'you cover'} it.
             Balance in red = ${mgr ? esc(first) + ' still has to give' : 'you still have to give'}. Green = ${mgr ? 'you owe ' + esc(first) : 'you get back'}.</div>`
         : monthBlock(drv, T, es, mgr)}

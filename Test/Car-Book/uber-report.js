@@ -403,6 +403,23 @@ const UberReport = (() => {
   }
   function ledgerInfo(drv, entries, uberRows) {
     const rows = ledgerRows(drv, entries, uberRows);
+    /* Status per day, oldest money settled first:
+       the latest days that make up today's balance are "Pending" (or "Part paid"); earlier days are "Paid".
+       Days where Uber sent more than the rent are "Adjusted" (their extra went against other days),
+       or "Get back" while the balance is in the driver's favour. */
+    const B = rows.length ? rows[rows.length - 1].bal : 0;
+    let left = B;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const r = rows[i];
+      if (r.settled) { r.status = r.net < -0.004 ? 'adjusted' : 'paid'; continue; }
+      if (r.net > 0.004) {
+        if (left > 0.004) { r.status = left >= r.net - 0.004 ? 'pending' : 'part'; r.pendingAmt = r2(Math.min(left, r.net)); left = r2(left - r.net); }
+        else r.status = 'paid';
+      } else if (r.net < -0.004) {
+        if (left < -0.004) { r.status = 'getback'; r.pendingAmt = r2(Math.min(-left, -r.net)); left = r2(left - r.net); }
+        else r.status = 'adjusted';
+      } else r.status = r.rent || r.cash ? 'paid' : 'none';
+    }
     const open = rows.filter(r => !r.settled), settledTill = rows.filter(r => r.settled).map(r => r.date).pop() || '';
     const S = k => r2(open.reduce((t, r) => t + r[k], 0));
     return { rows, open, settledTill, balance: open.length ? open[open.length - 1].bal : 0,
@@ -423,6 +440,11 @@ const UberReport = (() => {
       ${row('Balance', inr(Math.abs(info.balance)), info.balance > 0.004 ? 'neg' : 'pos', true)}</div>`;
   }
 
-  return { parse, plan, guessDriver, previewHtml, importNew, pickFile, viewHtml, toggle, month, saveRows, earningsHtml, eday, eset, earnDays, takeShared, isShared,
+  const STATUS = { paid: ['Paid', 'var(--green-soft)', 'var(--green)'], pending: ['Pending', 'var(--red-soft)', 'var(--red)'],
+    part: ['Part paid', 'rgba(234,179,8,.15)', '#a16207'], getback: ['Get back', 'var(--green-soft)', 'var(--green)'],
+    adjusted: ['Adjusted', 'var(--surface2)', 'var(--text2)'], none: ['—', 'transparent', 'var(--text2)'] };
+  const tag = r => { const t = STATUS[r.status || 'none'];
+    return `<span style="display:inline-block;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700;white-space:nowrap;background:${t[1]};color:${t[2]}">${t[0]}</span>`; };
+  return { tag, parse, plan, guessDriver, previewHtml, importNew, pickFile, viewHtml, toggle, month, saveRows, earningsHtml, eday, eset, earnDays, takeShared, isShared,
            ledgerRows, ledgerInfo, owedLines, isSettle };
 })();
