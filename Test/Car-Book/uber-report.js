@@ -290,7 +290,7 @@ const UberReport = (() => {
     if (st._dir) { const j = days.findIndex(x => x.day === st.day) + st._dir; if (j >= 0 && j < days.length) st.day = days[j].day; st._dir = 0; }
     const i = days.findIndex(d => d.day === st.day), d = days[i];
     const give = r2(n(rent) - d.toBank), drv = esc(who.driver || 'Driver'), mgr = esc(who.manager || 'Manager');
-    const isDrv = who.me === 'driver', isMgr = who.me === 'manager';
+    const isDrv = who.me === 'driver', isMgr = who.me === 'manager', mgrP = isMgr ? 'your' : mgr + '’s';
     const prev = new Date(d.day + 'T00:00:00'); prev.setDate(prev.getDate() - 1);
     const range = SPLIT_AT ? prev.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) + ' 8 PM → ' + fd(d.day) + ' 8 PM'
       : new Date(d.day + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'long' }) + ' · 12 AM → 11:59 PM';
@@ -305,11 +305,25 @@ const UberReport = (() => {
           <div style="color:var(--text2);font-size:12px;margin-top:2px">${isCash ? 'Cash ' + inr(n(t.cash)) : 'Online'}${n(t.toll) ? ' · toll ' + inr(n(t.toll)) : ''}${n(t.tip) ? ' · tip ' + inr(n(t.tip)) : ''}</div></div>
         <div style="text-align:right"><b>${inr(t.earned)}</b><div style="font-size:11px;font-weight:700;color:${isCash ? 'var(--text2)' : 'var(--green)'}">${isCash ? 'CASH' : 'ONLINE'}</div></div></div>`;
     }).join('');
-    const settle = give > 0.004
-      ? `<div style="background:var(--red-soft);border-radius:10px;padding:12px;margin-top:10px;text-align:center"><div style="font-size:12px;color:var(--text2)">${isDrv ? 'You give ' + mgr : drv + ' gives ' + mgr}</div><div style="font-size:26px;font-weight:800" class="neg">${inr(give)}</div></div>`
-      : give < -0.004
-        ? `<div style="background:var(--green-soft);border-radius:10px;padding:12px;margin-top:10px;text-align:center"><div style="font-size:12px;color:var(--text2)">${isMgr ? 'You give ' + drv : mgr + ' gives ' + (isDrv ? 'you' : drv)}</div><div style="font-size:26px;font-weight:800" class="pos">${inr(-give)}</div></div>`
-        : `<div style="background:var(--surface2);border-radius:10px;padding:12px;margin-top:10px;text-align:center;font-weight:700">✓ Nothing to give either way</div>`;
+    // Ledger context (settled till / unpaid earlier days / balance after this day), when the page passes it
+    const L = who.ledger, lrow = L ? L.rows.find(r => r.date === d.day) : null;
+    const isSettled = !!(L && L.settledTill && d.day <= L.settledTill);
+    const prevOpen = L && lrow && !isSettled ? r2(L.open.filter(r => r.date < d.day).reduce((t, r) => t + r.net, 0)) : 0;
+    const box = (bg, label, amt, cls, note) => `<div style="background:${bg};border-radius:10px;padding:12px;margin-top:10px;text-align:center"><div style="font-size:12px;color:var(--text2)">${label}</div>
+        <div style="font-size:26px;font-weight:800" class="${cls}">${amt}</div>${note ? `<div style="font-size:12px;color:var(--text2);margin-top:2px">${note}</div>` : ''}</div>`;
+    const adjNote = prevOpen > 0.004 ? 'Adjusted against earlier days (' + inr(prevOpen) + ' not paid yet)' : prevOpen < -0.004 ? 'Plus ' + inr(-prevOpen) + ' still due to ' + (isDrv ? 'you' : drv) + ' from earlier days' : '';
+    const settle = isSettled
+      ? `<div style="background:var(--green-soft);border-radius:10px;padding:14px;margin-top:10px;text-align:center"><div style="font-size:20px;font-weight:800" class="pos">✓ Settled</div>
+          <div style="font-size:12px;color:var(--text2)">Cleared with ${isMgr ? drv : mgr} on ${fd(L.settledTill)}</div>
+          <div style="font-size:12px;color:var(--text2);margin-top:4px;text-decoration:line-through">${give > 0.004 ? (isDrv ? 'You give ' + mgr : isMgr ? drv + ' gives you' : drv + ' gives ' + mgr) : (isMgr ? 'You give ' + drv : mgr + ' gives ' + (isDrv ? 'you' : drv))} ${inr(Math.abs(give))}</div></div>`
+      : give > 0.004
+        ? box('var(--red-soft)', isDrv ? 'You give ' + mgr : isMgr ? drv + ' gives you' : drv + ' gives ' + mgr, inr(give), 'neg', adjNote)
+        : give < -0.004
+          ? box('var(--green-soft)', isMgr ? 'You give ' + drv : mgr + ' gives ' + (isDrv ? 'you' : drv), inr(-give), 'pos', adjNote)
+          : `<div style="background:var(--surface2);border-radius:10px;padding:12px;margin-top:10px;text-align:center;font-weight:700">✓ Nothing to give either way</div>`;
+    const after = lrow && !isSettled ? `<div style="margin-top:10px;background:var(--surface2);border-radius:10px;padding:10px 12px;font-size:13px;display:flex;justify-content:space-between;gap:10px">
+        <span>Balance after ${fd(d.day)}</span><b class="${lrow.bal > 0.004 ? 'neg' : 'pos'}">${lrow.bal > 0.004 ? (isDrv ? 'You give ' : isMgr ? drv + ' gives you ' : drv + ' gives ') + inr(lrow.bal)
+        : lrow.bal < -0.004 ? (isMgr ? 'You give ' + drv + ' ' : mgr + ' gives ' + (isDrv ? 'you ' : drv + ' ')) + inr(-lrow.bal) : '✓ ₹0'}</b></div>` : '';
     const keep = r2(d.earned - d.pass - n(rent));
     return `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">${nav(-1, i > 0)}
         <div style="text-align:center"><b style="font-size:16px">${fd(d.day)}</b><div style="font-size:11px;color:var(--text2)">${range}</div></div>${nav(1, i < days.length - 1)}</div>
@@ -328,12 +342,12 @@ const UberReport = (() => {
       ${d.adj < 0 ? `<div style="font-size:11px;color:var(--text2)">Riders paid a little more cash than the driver's fare (Uber's part, incl. tolls). Uber takes it from the online money.</div>` : ''}
       ${d.toll ? sub('Tolls Uber pays back (included)', inr(d.toll)) : ''}${d.tip ? sub('Tips (included)', inr(d.tip)) : ''}
       ${line('− Drive Pass', d.pass ? '−' + inr(d.pass) : '₹0', { cls: d.pass ? 'neg' : '' })}
-      ${line('= Uber sends to ' + mgr + '’s bank', inr(d.toBank), { top: true, cls: d.toBank < 0 ? 'neg' : 'pos' })}
+      ${line('= Uber sends to ' + mgrP + ' bank', inr(d.toBank), { top: true, cls: d.toBank < 0 ? 'neg' : 'pos' })}
       ${d.toBank < 0 ? `<div style="font-size:11px;color:var(--text2)">Negative: Uber takes this from the next online money.</div>` : ''}
       <div style="margin:14px 0 2px;font-weight:700;font-size:14px">Settlement</div>
       ${line('Rent', inr(n(rent)))}
-      ${d.toBank < 0 ? line('+ Uber will cut from ' + mgr + '’s next payout', '+' + inr(-d.toBank)) : line('− Uber sends to ' + mgr + '’s bank', '−' + inr(d.toBank))}
-      ${settle}
+      ${d.toBank < 0 ? line('+ Uber will cut from ' + mgrP + ' next payout', '+' + inr(-d.toBank)) : line('− Uber sends to ' + mgrP + ' bank', '−' + inr(d.toBank))}
+      ${settle}${after}
       <div style="font-size:12px;color:var(--text2);margin-top:8px;text-align:center">${isDrv ? 'Your' : drv + '’s'} earnings after rent &amp; Drive Pass: <b class="${keep < 0 ? 'neg' : 'pos'}">${inr(keep)}</b></div>
       ${d.payout ? `<div style="font-size:11px;color:var(--text2);margin-top:6px;text-align:center">Actual Uber payout that reached the bank on ${fd(d.day)}: ${inr(d.payout)} (for earlier days)</div>` : ''}
       <details style="margin-top:14px"><summary style="cursor:pointer;font-size:13px;color:var(--text2)">All days</summary>
@@ -347,5 +361,64 @@ const UberReport = (() => {
   function eday(key, dir) { const st = ST['e:' + key]; if (!st) return; st.move = dir; st.redraw && (st._dir = dir, st.redraw()); }
   function eset(key, day) { const st = ST['e:' + key]; if (!st) return; st.day = day; st.redraw && st.redraw(); window.scrollTo(0, 0); }
 
-  return { parse, plan, guessDriver, previewHtml, importNew, pickFile, viewHtml, toggle, month, saveRows, earningsHtml, eday, eset, earnDays, takeShared, isShared };
+  /* ── Driver ledger maths (shared by owner app, manager and driver screens) ──
+     A day counts once it is over: days run from the driver's start date to YESTERDAY (or his end date).
+     For days covered by Uber reports, "Uber" = what Uber sends to the manager's bank for that day
+       (online − Uber's share of cash fares − Drive Pass; can be negative). Uber payout entries
+       typed by hand for those days are then ignored, so nothing is counted twice.
+     Other platforms (Ola, Rapido…) still come from "+ Platform money" entries.
+     Settlement: a "Cash" entry whose note starts with "Settled" closes everything up to its date → balance 0.
+     Each row: { date, rent, waive, uber, other, credit (= uber + other), cash, net, bal, settled } */
+  const isSettle = e => e.kind === 'cash' && /^\s*settled/i.test(String(e.note || ''));
+  const ymdL = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  function ledgerRows(drv, entries, uberRows) {
+    const es = (entries || []).filter(e => e.driverId === drv.id);
+    const ub = (uberRows || []).filter(r => r.driverId === drv.id || !r.driverId);
+    const yest = new Date(); yest.setDate(yest.getDate() - 1);
+    const last = drv.endDate && drv.endDate < ymdL(yest) ? drv.endDate : ymdL(yest);
+    const settledTill = es.filter(isSettle).map(e => e.date).sort().pop() || '';
+    const uDays = {}; earnDays(ub).forEach(d => { if (d.trips.length || d.pass) uDays[d.day] = d.toBank; });
+    const uKeys = Object.keys(uDays).sort(), uFrom = uKeys[0] || '', uTo = uKeys[uKeys.length - 1] || '';
+    const covered = date => uFrom && date >= uFrom && date <= uTo;
+    const dates = new Set();
+    for (let d = new Date(drv.startDate + 'T00:00:00'), i = 0; ymdL(d) <= last && i < 3000; d.setDate(d.getDate() + 1), i++) dates.add(ymdL(d));
+    es.forEach(e => { if (e.date <= last || isSettle(e)) dates.add(e.date); });
+    let bal = 0;
+    return [...dates].sort().map(date => {
+      const of = (k, f) => r2(es.filter(e => e.date === date && e.kind === k && (!f || f(e))).reduce((t, e) => t + n(e.amount), 0));
+      const rentDay = date >= drv.startDate && date <= last ? n(drv.rent) : 0;
+      const waive = Math.min(of('waive'), rentDay), rent = r2(rentDay - waive);
+      const uber = covered(date) ? r2(uDays[date] || 0) : 0;
+      const other = of('credit', e => !(covered(date) && String(e.platform || '').toLowerCase() === 'uber'));
+      const cash = of('cash', e => !isSettle(e));
+      const net = r2(rent - uber - other - cash);
+      const settled = !!settledTill && date <= settledTill;
+      bal = settled ? 0 : r2(bal + net);
+      return { date, rent, waive, uber, other, credit: r2(uber + other), cash, net, bal, settled, covered: !!covered(date) };
+    });
+  }
+  function ledgerInfo(drv, entries, uberRows) {
+    const rows = ledgerRows(drv, entries, uberRows);
+    const open = rows.filter(r => !r.settled), settledTill = rows.filter(r => r.settled).map(r => r.date).pop() || '';
+    const S = k => r2(open.reduce((t, r) => t + r[k], 0));
+    return { rows, open, settledTill, balance: open.length ? open[open.length - 1].bal : 0,
+      rent: S('rent'), uber: S('uber'), other: S('other'), credit: S('credit'), cash: S('cash') };
+  }
+  // Top-card breakdown: one line per open day ("21 Nov · you give ₹919.13"), max 6, then balance
+  function owedLines(info, who) {
+    const isMgr = who.me === 'manager', drv = esc(who.driver || 'Driver'), mgr = esc(who.manager || 'Manager');
+    const days = info.open.filter(r => Math.abs(r.net) > 0.004);
+    const pick = days.length > 6 ? days.slice(-6) : days;
+    const row = (l, v, cls, bold) => `<div style="display:flex;justify-content:space-between;gap:10px;padding:3px 0;font-size:13px;${bold ? 'border-top:1px solid var(--border);margin-top:3px;padding-top:6px' : ''}">
+      <span style="${bold ? 'font-weight:700' : 'color:var(--text2)'}">${l}</span><b class="${cls}">${v}</b></div>`;
+    const say = net => net > 0 ? (isMgr ? drv + ' gives you' : who.me === 'driver' ? 'you give' : drv + ' gives ' + mgr)
+                               : (isMgr ? 'you give ' + drv : who.me === 'driver' ? mgr + ' gives you' : mgr + ' gives ' + drv);
+    if (!pick.length) return '';
+    return `<div style="margin-top:8px;text-align:left">${days.length > pick.length ? row('Earlier days', inr(r2(days.slice(0, -6).reduce((t, r) => t + r.net, 0))), '') : ''}
+      ${pick.map(r => row(fd(r.date) + ' · ' + say(r.net), (r.net < 0 ? '−' : '') + inr(Math.abs(r.net)), r.net > 0 ? 'neg' : 'pos')).join('')}
+      ${row('Balance', inr(Math.abs(info.balance)), info.balance > 0.004 ? 'neg' : 'pos', true)}</div>`;
+  }
+
+  return { parse, plan, guessDriver, previewHtml, importNew, pickFile, viewHtml, toggle, month, saveRows, earningsHtml, eday, eset, earnDays, takeShared, isShared,
+           ledgerRows, ledgerInfo, owedLines, isSettle };
 })();

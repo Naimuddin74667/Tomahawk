@@ -61,6 +61,7 @@ body { font-family:var(--font-body); background:var(--bg); color:var(--text); fo
 .badge { display:inline-block; padding:3px 9px; border-radius:20px; font-size:11px; font-weight:700; }
 .b-paid { background:var(--green-soft); color:var(--green); } .b-due { background:var(--red-soft); color:var(--red); }
 .b-part { background:var(--accent-soft); color:var(--accent); } .b-off { background:var(--surface2); color:var(--text2); }
+.settled-line { background:var(--green-soft); border-radius:10px; padding:10px 12px; font-size:13px; display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
 .tabs { display:grid; grid-auto-flow:column; grid-auto-columns:1fr; gap:6px; background:var(--surface2); padding:4px; border-radius:12px; margin-top:14px; }
 .tabs button { border:0; background:none; padding:10px; border-radius:9px; font-family:inherit; font-weight:600; font-size:14px; color:var(--text2); }
 .tabs button.on { background:var(--surface); color:var(--text); box-shadow:0 1px 2px rgba(0,0,0,.06); }
@@ -383,28 +384,19 @@ const inr2 = n => { const a = Math.abs(Math.round(n * 100) / 100); const t = a.t
 const canEditLedger = () => ROLE === 'manager';
 const ldEntries = id => (L ? L.entries : []).filter(e => e.driverId === id);
 
-/* Day-wise rows from the start date to today (or the end date), oldest first, with a running balance. */
-function ledgerDays(drv) {
-  const es = ldEntries(drv.id), today = todayStr();
-  const last = drv.endDate && drv.endDate < today ? drv.endDate : today;
-  const dates = new Set();
-  for (let d = parseYmd(drv.startDate), i = 0; ymd(d) <= last && i < 3000; d = addDays(d, 1), i++) dates.add(ymd(d));
-  es.forEach(e => dates.add(e.date));
-  let bal = 0;
-  return [...dates].sort().map(date => {
-    const of = k => es.filter(e => e.date === date && e.kind === k).reduce((s, e) => s + num(e.amount), 0);
-    const rentDay = date >= drv.startDate && date <= last ? num(drv.rent) : 0;
-    const waive = Math.min(of('waive'), rentDay), rent = rentDay - waive, credit = of('credit'), cash = of('cash');
-    bal = Math.round((bal + rent - credit - cash) * 100) / 100;
-    return { date, rent, waive, credit, cash, bal };
-  });
-}
+/* Day-wise rows (start date → yesterday) with a running balance — maths in uber-report.js (UberReport.ledgerRows):
+   Uber per day from the uploaded reports, other platforms from entries, "Settled…" cash entry resets to ₹0. */
+function ledgerDays(drv) { return UberReport.ledgerRows(drv, L ? L.entries : [], L ? L.uber : []); }
 function ledgerTotals(drv) {
-  const days = ledgerDays(drv), es = ldEntries(drv.id);
+  const info = UberReport.ledgerInfo(drv, L ? L.entries : [], L ? L.uber : []), es = ldEntries(drv.id);
   const byPlat = {};
-  es.filter(e => e.kind === 'credit').forEach(e => byPlat[e.platform || 'Other'] = (byPlat[e.platform || 'Other'] || 0) + num(e.amount));
-  const s = k => days.reduce((t, d) => t + d[k], 0);
-  return { days, balance: days.length ? days[days.length - 1].bal : 0, rent: s('rent'), credit: s('credit'), cash: s('cash'), byPlat };
+  info.open.forEach(r => { if (r.uber) byPlat.Uber = (byPlat.Uber || 0) + r.uber; });
+  es.filter(e => e.kind === 'credit' && !UberReport.isSettle(e)).forEach(e => {
+    const r = info.open.find(x => x.date === e.date); if (!r) return;
+    if (r.covered && String(e.platform || '').toLowerCase() === 'uber') return;
+    byPlat[e.platform || 'Other'] = (byPlat[e.platform || 'Other'] || 0) + num(e.amount); });
+  return { info, days: info.rows, open: info.open, settledTill: info.settledTill, balance: info.balance,
+           rent: info.rent, credit: info.credit, cash: info.cash, byPlat };
 }
 
 function renderLedger(tabs) {
@@ -418,7 +410,8 @@ function renderLedger(tabs) {
       ? (owe ? 'Collect from ' + esc(first) : back ? 'You owe ' + esc(first) : 'All settled with ' + esc(first))
       : (owe ? 'You need to give' : back ? 'You will get back' : 'All settled');
     const plats = Object.keys(T.byPlat).sort();
-    const days = T.days.slice().reverse(), shown = ldShowAll[drv.id] ? days : days.slice(0, 10);
+    const days = (ldShowAll[drv.id] ? T.days : T.open).slice().reverse(), shown = days;
+    const hist = T.days.filter(d => d.settled);
     const es = ldEntries(drv.id).slice().sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || ''));
     return `
       ${mgr || L.drivers.length > 1 ? `<div class="hello" style="font-size:19px;margin-top:6px">${esc(drv.name)}</div>` : `<div class="hello">Hi ${esc(first)} 👋</div>`}
@@ -426,8 +419,8 @@ function renderLedger(tabs) {
       <div class="card due ${owe ? 'pend' : 'clear'}">
         <div class="label">${head}</div>
         <div class="amt">${owe || back ? inr2(Math.abs(b)) : '✓'}</div>
-        <div class="sub">Rent ${inr2(T.rent)} − platform ${inr2(T.credit)} − cash ${inr2(T.cash)}</div>
-        ${plats.length ? `<div class="plat">${plats.map(p => `<span>${esc(p)} <b>${inr2(T.byPlat[p])}</b></span>`).join('')}</div>` : ''}
+        ${UberReport.owedLines(T.info, { me: ROLE, driver: first, manager: mgr ? 'you' : (drv.managerName || 'Manager').split(' ')[0] })
+          || `<div class="sub">${T.settledTill ? 'Settled till ' + fmtShort(T.settledTill) : 'Rent ' + inr2(T.rent) + ' − Uber/platform ' + inr2(T.credit) + ' − cash ' + inr2(T.cash)}</div>`}
         ${mgr ? `<div class="ld-acts"><button class="pay alt" onclick="openEntry('${drv.id}','credit')">+ Platform money</button>
             <button class="pay" onclick="openEntry('${drv.id}','cash')">+ Cash from ${esc(first)}</button></div>
           <div class="ld-links"><button class="more" onclick="openEntry('${drv.id}','waive')">Rent off day</button>
@@ -442,15 +435,17 @@ function renderLedger(tabs) {
         <button class="${ldTab === 'uber' ? 'on' : ''}" onclick="ldTab='uber';render()">Uber</button></div>
       <div class="card">${ldTab === 'uber' ? UberReport.viewHtml(drv.id, (L.uber || []).filter(r => r.driverId === drv.id), render)
         : ldTab === 'days'
-        ? `<table class="dtable"><thead><tr><th>Day</th><th>Rent</th><th>Online</th><th>Cash</th><th>Balance</th></tr></thead><tbody>
-            ${shown.map(d => `<tr${mgr ? ` class="click" onclick="openDay('${drv.id}','${d.date}')"` : ''}><td>${fmtShort(d.date)}</td>
+        ? `${T.settledTill ? `<div class="settled-line"><span>✓ <b>Settled till ${fmtShort(T.settledTill)}</b></span><b>₹0</b></div>` : ''}
+          <table class="dtable"><thead><tr><th>Day</th><th>Rent</th><th>Uber</th><th>Cash</th><th>Balance</th></tr></thead><tbody>
+            ${shown.map(d => `<tr${mgr ? ` class="click" onclick="openDay('${drv.id}','${d.date}')"` : ''}${d.settled ? ' style="opacity:.55"' : ''}><td>${fmtShort(d.date)}${d.settled ? ' ✓' : ''}</td>
               <td${d.rent ? '' : ' class="z"'}>${d.waive && !d.rent ? 'off' : inr2(d.rent)}</td>
-              <td${d.credit ? '' : ' class="z"'}>${d.credit ? inr2(d.credit) : '—'}</td>
+              <td class="${d.credit < -0.004 ? 'neg' : d.credit > 0.004 ? 'pos' : 'z'}">${d.credit ? (d.credit > 0 ? '+' : '') + inr2(d.credit) : '—'}</td>
               <td${d.cash ? '' : ' class="z"'}>${d.cash ? inr2(d.cash) : '—'}</td>
               <td class="${d.bal > 0.004 ? 'neg' : d.bal < -0.004 ? 'pos' : ''}"><b>${inr2(d.bal)}</b></td></tr>`).join('') || '<tr><td colspan="5">No days yet</td></tr>'}
           </tbody></table>
-          ${days.length > 10 ? `<button class="more" onclick="ldShowAll['${drv.id}']=!ldShowAll['${drv.id}'];render()">${ldShowAll[drv.id] ? 'Show latest only' : 'Show all ' + days.length + ' days'}</button>` : ''}
-          <div class="note">Balance in red = ${mgr ? esc(first) + ' still has to give' : 'you still have to give'}. Green = ${mgr ? 'you owe ' + esc(first) : 'you get back'}.</div>`
+          ${hist.length ? `<button class="more" onclick="ldShowAll['${drv.id}']=!ldShowAll['${drv.id}'];render()">${ldShowAll[drv.id] ? 'Hide old history ▴' : 'Show old history (' + fmtShort(hist[0].date) + ' – ' + fmtShort(T.settledTill) + ') ▾'}</button>` : ''}
+          <div class="note">Uber = what Uber sends to ${mgr ? 'your' : 'the manager’s'} bank for that day (from the daily report). Plus = it reduces what ${mgr ? esc(first) + ' gives' : 'you give'}. Minus = Uber takes it back later (Drive Pass, Uber’s share of cash fares), so ${mgr ? esc(first) + ' covers' : 'you cover'} it.
+            Balance in red = ${mgr ? esc(first) + ' still has to give' : 'you still have to give'}. Green = ${mgr ? 'you owe ' + esc(first) : 'you get back'}.</div>`
         : monthBlock(drv, T, es, mgr)}
       </div>`;
   }).join('<div style="height:18px"></div>');
@@ -575,7 +570,7 @@ function renderEarnings(tabs) {
   app.innerHTML = (tabs || '')
     + (drivers.length > 1 ? `<div class="tabs" style="margin-top:10px">${drivers.map(d => `<button class="${d.id === earnDrv ? 'on' : ''}" onclick="earnDrv='${d.id}';render()">${esc(d.name.split(' ')[0])}</button>`).join('')}</div>` : '')
     + '<div class="card" style="margin-top:14px">' + UberReport.earningsHtml(drv.id, uber.filter(r => r.driverId === drv.id), drv.rent,
-        { driver: drv.name.split(' ')[0], manager: managerName, me: ROLE }, render) + '</div>'
+        { driver: drv.name.split(' ')[0], manager: managerName, me: ROLE, ledger: UberReport.ledgerInfo(drv, L.entries, uber) }, render) + '</div>'
     + (mgr ? `<button class="pay pay-other" style="margin-top:14px" onclick="uberImport('${drv.id}')">⬆ Upload Uber report</button>` : '')
     + `<div class="foot">Earnings · day-wise · <a href="#" onclick="logoutDriver();return false" style="color:var(--text2)">Log out</a></div>`;
 }
@@ -647,7 +642,7 @@ async function driverLogin(id) {
 /* Short statement for WhatsApp */
 function shareLedger(id) {
   const d = ldDriver(id), T = ledgerTotals(d), b = T.balance;
-  const last = T.days.slice(-7).reverse().map(x => `${fmtShort(x.date)}: rent ${inr2(x.rent)}${x.credit ? ', platform ' + inr2(x.credit) : ''}${x.cash ? ', cash ' + inr2(x.cash) : ''} → ${inr2(x.bal)}`).join('\n');
+  const last = T.open.slice(-7).reverse().map(x => `${fmtShort(x.date)}: rent ${inr2(x.rent)}${x.credit ? ', platform ' + inr2(x.credit) : ''}${x.cash ? ', cash ' + inr2(x.cash) : ''} → ${inr2(x.bal)}`).join('\n');
   const text = `*MNS Tours & Travels — Rent account*\n${d.name} · ${inr2(d.rent)}/day since ${fmtDate(d.startDate)}\n\n` +
     `Rent: ${inr2(T.rent)}\nPlatform money (to bank): ${inr2(T.credit)}\nCash given: ${inr2(T.cash)}\n` +
     `*${b > 0.004 ? 'To give: ' + inr2(b) : b < -0.004 ? 'To get back: ' + inr2(-b) : 'All settled ✅'}*\n\nLast days:\n${last}`;

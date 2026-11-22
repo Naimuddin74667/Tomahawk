@@ -2001,31 +2001,19 @@ async function loadLedger() {
 }
 function inr2(n) { const a = Math.abs(Math.round(n * 100) / 100);
   return (n < -0.004 ? '−₹' : '₹') + a.toLocaleString('en-IN', { minimumFractionDigits: a % 1 ? 2 : 0, maximumFractionDigits: 2 }); }
-function ledgerDays(drv) {
-  const es = LEDGER.entries.filter(e => e.driverId === drv.id), today = todayStr();
-  const last = drv.endDate && drv.endDate < today ? drv.endDate : today;
-  const dates = new Set();
-  for (let d = parseYmd(drv.startDate), i = 0; ymd(d) <= last && i < 3000; d = addDays(d, 1), i++) dates.add(ymd(d));
-  es.forEach(e => dates.add(e.date));
-  let bal = 0;
-  return [...dates].sort().map(date => {
-    const of = k => es.filter(e => e.date === date && e.kind === k).reduce((t, e) => t + num(e.amount), 0);
-    const rentDay = date >= drv.startDate && date <= last ? num(drv.rent) : 0;
-    const waive = Math.min(of('waive'), rentDay), rent = rentDay - waive, credit = of('credit'), cash = of('cash');
-    bal = Math.round((bal + rent - credit - cash) * 100) / 100;
-    return { date, rent, waive, credit, cash, bal };
-  });
-}
+// Ledger maths shared with driver.html — see UberReport.ledgerRows in uber-report.js
+function ledgerDays(drv) { return UberReport.ledgerRows(drv, LEDGER.entries, LEDGER.uber || []); }
 function ledgerHtml() {
   if (!LEDGER) return '';
   const edit = !isViewer();
   const addBtn = edit ? `<button class="btn sm" style="margin-top:10px" onclick="openLdDriverForm()">+ Ledger driver</button>` : '';
   if (!LEDGER.drivers.length) return `<div class="card"><h3>Driver ledger</h3><div class="muted" style="font-size:13px">No drivers under the Driver Manager yet.</div>${addBtn}</div>`;
   return LEDGER.drivers.map(drv => {
-    const days = ledgerDays(drv), es = LEDGER.entries.filter(e => e.driverId === drv.id);
-    const s = k => days.reduce((t, d) => t + d[k], 0), bal = days.length ? days[days.length - 1].bal : 0;
-    const byPlat = {}; es.filter(e => e.kind === 'credit').forEach(e => byPlat[e.platform || 'Other'] = (byPlat[e.platform || 'Other'] || 0) + num(e.amount));
-    const rev = days.slice().reverse(), shown = ledgerAll[drv.id] ? rev : rev.slice(0, 7);
+    const info = UberReport.ledgerInfo(drv, LEDGER.entries, LEDGER.uber || []), days = info.rows, es = LEDGER.entries.filter(e => e.driverId === drv.id);
+    const s = k => info[k], bal = info.balance, hist = days.filter(d => d.settled);
+    const byPlat = {}; if (info.uber) byPlat.Uber = info.uber;
+    if (info.other) byPlat['Other platforms'] = info.other;
+    const rev = (ledgerAll[drv.id] ? days : info.open).slice().reverse(), shown = rev;
     const view = ledgerView[drv.id] || 'days', first = esc(drv.name.split(' ')[0]);
     const mgr = (USERS.find(u => u.mobile === drv.managerMobile) || {}).name;
     return `<div class="card section">
@@ -2041,21 +2029,25 @@ function ledgerHtml() {
           <button class="btn sm" onclick="loadLedger()">↻</button></div></div>
       <div class="mini-kpis" style="grid-template-columns:repeat(2,1fr)">
         <div><small>Rent</small><b>${inr2(s('rent'))}</b></div>
-        <div><small>Platform → bank</small><b>${inr2(s('credit'))}</b></div>
+        <div><small>Uber/platform → bank</small><b>${inr2(s('credit'))}</b></div>
         <div><small>Cash given</small><b>${inr2(s('cash'))}</b></div>
         <div><small>${bal > 0.004 ? 'Driver still owes' : bal < -0.004 ? 'Manager owes driver' : 'Balance'}</small><b class="${bal > 0.004 ? 'neg' : 'pos'}">${inr2(Math.abs(bal))}</b></div>
       </div>
+      ${info.settledTill ? `<div class="muted" style="font-size:12px;margin:-4px 0 6px">Counting from ${fmtShort(info.open.length ? info.open[0].date : info.settledTill)} · ✓ settled till ${fmtShort(info.settledTill)}</div>` : ''}
+      ${UberReport.owedLines(info, { me: 'owner', driver: first, manager: (mgr || 'Manager').split(' ')[0] })}
       ${Object.keys(byPlat).length ? `<div class="muted" style="font-size:12px;margin:-4px 0 10px">${Object.keys(byPlat).sort().map(p => esc(p) + ' ' + inr2(byPlat[p])).join(' · ')}</div>` : ''}
       <div class="btn-row" style="margin-bottom:8px"><button class="btn sm ${view === 'days' ? 'primary' : ''}" onclick="setLdView('${drv.id}','days')">Day-wise</button>
         <button class="btn sm ${view === 'entries' ? 'primary' : ''}" onclick="setLdView('${drv.id}','entries')">Month-wise entries</button>
         <button class="btn sm ${view === 'uber' ? 'primary' : ''}" onclick="setLdView('${drv.id}','uber')">Uber</button></div>
       ${view === 'uber' ? UberReport.viewHtml(drv.id, (LEDGER.uber || []).filter(r => r.driverId === drv.id), redrawLedger)
       : view === 'entries' ? ldMonthHtml(drv, days, es, edit) : `
-      <table><thead><tr><th>Day</th><th class="num">Rent</th><th class="num">Platform</th><th class="num">Cash</th><th class="num">Balance</th></tr></thead><tbody>
-        ${shown.map(d => `<tr ${edit ? `style="cursor:pointer" onclick="openLdDay('${drv.id}','${d.date}')"` : ''}><td style="white-space:nowrap">${fmtShort(d.date)}</td><td class="num">${d.waive && !d.rent ? 'off' : inr2(d.rent)}</td><td class="num">${d.credit ? inr2(d.credit) : '—'}</td>
+      ${info.settledTill ? `<div style="background:var(--green-soft,rgba(21,128,61,.1));border-radius:8px;padding:8px 12px;font-size:13px;display:flex;justify-content:space-between;margin-bottom:6px"><span>✓ <b>Settled till ${fmtShort(info.settledTill)}</b></span><b>₹0</b></div>` : ''}
+      <table><thead><tr><th>Day</th><th class="num">Rent</th><th class="num">Uber</th><th class="num">Cash</th><th class="num">Balance</th></tr></thead><tbody>
+        ${shown.map(d => `<tr ${edit ? `style="cursor:pointer${d.settled ? ';opacity:.55' : ''}" onclick="openLdDay('${drv.id}','${d.date}')"` : d.settled ? 'style="opacity:.55"' : ''}><td style="white-space:nowrap">${fmtShort(d.date)}${d.settled ? ' ✓' : ''}</td><td class="num">${d.waive && !d.rent ? 'off' : inr2(d.rent)}</td><td class="num ${d.credit < -0.004 ? 'neg' : d.credit > 0.004 ? 'pos' : ''}">${d.credit ? (d.credit > 0 ? '+' : '') + inr2(d.credit) : '—'}</td>
           <td class="num">${d.cash ? inr2(d.cash) : '—'}</td><td class="num ${d.bal > 0.004 ? 'neg' : d.bal < -0.004 ? 'pos' : ''}"><b>${inr2(d.bal)}</b></td></tr>`).join('')}
       </tbody></table>
-      ${rev.length > 7 ? `<button class="link-btn" onclick="ledgerAll['${drv.id}']=!ledgerAll['${drv.id}'];redrawLedger()">${ledgerAll[drv.id] ? 'Show latest only' : 'Show all ' + rev.length + ' days'}</button>` : ''}
+      ${hist.length ? `<button class="link-btn" onclick="ledgerAll['${drv.id}']=!ledgerAll['${drv.id}'];redrawLedger()">${ledgerAll[drv.id] ? 'Hide old history ▴' : 'Show old history (' + fmtShort(hist[0].date) + ' – ' + fmtShort(info.settledTill) + ') ▾'}</button>` : ''}
+      <div class="muted" style="font-size:11px;margin-top:6px">Days count once over (till yesterday). Uber = Uber’s figure for the day from the daily report (− = Uber takes it back later). A “Cash” entry with a note starting “Settled” clears everything up to its date.</div>
       ${edit ? '<div class="muted" style="font-size:11px;margin-top:6px">Tap a day to see or change its entries.</div>' : ''}`}
     </div>`;
   }).join('') + addBtn;
@@ -2150,7 +2142,7 @@ function drawEarnings() {
   const mgr = (USERS.find(u => u.mobile === drv.managerMobile) || {}).name || 'Manager';
   box.innerHTML = (drivers.length > 1 ? `<div class="btn-row" style="margin-bottom:10px">${drivers.map(d => `<button class="btn sm ${d.id === earnDrv ? 'primary' : ''}" onclick="earnDrv='${d.id}';drawEarnings()">${esc(d.name)}</button>`).join('')}</div>` : '')
     + '<div class="card" style="max-width:620px">' + UberReport.earningsHtml(drv.id, uber.filter(r => r.driverId === drv.id), drv.rent,
-        { driver: drv.name.split(' ')[0], manager: mgr.split(' ')[0], me: 'owner' }, drawEarnings) + '</div>';
+        { driver: drv.name.split(' ')[0], manager: mgr.split(' ')[0], me: 'owner', ledger: UberReport.ledgerInfo(drv, LEDGER.entries, uber) }, drawEarnings) + '</div>';
 }
 
 /* ── Upload Uber report → Uber payouts into the ledger (parser in uber-report.js, shared with driver.html) ── */
@@ -2192,7 +2184,7 @@ async function openLdDriverForm(id) {
   f => { ldPost('/ledger/driver', { ...f, id: d ? d.id : undefined }).then(ok => ok && toast('Saved')); });
 }
 function shareLdWhatsApp(id) {
-  const d = ldDrv(id), days = ledgerDays(d), s = k => days.reduce((t, x) => t + x[k], 0), b = days.length ? days[days.length - 1].bal : 0;
+  const d = ldDrv(id), info = UberReport.ledgerInfo(d, LEDGER.entries, LEDGER.uber || []), days = info.open, s = k => info[k], b = info.balance;
   const last = days.slice(-7).reverse().map(x => `${fmtShort(x.date)}: rent ${inr2(x.rent)}${x.credit ? ', platform ' + inr2(x.credit) : ''}${x.cash ? ', cash ' + inr2(x.cash) : ''} → ${inr2(x.bal)}`).join('\n');
   const text = `*MNS Tours & Travels — Rent account*\n${d.name} · ${inr2(d.rent)}/day since ${fmtDate(d.startDate)}\n\n` +
     `Rent: ${inr2(s('rent'))}\nPlatform money (to bank): ${inr2(s('credit'))}\nCash given: ${inr2(s('cash'))}\n` +

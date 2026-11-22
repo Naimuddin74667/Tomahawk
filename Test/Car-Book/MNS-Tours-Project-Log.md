@@ -278,3 +278,13 @@ Owner confirmed: 8 PM → 8 PM periods until "15–16 Nov", but **16 Nov day off
 - New driver field `calendarFrom` (Rent → Edit driver → "Calendar days from"). Daily periods on/after it = that date's day + night, label "18 Nov"; before it unchanged (night + day, "16–17 Oct"). `periodHalves(day, drv)` in index.html, `halves()`/`label()` in driver.html.
 - One-time migration `migrateCalendarCutover()` (owner app, flag `settings.cutover_20261118`): for Naushad's daily rent sets `calendarFrom = 2026-11-18` and car-off halves 16 Nov day, 16 Nov night, 17 Nov day. Shows in Change log (undoable).
 - Worker `/driver` now sends `calendarFrom` so Naushad's "My rent" shows the same periods (paste worker). Siddique's ₹600 ledger unchanged (owner didn't ask). SW cache `mns-tours-v16`.
+
+## 15. Driver ledger = Uber daily figure + "Settled till" (22 Nov 2026)
+
+Owner approved the demos (Siddique + Naushad screens). Shared maths `UberReport.ledgerRows / ledgerInfo / owedLines` (uber-report.js) now used by owner app, manager and driver screens:
+- **Days count once over:** start date → **yesterday** (no "today/waiting" row).
+- **Uber column = Uber's figure for that day** from uploaded reports (online − Uber's share of cash fares − Drive Pass; can be negative). Within the date range covered by reports, hand-typed Uber payout entries are ignored (no double count); Ola/Rapido etc. still from "+ Platform money". Same number as the Earnings tab.
+- **Settlement:** a Cash entry whose note starts with "Settled" closes everything up to its date → balance ₹0; ledger shows "✓ Settled till <date>", only later days, older days behind "Show old history". The 22 Nov "Settled manually: balance cleared" entry is the first one.
+- Top card lists each open day ("21 Nov · you give ₹919.13", "22 Nov · Naushad gives you −₹400", Balance) — wording per viewer (driver / manager "Collect from Siddique" / owner).
+- Earnings settlement box: "✓ Settled" for days ≤ settled-till; otherwise give/get + "Adjusted against earlier days (₹X not paid yet)" + "Balance after <day>". Manager sees "your bank".
+- Tested: settled till 20 Nov, real 21 Nov (−₹319.13 → ₹919.13) + sample 22 Nov (+₹1,000 → −₹400) ⇒ balance ₹519.13. No worker change. SW cache `mns-tours-v17`.
