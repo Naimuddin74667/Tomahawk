@@ -247,3 +247,15 @@ It is built for phones, since about 99% of use is on a phone. It has its own lig
 - **Uber tab** (Driver ledger: Day-wise · Entries/Month-wise · **Uber**) in index.html and driver.html (Siddique + Naushad): month nav, totals (trips, fare earned, cash he collected, tolls, Drive Pass fees, Uber → bank), day table; tap a day → its trips (time, cash/online, fare, +tip, cash, toll). Renderer `UberReport.viewHtml` in uber-report.js.
 - Fleet Hub reports are limited to **32 days** each → upload month by month. Generated in Fleet Hub on 22 Nov: Payments Transaction 1–21 Nov (Payments Driver 21 Oct–21 Nov not confirmed).
 - driver.html `.tabs` now fit any number of tabs. SW cache `mns-tours-v12`. **Worker must be pasted into Cloudflare again.**
+
+## 12. Earnings tab (22 Nov 2026)
+
+**Why:** the driver changes at **8 PM**, so money is settled per **rent day = 8 PM previous day → 8 PM**. Owner wanted one place showing each trip, totals (trips, online, cash), earning, Uber deductions/credits and what to give/take.
+
+- **Where:** owner app sidebar → **Earnings** (between Rent and Expenses); driver.html → **Earnings** tab (Naushad: My rent · Driver ledger · Earnings; Siddique: My ledger · Earnings). Shared renderer `UberReport.earningsHtml` in uber-report.js.
+- **Per rent day:** ‹ › day nav; Trip 1…n (date/time, cash or online, toll, tip, earned); Earnings: total trips, total online, total cash, ± Uber difference on cash trips, − tolls, = total earning; Uber account: online trips + difference − Drive Pass = **Uber sends to Naushad's bank**; Settlement: rent − Uber to bank = **"Siddique gives Naushad ₹X"** (or "Naushad gives Siddique"); driver's earnings after rent & pass; "All days" table.
+- **Maths (per trip):** earned = paid + cash − toll (booking fee & tax cancel). Trip finishing ≥ 20:00 counts in the next rent day.
+- Data = saved Uber rows (`uber_txns`), so reports must be uploaded (or automated later).
+- **Fleet Hub schedule "MNS Transaction" (22 Nov):** Payments Transaction, Daily, window midnight→midnight, runs 04:00, 22 Nov 2026 → 22 May 2027. Uber needs ~4 h after a window ends (runs 00:00–03:30 blocked) and rejects an 8 PM window; no email option in the form. The app splits trips into 8 PM rent days itself.
+- At the 8 PM handover, figures can be taken from the driver's Uber app (proposed "Handover" screen — not built); next morning's report gives exact numbers.
+- Worker: `/ledger` drivers now include `managerName`. SW cache `mns-tours-v13`.

@@ -486,13 +486,14 @@ export default {
           const r = await row(), st = r ? (JSON.parse(r.data).settings || {}) : {};
           const platforms = Array.isArray(st.platforms) && st.platforms.length ? st.platforms : DEFAULT_PLATFORMS;
           const users = canEdit ? ((await DB.prepare("SELECT mobile, driver_id AS driverId FROM users WHERE role = 'driver'").all()).results || []) : [];
+          const mgrNames = {}; ((await DB.prepare("SELECT mobile, name FROM users WHERE role = 'manager'").all()).results || []).forEach(u => mgrNames[u.mobile] = u.name);
           const since = new Date(Date.now() - 180 * 864e5).toISOString().slice(0, 10);
           const uber = ids.length ? ((await DB.prepare('SELECT id, driver_id AS driverId, date, time, kind, trip_id AS tripId, descr AS "desc", paid, earnings, fare, tip, toll, cash, pass, payout ' +
             'FROM uber_txns WHERE date >= ?1 AND driver_id IN (' + ids.map((_, i) => '?' + (i + 2)).join(',') + ') ORDER BY date, time')
             .bind(since, ...ids).all()).results || []) : [];
           return json({ role: me.role, platforms, uber,
             drivers: drivers.map(d => ({ id: d.id, name: d.name, mobile: d.mobile || '', rent: d.rent, startDate: d.start_date, endDate: d.end_date || '',
-              managerMobile: d.manager_mobile || '', hasLogin: users.some(u => u.driverId === d.id) })),
+              managerMobile: d.manager_mobile || '', managerName: mgrNames[d.manager_mobile] || '', hasLogin: users.some(u => u.driverId === d.id) })),
             entries });
         }
         if (!canEdit) return notAllowed();

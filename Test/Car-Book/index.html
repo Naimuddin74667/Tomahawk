@@ -298,6 +298,7 @@ body.readonly .lrow.click { cursor:default; }
   <div class="brand"><img class="logo-img lg" src="logo.png?v=2" alt="MNS"><div><h1>MNS Tours &amp; Travels</h1><small><span class="sync-dot" data-s="off"></span>Car rent &amp; expense book</small></div></div>
   <button class="nav-item" data-page="dashboard"><span class="ico">◧</span>Dashboard</button>
   <button class="nav-item" data-page="rent"><span class="ico">₹</span>Rent</button>
+  <button class="nav-item" data-page="earnings"><span class="ico">↗</span>Earnings</button>
   <button class="nav-item" data-page="expenses"><span class="ico">⇣</span>Expenses</button>
   <button class="nav-item" data-page="loan"><span class="ico">▤</span>Loan</button>
   <button class="nav-item" data-page="partners"><span class="ico">⚇</span>Partners</button>
@@ -790,6 +791,14 @@ rent() {
     ${blocks || '<div class="card empty">No driver yet. Add one to start tracking rent.</div>'}
     <div id="ledgerBox">${ledgerHtml()}</div>`);
   loadLedger();
+},
+
+/* Earnings: Uber trips per rent day (8 PM → 8 PM) and the settlement. Renderer in uber-report.js */
+earnings() {
+  render(`<div class="page-head"><div><h2>Earnings</h2><div class="sub">Uber trips and what to collect · 8 PM to 8 PM</div></div>
+      ${isViewer() ? '' : '<div class="btn-row"><button class="btn" onclick="openUberImport()">⬆ Uber report</button></div>'}</div>
+    <div id="earnBox"><div class="card empty">Loading…</div></div>`);
+  drawEarnings(); loadLedger().then(drawEarnings);
 },
 
 expenses() {
@@ -2125,9 +2134,23 @@ function openLdEntry(id, kind, entryId, date) {
     ldPost('/ledger/entry', { ...d, id: e ? e.id : undefined, driverId: id, kind }).then(ok => ok && toast('Saved'));
   }, e ? () => { ldPost('/ledger/entry/delete', { id: e.id }); } : null);
 }
+let earnDrv = '';
+function drawEarnings() {
+  const box = document.getElementById('earnBox'); if (!box || !LEDGER) return;
+  const drivers = LEDGER.drivers || [], uber = LEDGER.uber || [];
+  if (!drivers.length) { box.innerHTML = '<div class="card empty">No driver in the Driver ledger yet.</div>'; return; }
+  if (!drivers.some(d => d.id === earnDrv)) earnDrv = (drivers.find(d => uber.some(r => r.driverId === d.id)) || drivers[0]).id;
+  const drv = drivers.find(d => d.id === earnDrv);
+  const mgr = (USERS.find(u => u.mobile === drv.managerMobile) || {}).name || 'Manager';
+  box.innerHTML = (drivers.length > 1 ? `<div class="btn-row" style="margin-bottom:10px">${drivers.map(d => `<button class="btn sm ${d.id === earnDrv ? 'primary' : ''}" onclick="earnDrv='${d.id}';drawEarnings()">${esc(d.name)}</button>`).join('')}</div>` : '')
+    + '<div class="card" style="max-width:620px">' + UberReport.earningsHtml(drv.id, uber.filter(r => r.driverId === drv.id), drv.rent,
+        { driver: drv.name.split(' ')[0], manager: mgr.split(' ')[0], me: 'owner' }, drawEarnings) + '</div>';
+}
+
 /* ── Upload Uber report → Uber payouts into the ledger (parser in uber-report.js, shared with driver.html) ── */
 async function openUberImport(drvId) {
   if (isViewer()) return;
+  if (!LEDGER) { await loadLedger(); if (!LEDGER) { toast('No connection — try again'); return; } }
   const f = await UberReport.pickFile(); if (!f) return;
   let rep; try { rep = UberReport.parse(f.text); } catch (e) { alert(e.message); return; }
   const items = UberReport.plan(rep, LEDGER.entries), fresh = items.filter(i => !i.exists).length;
@@ -2143,7 +2166,7 @@ async function openUberImport(drvId) {
     const call = async (path, body) => { const r = await cloudFetch(path, { method:'POST', body: JSON.stringify(body) }).catch(() => null); return r ? { ok: r.status < 400, status: r.status, body: r.body } : null; };
     const saved = await UberReport.saveRows(rep, id, call);
     const n = await UberReport.importNew(items, id, async body => !!(await call('/ledger/entry', body) || {}).ok);
-    closeModal(); ledgerView[id] = 'uber'; await loadLedger();
+    closeModal(); ledgerView[id] = 'uber'; await loadLedger(); if (currentPage === 'earnings') drawEarnings();
     toast((fresh ? 'Payouts added ' + n + '/' + fresh + ' · ' : '') + (saved.ok ? saved.added + ' new Uber rows saved' : 'Trips not saved — update the worker in Cloudflare'));
   };
 }

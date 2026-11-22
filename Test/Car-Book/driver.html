@@ -273,10 +273,17 @@ function status(p) {
 
 /* ── Render ── */
 function render() {
-  if (ROLE === 'driver') { renderLedger(); return; }
+  if (ROLE === 'driver') {
+    const t = `<div class="tabs main-tabs"><button class="${mainTab !== 'earnings' ? 'on' : ''}" onclick="setMainTab('ledger')">My ledger</button>
+      <button class="${mainTab === 'earnings' ? 'on' : ''}" onclick="setMainTab('earnings')">Earnings</button></div>`;
+    if (mainTab === 'earnings') renderEarnings(t); else renderLedger(t);
+    return;
+  }
   const tabs = `<div class="tabs main-tabs"><button class="${mainTab === 'rent' ? 'on' : ''}" onclick="setMainTab('rent')">My rent</button>
-    <button class="${mainTab === 'ledger' ? 'on' : ''}" onclick="setMainTab('ledger')">Driver ledger</button></div>`;
+    <button class="${mainTab === 'ledger' ? 'on' : ''}" onclick="setMainTab('ledger')">Driver ledger</button>
+    <button class="${mainTab === 'earnings' ? 'on' : ''}" onclick="setMainTab('earnings')">Earnings</button></div>`;
   if (mainTab === 'ledger') { renderLedger(tabs); return; }
+  if (mainTab === 'earnings') { renderEarnings(tabs); return; }
   // Rent screen failed to load (e.g. his rent record was removed or changed) → say so instead of "Loading…" forever
   if (!D) { document.getElementById('app').innerHTML = tabs + (rentErr
     ? `<div class="msg"><b>Can\u2019t show your rent</b>${esc(rentErr)}<br><br>The Driver ledger tab still works.</div>`
@@ -552,6 +559,24 @@ async function deleteEntry(id) {
   closeSheet(); flash('Deleted'); loadData();
 }
 
+/* ── Earnings tab: Uber trips per rent day (8 PM → 8 PM) and what to give / collect. Renderer in uber-report.js ── */
+let earnDrv = '';
+function renderEarnings(tabs) {
+  const app = document.getElementById('app');
+  if (!L) { app.innerHTML = (tabs || '') + '<div class="msg">Loading…</div>'; return; }
+  const drivers = L.drivers || [], uber = L.uber || [], mgr = ROLE === 'manager';
+  if (!drivers.length) { app.innerHTML = (tabs || '') + '<div class="card msg">No driver yet.</div>'; return; }
+  if (!drivers.some(d => d.id === earnDrv)) earnDrv = (drivers.find(d => uber.some(r => r.driverId === d.id)) || drivers[0]).id;
+  const drv = drivers.find(d => d.id === earnDrv);
+  const managerName = mgr ? String(auth.name || 'Manager').split(' ')[0] : (drv.managerName || 'Manager').split(' ')[0];
+  app.innerHTML = (tabs || '')
+    + (drivers.length > 1 ? `<div class="tabs" style="margin-top:10px">${drivers.map(d => `<button class="${d.id === earnDrv ? 'on' : ''}" onclick="earnDrv='${d.id}';render()">${esc(d.name.split(' ')[0])}</button>`).join('')}</div>` : '')
+    + '<div class="card" style="margin-top:14px">' + UberReport.earningsHtml(drv.id, uber.filter(r => r.driverId === drv.id), drv.rent,
+        { driver: drv.name.split(' ')[0], manager: managerName, me: ROLE }, render) + '</div>'
+    + (mgr ? `<button class="pay pay-other" style="margin-top:14px" onclick="uberImport('${drv.id}')">⬆ Upload Uber report</button>` : '')
+    + `<div class="foot">Earnings · 8 PM to 8 PM · <a href="#" onclick="logoutDriver();return false" style="color:var(--text2)">Log out</a></div>`;
+}
+
 /* ── Upload Uber report → Uber payouts into the ledger (parser in uber-report.js, shared with index.html) ── */
 async function uberImport(drvId) {
   if (!canEditLedger()) return;
@@ -570,7 +595,7 @@ async function uberImport(drvId) {
     const call = (path, body) => api(path, { method: 'POST', body: JSON.stringify(body) }).catch(() => null);
     const saved = await UberReport.saveRows(rep, id, call);
     const n = await UberReport.importNew(items, id, async body => !!(await call('/ledger/entry', body) || {}).ok);
-    closeSheet(); ldTab = 'uber'; await loadData();
+    closeSheet(); if (mainTab !== 'earnings') ldTab = 'uber'; await loadData();
     flash((fresh ? '✓ Payouts ' + n + '/' + fresh + ' · ' : '✓ ') + (saved.ok ? saved.added + ' new Uber rows saved' : 'trips not saved — ask the owner to update the server'));
   };
 }
