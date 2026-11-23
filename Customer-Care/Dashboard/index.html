@@ -2696,7 +2696,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // What each filterable column holds, per table
   var COL_VAL = {
     case: { kind: function (c) { return c.type; }, ref: rowCourier, status: function (c) { return c.st.label; } },
-    req: { kind: reqKindLabel, ref: function (r) { return r.platform || '\u2014'; }, status: function (r) { return (REQ_STATUS[r.status || 'new'] || [r.status])[0]; } }
+    req: { kind: reqKindLabel, ref: function (r) { return r.platform || '\u2014'; }, status: function (r) { var w = waitingFor(r); return w ? 'Waiting: ' + w.label : (REQ_STATUS[r.status || 'new'] || [r.status])[0]; } }
   };
   var colBase = { case: [], req: [] };   // rows before column filters (for the option list)
   function colPass(tbl, row) {
@@ -4804,6 +4804,25 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     handed_over: 'Customer collected', converted: 'Converted to warranty request' };
   function canActReq() { return window.TM_ROLE === 'admin' || window.TM_ROLE === 'manager'; }
   function isNV(r) { return /^NV-/.test(r.claim_id || ''); }
+  // Waiting for customer → WHAT we're waiting on (23-Nov-2026): the latest "ask" in the
+  // request history decides it. Returns { label, note, at } or null when not waiting.
+  var WAIT_ASKS = { media_request: 'Photos / video', invoice_request: 'Invoice', payment_link: 'Payment',
+    tip: 'Tip result', quote: 'Quote OK', ask_info: 'More info' };
+  var WAIT_DONE = { media_request: 'media_uploaded', invoice_request: 'invoice_uploaded', payment_link: 'payment_received', quote: 'consent' };
+  function waitingFor(r) {
+    if (['waiting_customer', 'tip_sent', 'quote_sent'].indexOf(r.status) === -1) return null;
+    var ev = r.events || [];
+    for (var i = ev.length - 1; i >= 0; i--) {
+      var k = ev[i].kind;
+      if (!WAIT_ASKS[k]) continue;
+      // skip an ask the customer already answered
+      if (WAIT_DONE[k] && ev.slice(i + 1).some(function (e) { return e.kind === WAIT_DONE[k]; })) continue;
+      return { label: WAIT_ASKS[k], note: String(ev[i].note || '').replace(/\s*·\s*link sent by.*$/i, ''), at: ev[i].at };
+    }
+    if (r.pay === 'pending') return { label: 'Payment', note: '', at: '' };
+    return { label: r.status === 'tip_sent' ? 'Tip result' : r.status === 'quote_sent' ? 'Quote OK' : 'Reply', note: '', at: '' };
+  }
+  function daysAgo(t) { var d = Date.parse(t || ''); return d ? Math.max(0, Math.floor((Date.now() - d) / 86400000)) : null; }
   // Type column for requests (23-Nov-2026) — same names as the tab cards
   function reqKindLabel(r) { return isDRN(r) ? 'Delivery issue' : isNV(r) ? 'Verify order' : isSRN(r) ? 'Service' : 'Warranty'; }
   // TAT column for requests: days since the request came in (no SLA colours yet)
@@ -4901,15 +4920,16 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     body.closest('table').classList.add('req-full');
     body.innerHTML = rows.map(function (r) {
       var st = REQ_STATUS[r.status || 'new'] || [r.status, 'b-gray'];
-      var cs = reqCaseStatus(r);
+      var cs = reqCaseStatus(r), wf = waitingFor(r);
       return '<tr class="case-row' + ((r.status || 'new') === 'new' ? ' attn' : '') + '" data-id="' + esc(r.claim_id) + '">' +
         '<td class="mono">' + esc(r.claim_id) + repeatChip(r) + (isMarketDRN(r) ? ' <span class="badge b-blue">' + esc(r.platform) + '</span>' : '') + '<div class="sub">' + esc(fmtWhen(r.created_at)) + (r.prev_claim_id ? ' · was ' + esc(r.prev_claim_id) : '') + '</div>' + stepsMini(computeSteps(reqCase(r), r, null)) + '</td>' +
         '<td class="name-cell" title="' + esc(r.name) + '">' + esc(r.name) + '</td>' +
         '<td class="name-cell">' + esc(reqKindLabel(r)) + '</td>' +
         '<td class="prod-cell req-prod" title="' + esc(r.product) + '">' + esc(r.product) + '</td>' +
         '<td class="ref-cell" title="' + esc((r.platform || '\u2014') + ' · ' + (r.order_id || '\u2014')) + '">' + esc(r.platform || '\u2014') + '<div class="sub mono">' + esc(r.order_id || '\u2014') + '</div></td>' +
-        '<td><span class="badge ' + st[1] + '">' + esc(st[0]) + '</span>' + payChip(r) + (cs ? '<div class="sub">' + esc(r.case_id + ' · ' + cs) + '</div>' : '') + '</td>' +
-        '<td class="need-cell" title="' + esc(r.issue_type + (r.issue_detail ? ' — ' + r.issue_detail : '')) + '">' + esc(r.issue_type) + (isDRN(r) && r.issue_detail ? '<div class="sub">' + esc(r.issue_detail) + '</div>' : '') + '</td>' +
+        '<td>' + (wf ? '<span class="badge ' + st[1] + '" title="' + esc(wf.note) + '">Waiting: ' + esc(wf.label) + '</span>' + (daysAgo(wf.at) !== null ? '<div class="sub">asked ' + (daysAgo(wf.at) ? daysAgo(wf.at) + 'd ago' : 'today') + '</div>' : '')
+          : '<span class="badge ' + st[1] + '">' + esc(st[0]) + '</span>') + payChip(r) + (cs ? '<div class="sub">' + esc(r.case_id + ' · ' + cs) + '</div>' : '') + '</td>' +
+        '<td class="need-cell" title="' + esc(r.issue_type + (r.issue_detail ? ' — ' + r.issue_detail : '')) + '">' + esc(r.issue_type) + (wf && wf.note ? '<div class="sub" title="' + esc(wf.note) + '">Asked: ' + esc(wf.note) + '</div>' : (isDRN(r) && r.issue_detail ? '<div class="sub">' + esc(r.issue_detail) + '</div>' : '')) + '</td>' +
         '<td>' + reqAgeHtml(r) + '</td>' +
         '<td class="act-cell muted">' + (r.file_count || 0) + ' file(s)</td></tr>';
     }).join('');
