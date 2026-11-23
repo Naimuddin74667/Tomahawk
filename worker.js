@@ -1936,12 +1936,16 @@ async function handleWalima(act, body, url, env) {
 const CC_OPEN_DAYS = [1, 2, 3, 4, 5, 6]; // 0 = Sunday
 const CC_OPEN_FROM_MIN = 9 * 60;  // 09:00
 const CC_OPEN_TO_MIN = 17 * 60;   // 17:00
+// Holidays — customer care closed all day (IST dates, YYYY-MM-DD).
+// TODO (pending): read business hours + holidays from Zoho Desk instead.
+const CC_HOLIDAYS = ['2026-12-09'];
 function customerCareOpenStatus(now) {
   // Shift UTC to IST (+5:30); India has no daylight saving.
   const ist = new Date(now.getTime() + 330 * 60 * 1000);
   const day = ist.getUTCDay();
   const mins = ist.getUTCHours() * 60 + ist.getUTCMinutes();
-  const open = CC_OPEN_DAYS.includes(day) && mins >= CC_OPEN_FROM_MIN && mins < CC_OPEN_TO_MIN;
+  const holiday = CC_HOLIDAYS.includes(ist.toISOString().slice(0, 10));
+  const open = !holiday && CC_OPEN_DAYS.includes(day) && mins >= CC_OPEN_FROM_MIN && mins < CC_OPEN_TO_MIN;
   return {
     ok: true,
     open,
