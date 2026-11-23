@@ -115,6 +115,8 @@ html[data-theme="light"]       .icon-moon { display: none; }
 .gs-row:hover, .gs-row.on { background: var(--surface2); }
 .gs-row .mono { font-weight: 700; }
 .gs-row .gs-sub { color: var(--text2); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Customer name stands out like the request ID (23-Nov-2026) */
+.gs-row .gs-sub .gs-name { color: var(--text); font-weight: 700; }
 .gs-empty { padding: 14px 10px; color: var(--text2); font-size: 13px; }
 
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: start; }
@@ -6228,14 +6230,14 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var hay = gsNorm([r.claim_id, r.prev_claim_id, r.name, r.phone, r.email, r.order_id, r.product, r.order_skus, r.confirmed_sku, r.issue_type, r.city].join(' '));
       if (!gsMatch(hay, words)) return;
       var st = REQ_STATUS[r.status || 'new'] || [r.status || '', 'b-gray'];
-      out.push({ kind: 'req', id: r.claim_id, title: r.claim_id, sub: [r.name, r.phone, r.product].filter(Boolean).join(' · '),
+      out.push({ kind: 'req', id: r.claim_id, title: r.claim_id, name: r.name, sub: [r.phone, r.product].filter(Boolean).join(' · '),
         badge: st, at: r.created_at || '' });
     });
     cases.forEach(function (c) {
       var r = caseRequest(c);
       var hay = gsNorm(c.search + ' ' + (r ? [r.claim_id, r.prev_claim_id, r.email, r.order_id].join(' ') : ''));
       if (!gsMatch(hay, words)) return;
-      out.push({ kind: 'case', id: c.id, title: c.caseNo, sub: [c.type, c.customer, c.product].filter(Boolean).join(' · '),
+      out.push({ kind: 'case', id: c.id, title: c.caseNo, name: c.customer, sub: [c.type, c.product].filter(Boolean).join(' · '),
         badge: [c.st ? c.st.label : '', c.st && c.st.tone === 'closed' ? 'b-gray' : 'b-blue'], at: c.created || '' });
     });
     // Exact ID / phone hits first, then newest
@@ -6252,7 +6254,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     gsHits = gsSearch(q); if (gsSel >= gsHits.length) gsSel = 0;
     var row = function (h, i) {
       return '<button type="button" class="gs-row' + (i === gsSel ? ' on' : '') + '" data-i="' + i + '">' +
-        '<span class="mono">' + esc(h.title) + '</span><span class="gs-sub">' + esc(h.sub || '\u2014') + '</span>' +
+        '<span class="mono">' + esc(h.title) + '</span><span class="gs-sub">' + (h.name ? '<b class="gs-name">' + esc(h.name) + '</b>' + (h.sub ? ' · ' : '') : '') + esc(h.sub || (h.name ? '' : '\u2014')) + '</span>' +
         (h.badge[0] ? '<span class="badge ' + h.badge[1] + '">' + esc(h.badge[0]) + '</span>' : '<span></span>') + '</button>';
     };
     var reqs = gsHits.filter(function (h) { return h.kind === 'req'; }), cs = gsHits.filter(function (h) { return h.kind === 'case'; });
