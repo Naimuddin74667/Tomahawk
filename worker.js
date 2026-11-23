@@ -6763,6 +6763,18 @@ async function ucDelhiveryWaitingPackages(env) {
     '&order=created_at.asc');
 }
 
+// Pulls "24 Nov" out of a Delhivery message → "2026-11-24" (IST year; a
+// December request for a January date rolls to next year). null if absent.
+function dateFromDelhiveryMsg(msg) {
+  const m = /for (\d{1,2}) (jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.exec(String(msg || ''));
+  if (!m) return null;
+  const mon = 'janfebmaraprmayjunjulaugsepoctnovdec'.indexOf(m[2].toLowerCase()) / 3;
+  const now = istDateParts(0).ymd;
+  let year = Number(now.slice(0, 4));
+  if (mon < Number(now.slice(5, 7)) - 1 - 6) year += 1; // e.g. Dec → Jan
+  return year + '-' + String(mon + 1).padStart(2, '0') + '-' + String(m[1]).padStart(2, '0');
+}
+
 // trigger: 'cron' (scheduled tick) or 'manual' (button / ?action=). dryRun: report only.
 async function autoDelhiveryUcPickup(env, trigger, dryRun) {
   const location = env.DELHIVERY_UC_PICKUP_LOCATION;
@@ -6782,9 +6794,11 @@ async function autoDelhiveryUcPickup(env, trigger, dryRun) {
   }
   const summary = { waiting: waiting.length, oldest: waiting[0].created_at, location };
 
-  // Already booked for the first eligible date → nothing to do.
-  const have = await env.DB.prepare('SELECT pickup_id, status FROM delhivery_uc_pickups WHERE pickup_date = ?').bind(dates[0]).first();
-  if (have) return { ok: true, status: 'exists', date: dates[0], pickup_id: have.pickup_id, ...summary };
+  // Already booked for this date or a later one → nothing to do. Delhivery
+  // allows only ONE open pickup per location (a new one only after the
+  // previous is picked up), so any open booking covers the waiting packages.
+  const have = await env.DB.prepare('SELECT pickup_date, pickup_id, status FROM delhivery_uc_pickups WHERE pickup_date >= ? ORDER BY pickup_date LIMIT 1').bind(dates[0]).first();
+  if (have) return { ok: true, status: 'exists', date: have.pickup_date, pickup_id: have.pickup_id, ...summary };
   if (dryRun) return { ok: true, status: 'would_book', date: dates[0], ...summary };
 
   const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
@@ -6812,10 +6826,13 @@ async function autoDelhiveryUcPickup(env, trigger, dryRun) {
     const pickupId = data.pickup_id || data.pickupId || (data.data && data.data.pickup_id) || '';
     const alreadyThere = data.pr_exist === true || /already (exist|raised|created|scheduled)/.test(msg);
     if ((resp.ok && pickupId) || alreadyThere) {
+      // "A Pickup Request 338425522 … Already Exist for 24 Nov …" — the open
+      // request may be for a DIFFERENT date than we asked; record its real date.
+      const bookedDate = alreadyThere ? (dateFromDelhiveryMsg(msg) || date) : date;
       await env.DB.prepare(
         'INSERT OR IGNORE INTO delhivery_uc_pickups (pickup_date, location, pickup_id, pickup_time, package_count, status, trigger, response_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-      ).bind(date, location, String(pickupId || ''), DELHIVERY_PICKUP_TIME, waiting.length, pickupId ? 'created' : 'exists', trigger || '', text.slice(0, 2000)).run();
-      return { ok: true, status: pickupId ? 'created' : 'exists', date, pickup_id: String(pickupId || ''), ...summary };
+      ).bind(bookedDate, location, String(pickupId || ''), DELHIVERY_PICKUP_TIME, waiting.length, alreadyThere ? 'exists' : 'created', trigger || '', text.slice(0, 2000)).run();
+      return { ok: true, status: alreadyThere ? 'exists' : 'created', date: bookedDate, pickup_id: String(pickupId || ''), ...summary };
     }
     lastErr = (data.error && (data.error.message || data.error)) || data.message || data.raw || ('HTTP ' + resp.status);
     // Refused for this date (too late, holiday…) — try the next date.
