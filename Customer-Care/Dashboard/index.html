@@ -3440,7 +3440,11 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
           '<datalist id="sb-skus">' + (skuList || []).map(function (x) { return '<option value="' + esc(x) + '">'; }).join('') + '</datalist></div>' +
         '<div><div class="cm-k">Value (₹)</div><input class="sb-input" id="sb-value" type="number" min="1" value="' + esc(o.total_amount) + '"' + (foc ? ' placeholder="Part value"' : '') + '></div>' +
         // Package (04-Nov-2026): exactly what gets booked — check before confirming.
-        '<div class="span3"><div class="cm-k">Package — L × W × H (cm) · Weight (kg) ' + pkgTag(o._pkgSrc) + '</div>' +
+        // Booking for (23-Nov-2026): pickup only — Repair / Replace / Refund decides the case type
+        (pk ? '<div><div class="cm-k">Booking for</div><select class="sb-input" id="sb-job">' +
+          [['Repair', 'Repair'], ['Replacement', 'Replace'], ['Refund', 'Refund']].map(function (x) {
+            return '<option value="' + x[0] + '"' + (o.job_type === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select></div>' : '') +
+        '<div class="' + (pk ? 'span2' : 'span3') + '"><div class="cm-k">Package — L × W × H (cm) · Weight (kg) ' + pkgTag(o._pkgSrc) + '</div>' +
           '<div class="sb-pkg">' +
             '<input class="sb-input" id="sb-l" type="number" min="1" value="' + esc(o.length) + '" title="Length (cm)"> × ' +
             '<input class="sb-input" id="sb-w" type="number" min="1" value="' + esc(o.width) + '" title="Width (cm)"> × ' +
@@ -3533,6 +3537,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     });
     var kgEl = document.getElementById('sb-kg'), g = kgEl && Math.round(parseFloat(kgEl.value) * 1000);
     if (g > 0) sb.o.weight = g;
+    var jb = document.getElementById('sb-job');
+    if (jb && jb.value) sb.o.job_type = jb.value;
     sb.o.products_desc = sb.o.job_type + ' - ' + sb.o._sku;
   }
 
