@@ -2243,7 +2243,14 @@ export default {
             else payOf[p.claim_id] = 'paid';
           });
         } catch (e) { console.warn('ccClaimsList pay', e.message); }
-        return json({ ok: true, requests: rows.map(r => ({ ...r, pay: payOf[r.claim_id] || null, events: srEvents(r), events_json: undefined })) });
+        // Latest internal note per request (23-Nov-2026) — shown as a one-line note in the list
+        const noteOf = {};
+        try {
+          const ns = (await env.DB.prepare("SELECT case_key, note, by_user, created_at FROM cc_notes WHERE id IN (SELECT MAX(id) FROM cc_notes GROUP BY case_key)").all()).results || [];
+          ns.forEach(n => { noteOf[n.case_key] = { note: n.note, by: n.by_user, at: String(n.created_at || '').replace(' ', 'T') + 'Z' }; });
+        } catch (e) { /* no notes table yet */ }
+        const lastNote = r => [noteOf[r.claim_id], noteOf[r.prev_claim_id]].filter(Boolean).sort((x, y) => String(y.at).localeCompare(String(x.at)))[0] || null;
+        return json({ ok: true, requests: rows.map(r => ({ ...r, pay: payOf[r.claim_id] || null, last_note: lastNote(r), events: srEvents(r), events_json: undefined })) });
       }
       if (request.method === 'GET' && action === 'ccClaimGet') {
         await ensureServiceRequestCols(env.DB);

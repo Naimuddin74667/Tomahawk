@@ -642,6 +642,8 @@ html:not([data-theme="light"]) .age-amber { color: var(--accent); }
 .case-table td.name-cell, .case-table td.prod-cell, .case-table td.ref-cell, .case-table td.need-cell .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: none; }
 .case-table td.ref-cell .sub { overflow: hidden; text-overflow: ellipsis; }
 .case-table td.need-cell { white-space: normal; }
+/* Latest internal note, one line above the issue (23-Nov-2026) */
+.case-table .nt-line { font-size: 11.5px; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; }
 /* Column-header filter (▾ at the end of the header) */
 .case-table th.th-has-f { padding-right: 26px; }
 .th-f { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 18px; height: 18px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--text2); font-size: 11px; line-height: 1; cursor: pointer; padding: 0; }
@@ -4822,6 +4824,18 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (r.pay === 'pending') return { label: 'Payment', note: '', at: '' };
     return { label: r.status === 'tip_sent' ? 'Tip result' : r.status === 'quote_sent' ? 'Quote OK' : 'Reply', note: '', at: '' };
   }
+  // Newest internal note on a request (23-Nov-2026): cc_notes (from the list API) or an older history note
+  function latestNote(r) {
+    var ev = (r.events || []).filter(function (e) { return e.kind === 'note' && e.by !== 'system' && e.note; }).slice(-1)[0];
+    var a = r.last_note, b = ev ? { note: ev.note, by: ev.by, at: ev.at } : null;
+    if (!a) return b; if (!b) return a;
+    return Date.parse(a.at) >= Date.parse(b.at) ? a : b;
+  }
+  function noteLineHtml(n) {
+    if (!n) return '';
+    var t = String(n.note).replace(/\s+/g, ' ');
+    return '<div class="nt-line" title="' + esc((n.by ? n.by + ': ' : '') + t) + '">&#128221; ' + esc(t) + '</div>';
+  }
   function daysAgo(t) { var d = Date.parse(t || ''); return d ? Math.max(0, Math.floor((Date.now() - d) / 86400000)) : null; }
   // Type column for requests (23-Nov-2026) — same names as the tab cards
   function reqKindLabel(r) { return isDRN(r) ? 'Delivery issue' : isNV(r) ? 'Verify order' : isSRN(r) ? 'Service' : 'Warranty'; }
@@ -4929,7 +4943,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         '<td class="ref-cell" title="' + esc((r.platform || '\u2014') + ' · ' + (r.order_id || '\u2014')) + '">' + esc(r.platform || '\u2014') + '<div class="sub mono">' + esc(r.order_id || '\u2014') + '</div></td>' +
         '<td>' + (wf ? '<span class="badge ' + st[1] + '" title="' + esc(wf.note) + '">Waiting: ' + esc(wf.label) + '</span>' + (daysAgo(wf.at) !== null ? '<div class="sub">asked ' + (daysAgo(wf.at) ? daysAgo(wf.at) + 'd ago' : 'today') + '</div>' : '')
           : '<span class="badge ' + st[1] + '">' + esc(st[0]) + '</span>') + payChip(r) + (cs ? '<div class="sub">' + esc(r.case_id + ' · ' + cs) + '</div>' : '') + '</td>' +
-        '<td class="need-cell" title="' + esc(r.issue_type + (r.issue_detail ? ' — ' + r.issue_detail : '')) + '">' + esc(r.issue_type) + (wf && wf.note ? '<div class="sub" title="' + esc(wf.note) + '">Asked: ' + esc(wf.note) + '</div>' : (isDRN(r) && r.issue_detail ? '<div class="sub">' + esc(r.issue_detail) + '</div>' : '')) + '</td>' +
+        '<td class="need-cell" title="' + esc(r.issue_type + (r.issue_detail ? ' — ' + r.issue_detail : '')) + '">' + noteLineHtml(latestNote(r)) + esc(r.issue_type) + (wf && wf.note ? '<div class="sub" title="' + esc(wf.note) + '">Asked: ' + esc(wf.note) + '</div>' : (isDRN(r) && r.issue_detail ? '<div class="sub">' + esc(r.issue_detail) + '</div>' : '')) + '</td>' +
         '<td>' + reqAgeHtml(r) + '</td>' +
         '<td class="act-cell muted">' + (r.file_count || 0) + ' file(s)</td></tr>';
     }).join('');
