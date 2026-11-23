@@ -5532,7 +5532,21 @@ export default {
           await env.DB.prepare(
             "UPDATE delhivery_orders SET refund_token_hash = ?, refund_token_expires = datetime('now', '+7 days'), refund_link_sent_at = datetime('now'), refund_fail_count = 0 WHERE order_id = ? AND direction = 'reverse'"
           ).bind(await sha256Hex(token), oid).run();
-          return json({ ok: true, token });
+          // WhatsApp template refund_bank_link (button …/refund-details?t=${Contacts.Upload Token}).
+          // Best effort: if it fails, the Dashboard still shows Share / Copy.
+          let wa = { sent: false };
+          try {
+            const d = await env.DB.prepare("SELECT order_id, payload_json FROM delhivery_orders WHERE order_id = ? AND direction = 'reverse'").bind(oid).first();
+            const sh = shipOf(d || {});
+            const cr = await env.DB.prepare('SELECT claim_id FROM warranty_claims WHERE case_id = ?').bind(oid).first();
+            const product = String(sh.products_desc || '').replace(/^(Repair|Replacement|Refund)\s*-\s*/i, '') || 'your Tomahawk product';
+            const u = await resolveSession(request, env.DB);
+            // claim_id → timeline of the linked service request (if any); Request ID shown = refund case
+            const waRow = { claim_id: cr ? cr.claim_id : oid, phone: sh.phone, name: sh.name, email: sh.email, product };
+            wa = await srSendWhatsAppFollowup(env, waRow, 'refund_bank_link',
+              { 'Request ID': oid, 'Product': product, 'Upload Token': token }, (await sha256Hex(token)).slice(0, 12), (u && u.username) || 'team');
+          } catch (e) { wa = { sent: false, error: e.message }; }
+          return json({ ok: true, token, wa });
         }
 
         // ── Customer submits bank details (public, token + phone last-4).
@@ -10443,7 +10457,7 @@ const SR_WA_FOLLOWUP_FROM = '2026-11-04 04:30:00';   // UTC — cron never back-
 const SR_WA_FOLLOWUP_NAMES = {
   payment_pickup: 'Pickup payment link', product_received: 'Product received',
   payment_repair: 'Repair payment link', request_delivered: 'Delivered', media_reupload: 'Photos/video upload link', request_closed: 'Request closed',
-  request_delivered_invoice: 'Delivered + tax invoice'
+  request_delivered_invoice: 'Delivered + tax invoice', refund_bank_link: 'Refund bank details link'
 };
 async function srWaEnsureSent(DB) {
   await DB.prepare('CREATE TABLE IF NOT EXISTS sr_wa_sent (claim_id TEXT, tpl TEXT, ref TEXT, at TEXT DEFAULT (datetime(\'now\')), result TEXT, PRIMARY KEY (claim_id, tpl, ref))').run();
