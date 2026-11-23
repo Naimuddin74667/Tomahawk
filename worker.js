@@ -6797,7 +6797,7 @@ async function autoDelhiveryUcPickup(env, trigger, dryRun) {
   // Already booked for this date or a later one → nothing to do. Delhivery
   // allows only ONE open pickup per location (a new one only after the
   // previous is picked up), so any open booking covers the waiting packages.
-  const have = await env.DB.prepare('SELECT pickup_date, pickup_id, status FROM delhivery_uc_pickups WHERE pickup_date >= ? ORDER BY pickup_date LIMIT 1').bind(dates[0]).first();
+  const have = await env.DB.prepare('SELECT pickup_date, pickup_id, status FROM delhivery_uc_pickups WHERE pickup_date >= ? AND location = ? ORDER BY pickup_date LIMIT 1').bind(dates[0], location).first();
   if (have) return { ok: true, status: 'exists', date: have.pickup_date, pickup_id: have.pickup_id, ...summary };
   if (dryRun) return { ok: true, status: 'would_book', date: dates[0], ...summary };
 
