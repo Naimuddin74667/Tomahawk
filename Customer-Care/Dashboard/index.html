@@ -5323,8 +5323,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     // [key, label, customer text, emoji shown in the dropdown]
     ['not_responding', 'Customer not responding', "We couldn't reach you for a few days", '📵'],
     ['declined', "Customer doesn't want the service", "As per your confirmation, you don't wish to proceed with the service", '🙅'],
-    // Doesn't use up the free warranty claim — customer can claim again (23-Nov-2026)
-    ['solved', 'Resolved without pickup (warranty not used)', 'Your issue was resolved with our support', '✅'],
+    // These 4 don't use up the free warranty claim if nothing was picked up — customer can claim again (23-Nov-2026)
+    ['solved', 'Resolved without pickup', 'Your issue was resolved with our support', '✅'],
     ['duplicate', 'Duplicate request', "You have another request open for the same product; we'll continue there", '📑'],
     ['not_covered', 'Not covered', 'This issue is not covered under our warranty / service', '🚫'],
     // Delivery issues (DRN-) only — Refund approved: Admin + Shikhar only (17-Nov-2026)
@@ -5334,7 +5334,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   ];
   function closeReasonsFor(r) {
     return CLOSE_REASONS.filter(function (x) {
-      if (!x[4]) return true;
+      if (!x[4]) return true;   // (not_responding / declined / solved / duplicate → warranty claim not used)
       if (!isDRN(r)) return false;
       if (x[4] === 'drn_mp') return isMarketDRN(r);   // Amazon / Flipkart orders only
       return x[4] === 'drn' || canApproveRefund();
@@ -5366,7 +5366,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       box.innerHTML = '<div class="cm-sec-title" style="margin-bottom:8px">Close request</div>' +
         '<div class="cm-k" style="margin-bottom:6px">Reason</div>' +
         '<select class="sb-input" id="cl-reason" style="max-width:360px"><option value="">— Pick a reason —</option>' + closeReasonsFor(r).map(function (x) {
-          return '<option value="' + x[0] + '">' + x[3] + '  ' + esc(x[1]) + '</option>'; }).join('') + '</select>' +
+          return '<option value="' + x[0] + '">' + x[3] + '  ' + esc(x[1]) + (['not_responding', 'declined', 'solved', 'duplicate'].indexOf(x[0]) !== -1 ? ' · warranty not used' : '') + '</option>'; }).join('') + '</select>' +
         '<input class="sb-input" id="cl-other" placeholder="Type the reason (the customer sees this)" maxlength="200" style="width:100%;margin-top:8px" hidden>' +
         '<div class="pay-hint" id="cl-cust" style="margin-top:8px"></div>' +
         '<label class="pay-hint" style="display:flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" id="cl-wa" checked> Send WhatsApp to the customer</label>' +

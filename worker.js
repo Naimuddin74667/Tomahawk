@@ -7799,7 +7799,9 @@ async function ensureServiceRequestColsOnce(DB) {
                      'fb_token_hash TEXT', 'fb_token_expires TEXT', 'fb_rating INTEGER', 'fb_comment TEXT', 'fb_recommend INTEGER', 'fb_at TEXT',
                      // Delivery issue requests (17-Nov-2026): request_type 'DRN' (or 'WRN_FROM_DRN' once converted),
                      // line_id = Shopify line item, issue_detail = what's missing / received / damaged, delivered_at = parcel delivered
-                     'request_type TEXT', 'line_id TEXT', 'issue_detail TEXT', 'delivered_at TEXT']) {
+                     'request_type TEXT', 'line_id TEXT', 'issue_detail TEXT', 'delivered_at TEXT',
+                     // 1 = closed without pickup → free warranty claim not used (23-Nov-2026)
+                     'claim_not_used INTEGER']) {
     if (have.has(col.split(' ')[0].toLowerCase())) continue;
     try { await DB.prepare('ALTER TABLE warranty_claims ADD COLUMN ' + col).run(); } catch (e) { /* exists */ }
   }
@@ -8047,9 +8049,6 @@ async function srFeedbackSubmit(env, b) {
 const SR_CLOSE_REASONS = {
   not_responding: { label: 'Customer not responding',            text: "We couldn't reach you for a few days" },
   declined:       { label: "Customer doesn't want the service",   text: "As per your confirmation, you don't wish to proceed with the service" },
-  // Resolved on call, nothing picked up (23-Nov-2026): does NOT use up the order's one free
-  // warranty claim — the customer can raise a warranty request again. Label is stored in
-  // close_reason and matched by the earlier-claim check in the request form; keep it unchanged.
   solved:         { label: 'Solved without pickup',               text: 'Your issue was resolved with our support' },
   duplicate:      { label: 'Duplicate request',                   text: "You have another request open for the same product; we'll continue there" },
   not_covered:    { label: 'Not covered',                         text: 'This issue is not covered under our warranty / service' },
@@ -8059,6 +8058,10 @@ const SR_CLOSE_REASONS = {
   refund:         { label: 'Refund approved',                     text: 'Your refund has been approved and will be processed within 7 working days', drn: true },
   other:          { label: 'Other',                               text: '' }
 };
+// Closes that do NOT use up the order's one free warranty claim (23-Nov-2026), as long as
+// nothing was picked up: the customer can raise a warranty request again. Saved as
+// warranty_claims.claim_not_used = 1. Labels also matched for requests closed before then — keep them unchanged.
+const SR_CLAIM_NOT_USED = ['not_responding', 'declined', 'solved', 'duplicate'];
 async function srCloseRequest(env, user, b) {
   await ensureServiceRequestCols(env.DB);
   const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ?').bind(String(b.claim_id || '').trim()).first();
@@ -8075,8 +8078,10 @@ async function srCloseRequest(env, user, b) {
   if (key === 'other' && !other) return { ok: false, error: 'Type the reason' };
   const custText = key === 'other' ? other : rs.text.replace('{platform}', row.platform && row.platform !== 'Website (Shopify)' ? row.platform : 'Amazon / Flipkart');
   // 1) A live pickup / product still with us → can't close yet
+  let pickedUp = false;
   if (row.case_id) {
     const { rev, fwd } = await srCaseLegs(env.DB, row.case_id);
+    pickedUp = !!(rev && rev.received_at);
     if (key === 'solved' && rev && rev.received_at)
       return { ok: false, error: 'The product was picked up (' + row.case_id + '), so it was not solved without pickup — pick another reason.' };
     const revLive = rev && !rev.cancelled_at && rev.track_stage !== 'Cancelled';
@@ -8101,10 +8106,11 @@ async function srCloseRequest(env, user, b) {
   }
   // 3) Close
   const status = key === 'not_covered' ? 'not_covered' : 'closed';
-  await env.DB.prepare("UPDATE warranty_claims SET close_reason = ?, closed_at = datetime('now'), med_token_hash = NULL, inv_token_hash = NULL WHERE claim_id = ?")
-    .bind(rs.label + (key === 'other' ? ': ' + other : ''), row.claim_id).run();
+  const notUsed = SR_CLAIM_NOT_USED.includes(key) && !pickedUp;
+  await env.DB.prepare("UPDATE warranty_claims SET close_reason = ?, closed_at = datetime('now'), claim_not_used = ?, med_token_hash = NULL, inv_token_hash = NULL WHERE claim_id = ?")
+    .bind(rs.label + (key === 'other' ? ': ' + other : ''), notUsed ? 1 : 0, row.claim_id).run();
   await srAddEvent(env.DB, row.claim_id, { by, kind: 'closed',
-    note: 'Closed · ' + rs.label + (key === 'other' ? ': ' + other : '') + (key === 'solved' ? ' · warranty claim not used' : '') + (b.note ? ' · ' + String(b.note).slice(0, 300) : '') +
+    note: 'Closed · ' + rs.label + (key === 'other' ? ': ' + other : '') + (notUsed ? ' · warranty claim not used' : '') + (b.note ? ' · ' + String(b.note).slice(0, 300) : '') +
       (paid.length ? ' · ₹' + paidTot.toFixed(2) + ' paid — refund in Razorpay' : '') +
       (voided.length ? ' · cancelled unpaid link ' + voided.join(', ') : '') }, { status });
   // 4) WhatsApp request_closed (best effort)
@@ -10496,7 +10502,7 @@ async function submitWarrantyClaim(env, b, ip) {
   if (!repeat) {
     try {
       const prev = await env.DB.prepare(
-        "SELECT claim_id, created_at FROM warranty_claims WHERE order_key = ? AND COALESCE(request_type, '') <> 'DRN' AND COALESCE(close_reason, '') <> 'Solved without pickup' AND (claim_id LIKE 'WRN-%' OR warranty_status = 'Under warranty') ORDER BY created_at DESC LIMIT 1"
+        "SELECT claim_id, created_at FROM warranty_claims WHERE order_key = ? AND COALESCE(request_type, '') <> 'DRN' AND COALESCE(claim_not_used, 0) = 0 AND NOT (COALESCE(case_id, '') = '' AND close_reason IN ('Solved without pickup', 'Customer not responding', 'Customer doesn''t want the service', 'Duplicate request')) AND (claim_id LIKE 'WRN-%' OR warranty_status = 'Under warranty') ORDER BY created_at DESC LIMIT 1"
       ).bind(orderKey).first();
       if (prev) repeat = { ref: prev.claim_id, at: String(prev.created_at || ''), ms: Date.now() };
     } catch (e) { console.error('earlier-claim check failed:', e.message); }
