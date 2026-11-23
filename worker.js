@@ -7770,8 +7770,18 @@ const SR_KINDS = {
   note:        { status: null,                subject: null }   // internal note only
 };
 
-async function ensureServiceRequestCols(DB) {
+// Speed-up (23-Nov-2026): this used to run CREATE TABLE + ~38 ALTER TABLE calls
+// (one D1 round trip each) on EVERY request — the main cause of slow popups /
+// attachments. Now: once per Worker instance, read the existing columns with one
+// PRAGMA and only ALTER the ones that are missing. Retries next call if it fails.
+let srColsReady = null;
+function ensureServiceRequestCols(DB) {
+  if (!srColsReady) srColsReady = ensureServiceRequestColsOnce(DB).catch(function (e) { srColsReady = null; throw e; });
+  return srColsReady;
+}
+async function ensureServiceRequestColsOnce(DB) {
   await ensureWarrantyClaimsTable(DB);
+  const have = new Set((((await DB.prepare('PRAGMA table_info(warranty_claims)').all()) || {}).results || []).map(function (c) { return String(c.name).toLowerCase(); }));
   for (const col of ['case_id TEXT', 'events_json TEXT', 'updated_at TEXT', 'files_json TEXT',
                      // Repeat claim (14-Nov-2026): same order came back after we delivered it.
                      // repeat_of = earlier request / case ID · repeat_kind = 'priority' (≤30 days,
@@ -7790,6 +7800,7 @@ async function ensureServiceRequestCols(DB) {
                      // Delivery issue requests (17-Nov-2026): request_type 'DRN' (or 'WRN_FROM_DRN' once converted),
                      // line_id = Shopify line item, issue_detail = what's missing / received / damaged, delivered_at = parcel delivered
                      'request_type TEXT', 'line_id TEXT', 'issue_detail TEXT', 'delivered_at TEXT']) {
+    if (have.has(col.split(' ')[0].toLowerCase())) continue;
     try { await DB.prepare('ALTER TABLE warranty_claims ADD COLUMN ' + col).run(); } catch (e) { /* exists */ }
   }
 }
