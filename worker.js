@@ -1423,6 +1423,7 @@ const ACTION_TIERS = {
   delhiveryGetLabel: 'viewer_read',
   // — Live tracking for a waybill (order details popup "Track now"). —
   delhiveryTrack: 'viewer_read',
+  delhiveryUcPickupRun: 'manager_up', // UC orders auto pickup — run now / ?dry=1 check + log
   // — Ekart forward orders (same flow as Delhivery above). —
   ekartCreateOrder: 'manager_up', ekartCheckPincode: 'viewer_read', ekartEstimateCharge: 'viewer_read',
   ekartGetLabel: 'viewer_read', ekartTrack: 'viewer_read',
@@ -3288,6 +3289,19 @@ export default {
         // Same logic the scheduled() cron handler runs automatically every
         // 15 min; exposed here too so it can be tested/triggered on demand
         // without waiting for the next cron tick.
+        // ── DELHIVERY — UC orders auto pickup: run now / check (?dry=1) /
+        //   recent log. Same job the */15 cron runs (autoDelhiveryUcPickup).
+        if (action === 'delhiveryUcPickupRun') {
+          try {
+            const result = await autoDelhiveryUcPickup(env, 'manual', url.searchParams.get('dry') === '1');
+            await ensureDelhiveryUcPickupTable(env.DB);
+            const log = (await env.DB.prepare('SELECT * FROM delhivery_uc_pickups ORDER BY pickup_date DESC LIMIT 14').all()).results || [];
+            return json({ ...result, log });
+          } catch (err) {
+            return json({ ok: false, error: err.message }, 500);
+          }
+        }
+
         if (action === 'blinkitCheckRoEmails') {
           try {
             const result = await checkNewRoEmails(env);
@@ -5954,6 +5968,19 @@ export default {
     ctx.waitUntil(srWaMilestones(env).catch(err => console.error('wa milestones:', err.message)));
     // Repair payments — mark requests Paid once Zoho shows the invoice paid. */15 ticks.
     ctx.waitUntil(rpCronCheck(env).catch(err => console.error('repair payments:', err.message)));
+    // Delhivery — same-day pickup request for Unicommerce orders. */15 ticks;
+    // books at most one pickup per day (see autoDelhiveryUcPickup).
+    ctx.waitUntil(
+      autoDelhiveryUcPickup(env, 'cron')
+        .then(r => r.status === 'skipped' && r.reason === 'before 9 am IST' ? null :
+          recordHeartbeat(env, 'delhivery_uc_pickup', 'Delhivery Auto Pickup — UC orders (every 15 min, 9 AM+)',
+            r.ok ? 'ok' : 'error',
+            r.ok ? (r.status === 'skipped' ? r.reason
+                    : `${r.status === 'exists' ? 'Already booked' : 'Booked'} pickup ${r.pickup_id || ''} for ${r.date} — ${r.waiting} package(s) waiting.`)
+                 : r.error, 86400))
+        .catch(err => recordHeartbeat(env, 'delhivery_uc_pickup', 'Delhivery Auto Pickup — UC orders (every 15 min, 9 AM+)',
+          'error', err.message, 86400).catch(() => {}))
+    );
     // Order-data retention (Supabase mirror) — once a day, on the tick
     // that falls between 20:30 and 20:44 UTC (02:00–02:14 IST).
     const tick = new Date(event.scheduledTime || Date.now());
@@ -6688,6 +6715,112 @@ async function ensureDelhiveryPickup(env, trigger) {
     // Refused for this date (too late, holiday…) — try the next date.
   }
   return { ok: false, error: String(lastErr || 'No pickup date accepted') };
+}
+
+// ── DELHIVERY — automatic same-day pickup for UNICOMMERCE orders (23-Nov-2026) ──
+// Shopify orders processed in Unicommerce get their Delhivery AWB through
+// UC's Delhivery integration (UC shipping provider "Industrial Tools And
+// hardware" → Delhivery pickup location "industrial tools and hardware",
+// the E-3 location). Nobody raised a pickup for them, so they sat in
+// Delhivery One "Ready to ship". This job (runs on every */15 tick):
+//   1. Counts UC packages for that provider still waiting for the courier
+//      (UC status READY_TO_SHIP / DISPATCHED with an AWB, last 7 days) —
+//      read from the Supabase mirror.
+//   2. If any are waiting and no pickup is booked yet for the day, raises
+//      ONE pickup request for the location (Delhivery picks up every
+//      manifested AWB there). Before 14:00 IST → today; after → next
+//      working day. Sundays are skipped.
+//   3. Logs it in D1 delhivery_uc_pickups (one row per date = no duplicates).
+// Separate from ensureDelhiveryPickup() above, which covers our own
+// Create-Pickup orders at the other location (DELHIVERY_PICKUP_LOCATION).
+const DELHIVERY_UC_PROVIDER = 'Industrial Tools And hardware'; // UC shippingProvider name
+const DELHIVERY_UC_CUTOFF_HOUR_IST = 14;   // Delhivery same-day cutoff (2 pm)
+const DELHIVERY_UC_START_HOUR_IST = 9;     // cron doesn't book before 9 am
+
+async function ensureDelhiveryUcPickupTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS delhivery_uc_pickups (
+    pickup_date   TEXT PRIMARY KEY,   -- YYYY-MM-DD (IST)
+    location      TEXT,
+    pickup_id     TEXT,
+    pickup_time   TEXT,
+    package_count INTEGER,            -- UC packages waiting when booked
+    status        TEXT,               -- 'created' | 'exists' (already on Delhivery)
+    trigger       TEXT,               -- 'cron' | 'manual'
+    response_json TEXT,
+    created_at    TEXT DEFAULT (datetime('now'))
+  )`).run();
+}
+
+// UC packages for the Delhivery provider that are still waiting for pickup.
+async function ucDelhiveryWaitingPackages(env) {
+  const since = new Date(Date.now() - 7 * 86400000).toISOString();
+  return supabaseGetAll(env,
+    'uc_shipping_packages?select=code,sale_order_code,status,created_at,awb:raw->>trackingNumber' +
+    '&raw->>shippingProvider=eq.' + encodeURIComponent(DELHIVERY_UC_PROVIDER) +
+    '&status=in.(READY_TO_SHIP,DISPATCHED)' +
+    '&raw->>trackingNumber=not.is.null' +
+    '&created_at=gte.' + encodeURIComponent(since) +
+    '&order=created_at.asc');
+}
+
+// trigger: 'cron' (scheduled tick) or 'manual' (button / ?action=). dryRun: report only.
+async function autoDelhiveryUcPickup(env, trigger, dryRun) {
+  const location = env.DELHIVERY_UC_PICKUP_LOCATION;
+  if (!env.DELHIVERY_API_TOKEN || !location) return { ok: false, status: 'skipped', error: 'DELHIVERY_API_TOKEN / DELHIVERY_UC_PICKUP_LOCATION not set' };
+  const now = istDateParts(0);
+  if (trigger === 'cron' && now.hour < DELHIVERY_UC_START_HOUR_IST) return { ok: true, status: 'skipped', reason: 'before 9 am IST' };
+
+  await ensureDelhiveryUcPickupTable(env.DB);
+  const waiting = await ucDelhiveryWaitingPackages(env);
+  if (!waiting.length) return { ok: true, status: 'skipped', reason: 'no UC Delhivery packages waiting', waiting: 0 };
+
+  // Candidate dates: today if before the 2 pm cutoff, then the next days; no Sundays.
+  const dates = [];
+  for (let i = now.hour >= DELHIVERY_UC_CUTOFF_HOUR_IST ? 1 : 0; dates.length < 3 && i < 7; i++) {
+    const p = istDateParts(i);
+    if (p.dow !== 0) dates.push(p.ymd);
+  }
+  const summary = { waiting: waiting.length, oldest: waiting[0].created_at, location };
+
+  // Already booked for the first eligible date → nothing to do.
+  const have = await env.DB.prepare('SELECT pickup_id, status FROM delhivery_uc_pickups WHERE pickup_date = ?').bind(dates[0]).first();
+  if (have) return { ok: true, status: 'exists', date: dates[0], pickup_id: have.pickup_id, ...summary };
+  if (dryRun) return { ok: true, status: 'would_book', date: dates[0], ...summary };
+
+  const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
+  let lastErr = '';
+  for (const date of dates) {
+    let resp, text = '', data = {};
+    try {
+      resp = await fetch(base + '/fm/request/new/', {
+        method: 'POST',
+        headers: { 'Authorization': 'Token ' + env.DELHIVERY_API_TOKEN, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+          pickup_location: location,
+          pickup_date: date,
+          pickup_time: DELHIVERY_PICKUP_TIME,
+          expected_package_count: waiting.length
+        })
+      });
+      text = await resp.text();
+      try { data = JSON.parse(text); } catch (e) { data = { raw: text.slice(0, 500) }; }
+    } catch (e) {
+      lastErr = 'Pickup request failed: ' + e.message;
+      continue;
+    }
+    const msg = JSON.stringify(data).toLowerCase();
+    const pickupId = data.pickup_id || data.pickupId || (data.data && data.data.pickup_id) || '';
+    const alreadyThere = data.pr_exist === true || /already (exist|raised|created|scheduled)/.test(msg);
+    if ((resp.ok && pickupId) || alreadyThere) {
+      await env.DB.prepare(
+        'INSERT OR IGNORE INTO delhivery_uc_pickups (pickup_date, location, pickup_id, pickup_time, package_count, status, trigger, response_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      ).bind(date, location, String(pickupId || ''), DELHIVERY_PICKUP_TIME, waiting.length, pickupId ? 'created' : 'exists', trigger || '', text.slice(0, 2000)).run();
+      return { ok: true, status: pickupId ? 'created' : 'exists', date, pickup_id: String(pickupId || ''), ...summary };
+    }
+    lastErr = (data.error && (data.error.message || data.error)) || data.message || data.raw || ('HTTP ' + resp.status);
+    // Refused for this date (too late, holiday…) — try the next date.
+  }
+  return { ok: false, status: 'failed', error: String(lastErr || 'No pickup date accepted'), ...summary };
 }
 
 // Links a re-send (after an RTO) to the shipment that came back (06-Nov-2026):
