@@ -1316,6 +1316,14 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .br-guide { margin-top: 12px; display: grid; grid-template-columns: 1fr auto; gap: 6px 8px; align-items: end; }
 .br-guide .br-col-h { grid-column: 1 / -1; margin: 0; }
 .br-guide-ta { border-radius: 10px; resize: vertical; min-height: 58px; width: 100%; box-sizing: border-box; }
+.br-thread-box { margin-bottom: 12px; }
+.br-thread > summary { cursor: pointer; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text2); font-weight: 700; margin-bottom: 8px; }
+.br-thread { max-height: 460px; overflow: auto; }
+.br-msg { border-radius: 10px; padding: 9px 12px; margin: 0 0 8px; font-size: 12.5px; max-width: 85%; }
+.br-msg.in { background: color-mix(in srgb, var(--text2) 7%, transparent); }
+.br-msg.out { background: color-mix(in srgb, var(--accent) 9%, transparent); margin-left: auto; }
+.br-msg-h { font-size: 11px; color: var(--text2); margin-bottom: 4px; }
+.br-msg-t { white-space: pre-wrap; word-break: break-word; line-height: 1.5; color: var(--text); }
 .br-empty { padding: 28px; text-align: center; color: var(--text2); font-size: 13px; }
 @media (max-width: 1000px) { .br-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } .br-row2, .br-cols { grid-template-columns: 1fr; } .br-bar .br-input { margin-left: 0; width: 100%; min-width: 0; } }
 </style>
@@ -1717,7 +1725,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
         if (e.target.closest('a')) return;
         var id = tr.getAttribute('data-tid');
         var t = src.find(function (x) { return x.id === id; });
-        var r = rawRows.filter(function (x) { return String(x.ticket_id) === id; }).sort(function (a, b) { return b.id - a.id; })[0];
+        var r = latestRowFor(id);
         if (r) openTicket(r); else openPreview(t);
       };
     });
@@ -1727,7 +1735,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   async function fillZohoDetail(box, t) {
     if (!t) return;
     // Bot already checked it → the same card as in the list (edit / send / rate)
-    var r = rawRows.filter(function (x) { return String(x.ticket_id) === t.id; }).sort(function (a, b) { return b.id - a.id; })[0];
+    var r = latestRowFor(t.id);
     if (r) { box.innerHTML = itemHtml(r, true); wireItem(box.querySelector('.br-item'), r); return; }
     // Not checked yet → preview of what the bot would reply (nothing saved or sent)
     var show = function (p) {
@@ -1827,6 +1835,31 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   }
   function workClear(id) { try { var a = workAll(); delete a[id]; localStorage.setItem(WORK_KEY, JSON.stringify(a)); } catch (e) { /* ignore */ } }
 
+  // Newest log row for a Zoho ticket — the original or a customer follow-up on it (id:2)
+  function latestRowFor(zid) {
+    zid = String(zid).replace(/:\d+$/, '');
+    return rawRows.filter(function (x) { return String(x.ticket_id).replace(/:\d+$/, '') === zid || String(x.zoho_id || '') === zid; })
+      .sort(function (a, b) { return b.id - a.id; })[0];
+  }
+  var threadCache = {};
+  // Full conversation (every mail in + out), oldest first, in the ticket window
+  async function fillThread(box, zid) {
+    var draw = function (th) {
+      box.innerHTML = '<details class="br-thread"' + (th.length > 1 ? ' open' : '') + '><summary>Full conversation <span class="br-muted">(' + th.length + ' mail' + (th.length === 1 ? '' : 's') + ')</span></summary>' +
+        th.map(function (m) {
+          return '<div class="br-msg ' + (m.dir === 'out' ? 'out' : 'in') + '"><div class="br-msg-h"><b>' + (m.dir === 'out' ? 'Us' : 'Customer') + '</b> · ' + esc(m.from) + ' · ' + esc(when(m.at)) + '</div>' +
+            '<div class="br-msg-t">' + esc(m.text || '(empty)') + '</div></div>';
+        }).join('') + '</details>';
+    };
+    if (threadCache[zid]) return draw(threadCache[zid]);
+    box.innerHTML = '<div class="br-hint">Loading full conversation…</div>';
+    try {
+      var res = await api('mailBotThread', '&ticket=' + encodeURIComponent(zid));
+      if (!res.ok) throw new Error(res.error || 'failed');
+      threadCache[zid] = res.threads; draw(res.threads);
+    } catch (e) { box.innerHTML = '<div class="br-hint" style="color:var(--red)">Could not load the conversation: ' + esc(e.message) + '</div>'; }
+  }
+
   var modal = null, modalId = null;
   function ensureModal() {
     if (modal) return modal;
@@ -1843,6 +1876,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     return modal;
   }
   function openTicket(r) {
+    r = latestRowFor(r.zoho_id || r.ticket_id) || r;   // a follow-up? show its newest state
     ensureModal(); modalId = r.id;
     if (history.replaceState) history.replaceState(null, '', '#t=' + encodeURIComponent(r.ticket_number));
     modal.hidden = false; document.body.style.overflow = 'hidden';
@@ -1874,6 +1908,9 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     modal.querySelector('[data-mtitle]').textContent = '#' + r.ticket_number + ' · ' + (r.customer_name || r.customer_email) + ' · ' + (r.subject || '');
     var body = modal.querySelector('[data-mbody]');
     body.innerHTML = itemHtml(r, true);
+    var tb = document.createElement('div'); tb.className = 'br-thread-box';
+    var bd = body.querySelector('.br-body'); if (bd) bd.insertBefore(tb, bd.querySelector('.br-cols'));
+    fillThread(tb, String(r.zoho_id || r.ticket_id).replace(/:\d+$/, ''));
     wireItem(body.querySelector('.br-item'), r);
     if (w && w.reason) { var lb = body.querySelector('[data-learn-box]'); if (lb) { lb.hidden = false; lb.querySelector('[data-reason]').value = w.reason; } }
   }
@@ -2068,7 +2105,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   async function load() {
     var res = await api('mailBotList', '&days=' + days);
     if (!res.ok) throw new Error(res.error || 'failed');
-    rawRows = res.rows || []; applyOpen(); settings = res.settings; lastRun = res.last_run || null;
+    rawRows = res.rows || []; threadCache = {}; applyOpen(); settings = res.settings; lastRun = res.last_run || null;
     document.getElementById('br-sub').textContent = 'Customer emails the bot checked in the last ' + days + ' days — rate every reply Good, Average or Bad.';
     draw();
     loadZoho();   // All tickets card count — fresh from Zoho on every load

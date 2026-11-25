@@ -1439,7 +1439,7 @@ const ACTION_TIERS = {
   // Internal notes on requests / cases (20-Nov-2026)
   ccNotesList: 'viewer_read', ccNoteAdd: 'manager_up',
   // Customer Care → Bot Replies: automatic email replies log + review (25-Nov-2026)
-  mailBotList: 'viewer_read', mailBotZohoOpen: 'viewer_read', mailBotRefine: 'manager_up', mailBotRedraft: 'manager_up', mailBotLearn: 'manager_up', mailBotLessons: 'viewer_read', mailBotLessonDelete: 'manager_up', mailBotRate: 'manager_up', mailBotTest: 'manager_up', mailBotSend: 'manager_up', mailBotTemplates: 'viewer_read', mailBotTemplateSave: 'admin_only', mailBotSuggest: 'admin_only', mailBotSettings: 'admin_only', mailBotRunNow: 'admin_only',
+  mailBotList: 'viewer_read', mailBotZohoOpen: 'viewer_read', mailBotThread: 'viewer_read', mailBotRefine: 'manager_up', mailBotRedraft: 'manager_up', mailBotLearn: 'manager_up', mailBotLessons: 'viewer_read', mailBotLessonDelete: 'manager_up', mailBotRate: 'manager_up', mailBotTest: 'manager_up', mailBotSend: 'manager_up', mailBotTemplates: 'viewer_read', mailBotTemplateSave: 'admin_only', mailBotSuggest: 'admin_only', mailBotSettings: 'admin_only', mailBotRunNow: 'admin_only',
   // Dashboard "Raise ticket" — record (or clear) a courier escalation ticket on one leg.
   ccMarkEscalation: 'manager_up',
   // RTO received → close the case instead of re-sending (06-Nov-2026).
@@ -1496,7 +1496,7 @@ const ACTION_TIERS = {
 
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
-const ALWAYS_GATED = new Set(['ccDeliveredDate', 'mailBotList', 'mailBotZohoOpen', 'mailBotRefine', 'mailBotRedraft', 'mailBotLearn', 'mailBotLessons', 'mailBotLessonDelete', 'mailBotRate', 'mailBotTest', 'mailBotSend', 'mailBotTemplates', 'ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
+const ALWAYS_GATED = new Set(['ccDeliveredDate', 'mailBotList', 'mailBotZohoOpen', 'mailBotThread', 'mailBotRefine', 'mailBotRedraft', 'mailBotLearn', 'mailBotLessons', 'mailBotLessonDelete', 'mailBotRate', 'mailBotTest', 'mailBotSend', 'mailBotTemplates', 'ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
   'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccPaymentWaive', 'ccLogisticsQuote', 'ccVersion',
   'shopShipList', 'shopShipRefresh', 'shopShipReceived']);
 
@@ -2298,6 +2298,11 @@ export default {
         return json(await mbList(env, days));
       }
       // All open Zoho email cases (25-Nov-2026) — Bot Replies "All tickets" card
+      // Full conversation of one Zoho ticket — every mail in and out (25-Nov-2026)
+      if (request.method === 'GET' && action === 'mailBotThread') {
+        try { return json(await mbThread(env, String(url.searchParams.get('ticket') || '').replace(/:\d+$/, ''))); }
+        catch (e) { return json({ ok: false, error: e.message }, 500); }
+      }
       if (request.method === 'GET' && action === 'mailBotZohoOpen') {
         return json(await mbZohoOpen(env));
       }
@@ -15735,6 +15740,25 @@ async function mbRefine(env, b) {
   }
   if (!out) return { ok: false, error: lastErr || 'AI gave no answer' };
   return { ok: true, text: out.replace(/^(here is|here's)[^\n]*:\s*\n+/i, '').trim() };
+}
+
+async function mbThread(env, ticketId) {
+  if (!/^\d+$/.test(ticketId)) return { ok: false, error: 'Bad ticket id' };
+  const orgId = await mbOrgId(env);
+  const th = await zdCall(env, 'GET', '/tickets/' + ticketId + '/threads', { orgId, query: { limit: '50' } });
+  if (!th.ok) return { ok: false, error: 'Zoho threads ' + th.status };
+  const list = ((th.json && th.json.data) || []).slice().sort((x, y) => String(x.createdTime).localeCompare(String(y.createdTime))).slice(-20);
+  const out = [];
+  for (let i = 0; i < list.length; i += 5) {
+    await Promise.all(list.slice(i, i + 5).map(async (t, k) => {
+      let text = '';
+      try { const one = await zdCall(env, 'GET', '/tickets/' + ticketId + '/threads/' + t.id, { orgId }); text = mbStripQuoted(mbHtmlToText((one.json && (one.json.content || one.json.summary)) || '')); }
+      catch (e) { /* fall back to the summary */ }
+      out[i + k] = { dir: t.direction, from: (t.author && (t.author.name || t.author.email)) || t.fromEmailAddress || '', at: t.createdTime,
+        channel: t.channel || '', text: (text || mbHtmlToText(t.summary || '')).slice(0, 4000) };
+    }));
+  }
+  return { ok: true, threads: out.filter(Boolean) };
 }
 
 async function mbZohoOpen(env) {
