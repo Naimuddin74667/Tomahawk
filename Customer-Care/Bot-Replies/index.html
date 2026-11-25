@@ -1654,7 +1654,15 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   // Closed tickets drop off the page (25-Nov-2026): keep only rows whose Zoho ticket is
   // still open. Exception: replies the bot itself sent (the bot closes those tickets) —
   // kept so they can still be rated.
+  // Shopify contact-form mails ("New customer message on …" from mailer@shopify.com) are
+  // ignored on this page — bulk / B2B enquiries the team handles directly (25-Nov-2026)
+  function isIgnored(x) {
+    var mail = String(x.customer_email || x.email || '').toLowerCase(), subj = String(x.subject || '');
+    return mail === 'mailer@shopify.com' || /^new customer message on /i.test(subj);
+  }
   function applyOpen() {
+    rawRows = rawRows.filter(function (r) { return !isIgnored(r); });
+    if (zohoList) zohoList = zohoList.filter(function (t) { return !isIgnored(t); });
     if (!zohoList) { rows = rawRows; return; }
     var open = new Set(zohoList.map(function (t) { return String(t.id); }));
     rows = rawRows.filter(function (r) { return r.result === 'sent' || open.has(String(r.ticket_id)); });
