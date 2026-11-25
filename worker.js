@@ -1438,6 +1438,8 @@ const ACTION_TIERS = {
   ccSetOrderId: 'manager_up', ccOrderLookup: 'viewer_read',
   // Internal notes on requests / cases (20-Nov-2026)
   ccNotesList: 'viewer_read', ccNoteAdd: 'manager_up',
+  // Customer Care → Bot Replies: automatic email replies log + review (25-Nov-2026)
+  mailBotList: 'viewer_read', mailBotRate: 'manager_up', mailBotTest: 'manager_up', mailBotSettings: 'admin_only', mailBotRunNow: 'admin_only',
   // Dashboard "Raise ticket" — record (or clear) a courier escalation ticket on one leg.
   ccMarkEscalation: 'manager_up',
   // RTO received → close the case instead of re-sending (06-Nov-2026).
@@ -1494,7 +1496,7 @@ const ACTION_TIERS = {
 
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
-const ALWAYS_GATED = new Set(['ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
+const ALWAYS_GATED = new Set(['mailBotList', 'mailBotRate', 'mailBotTest', 'ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
   'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccPaymentWaive', 'ccLogisticsQuote', 'ccVersion',
   'shopShipList', 'shopShipRefresh', 'shopShipReceived']);
 
@@ -2289,6 +2291,38 @@ export default {
           const row = await env.DB.prepare("INSERT INTO cc_notes (case_key, note, by_user) VALUES (?, ?, ?) RETURNING id, case_key, note, by_user, created_at").bind(key, note, who).first();
           return json({ ok: true, note: row });
         }
+      }
+      // ── MAIL BOT — Customer Care → Bot Replies (25-Nov-2026). See mbRun().
+      if (request.method === 'GET' && action === 'mailBotList') {
+        const days = Math.min(120, Math.max(1, parseInt(url.searchParams.get('days') || '31', 10) || 31));
+        return json(await mbList(env, days));
+      }
+      if (request.method === 'POST' && act === 'mailBotRate') {
+        await ensureMailBotTable(env.DB);
+        const id = parseInt(body && body.id, 10);
+        const rating = ['good', 'average', 'bad', ''].includes(body && body.rating) ? body.rating : null;
+        if (!id || rating === null) return json({ ok: false, error: 'Bad rating' }, 400);
+        const note = String((body && body.note) || '').trim().slice(0, 500);
+        const user = authResult.user || (await resolveSession(request, env.DB));
+        const who = (user && user.username) || 'admin';
+        const row = await env.DB.prepare(`UPDATE bot_reply_log SET rating = ?, rating_note = ?, rated_by = ?, rated_at = datetime('now')
+          WHERE id = ? RETURNING id, rating, rating_note, rated_by, rated_at`).bind(rating || null, note, rating || note ? who : null, id).first();
+        return json(row ? { ok: true, row } : { ok: false, error: 'Not found' }, row ? 200 : 404);
+      }
+      if (request.method === 'POST' && act === 'mailBotSettings') {
+        const s = await mbGetSettings(env);
+        if (body && MB_MODES.includes(body.mode)) s.mode = body.mode;
+        if (body && Array.isArray(body.test_emails)) s.test_emails = body.test_emails.map(x => String(x).trim().toLowerCase()).filter(validEmail).slice(0, 10);
+        await mbSaveSettings(env, s);
+        return json({ ok: true, settings: { mode: s.mode, start_at: s.start_at, test_emails: s.test_emails } });
+      }
+      if (request.method === 'POST' && act === 'mailBotRunNow') {
+        try { return json(await mbRun(env, {})); }
+        catch (e) { return json({ ok: false, error: e.message }, 500); }
+      }
+      if (request.method === 'POST' && act === 'mailBotTest') {
+        try { return json(await mbTestTicket(env, body && body.ticket)); }
+        catch (e) { return json({ ok: false, error: e.message }, 500); }
       }
       if (request.method === 'POST' && act === 'ccDrnToWrn') {
         const user = authResult.user || (await resolveSession(request, env.DB));
@@ -5980,6 +6014,8 @@ export default {
     ctx.waitUntil(srWaProcessQueue(env).catch(err => console.error('wa queue:', err.message)));
     // Service requests — WhatsApp "Product received" / "Delivered" follow-ups. */15 ticks.
     ctx.waitUntil(srWaMilestones(env).catch(err => console.error('wa milestones:', err.message)));
+    // Mail bot — automatic replies to new customer emails in Zoho Desk. */15 ticks.
+    ctx.waitUntil(mbRun(env).catch(err => console.error('mail bot:', err.message)));
     // Repair payments — mark requests Paid once Zoho shows the invoice paid. */15 ticks.
     ctx.waitUntil(rpCronCheck(env).catch(err => console.error('repair payments:', err.message)));
     // Delhivery — same-day pickup request for Unicommerce orders. */15 ticks;
@@ -14360,4 +14396,367 @@ async function shopShipList(env) {
     FROM shopify_shipments WHERE shipped_at >= ? ORDER BY shipped_at DESC`).bind(new Date(Date.now() - SHOP_SHIP_DAYS * 864e5).toISOString()).all()).results || [];
   const st = await env.DB.prepare("SELECT value FROM tm_settings WHERE key = 'shop_ship_refreshed'").first().catch(() => null);
   return { ok: true, rows, refreshed_at: st ? st.value : null, days: SHOP_SHIP_DAYS };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// MAIL BOT — automatic replies to customer emails in Zoho Desk (25-Nov-2026)
+// ══════════════════════════════════════════════════════════════════
+// Runs on the */15 cron. Picks up new EMAIL tickets (support@tomahawk.tools),
+// and — one reply type at a time — answers the ones it is sure about.
+// Type 1 (live first): ORDER CANCELLATION. The bot never cancels anything:
+// customers cancel themselves on the Track Order page. The bot only looks
+// up the order's current state and sends one of CX1–CX6.
+//   CX1 can still cancel → steps for the Track Order page (+ refund line if prepaid)
+//   CX2 already handed to the courier → can't cancel, live tracking link
+//   CX3 already cancelled → refund line (prepaid only)
+//   CX4 delivered → can't cancel, delivery issue page
+//   CX5 Amazon / Flipkart order → cancel in that app
+//   CX6 order missing / not found / not theirs → Track Order page (OTP shows all orders)
+// Anything mixed or unclear is SKIPPED (no reply) and stays with the team.
+// Every ticket the bot looks at goes into D1 bot_reply_log; the Customer
+// Care → Bot Replies page shows them for Good / Average / Bad review.
+// Settings (tm_settings 'mailbot_settings', changed on the Bot Replies page):
+//   mode: off | dryrun (log the reply, send nothing) | test (send only to
+//   test emails, dry-run the rest) | live (send to everyone).
+//   start_at: tickets created before this are never touched.
+// Needs Worker secret ZOHO_DESK_REFRESH_TOKEN with Desk.tickets.ALL added.
+// ══════════════════════════════════════════════════════════════════
+const MB_TRACK_LINK = 'https://tomahawk.tools/pages/track-order';
+const MB_DRN_LINK = 'https://tomahawk.tools/pages/delivery-issue';
+const MB_FROM_EMAIL = 'support@tomahawk.tools';
+const MB_MAX_PER_RUN = 8;          // tickets handled per cron tick (subrequest budget)
+const MB_MODES = ['off', 'dryrun', 'test', 'live'];
+
+async function ensureMailBotTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS bot_reply_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id TEXT UNIQUE, ticket_number TEXT, ticket_created TEXT,
+    customer_name TEXT, customer_email TEXT, subject TEXT, mail_text TEXT,
+    reply_type TEXT, template TEXT, order_no TEXT, order_info TEXT,
+    reply_text TEXT, result TEXT, skip_reason TEXT, error TEXT,
+    rating TEXT, rating_note TEXT, rated_by TEXT, rated_at TEXT,
+    processed_at TEXT DEFAULT (datetime('now'))
+  )`).run();
+}
+
+async function mbGetSettings(env) {
+  const row = await env.DB.prepare("SELECT value FROM tm_settings WHERE key = 'mailbot_settings'").first().catch(() => null);
+  let s = {};
+  try { s = row && row.value ? JSON.parse(row.value) : {}; } catch (e) { s = {}; }
+  if (!MB_MODES.includes(s.mode)) s.mode = 'dryrun';     // safe default: log only, never send
+  if (!Array.isArray(s.test_emails)) s.test_emails = ['onlinesales@bullet.co.in', 'naimuddin@bullet.co.in'];
+  if (!s.start_at) {                                       // first run: ignore every older ticket
+    s.start_at = new Date().toISOString();
+    await mbSaveSettings(env, s);
+  }
+  return s;
+}
+async function mbSaveSettings(env, s) {
+  await env.DB.prepare("INSERT INTO tm_settings (key, value) VALUES ('mailbot_settings', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+    .bind(JSON.stringify(s)).run();
+}
+
+// Zoho Desk org ID — reuses the WhatsApp setup cache when it exists.
+async function mbOrgId(env) {
+  for (const key of ['zoho_desk_org_id', 'zoho_desk_wa_setup']) {
+    const row = await env.DB.prepare('SELECT value FROM tm_settings WHERE key = ?').bind(key).first().catch(() => null);
+    if (row && row.value) {
+      try { const v = JSON.parse(row.value); if (v && v.orgId) return v.orgId; } catch (e) { /* plain value */ }
+      if (/^\d+$/.test(row.value)) return row.value;
+    }
+  }
+  const orgs = await zdCall(env, 'GET', '/organizations');
+  const list = (orgs.json && orgs.json.data) || [];
+  if (!list.length) throw new Error('Zoho Desk organizations ' + orgs.status + ': ' + JSON.stringify(orgs.json).slice(0, 200));
+  const org = list.find(o => /tomahawk/i.test((o.portalName || '') + ' ' + (o.companyName || ''))) || list[0];
+  await env.DB.prepare("INSERT INTO tm_settings (key, value) VALUES ('zoho_desk_org_id', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+    .bind(JSON.stringify({ orgId: org.id })).run();
+  return org.id;
+}
+
+// ── Text helpers ──
+function mbHtmlToText(html) {
+  return String(html || '')
+    .replace(/<(br|\/p|\/div|\/li|\/tr|\/h\d)\b[^>]*>/gi, '\n')
+    .replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, ' ').replace(/\n\s*\n\s*\n+/g, '\n\n').trim();
+}
+// Drop the quoted earlier mail ("On … wrote:", "-----Original Message-----", "From: …").
+function mbStripQuoted(text) {
+  const cut = String(text || '').search(/\n\s*(On .{5,200}wrote:|-{2,}\s*Original Message|From:\s.+\n\s*(Sent|Date):)/i);
+  return (cut > 0 ? text.slice(0, cut) : text).trim();
+}
+function mbEscHtml(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function mbDate(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+}
+function mbMoney(n) { const v = Number(n || 0), d = v % 1 ? 2 : 0; return '₹' + v.toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+function mbFirstName(s) {
+  const f = String(s || '').trim().split(/\s+/)[0] || '';
+  return /^[a-z][a-z.'-]{1,30}$/i.test(f) ? f.charAt(0).toUpperCase() + f.slice(1).toLowerCase() : '';
+}
+// "TOMAHAWK® KLL-16A … | 4D … | 2 Batteries" → text before the first " | ".
+function mbProductName(items) {
+  const list = (items || []).filter(i => i && i.title);
+  if (!list.length) return 'your product';
+  const first = String(list[0].title).split(' | ')[0].trim();
+  return list.length > 1 ? first + ' + ' + (list.length - 1) + ' more item' + (list.length > 2 ? 's' : '') : first;
+}
+
+// ── Step 1: is this a plain cancellation request? ──
+// Returns '' when it is, otherwise the reason it was skipped.
+function mbCancelSkipReason(subject, text) {
+  const all = (subject + '\n' + text);
+  if (!/\bcancel/i.test(all)) return 'Not a cancellation mail';
+  if (/\b(return|replace|replacement|exchange|damaged?|defective|broken|not working|warranty|repair|missing|wrong (item|product)|not received|did ?n[o']?t receive)\b/i.test(all))
+    return 'Cancellation mixed with another issue';
+  if (/\bwhy\b|cancel+ed by (you|seller|tomahawk)|without (my|asking)|re-?order|order again/i.test(all))
+    return 'Customer asks about a cancellation, not for one';
+  if (/refund/i.test(all) && /(not|still|yet|when).{0,30}refund|refund.{0,30}(not|still|yet|status)/i.test(all))
+    return 'Refund status question';
+  return '';
+}
+
+// ── Step 2: which order? ──
+function mbExtractOrders(subject, text) {
+  const all = subject + '\n' + text;
+  const amazon = [...new Set((all.match(/\b\d{3}-\d{7}-\d{7}\b/g) || []))];
+  const flipkart = [...new Set((all.match(/\bOD\d{15,20}\b/gi) || []).map(x => x.toUpperCase()))];
+  const cleaned = all.replace(/\b\d{3}-\d{7}-\d{7}\b/g, ' ').replace(/\bOD\d{15,20}\b/gi, ' ');
+  const web = new Set();
+  let m;
+  const reHash = /#\s?(\d{4,5})\b/g;
+  while ((m = reHash.exec(cleaned))) web.add(m[1]);
+  const reWord = /\border\s*(?:no\.?|number|id)?\s*(?:is\s*)?[:\-#]?\s*(\d{4,5})\b/gi;
+  while ((m = reWord.exec(cleaned))) web.add(m[1]);
+  return { web: [...web], amazon, flipkart,
+    mentionsAmazon: /\bamazon\b/i.test(all), mentionsFlipkart: /\bflipkart\b/i.test(all) };
+}
+
+const MB_ORDER_FIELDS = `id name createdAt cancelledAt email phone displayFinancialStatus paymentGatewayNames
+  totalPriceSet { shopMoney { amount } }
+  customer { firstName } billingAddress { firstName } shippingAddress { firstName }
+  lineItems(first: 5) { nodes { title quantity } }
+  fulfillments(first: 10) { status displayStatus deliveredAt createdAt }
+  refunds(first: 5) { createdAt totalRefundedSet { shopMoney { amount } } }`;
+
+async function mbShopifyOrderByNumber(env, num) {
+  const d = await shopifyGql(env, `query($q: String!) { orders(first: 5, query: $q) { nodes { ${MB_ORDER_FIELDS} } } }`, { q: 'name:' + num });
+  return ((d && d.orders && d.orders.nodes) || []).find(x => String(x.name).replace(/\D/g, '') === String(num)) || null;
+}
+async function mbShopifyOrdersByEmail(env, email) {
+  const d = await shopifyGql(env, `query($q: String!) { orders(first: 10, query: $q, sortKey: CREATED_AT, reverse: true) { nodes { ${MB_ORDER_FIELDS} } } }`,
+    { q: 'email:"' + email.replace(/"/g, '') + '"' });
+  return ((d && d.orders && d.orders.nodes) || []).filter(o => String(o.email || '').toLowerCase() === email);
+}
+
+// Order state in the same terms the Track Order page / orderCancel() use.
+function mbOrderState(o) {
+  const live = (o.fulfillments || []).filter(f => String(f.status || '').toUpperCase() !== 'CANCELLED');
+  const delivered = live.length && live.every(f => f.deliveredAt || String(f.displayStatus || '').toUpperCase() === 'DELIVERED');
+  const isCod = (o.paymentGatewayNames || []).some(g => /cod|cash on delivery/i.test(g));
+  const fin = String(o.displayFinancialStatus || '').toUpperCase();
+  const refunded = (o.refunds || []).reduce((s, r) => s + (Number(r.totalRefundedSet && r.totalRefundedSet.shopMoney && r.totalRefundedSet.shopMoney.amount) || 0), 0);
+  const lastRefund = (o.refunds || []).map(r => r.createdAt).filter(Boolean).sort().pop() || null;
+  return {
+    state: o.cancelledAt ? 'cancelled' : delivered ? 'delivered' : live.length ? 'shipped' : 'open',
+    isCod, paid: !isCod && ['PAID', 'PARTIALLY_PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'].includes(fin),
+    amount: Number(o.totalPriceSet && o.totalPriceSet.shopMoney && o.totalPriceSet.shopMoney.amount) || 0,
+    refunded, lastRefund,
+    deliveredAt: delivered ? (live.map(f => f.deliveredAt).filter(Boolean).sort().pop() || null) : null
+  };
+}
+
+// ── Step 3: pick CX1–CX6 and write the reply ──
+// Returns { template, order_no, order_info, lines } or { skip }.
+async function mbBuildCancelReply(env, t) {
+  const ids = mbExtractOrders(t.subject, t.text);
+  if (ids.web.length > 1) return { skip: 'More than one order number in the mail (' + ids.web.map(n => '#' + n).join(', ') + ')' };
+  if (!shopifyConfigured(env)) return { skip: 'Shopify not configured on the Worker' };
+
+  let order = null, how = '';
+  if (ids.web.length === 1) {
+    order = await mbShopifyOrderByNumber(env, ids.web[0]);
+    how = 'number in mail';
+    if (order && String(order.email || '').toLowerCase() !== t.email) {
+      // Order exists but belongs to another email — never reveal its state.
+      return { template: 'CX6', order_no: '#' + ids.web[0], order_info: 'Order found but its email (' + (order.email || 'none') + ") doesn't match the sender",
+        name: mbFirstName(t.contactName), lines: null };
+    }
+  }
+  if (!order && !ids.web.length && (ids.amazon.length || ids.flipkart.length || ids.mentionsAmazon || ids.mentionsFlipkart)) {
+    const platform = (ids.amazon.length || (ids.mentionsAmazon && !ids.mentionsFlipkart)) ? 'Amazon' : 'Flipkart';
+    return { template: 'CX5', order_no: ids.amazon[0] || ids.flipkart[0] || '', order_info: platform + ' order', platform, name: mbFirstName(t.contactName) };
+  }
+  if (!order && !ids.web.length) {
+    // No number: use the sender's only recent (60 days) not-cancelled website order.
+    const since = Date.now() - 60 * 864e5;
+    const recent = (await mbShopifyOrdersByEmail(env, t.email)).filter(o => new Date(o.createdAt).getTime() >= since && !o.cancelledAt);
+    if (recent.length === 1) { order = recent[0]; how = 'only open order on sender email'; }
+    else return { template: 'CX6', order_no: '', order_info: recent.length ? recent.length + ' open orders on this email — not sure which' : 'No order number, no open order on this email',
+      name: mbFirstName(t.contactName) };
+  }
+  if (!order) return { template: 'CX6', order_no: '#' + ids.web[0], order_info: 'Order not found in Shopify', name: mbFirstName(t.contactName) };
+
+  const st = mbOrderState(order);
+  const name = mbFirstName((order.customer && order.customer.firstName) || (order.billingAddress && order.billingAddress.firstName) ||
+    (order.shippingAddress && order.shippingAddress.firstName) || t.contactName);
+  const product = mbProductName(order.lineItems && order.lineItems.nodes);
+  const info = order.name + ' · ' + ({ open: 'not yet with courier', shipped: 'with courier', delivered: 'delivered', cancelled: 'cancelled' })[st.state] +
+    ' · ' + (st.isCod ? 'COD' : st.paid ? 'Prepaid' : 'Payment ' + String(order.displayFinancialStatus || '').toLowerCase()) +
+    ' · ' + mbMoney(st.amount) + (how ? ' · found by ' + how : '');
+  const base = { order_no: order.name, order_info: info, name, product, st, order };
+  if (st.state === 'open') return { ...base, template: 'CX1' };
+  if (st.state === 'shipped') return { ...base, template: 'CX2' };
+  if (st.state === 'delivered') return { ...base, template: 'CX4' };
+  return { ...base, template: 'CX3' };
+}
+
+// The reply wording (agreed 25-Nov-2026). Returns an array of paragraphs.
+function mbCancelText(r) {
+  const n = r.order_no;
+  const out = ['Hi' + (r.name ? ' ' + r.name : '') + ','];
+  if (r.template === 'CX1') {
+    out.push('Your order ' + n + ' for ' + r.product + " hasn't been dispatched yet, so you can cancel it yourself in a few seconds:");
+    out.push('1. Open ' + MB_TRACK_LINK + '\n2. Enter your order number ' + n + ' and your mobile number\n3. Click "Cancel order" at the bottom of the order details\n4. Confirm with the OTP sent to your WhatsApp');
+    if (r.st.paid) out.push('Once cancelled, ' + mbMoney(r.st.amount) + ' will be refunded to your original payment method within 7–10 working days.');
+  } else if (r.template === 'CX2') {
+    out.push('Your order ' + n + ' has already been picked up by our courier partner, so it can no longer be cancelled. You can follow its live status here: ' + MB_TRACK_LINK);
+  } else if (r.template === 'CX3') {
+    let line = 'Your order ' + n + ' is already cancelled.';
+    if (r.st.refunded > 0) line += ' A refund of ' + mbMoney(r.st.refunded) + ' was processed on ' + mbDate(r.st.lastRefund) + '.';
+    else if (r.st.paid) line += ' Your refund will be processed within 7–10 working days.';
+    out.push(line);
+  } else if (r.template === 'CX4') {
+    out.push('Our records show order ' + n + ' was delivered' + (r.st.deliveredAt ? ' on ' + mbDate(r.st.deliveredAt) : '') +
+      ", so it can't be cancelled. If there's an issue with the product, you can report it here within 7 days of delivery: " + MB_DRN_LINK);
+  } else if (r.template === 'CX5') {
+    out.push('This order was placed on ' + r.platform + ', so it can only be cancelled from the "Your Orders" section of the ' + r.platform + ' app.');
+  } else {
+    out.push("We couldn't find the order from your mail. You can see and cancel your website orders yourself here: " + MB_TRACK_LINK +
+      '. Just verify your mobile number with the WhatsApp OTP to see all your orders.');
+  }
+  out.push('Regards,\nTeam Tomahawk Tools\n' + MB_FROM_EMAIL);
+  return out;
+}
+function mbParasToHtml(paras) {
+  return paras.map(p => '<p>' + mbEscHtml(p).replace(/(https:\/\/[^\s<]+)/g, '<a href="$1">$1</a>').replace(/\n/g, '<br>') + '</p>').join('');
+}
+
+// ── Zoho Desk: ticket text ──
+async function mbTicketText(env, orgId, ticketId) {
+  const t = await zdCall(env, 'GET', '/tickets/' + ticketId, { orgId });
+  let html = (t.json && t.json.description) || '';
+  if (!mbHtmlToText(html)) {
+    const th = await zdCall(env, 'GET', '/tickets/' + ticketId + '/threads', { orgId });
+    const first = ((th.json && th.json.data) || []).filter(x => x.direction === 'in')
+      .sort((a, b) => String(a.createdTime).localeCompare(String(b.createdTime)))[0];
+    if (first) {
+      const one = await zdCall(env, 'GET', '/tickets/' + ticketId + '/threads/' + first.id, { orgId });
+      html = (one.json && (one.json.content || one.json.summary)) || first.summary || '';
+    }
+  }
+  return mbStripQuoted(mbHtmlToText(html)).slice(0, 4000);
+}
+
+// Works out the reply for one ticket (no sending). Used by the cron and by "Test a ticket".
+async function mbDecide(env, orgId, tk) {
+  const contact = tk.contact || {};
+  const email = String(tk.email || contact.email || '').trim().toLowerCase();
+  const out = {
+    ticket_id: String(tk.id), ticket_number: String(tk.ticketNumber || ''), ticket_created: tk.createdTime || null,
+    customer_name: [contact.firstName, contact.lastName].filter(Boolean).join(' ') || '', customer_email: email,
+    subject: String(tk.subject || '').slice(0, 300), mail_text: '', reply_type: 'other', template: '', order_no: '', order_info: '',
+    reply_text: '', reply_html: '', skip_reason: ''
+  };
+  if (!email || /no-?reply|mailer-daemon|postmaster|@tomahawk\.tools$/i.test(email)) { out.skip_reason = 'System / internal sender'; return out; }
+  out.mail_text = await mbTicketText(env, orgId, tk.id);
+  const skip = mbCancelSkipReason(out.subject, out.mail_text);
+  if (skip) { out.skip_reason = skip; if (skip !== 'Not a cancellation mail') out.reply_type = 'cancellation'; return out; }
+  out.reply_type = 'cancellation';
+  const r = await mbBuildCancelReply(env, { subject: out.subject, text: out.mail_text, email, contactName: contact.firstName || out.customer_name });
+  if (r.skip) { out.skip_reason = r.skip; return out; }
+  const paras = mbCancelText(r);
+  Object.assign(out, { template: r.template, order_no: r.order_no || '', order_info: r.order_info || '',
+    reply_text: paras.join('\n\n'), reply_html: mbParasToHtml(paras) });
+  return out;
+}
+
+async function mbSendReply(env, orgId, ticketId, to, html) {
+  const r = await zdCall(env, 'POST', '/tickets/' + ticketId + '/sendReply', { orgId,
+    body: { channel: 'EMAIL', to, fromEmailAddress: MB_FROM_EMAIL, contentType: 'html', content: html } });
+  if (!r.ok) throw new Error('Zoho sendReply ' + r.status + ': ' + JSON.stringify(r.json).slice(0, 300));
+  return r.json;
+}
+
+// Cron entry: look at new email tickets and answer what we can.
+async function mbRun(env, opts) {
+  opts = opts || {};
+  await ensureMailBotTable(env.DB);
+  const s = await mbGetSettings(env);
+  if (s.mode === 'off' && !opts.force) return { ok: true, mode: 'off', handled: 0 };
+  if (!env.ZOHO_DESK_REFRESH_TOKEN) return { ok: false, error: 'ZOHO_DESK_REFRESH_TOKEN secret missing' };
+  const orgId = await mbOrgId(env);
+  const list = await zdCall(env, 'GET', '/tickets', { orgId, query: { from: '0', limit: '50', sortBy: '-createdTime', include: 'contacts' } });
+  if (!list.ok) throw new Error('Zoho tickets list ' + list.status + ': ' + JSON.stringify(list.json).slice(0, 300));
+  const startMs = new Date(s.start_at).getTime();
+  const fresh = ((list.json && list.json.data) || [])
+    .filter(t => /email/i.test(t.channel || '') && new Date(t.createdTime).getTime() >= startMs);
+  if (!fresh.length) return { ok: true, mode: s.mode, handled: 0 };
+  const seen = new Set(((await env.DB.prepare('SELECT ticket_id FROM bot_reply_log WHERE ticket_id IN (' + fresh.map(() => '?').join(',') + ')')
+    .bind(...fresh.map(t => String(t.id))).all()).results || []).map(r => r.ticket_id));
+  const todo = fresh.filter(t => !seen.has(String(t.id))).reverse().slice(0, MB_MAX_PER_RUN);   // oldest first
+
+  let handled = 0;
+  for (const tk of todo) {
+    // Claim the ticket first so two runs can never answer it twice.
+    const claim = await env.DB.prepare("INSERT OR IGNORE INTO bot_reply_log (ticket_id, ticket_number, result) VALUES (?, ?, 'working')")
+      .bind(String(tk.id), String(tk.ticketNumber || '')).run();
+    if (!claim.meta || !claim.meta.changes) continue;
+    let d = null, result = 'skipped', error = '';
+    try {
+      d = await mbDecide(env, orgId, tk);
+      if (d.reply_html) {
+        const send = s.mode === 'live' || (s.mode === 'test' && s.test_emails.map(x => String(x).toLowerCase()).includes(d.customer_email));
+        if (send) { await mbSendReply(env, orgId, tk.id, d.customer_email, d.reply_html); result = 'sent'; }
+        else result = 'dry_run';
+      }
+    } catch (e) { result = 'error'; error = String(e.message || e).slice(0, 500); console.error('mailbot', tk.id, error); }
+    d = d || { customer_email: tk.email || '', subject: tk.subject || '' };
+    await env.DB.prepare(`UPDATE bot_reply_log SET ticket_created = ?, customer_name = ?, customer_email = ?, subject = ?, mail_text = ?,
+        reply_type = ?, template = ?, order_no = ?, order_info = ?, reply_text = ?, result = ?, skip_reason = ?, error = ?, processed_at = datetime('now')
+      WHERE ticket_id = ?`).bind(tk.createdTime || null, d.customer_name || '', d.customer_email || '', d.subject || '', d.mail_text || '',
+        d.reply_type || 'other', d.template || '', d.order_no || '', d.order_info || '', d.reply_text || '', result, d.skip_reason || '', error, String(tk.id)).run();
+    handled++;
+  }
+  return { ok: true, mode: s.mode, handled };
+}
+
+// "Test a ticket" on the Bot Replies page: shows what the bot would reply. Never sends, never logs.
+async function mbTestTicket(env, ticketNumber) {
+  const num = String(ticketNumber || '').replace(/\D/g, '');
+  if (!num) return { ok: false, error: 'Enter a ticket number, e.g. 10823' };
+  const orgId = await mbOrgId(env);
+  const r = await zdCall(env, 'GET', '/tickets/search', { orgId, query: { ticketNumber: num, limit: '1' } });
+  const tk = ((r.json && r.json.data) || [])[0];
+  if (!tk) return { ok: false, error: 'Ticket #' + num + ' not found (Zoho ' + r.status + ')' };
+  if (!tk.contact && tk.contactId) {
+    const c = await zdCall(env, 'GET', '/contacts/' + tk.contactId, { orgId });
+    if (c.ok) tk.contact = c.json;
+  }
+  const d = await mbDecide(env, orgId, tk);
+  delete d.reply_html;
+  return { ok: true, test: d };
+}
+
+async function mbList(env, days) {
+  await ensureMailBotTable(env.DB);
+  const s = await mbGetSettings(env);
+  const rows = (await env.DB.prepare(`SELECT id, ticket_id, ticket_number, ticket_created, customer_name, customer_email, subject, mail_text,
+      reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, rating, rating_note, rated_by, rated_at, processed_at
+    FROM bot_reply_log WHERE processed_at >= datetime('now', ?) ORDER BY processed_at DESC, id DESC LIMIT 1000`).bind('-' + days + ' days').all()).results || [];
+  return { ok: true, rows, settings: { mode: s.mode, start_at: s.start_at, test_emails: s.test_emails }, days };
 }
