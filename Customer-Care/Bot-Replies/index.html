@@ -1337,7 +1337,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   var TEMPLATE_NAMES = {
     CX1: 'Can still cancel', CX2: 'Already with courier', CX3: 'Already cancelled',
     CX4: 'Already delivered', CX5: 'Amazon / Flipkart', CX6: 'Order not found',
-    AR1: 'Asked for order ID'
+    AR1: 'Asked for order ID', AI1: 'AI draft'
   };
   var MODES = [
     ['off', 'Off', 'The bot is switched off — it does not read any mails.'],
@@ -1381,6 +1381,8 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     ['good', 'Good', function (r) { return r.rating === 'good'; }],
     ['average', 'Average', function (r) { return r.rating === 'average'; }],
     ['bad', 'Bad', function (r) { return r.rating === 'bad'; }],
+    ['ai', 'AI drafts', function (r) { return r.template === 'AI1'; }],
+    ['upset', 'Upset customers', function (r) { return r.priority === 'upset'; }],
     ['skipped', 'Skipped', function (r) { return r.result === 'skipped'; }],
     ['skipped_cancel', 'Skipped cancellations', function (r) { return r.result === 'skipped' && r.reply_type === 'cancellation'; }],
     ['errors', 'Errors', function (r) { return r.result === 'error'; }],
@@ -1400,6 +1402,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       (r.template === 'AR1' ? ' <span class="br-badge br-b-gray" title="Waiting for the customer to send the order ID">Ticket kept open</span>' : r.closed_at ? ' <span class="br-badge br-b-gray" title="Zoho ticket closed ' + esc(when(r.closed_at)) + '">Ticket closed</span>' : ' <span class="br-badge br-b-amber" title="Will be closed on the next check">Closing…</span>');
     if (r.result === 'test') return '<span class="br-badge br-b-amber">Test · not sent</span>';
     if (r.result === 'sending') return '<span class="br-badge br-b-gray">Sending…</span>';
+    if (r.template === 'AI1' && r.result === 'dry_run') return '<span class="br-badge br-b-amber" title="Free AI draft — never sent automatically. Review, edit in Zoho if needed, then send">AI draft · review &amp; send</span>';
     if (r.result === 'dry_run' && r.ticket_kind === 'followup') return '<span class="br-badge br-b-amber" title="Follow-up tickets are never sent automatically">Draft · review &amp; send</span>';
     if (r.result === 'dry_run') return '<span class="br-badge br-b-amber">Dry run · not sent</span>';
     if (r.result === 'error') return '<span class="br-badge br-b-red">Error</span>';
@@ -1467,7 +1470,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     var bar = document.getElementById('br-mode-hint');
     bar.className = 'br-mode-bar m-' + cur;
     bar.innerHTML = '<i></i><b>' + esc(m ? m[1] : '') + '</b><span>' + (m ? esc(m[2].replace('%TEST%', (settings.test_emails || []).join(', '))) : '') + '</span>' +
-      '<span class="br-mode-meta">' + lastRunText() + 'Checking mails from ' + esc(when(settings && settings.start_at)) + ' · Replies on: <b>Cancellations · Ask for order ID</b>' +
+      '<span class="br-mode-meta">' + lastRunText() + 'Checking mails from ' + esc(when(settings && settings.start_at)) + ' · Replies on: <b>Cancellations · Ask for order ID · AI drafts (review only)</b>' +
       (isAdmin() ? '' : ' · Only admins can change the mode') + '</span>';
     document.querySelectorAll('#br-modes [data-mode]').forEach(function (b) {
       b.onclick = async function () {
@@ -1515,7 +1518,10 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
           (r.template ? '<span class="br-badge br-b-gray">' + esc(r.template) + ' · ' + esc(TEMPLATE_NAMES[r.template] || '') + '</span>' : '') +
           resultBadge(r) + followBadge(r) + '</span>' +
       '</div>' +
+      (r.priority === 'upset' ? '<div class="br-order" style="color:var(--red)"><b>&#9888; Upset customer</b> — handle with priority</div>' : '') +
       (r.order_info ? '<div class="br-order">Order: <b>' + esc(r.order_info) + '</b></div>' : '') +
+      (r.history ? '<div class="br-order">Earlier tickets: ' + String(r.history).split(',').map(function (n) { return '<b>#' + esc(n) + '</b>'; }).join(', ') + ' <span class="br-muted">(used by the AI for context)</span></div>' : '') +
+      (r.ai_note ? '<div class="br-order" style="color:var(--accent)"><b>' + esc(r.ai_note) + '</b></div>' : '') +
       (r.skip_reason ? '<div class="br-order">Skipped because: <b>' + esc(r.skip_reason) + '</b> — left for the team</div>' : '') +
       (r.error ? '<div class="br-order" style="color:var(--red)">' + esc(r.error) + '</div>' : '') +
       '<div class="br-cols">' +
@@ -1616,9 +1622,10 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
             ' <span class="br-muted">#' + esc(n.ticket_number) + ' · ' + esc(n.rated_by || '') + '</span></div>';
         }).join('') + '</div>' : '<div class="br-hint" style="margin:6px 0">No Average / Bad notes yet.</div>') +
         '<textarea class="br-tpl-ta" data-ta' + (isAdmin() ? '' : ' readonly') + '>' + esc(t.body) + '</textarea>' +
+        (t.code === 'AI1' ? '<div class="br-hint" style="margin-top:4px">These are the <b>instructions the free AI follows</b> when it drafts a reply — tone, policies, links, what it must never promise. Improve them from your Average / Bad notes on AI drafts.</div>' :
         '<div class="br-hint" style="margin-top:4px">Fill-ins: ' + (t.fill_ins.length ? t.fill_ins.map(function (f) {
           return '<span class="br-fill" title="' + esc(FILL_HELP[f] || '') + '">{' + f + '}</span>'; }).join('') : 'none') +
-          ' · "Hi {name}," and "Thanks &amp; Regards," are added automatically · blank line = new paragraph</div>' +
+          ' · "Hi {name}," and "Thanks &amp; Regards," are added automatically · blank line = new paragraph</div>') +
         (isAdmin() ? '<div class="br-send" style="margin-top:8px"><button class="br-btn primary" data-save>Save as v' + (t.version + 1) + '</button>' +
           '<button class="br-btn" data-suggest' + (t.notes.length ? '' : ' disabled title="Needs Average / Bad notes first"') + '>&#10024; Suggest a better reply</button></div>' : '') +
         (sug ? '<div class="br-tpl-sug"><div class="br-col-h">Suggested from ' + sug.notes_used + ' note' + (sug.notes_used > 1 ? 's' : '') + ' — check it before using</div>' +

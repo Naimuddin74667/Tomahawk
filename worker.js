@@ -2338,7 +2338,7 @@ export default {
         } catch (e) { return json({ ok: false, error: e.message }, 500); }
       }
       if (request.method === 'POST' && act === 'mailBotRunNow') {
-        try { return json(await mbRun(env, { max: 15 })); }   // manual click: a bigger batch than the cron
+        try { return json(await mbRun(env, { max: 8 })); }   // manual click: a bigger batch than the cron
         catch (e) { return json({ ok: false, error: e.message }, 500); }
       }
       if (request.method === 'POST' && act === 'mailBotTest') {
@@ -14503,7 +14503,7 @@ async function shopShipList(env) {
 const MB_TRACK_LINK = 'https://tomahawk.tools/pages/track-order';
 const MB_DRN_LINK = 'https://tomahawk.tools/pages/delivery-issue';
 const MB_FROM_EMAIL = 'support@tomahawk.tools';
-const MB_MAX_PER_RUN = 8;          // tickets handled per cron tick (subrequest budget)
+const MB_MAX_PER_RUN = 5;          // tickets handled per cron tick (subrequest budget — AI drafts + history lookups)
 const MB_MODES = ['off', 'dryrun', 'test', 'live'];
 
 async function ensureMailBotTable(DB) {
@@ -14518,7 +14518,7 @@ async function ensureMailBotTable(DB) {
   )`).run();
   // backfill = 1 → a ticket that was already open before the bot started (never sent)
   for (const col of ['backfill INTEGER DEFAULT 0', 'sent_by TEXT', 'sent_at TEXT', 'closed_at TEXT', 'template_version INTEGER',
-      'zoho_id TEXT', 'thread_count INTEGER', 'bot_thread_ids TEXT', 'bot_replies INTEGER DEFAULT 0', 'followup TEXT', 'ticket_kind TEXT', 'prev_ticket TEXT']) {   // added 25-Nov-2026
+      'zoho_id TEXT', 'thread_count INTEGER', 'bot_thread_ids TEXT', 'bot_replies INTEGER DEFAULT 0', 'followup TEXT', 'ticket_kind TEXT', 'prev_ticket TEXT', 'priority TEXT', 'history TEXT', 'ai_note TEXT']) {   // added 25-Nov-2026
     try { await DB.prepare('ALTER TABLE bot_reply_log ADD COLUMN ' + col).run(); } catch (e) { /* already there */ }
   }
 }
@@ -14716,7 +14716,13 @@ const MB_DEFAULT_TEXTS = {
   CX6: 'We couldn\'t find the order from your mail. You can see and cancel your website orders yourself here: {track_link}. Just verify your mobile number with the WhatsApp OTP to see all your orders.',
   AR1: 'Thank you for writing to us. To help you quickly, please reply to this mail with one of these:\n\n' +
        '• Your order ID — website order like #3370, Amazon order like 402-1234567-1234567, or Flipkart order like OD123456789012345678\n' +
-       '• Or your request ID, if you have already raised a request (like WRN-261121-01)'
+       '• Or your request ID, if you have already raised a request (like WRN-261121-01)',
+  // AI1 = the instructions the free AI follows when it drafts a reply (editable / improvable like a reply text)
+  AI1: 'Write a short, polite, helpful email reply in simple Indian English (or Hinglish if the customer wrote in Hindi/Hinglish).\n\n' +
+       'Answer only what the customer asked, using ONLY the facts given (order facts, request status, earlier conversation). If a fact is missing, ask for it or say the team will check and update within 1 working day.\n\n' +
+       'Never promise a refund, return, replacement, free part, discount or a date that is not in the facts. Tomahawk does not accept returns as standard; issues within 7 days of delivery go through the delivery issue page; warranty is 6 months from purchase with one free claim per order, raised on the service request page.\n\n' +
+       'If the customer is upset, start with a sincere apology in one line. Do not repeat what our team already told them; build on it.\n\n' +
+       'Useful links: Track order https://tomahawk.tools/pages/track-order · Service request (warranty / repair) https://tomahawk.tools/pages/service-request · Delivery issue https://tomahawk.tools/pages/delivery-issue · Track a request https://tomahawk.tools/pages/track-request'
 };
 // Fill-ins each reply type may use (the editor and the AI suggestion are checked against this).
 const MB_FILL_INS = {
@@ -14726,11 +14732,12 @@ const MB_FILL_INS = {
   CX4: ['order_no', 'product', 'delivered_on', 'drn_link'],
   CX5: ['order_no', 'platform'],
   CX6: ['track_link'],
-  AR1: []
+  AR1: [],
+  AI1: []
 };
 // Fill-ins a reply must keep (removing them would break the reply's purpose).
 const MB_REQUIRED_FILL_INS = { CX1: ['order_no', 'track_link'], CX2: ['order_no', 'track_link'], CX3: ['order_no', 'refund_line'],
-  CX4: ['order_no', 'drn_link'], CX5: ['platform'], CX6: ['track_link'], AR1: [] };
+  CX4: ['order_no', 'drn_link'], CX5: ['platform'], CX6: ['track_link'], AR1: [], AI1: [] };
 
 async function ensureMbTemplateTable(DB) {
   await DB.prepare(`CREATE TABLE IF NOT EXISTS bot_reply_templates (
@@ -14758,7 +14765,7 @@ function mbCheckTemplate(code, body) {
   if (bad.length) return 'Unknown fill-in: ' + bad.map(f => '{' + f + '}').join(', ') + '. Allowed: ' + (MB_FILL_INS[code].map(f => '{' + f + '}').join(', ') || 'none');
   const missing = MB_REQUIRED_FILL_INS[code].filter(f => !b.includes('{' + f + '}'));
   if (missing.length) return 'Keep ' + missing.map(f => '{' + f + '}').join(', ') + ' — the reply needs it.';
-  if (/^\s*(hi|hello|dear)\b/i.test(b) || /(thanks|regards)\s*,?\s*$/i.test(b)) return 'Leave out the greeting and the "Thanks & Regards" — they are added automatically.';
+  if (code !== 'AI1' && (/^\s*(hi|hello|dear)\b/i.test(b) || /(thanks|regards)\s*,?\s*$/i.test(b))) return 'Leave out the greeting and the "Thanks & Regards" — they are added automatically.';
   return '';
 }
 // Renders greeting + body + sign-off into paragraphs.
@@ -14800,7 +14807,7 @@ function mbHasReference(subject, text) {
 }
 function mbAskRefText(name, T) { return mbRender(T.AR1, name, {}); }
 // Replies that keep the ticket open after sending (the customer needs to answer).
-const MB_KEEP_OPEN = ['AR1'];
+const MB_KEEP_OPEN = ['AR1', 'AI1'];   // AI drafts: the team decides when to close
 
 function mbParasToHtml(paras) {
   return paras.map(p => '<p>' + mbEscHtml(p).replace(/(https:\/\/[^\s<]+)/g, '<a href="$1">$1</a>').replace(/\n/g, '<br>') + '</p>').join('');
@@ -14851,15 +14858,16 @@ async function mbConversation(env, orgId, ticketId) {
   const th = await zdCall(env, 'GET', '/tickets/' + ticketId + '/threads', { orgId, query: { limit: '50' } });
   const list = ((th.json && th.json.data) || []).slice().sort((x, y) => String(x.createdTime).localeCompare(String(y.createdTime)));
   const ins = list.filter(x => x.direction === 'in'), outs = list.filter(x => x.direction === 'out');
-  let latestText = '';
+  let latestText = '', latestAtt = [];
   const last = ins[ins.length - 1];
   if (last) {
     const one = await zdCall(env, 'GET', '/tickets/' + ticketId + '/threads/' + last.id, { orgId });
     latestText = mbStripQuoted(mbHtmlToText((one.json && (one.json.content || one.json.summary)) || last.summary || ''));
+    latestAtt = (one.json && one.json.attachments) || [];
   }
   if (!latestText && ins.length <= 1) latestText = await mbTicketText(env, orgId, ticketId);
   const olderText = ins.slice(0, -1).map(x => mbHtmlToText(x.summary || '')).join('\n');
-  return { list, ins, outs, latestText: latestText.slice(0, 4000), olderText: olderText.slice(0, 3000), count: list.length || (ins.length + outs.length) };
+  return { list, ins, outs, latestText: latestText.slice(0, 4000), olderText: olderText.slice(0, 3000), count: list.length || (ins.length + outs.length), attachments: latestAtt };
 }
 // Our team's replies = 'out' threads the bot did not send (bot thread ids, or within 3 min of a bot send).
 function mbTeamReplies(conv, botIds, botSentAt) {
@@ -14890,7 +14898,8 @@ async function mbDecide(env, orgId, tk) {
     out.skip_reason = 'Team already replied on this ticket — left for the team';
     return out;
   }
-  return mbClassify(env, out, contact, conv.latestText, conv.olderText);
+  const d = await mbClassify(env, out, contact, conv.latestText, conv.olderText);
+  return mbMaybeAi(env, orgId, tk, d, contact, conv);
 }
 // Picks the reply from the customer's text (latest message; older ones help find the order).
 async function mbClassify(env, out, contact, latest, older) {
@@ -15027,7 +15036,7 @@ async function mbRunInner(env, opts) {
       d = await mbDecide(env, orgId, tk);
       try { fu = await mbDetectFollowUpTicket(env, orgId, tk, d.customer_email); } catch (e) { console.warn('mailbot followup check', tk.id, e.message); }
       if (d.reply_text) {
-        const send = !backfill && !fu && (s.mode === 'live' || (s.mode === 'test' && s.test_emails.map(x => String(x).toLowerCase()).includes(d.customer_email)));
+        const send = !backfill && !fu && d.template !== 'AI1' && (s.mode === 'live' || (s.mode === 'test' && s.test_emails.map(x => String(x).toLowerCase()).includes(d.customer_email)));
         if (send) {
           d.sendJson = await mbSendReply(env, orgId, tk.id, d.customer_email, mbComposeHtml(d.reply_text, s)); result = 'sent';
         }
@@ -15040,8 +15049,8 @@ async function mbRunInner(env, opts) {
       WHERE ticket_id = ?`).bind(tk.createdTime || null, d.customer_name || '', d.customer_email || '', d.subject || '', d.mail_text || '',
         d.reply_type || 'other', d.template || '', d.order_no || '', d.order_info || '', d.reply_text || '', result, d.skip_reason || '', error, backfill ? 1 : 0,
         d.template_version || null, String(tk.id)).run();
-    await env.DB.prepare('UPDATE bot_reply_log SET ticket_kind = ?, prev_ticket = ? WHERE ticket_id = ?')
-      .bind(fu ? 'followup' : 'new', fu ? (fu.prev_ticket || null) : null, String(tk.id)).run();
+    await env.DB.prepare('UPDATE bot_reply_log SET ticket_kind = ?, prev_ticket = ?, priority = ?, history = ?, ai_note = ? WHERE ticket_id = ?')
+      .bind(fu ? 'followup' : 'new', fu ? (fu.prev_ticket || null) : null, d.priority || null, d.history || null, d.ai_note || null, String(tk.id)).run();
     if (result === 'sent') {
       const rid = await env.DB.prepare('SELECT id FROM bot_reply_log WHERE ticket_id = ?').bind(String(tk.id)).first();
       if (rid) await mbRememberSend(env, rid.id, d.sendJson, d.thread_count != null ? d.thread_count + 1 : null);
@@ -15057,6 +15066,150 @@ async function mbRunInner(env, opts) {
   handled += await mbFollowUps(env, orgId, s, byId);
   const left = fresh.concat(old).filter(t => !seen.has(String(t.id))).length - handled;
   return { ok: true, mode: s.mode, handled, left: Math.max(0, left), zoho_open: zohoOpen };
+}
+
+// ══ FREE AI DRAFTS (25-Nov-2026) — Cloudflare Workers AI, no API key ══════════
+// For customer mails the rules can't answer (product questions, complaints, mixed
+// issues, warranty / delivery questions …) the free Workers AI writes a DRAFT.
+// AI drafts (template AI1) are NEVER sent automatically, in any mode — the team
+// reviews, edits if needed, rates and clicks "Send to customer".
+// Before drafting, the bot gathers facts so the AI can't invent them:
+//   • the customer's other tickets + our earlier replies (by customer email)
+//   • the website order (Shopify) when the mail has an order number
+//   • the service request (WRN/SRN/DRN/NV) status from our own D1
+//   • order / request IDs read from an attached image (vision model)
+// The AI's instructions are the editable "AI1" text on the Bot Replies page.
+const MB_AI_TEXT_MODELS = ['@cf/meta/llama-3.3-70b-instruct-fp8-fast', '@cf/meta/llama-3.1-8b-instruct'];
+const MB_AI_VISION_MODEL = '@cf/meta/llama-4-scout-17b-16e-instruct';
+const MB_UPSET_RE = /\b(appall\w*|worst|pathetic|disgust\w*|horrible|terrible|fraud|cheat\w*|scam|useless|done waiting|no response|radio silence|consumer (court|forum)|legal action|complain\w* to|unacceptable|frustrat\w*|angry|irritat\w*|bakwas|dhokha|ghatiya)\b/i;
+// Skips the AI never takes over (nothing to answer, or the team owns it).
+const MB_AI_NO_DRAFT_RE = /^(System \/ internal sender|Automatic \/ system mail|Empty mail|Team already replied)/i;
+
+async function mbMaybeAi(env, orgId, tk, d, contact, conv) {
+  const upset = MB_UPSET_RE.test((d.subject || '') + '\n' + (conv.latestText || ''));
+  if (upset) d.priority = 'upset';
+  if (!env.AI) return d;
+  if (MB_AI_NO_DRAFT_RE.test(d.skip_reason || '')) return d;
+  // Rule replies stay — except "send your order ID" to an upset customer (needs a human tone)
+  if (d.reply_text && !(d.template === 'AR1' && upset)) return d;
+  try { return await mbAiDraft(env, orgId, tk, d, contact, conv); }
+  catch (e) { console.error('mailbot ai', tk.id, e.message); d.ai_note = 'AI draft failed: ' + String(e.message).slice(0, 160); return d; }
+}
+
+// Customer's other tickets (same email, last 90 days) + the last few messages on each.
+async function mbCustomerHistory(env, orgId, email, currentId) {
+  if (!email) return { numbers: [], text: '' };
+  const r = await zdCall(env, 'GET', '/tickets/search', { orgId, query: { email, limit: '20' } });
+  const since = Date.now() - 90 * 864e5;
+  const others = ((r.json && r.json.data) || []).filter(t => String(t.id) !== String(currentId) && new Date(t.createdTime).getTime() >= since)
+    .sort((a, b) => String(b.createdTime).localeCompare(String(a.createdTime))).slice(0, 3);
+  const parts = [];
+  for (const t of others) {
+    const th = await zdCall(env, 'GET', '/tickets/' + t.id + '/threads', { orgId, query: { limit: '20' } });
+    const list = ((th.json && th.json.data) || []).slice().sort((x, y) => String(x.createdTime).localeCompare(String(y.createdTime))).slice(-4);
+    parts.push('Ticket #' + t.ticketNumber + ' "' + (t.subject || '') + '" (' + String(t.createdTime || '').slice(0, 10) + ', ' + (t.status || '') + '):\n' +
+      list.map(x => '  ' + (x.direction === 'out' ? 'US' : 'CUSTOMER') + ': ' + mbHtmlToText(x.summary || '').slice(0, 300)).join('\n'));
+  }
+  return { numbers: others.map(t => String(t.ticketNumber)), text: parts.join('\n\n').slice(0, 3500) };
+}
+
+// Order / request IDs read from attached images (first 2 images, ≤ 3 MB each).
+async function mbIdsFromImages(env, attachments) {
+  const imgs = (attachments || []).filter(a => /\.(png|jpe?g|webp|gif)$/i.test(a.name || '') && (!a.size || Number(a.size) <= 3 * 1024 * 1024) && a.href).slice(0, 2);
+  const found = [];
+  for (const a of imgs) {
+    const r = await fetch(a.href, { headers: { Authorization: 'Zoho-oauthtoken ' + (await zdToken(env)) } });
+    if (!r.ok) continue;
+    const buf = new Uint8Array(await r.arrayBuffer());
+    let bin = ''; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+    const mime = /\.png$/i.test(a.name) ? 'image/png' : /\.webp$/i.test(a.name) ? 'image/webp' : /\.gif$/i.test(a.name) ? 'image/gif' : 'image/jpeg';
+    const out = await env.AI.run(MB_AI_VISION_MODEL, {
+      messages: [{ role: 'user', content: [
+        { type: 'text', text: 'Look at this image. List every order ID, request ID (like WRN-261121-01, SRN-, DRN-, NV-), Amazon order ID (402-1234567-1234567), Flipkart order ID (OD…) and courier tracking/AWB number you can read. Reply with JSON only: {"ids":["…"]}. If none, {"ids":[]}.' },
+        { type: 'image_url', image_url: { url: 'data:' + mime + ';base64,' + btoa(bin) } }
+      ] }], max_tokens: 300, temperature: 0
+    });
+    const m = String((out && out.response) || '').match(/\{[\s\S]*\}/);
+    try { (JSON.parse(m ? m[0] : '{}').ids || []).forEach(x => { x = String(x).trim(); if (x.length >= 4 && x.length <= 40) found.push(x); }); } catch (e) { /* ignore */ }
+  }
+  return [...new Set(found)];
+}
+
+// Facts the AI may use: website order (only if it belongs to the sender) + request status.
+async function mbFactsFor(env, text, email) {
+  const facts = [];
+  const ids = mbExtractOrders('', text);
+  if (ids.web.length === 1 && shopifyConfigured(env)) {
+    const o = await mbShopifyOrderByNumber(env, ids.web[0]);
+    if (o && String(o.email || '').toLowerCase() === email) {
+      const st = mbOrderState(o);
+      facts.push('Website order ' + o.name + ': placed ' + mbDate(o.createdAt) + ', ' +
+        ({ open: 'not yet handed to the courier (customer can cancel on the Track Order page)', shipped: 'with the courier', delivered: 'delivered' + (st.deliveredAt ? ' on ' + mbDate(st.deliveredAt) : ''), cancelled: 'cancelled' })[st.state] +
+        ', ' + (st.isCod ? 'COD' : st.paid ? 'prepaid' : 'payment ' + String(o.displayFinancialStatus || '').toLowerCase()) + ', ' + mbMoney(st.amount) +
+        ', items: ' + mbProductName(o.lineItems && o.lineItems.nodes) + (st.refunded > 0 ? ', refunded ' + mbMoney(st.refunded) + ' on ' + mbDate(st.lastRefund) : '') + '.');
+    } else if (o) facts.push('Order #' + ids.web[0] + ' exists but is not on this customer\'s email — do not share its details; ask them to confirm the order number and mobile number.');
+    else facts.push('No website order #' + ids.web[0] + ' was found.');
+  }
+  if (ids.amazon.length) facts.push('Amazon order ' + ids.amazon[0] + ' — returns/refunds/cancellation go through Amazon; warranty/repair through our service request page.');
+  if (ids.flipkart.length) facts.push('Flipkart order ' + ids.flipkart[0] + ' — returns/refunds/cancellation go through Flipkart; warranty/repair through our service request page.');
+  const rq = (text.match(/\b(WRN|SRN|DRN|NV)-?\d{6}-?\d{1,3}\b/i) || [])[0];
+  if (rq) {
+    const id = rq.toUpperCase().replace(/^([A-Z]+)-?(\d{6})-?(\d+)$/, '$1-$2-$3');
+    const row = await env.DB.prepare('SELECT claim_id, status, product, case_id, created_at, request_type FROM warranty_claims WHERE claim_id = ? OR prev_claim_id = ?').bind(id, id).first().catch(() => null);
+    if (row) {
+      let leg = '';
+      try { const { rev, fwd } = await srCaseLegs(env.DB, row.case_id); if (rev) leg = ' Pickup: ' + (rev.received_at ? 'product received at our service centre' : (rev.track_stage || 'booked')) + '.'; if (fwd) leg += ' Sent back: ' + (fwd.track_stage || 'booked') + '.'; } catch (e) { /* ignore */ }
+      facts.push('Request ' + row.claim_id + ' (' + (row.product || '') + '), raised ' + mbDate(row.created_at) + ', status: ' + (row.status || 'new') + '.' + leg);
+    } else facts.push('Request ' + id + ' was not found in our system.');
+  }
+  return facts;
+}
+
+async function mbAiDraft(env, orgId, tk, d, contact, conv) {
+  const notes = [];
+  let text = (conv.latestText || '') + (conv.olderText ? '\n' + conv.olderText : '');
+  // IDs from attached images (only when the text has none)
+  if (!mbHasReference(d.subject || '', text) && (conv.attachments || []).length) {
+    const ids = await mbIdsFromImages(env, conv.attachments).catch(() => []);
+    if (ids.length) { text += '\n[IDs read from the attached image: ' + ids.join(', ') + ']'; notes.push('Read from attached image: ' + ids.join(', ')); }
+  }
+  const hist = await mbCustomerHistory(env, orgId, d.customer_email, tk.id).catch(() => ({ numbers: [], text: '' }));
+  if (hist.numbers.length) d.history = hist.numbers.join(',');
+  const facts = await mbFactsFor(env, text + '\n' + (d.subject || ''), d.customer_email).catch(() => []);
+  const T = await mbTemplates(env);
+  const prompt = [
+    'You are drafting an email reply for TOMAHAWK Tools customer care (an Indian power-tools brand). A team member will review it before it is sent.',
+    '', 'INSTRUCTIONS:', T.AI1.body, '',
+    'FORMAT: no greeting line and no sign-off (they are added automatically). Plain text, short paragraphs separated by a blank line, no markdown.',
+    'Reply with JSON only: {"upset": true|false, "draft": "the reply text", "needs_team": "one line on what the team must check, or empty"}',
+    '', 'FACTS (the only facts you may use):', facts.length ? facts.map(f => '- ' + f).join('\n') : '- No order or request facts found.',
+    '', 'EARLIER TICKETS FROM THIS CUSTOMER:', hist.text || 'None.',
+    '', 'SUBJECT: ' + (d.subject || ''), '', 'CUSTOMER\'S LATEST MAIL:', (conv.latestText || '').slice(0, 2500),
+    conv.olderText ? '\nEARLIER MAILS ON THIS TICKET:\n' + conv.olderText.slice(0, 1500) : ''
+  ].join('\n');
+  let raw = '', lastErr = '';
+  for (const model of MB_AI_TEXT_MODELS) {
+    try {
+      const out = await env.AI.run(model, { messages: [{ role: 'user', content: prompt }], max_tokens: 700, temperature: 0.2 });
+      raw = String((out && out.response) || '').trim();
+      if (raw) break;
+    } catch (e) { lastErr = e.message; }
+  }
+  if (!raw) throw new Error(lastErr || 'empty AI answer');
+  let j = null;
+  try { const m = raw.match(/\{[\s\S]*\}/); j = m ? JSON.parse(m[0]) : null; } catch (e) { j = null; }
+  let draft = String((j && j.draft) || raw).trim()
+    .replace(/^(hi|hello|dear)\b[^\n]*\n+/i, '').replace(/\n+(thanks|regards|thank you|warm regards|best regards)[\s\S]*$/i, '').trim();
+  if (!draft) throw new Error('AI gave no draft');
+  if (j && j.upset === true) d.priority = 'upset';
+  if (j && j.needs_team) notes.push('Check: ' + String(j.needs_team).slice(0, 200));
+  // Flag promises the AI isn't allowed to make on its own
+  if (/\b(we (will|shall) (refund|replace|send you a new)|full refund|refund (has been|will be) (initiated|processed)|replacement (will be|has been) (sent|dispatched))\b/i.test(draft))
+    notes.push('⚠ Draft mentions a refund / replacement — confirm before sending');
+  const paras = ['Hi' + (mbFirstName(contact.firstName || d.customer_name) ? ' ' + mbFirstName(contact.firstName || d.customer_name) : '') + ','].concat(
+    draft.split(/\n\s*\n/).map(x => x.trim()).filter(Boolean), ['Thanks & Regards,']);
+  return Object.assign(d, { template: 'AI1', template_version: T.AI1.version, reply_type: 'ai_draft', reply_text: paras.join('\n\n'),
+    reply_html: mbParasToHtml(paras), order_info: d.order_info || (facts[0] || ''), skip_reason: '', ai_note: notes.join(' · ') });
 }
 
 // ── Follow-up TICKETS (25-Nov-2026) ─────────────────────────────
@@ -15122,15 +15275,18 @@ async function mbFollowUp(env, orgId, s, row, tk) {
   if (row.template === 'AR1' && (row.bot_replies || 1) < MB_MAX_BOT_REPLIES) {
     // Customer answered "send us your order ID" → decide again on their answer
     d = await mbClassify(env, Object.assign({}, base, { reply_type: 'other' }), contact, conv.latestText, conv.olderText);
+    if (d.template !== 'AR1' && !d.reply_text) d = await mbMaybeAi(env, orgId, tk, d, contact, conv);
     if (d.template === 'AR1' || !d.reply_text) {
       d.reply_text = ''; d.template = '';
       d.skip_reason = 'Customer replied to "send your order ID"' + (d.skip_reason ? ' — ' + d.skip_reason : '') + ' — left for the team';
     } else status = 'bot_answered';
   } else {
-    d.skip_reason = 'Customer replied after the bot' + (row.template ? ' (' + row.template + ')' : '') + ' — left for the team';
+    // Any other follow-up: the free AI drafts an answer for the team (never sent automatically)
+    d = await mbMaybeAi(env, orgId, tk, Object.assign({}, base, { reply_type: 'followup', skip_reason: 'Customer replied after the bot' }), contact, conv);
+    if (!d.reply_text) d.skip_reason = 'Customer replied after the bot' + (row.template ? ' (' + row.template + ')' : '') + ' — left for the team';
   }
   if (d.reply_text) {
-    const send = s.mode === 'live' || (s.mode === 'test' && s.test_emails.map(x => String(x).toLowerCase()).includes(row.customer_email));
+    const send = d.template !== 'AI1' && (s.mode === 'live' || (s.mode === 'test' && s.test_emails.map(x => String(x).toLowerCase()).includes(row.customer_email)));
     result = send ? 'sent' : 'dry_run';
     if (send) d.sendJson = await mbSendReply(env, orgId, row.ticket_id, row.customer_email, mbComposeHtml(d.reply_text, s));
   }
@@ -15139,6 +15295,7 @@ async function mbFollowUp(env, orgId, s, row, tk) {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'followup', ?, ?, ?, ?, ?, ?, '', 0, ?)`).bind(childId, row.ticket_id, row.ticket_number, d.ticket_created || null,
       row.customer_name || '', row.customer_email || '', row.subject || '', conv.latestText || '', d.template || '', d.order_no || '', d.order_info || '',
       d.reply_text || '', result, d.skip_reason || '', d.template_version || null).run();
+  await env.DB.prepare('UPDATE bot_reply_log SET priority = ?, history = ?, ai_note = ? WHERE ticket_id = ?').bind(d.priority || null, d.history || null, d.ai_note || null, childId).run();
   await env.DB.prepare('UPDATE bot_reply_log SET followup = ? WHERE id = ?').bind(result === 'sent' || status === 'bot_answered' ? 'bot_answered' : 'customer_replied', row.id).run();
   if (result === 'sent') {
     const c = await env.DB.prepare('SELECT id FROM bot_reply_log WHERE ticket_id = ?').bind(childId).first();
@@ -15254,6 +15411,7 @@ async function mbManualSend(env, user, b) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'dry_run', '', '', 0, ?)`).bind(d.ticket_id, d.ticket_number, d.ticket_created || null, d.customer_name || '',
           d.customer_email || '', d.subject || '', d.mail_text || '', d.reply_type || 'cancellation', d.template || '', d.order_no || '', d.order_info || '', d.reply_text,
           d.template_version || null).run();
+      await env.DB.prepare('UPDATE bot_reply_log SET priority = ?, history = ?, ai_note = ? WHERE ticket_id = ?').bind(d.priority || null, d.history || null, d.ai_note || null, d.ticket_id).run();
       row = await env.DB.prepare('SELECT * FROM bot_reply_log WHERE ticket_id = ?').bind(d.ticket_id).first();
     }
   }
@@ -15281,7 +15439,7 @@ async function mbList(env, days) {
   await ensureMailBotTable(env.DB);
   const s = await mbGetSettings(env);
   const rows = (await env.DB.prepare(`SELECT id, ticket_id, ticket_number, ticket_created, customer_name, customer_email, subject, mail_text,
-      reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, rating, rating_note, rated_by, rated_at, processed_at, backfill, sent_by, sent_at, closed_at, template_version, zoho_id, followup, bot_replies, ticket_kind, prev_ticket
+      reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, rating, rating_note, rated_by, rated_at, processed_at, backfill, sent_by, sent_at, closed_at, template_version, zoho_id, followup, bot_replies, ticket_kind, prev_ticket, priority, history, ai_note
     FROM bot_reply_log WHERE processed_at >= datetime('now', ?) ORDER BY processed_at DESC, id DESC LIMIT 1000`).bind('-' + days + ' days').all()).results || [];
   const lr = await env.DB.prepare("SELECT value FROM tm_settings WHERE key = 'mailbot_last_run'").first().catch(() => null);
   let lastRun = null; try { lastRun = lr && lr.value ? JSON.parse(lr.value) : null; } catch (e) { lastRun = null; }
