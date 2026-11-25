@@ -15354,7 +15354,7 @@ function mbTrackLine(lt, fallbackStage) {
     new Date(l.t).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '');
 }
 
-async function mbAiDraft(env, orgId, tk, d, contact, conv) {
+async function mbAiDraft(env, orgId, tk, d, contact, conv, guide) {
   const notes = [];
   let text = (conv.latestText || '') + (conv.olderText ? '\n' + conv.olderText : '');
   // IDs from attached images (only when the text has none)
@@ -15371,6 +15371,7 @@ async function mbAiDraft(env, orgId, tk, d, contact, conv) {
   const prompt = [
     'You are drafting an email reply for TOMAHAWK Tools customer care (an Indian power-tools brand). A team member will review it before it is sent.',
     '', 'INSTRUCTIONS:', T.AI1.body, '',
+    guide ? 'OUR TEAM\'S NOTE FOR THIS REPLY (most important — it tells you what happened and what to answer; follow it exactly, it overrides the other instructions and facts):\n' + guide + '\n' : '',
     lessons.length ? 'LESSONS FROM OUR TEAM (similar past mails — follow how and why the team replied):\n' + lessons.map((l, i) =>
       (i + 1) + '. Customer wrote: ' + String(l.mail_text || '').slice(0, 400).replace(/\s+/g, ' ') + '\n   Team replied: ' + String(l.reply_text || '').slice(0, 600).replace(/\s+/g, ' ') +
       '\n   Why: ' + l.reason).join('\n') + '\n' : '',
@@ -15695,7 +15696,20 @@ async function mbRedraft(env, b) {
   const tk = t.json;
   if (!tk.contact && tk.contactId) { const c = await zdCall(env, 'GET', '/contacts/' + tk.contactId, { orgId }); if (c.ok) tk.contact = c.json; }
   mbAiBudget = 3;
-  const d = await mbDecide(env, orgId, tk);
+  const guide = String(b.guide || '').trim().slice(0, 1500);
+  let d;
+  if (guide) {
+    // "Tell the bot" (25-Nov-2026): the team says what happened + what to answer → AI writes
+    // the draft from that, even on tickets the bot skipped or the team already replied to.
+    const contact = tk.contact || {};
+    const conv = await mbConversation(env, orgId, tk.id);
+    d = { ticket_id: String(tk.id), ticket_number: String(tk.ticketNumber || ''), customer_name: [contact.firstName, contact.lastName].filter(Boolean).join(' ') || row.customer_name || '',
+      customer_email: String(tk.email || contact.email || row.customer_email || '').trim().toLowerCase(), subject: String(tk.subject || '').slice(0, 300),
+      mail_text: row.mail_text, reply_type: 'other', template: '', order_no: '', order_info: '', reply_text: '', skip_reason: '' };
+    if (!env.AI) return { ok: false, error: 'AI not available' };
+    d = await mbAiDraft(env, orgId, tk, d, contact, conv, guide);
+    d.ai_note = ('Team note: ' + guide.slice(0, 200) + (d.ai_note ? ' · ' + d.ai_note : '')).slice(0, 500);
+  } else d = await mbDecide(env, orgId, tk);
   if (!d.reply_text) return { ok: false, error: 'The bot has no reply for this ticket — ' + (d.skip_reason || d.ai_note || 'left for the team') };
   await env.DB.prepare(`UPDATE bot_reply_log SET reply_text = ?, template = ?, template_version = ?, reply_type = ?, order_no = ?, order_info = ?,
       ai_note = ?, priority = ?, history = ?, skip_reason = '', error = '', processed_at = datetime('now'), result = CASE WHEN result IN ('error', 'skipped') THEN 'dry_run' ELSE result END

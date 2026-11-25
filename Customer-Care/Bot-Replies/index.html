@@ -1313,6 +1313,9 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .br-modal .br-row { cursor: default; }
 .br-modal .br-row:hover { background: transparent; }
 .br-modal .br-text { max-height: 420px; }
+.br-guide { margin-top: 12px; display: grid; grid-template-columns: 1fr auto; gap: 6px 8px; align-items: end; }
+.br-guide .br-col-h { grid-column: 1 / -1; margin: 0; }
+.br-guide-ta { border-radius: 10px; resize: vertical; min-height: 58px; width: 100%; box-sizing: border-box; }
 .br-empty { padding: 28px; text-align: center; color: var(--text2); font-size: 13px; }
 @media (max-width: 1000px) { .br-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } .br-row2, .br-cols { grid-template-columns: 1fr; } .br-bar .br-input { margin-left: 0; width: 100%; min-width: 0; } }
 </style>
@@ -1599,7 +1602,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     var facts = [
       r.order_info ? ['Order', esc(r.order_info)] : null,
       r.ai_note ? ['Bot note', esc(r.ai_note)] : null,
-      r.skip_reason ? ['Skipped', esc(r.skip_reason) + ' — left for the team'] : null,
+      r.skip_reason ? ['Skipped', esc(r.skip_reason) + (/left for the team/i.test(r.skip_reason) ? '' : ' — left for the team')] : null,
       r.history ? ['Earlier tickets', String(r.history).split(',').map(function (n) { return '#' + esc(n); }).join(', ')] : null,
       r.error ? ['Error', '<span style="color:var(--red)">' + esc(r.error) + '</span>'] : null
     ].filter(Boolean);
@@ -1618,6 +1621,11 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
               : '<div class="br-text reply">' + (r.reply_text ? esc(r.reply_text) : '<span class="br-muted">No reply — the team answers this one.</span>') + '</div>') +
           '</div>' +
         '</div>' +
+        // Tell the bot what happened + what to answer → it writes the draft (25-Nov-2026)
+        (canRate() && r.id && ['sent', 'sending'].indexOf(r.result) === -1 ? '<div class="br-guide">' +
+          '<div class="br-col-h">Tell the bot — what happened and what should we answer?</div>' +
+          '<textarea class="br-input br-guide-ta" data-guide rows="3" placeholder="e.g. Replacement was dispatched on 20 Nov via Delhivery AWB 1234… Apologise for the delay, share the AWB and say it will reach in 3–4 days.">' + esc((workGet(r.id) || {}).guide || '') + '</textarea>' +
+          '<button class="br-btn primary" data-guide-go>&#10024; Generate draft</button></div>' : '') +
         // One action bar: tools left, Send right
         (canEdit(r) || showSend ? '<div class="br-acts">' +
           (canEdit(r) ? '<button class="br-btn" data-redraft title="Check the order, courier tracking and request again now, and write a fresh draft">&#8635; Redraft</button>' +
@@ -1764,6 +1772,24 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   // Buttons on one reply card (list, or opened from the All tickets table)
   function wireItem(box, r) {
       if (!r) return;
+      var gt = box.querySelector('[data-guide]');
+      if (gt) {
+        gt.oninput = function () { workSet(r.id, { guide: gt.value }); };
+        box.querySelector('[data-guide-go]').onclick = async function () {
+          var b = this, g = gt.value.trim();
+          if (g.length < 10) { alert('Tell the bot a bit more — what happened and what to answer.'); return; }
+          if (r._draft != null && r._draft !== r.reply_text && !confirm('Replace your edited reply with a new draft?')) return;
+          b.disabled = true; b.textContent = 'Writing draft…';
+          try {
+            var res = await post('mailBotRedraft', { id: r.id, guide: g });
+            if (!res.ok) throw new Error(res.error || 'failed');
+            Object.assign(r, res.row); r._draft = null; r._undo = null;
+            // Your note becomes the default Learn reason
+            workSet(r.id, { draft: null, reason: (workGet(r.id) || {}).reason || g });
+            renderModal(); drawList();
+          } catch (e) { alert("Couldn't write the draft: " + e.message); b.disabled = false; b.innerHTML = '&#10024; Generate draft'; }
+        };
+      }
       var note = box.querySelector('[data-note]');
       var sb = box.querySelector('[data-send]');
       var ta = box.querySelector('[data-edit]');
