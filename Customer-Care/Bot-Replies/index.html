@@ -1281,6 +1281,9 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .br-more .br-box { background: transparent; }
 .br-zoho td { text-align: left !important; font-size: 12.5px; vertical-align: top; }
 .br-zoho th { text-align: left !important; }
+.br-edit { width: 100%; box-sizing: border-box; border: 1px solid var(--border); font: inherit; font-size: 12.5px; resize: vertical; min-height: 160px; max-height: none; }
+.br-edit:focus { outline: none; border-color: var(--accent); }
+.br-edit-acts, .br-learn { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
 .br-empty { padding: 28px; text-align: center; color: var(--text2); font-size: 13px; }
 @media (max-width: 1000px) { .br-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } .br-row2, .br-cols { grid-template-columns: 1fr; } .br-bar .br-input { margin-left: 0; width: 100%; min-width: 0; } }
 </style>
@@ -1343,6 +1346,14 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
         <button class="br-btn" id="br-tpl-toggle" style="margin-left:auto">Show</button>
       </div>
       <div id="br-tpl" hidden></div>
+    </div>
+    <div class="br-box" style="margin-top:12px">
+      <div class="br-tpl-head">
+        <h3 style="margin:0">Lessons</h3>
+        <span class="br-hint">Replies the team taught the bot (🧠 Learn) — the AI follows the most similar ones when drafting.</span>
+        <button class="br-btn" id="br-les-toggle" style="margin-left:auto">Show</button>
+      </div>
+      <div id="br-lessons" hidden></div>
     </div>
   </details>
 </div>
@@ -1512,6 +1523,9 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     qi.oninput = function () { q = qi.value; drawList(); };
   }
 
+  // Team can edit / refine / learn on any reply not sent yet (25-Nov-2026)
+  function canEdit(r) { return canRate() && !!r.reply_text && ['dry_run', 'error', 'test'].indexOf(r.result) !== -1; }
+
   function itemHtml(r) {
     var canR = canRate() && isReply(r);
     var rateBtns = ['good', 'average', 'bad'].map(function (k) {
@@ -1539,7 +1553,15 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       (r.error ? '<div class="br-order" style="color:var(--red)">' + esc(r.error) + '</div>' : '') +
       '<div class="br-cols">' +
         '<div><div class="br-col-h">Customer mail — ' + esc(r.subject) + '</div><div class="br-text">' + esc(r.mail_text || '(empty)') + '</div></div>' +
-        '<div><div class="br-col-h">Bot reply</div><div class="br-text reply">' + (r.reply_text ? esc(r.reply_text) : '<span class="br-muted">No reply — the team answers this one.</span>') + '</div></div>' +
+        (canEdit(r)
+          ? '<div><div class="br-col-h">Bot reply <span class="br-muted" style="text-transform:none;letter-spacing:0">— edit or type your own</span></div>' +
+            '<textarea class="br-text reply br-edit" data-edit rows="9">' + esc(r._draft != null ? r._draft : r.reply_text) + '</textarea>' +
+            '<div class="br-edit-acts"><button class="br-btn" data-refine>&#10024; Refine with AI</button>' +
+            '<button class="br-btn" data-undo' + (r._undo != null ? '' : ' hidden') + '>&#8630; Undo</button>' +
+            '<button class="br-btn" data-learn style="margin-left:auto">&#129504; Learn</button></div>' +
+            '<div class="br-learn" data-learn-box hidden><input class="br-input" data-reason placeholder="Why this reply? e.g. order no. already given — check courier, don\'t ask again (min 20 chars)" style="flex:1">' +
+            '<button class="br-btn primary" data-learn-save>Save lesson</button></div></div>'
+          : '<div><div class="br-col-h">Bot reply</div><div class="br-text reply">' + (r.reply_text ? esc(r.reply_text) : '<span class="br-muted">No reply — the team answers this one.</span>') + '</div></div>') +
       '</div>' +
       // Send to customer (25-Nov-2026): any reply not sent yet — dry run, old open ticket, error, or a test result
       (canRate() && r.reply_text && ['dry_run', 'error', 'test'].indexOf(r.result) !== -1
@@ -1604,7 +1626,9 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       var r = rows.find(function (x) { return x.id === id; });
       var note = box.querySelector('[data-note]');
       var sb = box.querySelector('[data-send]');
-      if (sb) sb.onclick = function () { sendReply({ id: r.id }, r, sb); };
+      var ta = box.querySelector('[data-edit]');
+      if (sb) sb.onclick = function () { sendReply(ta ? { id: r.id, reply_text: ta.value } : { id: r.id }, r, sb); };
+      if (ta) wireEdit(box, ta, r);
       box.querySelectorAll('[data-rate]').forEach(function (b) {
         b.onclick = function () {
           var k = b.getAttribute('data-rate'), nv = note ? note.value.trim() : (r.rating_note || '');
@@ -1622,6 +1646,55 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
         note.onkeydown = function (e) { if (e.key === 'Enter') note.blur(); };
         note.onchange = function () { save(r, r.rating || '', note.value); };
       }
+    });
+  }
+
+  // Edit · Refine with AI · Undo · Learn (25-Nov-2026)
+  function wireEdit(box, ta, r) {
+    var undo = box.querySelector('[data-undo]'), lb = box.querySelector('[data-learn-box]');
+    ta.oninput = function () { r._draft = ta.value; };
+    box.querySelector('[data-refine]').onclick = async function () {
+      var b = this; if (!ta.value.trim()) return;
+      b.disabled = true; b.textContent = 'Refining…';
+      try {
+        var res = await post('mailBotRefine', { text: ta.value, mail: r.mail_text || '' });
+        if (!res.ok) throw new Error(res.error || 'failed');
+        r._undo = ta.value; ta.value = res.text; r._draft = res.text; undo.hidden = false;
+      } catch (e) { alert("Couldn't refine: " + e.message); }
+      b.disabled = false; b.innerHTML = '&#10024; Refine with AI';
+    };
+    undo.onclick = function () { if (r._undo == null) return; ta.value = r._undo; r._draft = r._undo; r._undo = null; undo.hidden = true; };
+    box.querySelector('[data-learn]').onclick = function () { lb.hidden = !lb.hidden; if (!lb.hidden) lb.querySelector('[data-reason]').focus(); };
+    box.querySelector('[data-learn-save]').onclick = async function () {
+      var b = this, reason = lb.querySelector('[data-reason]').value.trim();
+      if (reason.length < 20) { alert('Write the reason in at least 20 characters.'); return; }
+      b.disabled = true; b.textContent = 'Saving…';
+      try {
+        var res = await post('mailBotLearn', { id: r.id, reply_text: ta.value, reason: reason });
+        if (!res.ok) throw new Error(res.error || 'failed');
+        lb.innerHTML = '<span class="br-muted" style="color:var(--green)">&#10003; Lesson saved — the bot will use it on similar mails.</span>';
+        lessons = null;
+      } catch (e) { alert("Couldn't save: " + e.message); b.disabled = false; b.textContent = 'Save lesson'; }
+    };
+  }
+
+  // ── Lessons list (More tools) ──
+  var lessons = null;
+  async function loadLessons() {
+    var el = document.getElementById('br-lessons');
+    el.innerHTML = '<div class="br-hint">Loading…</div>';
+    var res = await api('mailBotLessons'); lessons = (res && res.lessons) || [];
+    el.innerHTML = !lessons.length ? '<div class="br-hint">No lessons yet — use 🧠 Learn on a reply.</div>' :
+      '<table class="br-sum br-zoho"><tr><th>Why</th><th>Ticket</th><th>Added</th><th></th></tr>' + lessons.map(function (l) {
+        return '<tr><td>' + esc(l.reason) + '<div class="br-muted" style="margin-top:4px">' + esc(String(l.reply_text || '').slice(0, 160)) + '…</div></td><td>#' + esc(l.ticket_number) +
+          '</td><td>' + esc(l.by_user || '') + '<br><span class="br-muted">' + esc(when(l.created_at)) + '</span></td><td>' +
+          (canRate() ? '<button class="br-btn" data-del-lesson="' + l.id + '">Delete</button>' : '') + '</td></tr>';
+      }).join('') + '</table>';
+    el.querySelectorAll('[data-del-lesson]').forEach(function (b) {
+      b.onclick = async function () {
+        if (!confirm('Delete this lesson? The bot will stop using it.')) return;
+        await post('mailBotLessonDelete', { id: b.getAttribute('data-del-lesson') }); loadLessons();
+      };
     });
   }
 
@@ -1643,6 +1716,10 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   var FILL_HELP = { order_no: 'order no., e.g. #3370', product: 'product name', track_link: 'Track Order page link', drn_link: 'delivery issue page link',
     platform: 'Amazon / Flipkart', amount: 'order amount', prepaid_line: 'refund line — prepaid orders only', refund_line: 'refund status line (prepaid only)',
     delivered_on: '" on 20 Nov 2026"' };
+  document.getElementById('br-les-toggle').onclick = function () {
+    var el = document.getElementById('br-lessons'); el.hidden = !el.hidden; this.textContent = el.hidden ? 'Show' : 'Hide';
+    if (!el.hidden) loadLessons();
+  };
   document.getElementById('br-tpl-toggle').onclick = function () {
     tplOpen = !tplOpen; this.textContent = tplOpen ? 'Hide' : 'Show';
     document.getElementById('br-tpl').hidden = !tplOpen;

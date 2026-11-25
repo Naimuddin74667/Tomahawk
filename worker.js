@@ -1439,7 +1439,7 @@ const ACTION_TIERS = {
   // Internal notes on requests / cases (20-Nov-2026)
   ccNotesList: 'viewer_read', ccNoteAdd: 'manager_up',
   // Customer Care → Bot Replies: automatic email replies log + review (25-Nov-2026)
-  mailBotList: 'viewer_read', mailBotZohoOpen: 'viewer_read', mailBotRate: 'manager_up', mailBotTest: 'manager_up', mailBotSend: 'manager_up', mailBotTemplates: 'viewer_read', mailBotTemplateSave: 'admin_only', mailBotSuggest: 'admin_only', mailBotSettings: 'admin_only', mailBotRunNow: 'admin_only',
+  mailBotList: 'viewer_read', mailBotZohoOpen: 'viewer_read', mailBotRefine: 'manager_up', mailBotLearn: 'manager_up', mailBotLessons: 'viewer_read', mailBotLessonDelete: 'manager_up', mailBotRate: 'manager_up', mailBotTest: 'manager_up', mailBotSend: 'manager_up', mailBotTemplates: 'viewer_read', mailBotTemplateSave: 'admin_only', mailBotSuggest: 'admin_only', mailBotSettings: 'admin_only', mailBotRunNow: 'admin_only',
   // Dashboard "Raise ticket" — record (or clear) a courier escalation ticket on one leg.
   ccMarkEscalation: 'manager_up',
   // RTO received → close the case instead of re-sending (06-Nov-2026).
@@ -1496,7 +1496,7 @@ const ACTION_TIERS = {
 
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
-const ALWAYS_GATED = new Set(['ccDeliveredDate', 'mailBotList', 'mailBotZohoOpen', 'mailBotRate', 'mailBotTest', 'mailBotSend', 'mailBotTemplates', 'ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
+const ALWAYS_GATED = new Set(['ccDeliveredDate', 'mailBotList', 'mailBotZohoOpen', 'mailBotRefine', 'mailBotLearn', 'mailBotLessons', 'mailBotLessonDelete', 'mailBotRate', 'mailBotTest', 'mailBotSend', 'mailBotTemplates', 'ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
   'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccPaymentWaive', 'ccLogisticsQuote', 'ccVersion',
   'shopShipList', 'shopShipRefresh', 'shopShipReceived']);
 
@@ -2300,6 +2300,23 @@ export default {
       // All open Zoho email cases (25-Nov-2026) — Bot Replies "All tickets" card
       if (request.method === 'GET' && action === 'mailBotZohoOpen') {
         return json(await mbZohoOpen(env));
+      }
+      // Team-written replies (25-Nov-2026): refine with AI · learn (lesson + reason) · lessons list
+      if (request.method === 'POST' && act === 'mailBotRefine') {
+        try { return json(await mbRefine(env, body || {})); } catch (e) { return json({ ok: false, error: e.message }, 500); }
+      }
+      if (request.method === 'POST' && act === 'mailBotLearn') {
+        return json(await mbLearn(env, authResult.user || (await resolveSession(request, env.DB)), body || {}));
+      }
+      if (request.method === 'GET' && action === 'mailBotLessons') {
+        await mbEnsureLessons(env.DB);
+        const r = await env.DB.prepare('SELECT * FROM bot_lessons ORDER BY id DESC LIMIT 300').all();
+        return json({ ok: true, lessons: r.results || [] });
+      }
+      if (request.method === 'POST' && act === 'mailBotLessonDelete') {
+        await mbEnsureLessons(env.DB);
+        await env.DB.prepare('DELETE FROM bot_lessons WHERE id = ?').bind(parseInt(body && body.id, 10) || 0).run();
+        return json({ ok: true });
       }
       if (request.method === 'POST' && act === 'mailBotRate') {
         await ensureMailBotTable(env.DB);
@@ -15248,9 +15265,14 @@ async function mbAiDraft(env, orgId, tk, d, contact, conv) {
   if (hist.numbers.length) d.history = hist.numbers.join(',');
   const facts = await mbFactsFor(env, text + '\n' + (d.subject || ''), d.customer_email).catch(() => []);
   const T = await mbTemplates(env);
+  const lessons = await mbLessonsFor(env, (d.subject || '') + '\n' + (conv.latestText || '')).catch(() => []);
+  if (lessons.length) notes.push('Used ' + lessons.length + ' team lesson' + (lessons.length > 1 ? 's' : ''));
   const prompt = [
     'You are drafting an email reply for TOMAHAWK Tools customer care (an Indian power-tools brand). A team member will review it before it is sent.',
     '', 'INSTRUCTIONS:', T.AI1.body, '',
+    lessons.length ? 'LESSONS FROM OUR TEAM (similar past mails — follow how and why the team replied):\n' + lessons.map((l, i) =>
+      (i + 1) + '. Customer wrote: ' + String(l.mail_text || '').slice(0, 400).replace(/\s+/g, ' ') + '\n   Team replied: ' + String(l.reply_text || '').slice(0, 600).replace(/\s+/g, ' ') +
+      '\n   Why: ' + l.reason).join('\n') + '\n' : '',
     'FORMAT: no greeting line and no sign-off (they are added automatically). Plain text, short paragraphs separated by a blank line, no markdown.',
     'Answer in EXACTLY this format, nothing else:\nUPSET: yes or no\nTEAM: one line on what our team must check (or "none")\nDRAFT:\n<the reply text>',
     '', 'FACTS (the only facts you may use):', facts.length ? facts.map(f => '- ' + f).join('\n') : '- No order or request facts found.',
@@ -15498,6 +15520,12 @@ async function mbManualSend(env, user, b) {
     }
   }
   if (!row) return { ok: false, error: 'Reply not found' };
+  // Team edited the reply on the page (25-Nov-2026) — send their text, and keep it on the log
+  const edited = b && typeof b.reply_text === 'string' ? b.reply_text.trim().slice(0, 5000) : '';
+  if (edited && row.result !== 'sent' && edited !== row.reply_text) {
+    await env.DB.prepare('UPDATE bot_reply_log SET reply_text = ? WHERE id = ?').bind(edited, row.id).run();
+    row.reply_text = edited;
+  }
   if (row.result === 'sent') return { ok: false, error: 'Already sent' + (row.sent_by ? ' by ' + row.sent_by : '') + '.' };
   if (!row.reply_text || !row.customer_email) return { ok: false, error: 'No reply to send for this ticket.' };
   // Claim it first — a double click can never send twice.
@@ -15519,6 +15547,57 @@ async function mbManualSend(env, user, b) {
 
 // Every OPEN email ticket in Zoho Desk (= Zoho's "Email Cases" view), newest first,
 // with what the bot did on each (latest bot_reply_log row) — or null if not checked yet.
+// ── Team lessons (25-Nov-2026): a reply the team wrote/edited + WHY. The AI gets the
+// most similar ones (shared words) as examples, so next time it drafts the same way.
+async function mbEnsureLessons(db) {
+  await db.prepare(`CREATE TABLE IF NOT EXISTS bot_lessons (id INTEGER PRIMARY KEY AUTOINCREMENT, log_id INTEGER, ticket_number TEXT,
+    subject TEXT, mail_text TEXT, reply_text TEXT, reason TEXT NOT NULL, by_user TEXT, created_at TEXT DEFAULT (datetime('now')))`).run();
+}
+const MB_STOP = new Set('the and for you your our with this that have has was were are not but from they them will would could please kindly order sir madam dear thanks thank regards hello also just what when where which there here been into about more some than then only very can any all'.split(' '));
+function mbWords(t) {
+  return new Set(String(t || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(w => w.length > 3 && !MB_STOP.has(w) && !/^\d+$/.test(w)));
+}
+async function mbLessonsFor(env, text) {
+  await mbEnsureLessons(env.DB);
+  const all = (await env.DB.prepare('SELECT * FROM bot_lessons ORDER BY id DESC LIMIT 300').all()).results || [];
+  const w = mbWords(text);
+  return all.map(l => {
+    const lw = mbWords((l.subject || '') + ' ' + (l.mail_text || '') + ' ' + (l.reason || ''));
+    let n = 0; lw.forEach(x => { if (w.has(x)) n++; });
+    return { l, n };
+  }).filter(x => x.n >= 2).sort((a, b) => b.n - a.n).slice(0, 5).map(x => x.l);
+}
+async function mbLearn(env, user, b) {
+  await mbEnsureLessons(env.DB);
+  const reason = String(b.reason || '').trim(), reply = String(b.reply_text || '').trim();
+  if (reason.length < 20) return { ok: false, error: 'Write the reason in at least 20 characters.' };
+  if (!reply) return { ok: false, error: 'Reply is empty.' };
+  const row = await env.DB.prepare('SELECT id, ticket_number, subject, mail_text FROM bot_reply_log WHERE id = ?').bind(parseInt(b.id, 10) || 0).first();
+  if (!row) return { ok: false, error: 'Reply not found' };
+  const r = await env.DB.prepare(`INSERT INTO bot_lessons (log_id, ticket_number, subject, mail_text, reply_text, reason, by_user) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`)
+    .bind(row.id, row.ticket_number || '', row.subject || '', String(row.mail_text || '').slice(0, 3000), reply.slice(0, 5000), reason.slice(0, 1000),
+      (user && user.username) || 'admin').first();
+  return { ok: true, lesson: r };
+}
+// Refine a reply the team typed: same meaning and facts, simple polite English.
+async function mbRefine(env, b) {
+  if (!env.AI) return { ok: false, error: 'AI not available' };
+  const text = String(b.text || '').trim();
+  if (!text) return { ok: false, error: 'Type a reply first.' };
+  const prompt = ['You polish a customer-care email reply written by a team member of TOMAHAWK Tools (Indian power-tools brand).',
+    'Rules: keep the SAME meaning, facts, numbers, links and promises — add nothing new, remove nothing important. Fix grammar and spelling.',
+    'Easy, simple, polite Indian English that reads like a real person, not a template. Keep it short. Keep the first line (e.g. "Hi Name,") and the last line (e.g. "Thanks & Regards,") exactly as they are.',
+    'Plain text, short paragraphs separated by a blank line, no markdown. Answer with ONLY the polished reply.',
+    '', 'CUSTOMER MAIL (for context):', String(b.mail || '').slice(0, 2000), '', 'REPLY TO POLISH:', text.slice(0, 4000)].join('\n');
+  let out = '', lastErr = '';
+  for (const model of MB_AI_TEXT_MODELS) {
+    try { const r = await env.AI.run(model, { messages: [{ role: 'user', content: prompt }], max_tokens: 800, temperature: 0.2 }); out = String((r && r.response) || '').trim(); if (out) break; }
+    catch (e) { lastErr = e.message; }
+  }
+  if (!out) return { ok: false, error: lastErr || 'AI gave no answer' };
+  return { ok: true, text: out.replace(/^(here is|here's)[^\n]*:\s*\n+/i, '').trim() };
+}
+
 async function mbZohoOpen(env) {
   await ensureMailBotTable(env.DB);
   if (!env.ZOHO_DESK_REFRESH_TOKEN) return { ok: false, error: 'ZOHO_DESK_REFRESH_TOKEN secret missing' };
