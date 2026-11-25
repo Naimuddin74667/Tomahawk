@@ -14495,7 +14495,10 @@ async function ensureMailBotTable(DB) {
     rating TEXT, rating_note TEXT, rated_by TEXT, rated_at TEXT,
     processed_at TEXT DEFAULT (datetime('now'))
   )`).run();
+  // backfill = 1 → a ticket that was already open before the bot started (never sent)
+  try { await DB.prepare('ALTER TABLE bot_reply_log ADD COLUMN backfill INTEGER DEFAULT 0').run(); } catch (e) { /* already there */ }
 }
+const MB_BACKFILL_DAYS = 30;       // old OPEN tickets this recent are checked too (log only, 25-Nov-2026)
 
 async function mbGetSettings(env) {
   const row = await env.DB.prepare("SELECT value FROM tm_settings WHERE key = 'mailbot_settings'").first().catch(() => null);
@@ -14762,12 +14765,33 @@ async function mbRun(env, opts) {
   const list = await zdCall(env, 'GET', '/tickets', { orgId, query: { from: '0', limit: '50', sortBy: '-createdTime', include: 'contacts' } });
   if (!list.ok) throw new Error('Zoho tickets list ' + list.status + ': ' + JSON.stringify(list.json).slice(0, 300));
   const startMs = new Date(s.start_at).getTime();
+  const isEmail = t => /email/i.test(t.channel || '');
   const fresh = ((list.json && list.json.data) || [])
-    .filter(t => /email/i.test(t.channel || '') && new Date(t.createdTime).getTime() >= startMs);
-  if (!fresh.length) return { ok: true, mode: s.mode, handled: 0 };
-  const seen = new Set(((await env.DB.prepare('SELECT ticket_id FROM bot_reply_log WHERE ticket_id IN (' + fresh.map(() => '?').join(',') + ')')
-    .bind(...fresh.map(t => String(t.id))).all()).results || []).map(r => r.ticket_id));
-  const todo = fresh.filter(t => !seen.has(String(t.id))).reverse().slice(0, MB_MAX_PER_RUN);   // oldest first
+    .filter(t => isEmail(t) && new Date(t.createdTime).getTime() >= startMs);
+  // Old tickets still OPEN from the last MB_BACKFILL_DAYS days (created before the bot
+  // started): logged for review only — never sent, the team may already have replied.
+  let old = [];
+  const openList = await zdCall(env, 'GET', '/tickets', { orgId, query: { from: '0', limit: '100', status: 'Open', sortBy: '-createdTime', include: 'contacts' } });
+  if (openList.ok) {
+    const sinceMs = Date.now() - MB_BACKFILL_DAYS * 864e5;
+    old = ((openList.json && openList.json.data) || []).filter(t => {
+      const ms = new Date(t.createdTime).getTime();
+      return isEmail(t) && ms < startMs && ms >= sinceMs;
+    });
+  } else console.warn('mailbot open list', openList.status, JSON.stringify(openList.json).slice(0, 200));
+  const all = fresh.concat(old);
+  if (!all.length) return { ok: true, mode: s.mode, handled: 0 };
+  const seen = new Set();
+  for (let i = 0; i < all.length; i += 50) {
+    const part = all.slice(i, i + 50);
+    ((await env.DB.prepare('SELECT ticket_id FROM bot_reply_log WHERE ticket_id IN (' + part.map(() => '?').join(',') + ')')
+      .bind(...part.map(t => String(t.id))).all()).results || []).forEach(r => seen.add(r.ticket_id));
+  }
+  // New mails first (oldest first), then the old open backlog — MB_MAX_PER_RUN in total.
+  const oldIds = new Set(old.map(t => String(t.id)));
+  const todo = fresh.filter(t => !seen.has(String(t.id))).reverse()
+    .concat(old.filter(t => !seen.has(String(t.id))).reverse())
+    .slice(0, MB_MAX_PER_RUN);
 
   let handled = 0;
   for (const tk of todo) {
@@ -14776,19 +14800,20 @@ async function mbRun(env, opts) {
       .bind(String(tk.id), String(tk.ticketNumber || '')).run();
     if (!claim.meta || !claim.meta.changes) continue;
     let d = null, result = 'skipped', error = '';
+    const backfill = oldIds.has(String(tk.id));
     try {
       d = await mbDecide(env, orgId, tk);
       if (d.reply_html) {
-        const send = s.mode === 'live' || (s.mode === 'test' && s.test_emails.map(x => String(x).toLowerCase()).includes(d.customer_email));
+        const send = !backfill && (s.mode === 'live' || (s.mode === 'test' && s.test_emails.map(x => String(x).toLowerCase()).includes(d.customer_email)));
         if (send) { await mbSendReply(env, orgId, tk.id, d.customer_email, d.reply_html); result = 'sent'; }
         else result = 'dry_run';
       }
     } catch (e) { result = 'error'; error = String(e.message || e).slice(0, 500); console.error('mailbot', tk.id, error); }
     d = d || { customer_email: tk.email || '', subject: tk.subject || '' };
     await env.DB.prepare(`UPDATE bot_reply_log SET ticket_created = ?, customer_name = ?, customer_email = ?, subject = ?, mail_text = ?,
-        reply_type = ?, template = ?, order_no = ?, order_info = ?, reply_text = ?, result = ?, skip_reason = ?, error = ?, processed_at = datetime('now')
+        reply_type = ?, template = ?, order_no = ?, order_info = ?, reply_text = ?, result = ?, skip_reason = ?, error = ?, backfill = ?, processed_at = datetime('now')
       WHERE ticket_id = ?`).bind(tk.createdTime || null, d.customer_name || '', d.customer_email || '', d.subject || '', d.mail_text || '',
-        d.reply_type || 'other', d.template || '', d.order_no || '', d.order_info || '', d.reply_text || '', result, d.skip_reason || '', error, String(tk.id)).run();
+        d.reply_type || 'other', d.template || '', d.order_no || '', d.order_info || '', d.reply_text || '', result, d.skip_reason || '', error, backfill ? 1 : 0, String(tk.id)).run();
     handled++;
   }
   return { ok: true, mode: s.mode, handled };
@@ -14815,7 +14840,7 @@ async function mbList(env, days) {
   await ensureMailBotTable(env.DB);
   const s = await mbGetSettings(env);
   const rows = (await env.DB.prepare(`SELECT id, ticket_id, ticket_number, ticket_created, customer_name, customer_email, subject, mail_text,
-      reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, rating, rating_note, rated_by, rated_at, processed_at
+      reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, rating, rating_note, rated_by, rated_at, processed_at, backfill
     FROM bot_reply_log WHERE processed_at >= datetime('now', ?) ORDER BY processed_at DESC, id DESC LIMIT 1000`).bind('-' + days + ' days').all()).results || [];
   return { ok: true, rows, settings: { mode: s.mode, start_at: s.start_at, test_emails: s.test_emails }, days };
 }

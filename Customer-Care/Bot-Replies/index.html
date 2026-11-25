@@ -1196,6 +1196,19 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .br-stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
 .br-stat b { display: block; font-size: 22px; font-weight: 800; color: var(--text); line-height: 1.1; }
 .br-stat span { font-size: 11.5px; color: var(--text2); }
+/* Bot mode switch (header) + one-line status bar */
+.br-seg { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); }
+.br-seg-lbl { font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--text2); padding: 0 8px 0 10px; }
+.br-seg-b { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border: 0; border-radius: 999px; background: transparent; color: var(--text2); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.br-seg-b:hover:not(:disabled) { color: var(--text); }
+.br-seg-b:disabled { cursor: default; }
+.br-seg-b i, .br-mode-bar i { width: 8px; height: 8px; border-radius: 50%; background: var(--mode-c); display: inline-block; flex: none; }
+.br-seg-b.on { background: color-mix(in srgb, var(--mode-c) 18%, transparent); color: var(--text); box-shadow: inset 0 0 0 1px var(--mode-c); }
+.m-off { --mode-c: var(--text2); } .m-dryrun { --mode-c: var(--accent); } .m-test { --mode-c: #60a5fa; } .m-live { --mode-c: var(--green); }
+.br-mode-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; color: var(--text2); margin: -6px 0 14px;
+  padding: 9px 14px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--mode-c) 40%, transparent); background: color-mix(in srgb, var(--mode-c) 7%, transparent); }
+.br-mode-bar b { color: var(--text); }
+.br-mode-bar .br-mode-meta { margin-left: auto; font-size: 11.5px; }
 .br-stat { cursor: pointer; transition: border-color .15s, box-shadow .15s; }
 .br-stat:hover { border-color: var(--accent); }
 .br-stat.on { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
@@ -1250,11 +1263,16 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       <div class="page-title">Bot Replies</div>
       <div class="br-sub" id="br-sub">Loading…</div>
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <!-- Bot mode switch (moved up here, 25-Nov-2026) -->
+      <div class="br-seg" id="br-modes" role="group" aria-label="Bot mode"></div>
       <button class="br-btn primary" id="br-run" hidden>&#8635; Check new mails now</button>
       <a class="br-btn" href="../">&#8592; Customer Care</a>
     </div>
   </div>
+
+  <!-- What the current mode means, in one line -->
+  <div class="br-mode-bar" id="br-mode-hint"></div>
 
   <!-- R1: counts for the selected period -->
   <div class="br-stats" id="br-stats"></div>
@@ -1262,10 +1280,8 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   <!-- R2: Col A = bot mode + test a ticket · Col B = rating summary per reply -->
   <div class="br-row2">
     <div class="br-box">
-      <h3>Bot mode</h3>
-      <div class="br-modes" id="br-modes"></div>
-      <div class="br-hint" id="br-mode-hint"></div>
-      <div class="br-test">
+      <h3>Test a ticket</h3>
+      <div class="br-test" style="margin-top:0">
         <input class="br-input" id="br-test-no" placeholder="Zoho ticket no., e.g. 10823" style="flex:1">
         <button class="br-btn" id="br-test-btn">Show bot reply</button>
       </div>
@@ -1333,6 +1349,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   ];
 
   function resultBadge(r) {
+    if (r.backfill && r.result === 'dry_run') return '<span class="br-badge br-b-gray" title="Was already open before the bot started — logged only, never sent">Old open ticket · not sent</span>';
     if (r.result === 'sent') return '<span class="br-badge br-b-green">Sent</span>';
     if (r.result === 'dry_run') return '<span class="br-badge br-b-amber">Dry run · not sent</span>';
     if (r.result === 'error') return '<span class="br-badge br-b-red">Error</span>';
@@ -1381,13 +1398,16 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 
   function drawModes() {
     var cur = settings ? settings.mode : '';
-    document.getElementById('br-modes').innerHTML = MODES.map(function (m) {
-      return '<button class="br-chip' + (m[0] === cur ? ' on' : '') + '" data-mode="' + m[0] + '"' + (isAdmin() ? '' : ' disabled') + '>' + m[1] + '</button>';
+    document.getElementById('br-modes').innerHTML = '<span class="br-seg-lbl">Bot</span>' + MODES.map(function (m) {
+      return '<button class="br-seg-b m-' + m[0] + (m[0] === cur ? ' on' : '') + '" data-mode="' + m[0] + '"' + (isAdmin() ? '' : ' disabled') +
+        ' title="' + esc(m[2].replace('%TEST%', (settings && settings.test_emails || []).join(', '))) + '"><i></i>' + m[1] + '</button>';
     }).join('');
     var m = MODES.find(function (x) { return x[0] === cur; });
-    document.getElementById('br-mode-hint').innerHTML = (m ? esc(m[2].replace('%TEST%', (settings.test_emails || []).join(', '))) : '') +
-      (settings && settings.start_at ? '<br>Only mails from ' + esc(when(settings.start_at)) + ' onwards are checked. Reply types switched on: <b>Cancellations</b>.' : '') +
-      (isAdmin() ? '' : '<br>Only admins can change the mode.');
+    var bar = document.getElementById('br-mode-hint');
+    bar.className = 'br-mode-bar m-' + cur;
+    bar.innerHTML = '<i></i><b>' + esc(m ? m[1] : '') + '</b><span>' + (m ? esc(m[2].replace('%TEST%', (settings.test_emails || []).join(', '))) : '') + '</span>' +
+      '<span class="br-mode-meta">Checking mails from ' + esc(when(settings && settings.start_at)) + ' · Replies on: <b>Cancellations</b>' +
+      (isAdmin() ? '' : ' · Only admins can change the mode') + '</span>';
     document.querySelectorAll('#br-modes [data-mode]').forEach(function (b) {
       b.onclick = async function () {
         var mode = b.getAttribute('data-mode');
