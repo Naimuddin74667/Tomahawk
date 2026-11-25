@@ -14503,7 +14503,7 @@ async function ensureMailBotTable(DB) {
     processed_at TEXT DEFAULT (datetime('now'))
   )`).run();
   // backfill = 1 → a ticket that was already open before the bot started (never sent)
-  for (const col of ['backfill INTEGER DEFAULT 0', 'sent_by TEXT', 'sent_at TEXT']) {   // added 25-Nov-2026
+  for (const col of ['backfill INTEGER DEFAULT 0', 'sent_by TEXT', 'sent_at TEXT', 'closed_at TEXT']) {   // added 25-Nov-2026
     try { await DB.prepare('ALTER TABLE bot_reply_log ADD COLUMN ' + col).run(); } catch (e) { /* already there */ }
   }
 }
@@ -14776,6 +14776,25 @@ async function mbDecide(env, orgId, tk) {
   return out;
 }
 
+// Once the bot's reply is sent the Zoho ticket is closed (25-Nov-2026). A failed close
+// never undoes the send — it's retried on the next cron run (mbCloseSent).
+async function mbCloseTicket(env, orgId, ticketId) {
+  const r = await zdCall(env, 'PATCH', '/tickets/' + ticketId, { orgId, body: { status: 'Closed' } });
+  if (!r.ok) throw new Error('Zoho close ' + r.status + ': ' + JSON.stringify(r.json).slice(0, 200));
+}
+async function mbMarkClosed(env, orgId, ticketId) {
+  try {
+    await mbCloseTicket(env, orgId, ticketId);
+    await env.DB.prepare("UPDATE bot_reply_log SET closed_at = datetime('now') WHERE ticket_id = ?").bind(String(ticketId)).run();
+    return true;
+  } catch (e) { console.error('mailbot close', ticketId, e.message); return false; }
+}
+// Sent but not closed yet (close failed, or sent before auto-close existed) → close now.
+async function mbCloseSent(env, orgId) {
+  const rows = (await env.DB.prepare("SELECT ticket_id FROM bot_reply_log WHERE result = 'sent' AND closed_at IS NULL LIMIT 10").all()).results || [];
+  for (const r of rows) await mbMarkClosed(env, orgId, r.ticket_id);
+}
+
 async function mbSendReply(env, orgId, ticketId, to, html) {
   const r = await zdCall(env, 'POST', '/tickets/' + ticketId + '/sendReply', { orgId,
     body: { channel: 'EMAIL', to, fromEmailAddress: MB_FROM_EMAIL, contentType: 'html', content: html } });
@@ -14791,6 +14810,7 @@ async function mbRun(env, opts) {
   if (s.mode === 'off' && !opts.force) return { ok: true, mode: 'off', handled: 0 };
   if (!env.ZOHO_DESK_REFRESH_TOKEN) return { ok: false, error: 'ZOHO_DESK_REFRESH_TOKEN secret missing' };
   const orgId = await mbOrgId(env);
+  await mbCloseSent(env, orgId);
   const list = await zdCall(env, 'GET', '/tickets', { orgId, query: { from: '0', limit: '50', sortBy: '-createdTime', include: 'contacts' } });
   if (!list.ok) throw new Error('Zoho tickets list ' + list.status + ': ' + JSON.stringify(list.json).slice(0, 300));
   const startMs = new Date(s.start_at).getTime();
@@ -14834,7 +14854,10 @@ async function mbRun(env, opts) {
       d = await mbDecide(env, orgId, tk);
       if (d.reply_text) {
         const send = !backfill && (s.mode === 'live' || (s.mode === 'test' && s.test_emails.map(x => String(x).toLowerCase()).includes(d.customer_email)));
-        if (send) { await mbSendReply(env, orgId, tk.id, d.customer_email, mbComposeHtml(d.reply_text, s)); result = 'sent'; }
+        if (send) {
+          await mbSendReply(env, orgId, tk.id, d.customer_email, mbComposeHtml(d.reply_text, s)); result = 'sent';
+          await mbMarkClosed(env, orgId, tk.id);
+        }
         else result = 'dry_run';
       }
     } catch (e) { result = 'error'; error = String(e.message || e).slice(0, 500); console.error('mailbot', tk.id, error); }
@@ -14907,16 +14930,17 @@ async function mbManualSend(env, user, b) {
     await env.DB.prepare('UPDATE bot_reply_log SET result = ?, error = ? WHERE id = ?').bind(row.result, String(e.message || e).slice(0, 500), row.id).run();
     return { ok: false, error: e.message };
   }
-  const done = await env.DB.prepare(`UPDATE bot_reply_log SET result = 'sent', error = '', sent_by = ?, sent_at = datetime('now')
-    WHERE id = ? RETURNING id, result, sent_by, sent_at`).bind(who, row.id).first();
-  return { ok: true, row: done };
+  await env.DB.prepare(`UPDATE bot_reply_log SET result = 'sent', error = '', sent_by = ?, sent_at = datetime('now') WHERE id = ?`).bind(who, row.id).run();
+  const closed = await mbMarkClosed(env, orgId, row.ticket_id);
+  const done = await env.DB.prepare('SELECT id, result, sent_by, sent_at, closed_at FROM bot_reply_log WHERE id = ?').bind(row.id).first();
+  return { ok: true, row: done, closed };
 }
 
 async function mbList(env, days) {
   await ensureMailBotTable(env.DB);
   const s = await mbGetSettings(env);
   const rows = (await env.DB.prepare(`SELECT id, ticket_id, ticket_number, ticket_created, customer_name, customer_email, subject, mail_text,
-      reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, rating, rating_note, rated_by, rated_at, processed_at, backfill, sent_by, sent_at
+      reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, rating, rating_note, rated_by, rated_at, processed_at, backfill, sent_by, sent_at, closed_at
     FROM bot_reply_log WHERE processed_at >= datetime('now', ?) ORDER BY processed_at DESC, id DESC LIMIT 1000`).bind('-' + days + ' days').all()).results || [];
   return { ok: true, rows, settings: mbPublicSettings(s), days };
 }
