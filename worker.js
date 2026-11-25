@@ -14721,7 +14721,7 @@ function mbParasToHtml(paras) {
 // Customer Care signature (agreed 25-Nov-2026). The page shows only "Thanks & Regards,".
 const MB_SIGNATURE_HTML = '<p>Thanks &amp; Regards,<br>Team TOMAHAWK&reg; Tools — Customer Care<br>' +
   'WhatsApp: +91 89289 49415<br>Email: <a href="mailto:support@tomahawk.tools">support@tomahawk.tools</a><br>' +
-  'Mon–Fri, 9:00 AM – 5:30 PM<br><a href="https://www.tomahawk.tools">www.tomahawk.tools</a></p>';
+  'Mon–Sat, 9:00 AM – 5:00 PM<br><a href="https://www.tomahawk.tools">www.tomahawk.tools</a></p>';
 function mbComposeHtml(replyText, s) {
   const paras = String(replyText || '').split(/\n\n/);
   if (/^(Thanks & )?Regards,/i.test(paras[paras.length - 1] || '')) paras.pop();   // old rows had a short sign-off too
