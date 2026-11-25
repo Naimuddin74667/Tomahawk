@@ -1439,7 +1439,7 @@ const ACTION_TIERS = {
   // Internal notes on requests / cases (20-Nov-2026)
   ccNotesList: 'viewer_read', ccNoteAdd: 'manager_up',
   // Customer Care → Bot Replies: automatic email replies log + review (25-Nov-2026)
-  mailBotList: 'viewer_read', mailBotRate: 'manager_up', mailBotTest: 'manager_up', mailBotSend: 'manager_up', mailBotTemplates: 'viewer_read', mailBotTemplateSave: 'admin_only', mailBotSuggest: 'admin_only', mailBotSettings: 'admin_only', mailBotRunNow: 'admin_only',
+  mailBotList: 'viewer_read', mailBotZohoOpen: 'viewer_read', mailBotRate: 'manager_up', mailBotTest: 'manager_up', mailBotSend: 'manager_up', mailBotTemplates: 'viewer_read', mailBotTemplateSave: 'admin_only', mailBotSuggest: 'admin_only', mailBotSettings: 'admin_only', mailBotRunNow: 'admin_only',
   // Dashboard "Raise ticket" — record (or clear) a courier escalation ticket on one leg.
   ccMarkEscalation: 'manager_up',
   // RTO received → close the case instead of re-sending (06-Nov-2026).
@@ -1496,7 +1496,7 @@ const ACTION_TIERS = {
 
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
-const ALWAYS_GATED = new Set(['ccDeliveredDate', 'mailBotList', 'mailBotRate', 'mailBotTest', 'mailBotSend', 'mailBotTemplates', 'ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
+const ALWAYS_GATED = new Set(['ccDeliveredDate', 'mailBotList', 'mailBotZohoOpen', 'mailBotRate', 'mailBotTest', 'mailBotSend', 'mailBotTemplates', 'ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
   'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccPaymentWaive', 'ccLogisticsQuote', 'ccVersion',
   'shopShipList', 'shopShipRefresh', 'shopShipReceived']);
 
@@ -2296,6 +2296,10 @@ export default {
       if (request.method === 'GET' && action === 'mailBotList') {
         const days = Math.min(120, Math.max(1, parseInt(url.searchParams.get('days') || '31', 10) || 31));
         return json(await mbList(env, days));
+      }
+      // All open Zoho email cases (25-Nov-2026) — Bot Replies "All tickets" card
+      if (request.method === 'GET' && action === 'mailBotZohoOpen') {
+        return json(await mbZohoOpen(env));
       }
       if (request.method === 'POST' && act === 'mailBotRate') {
         await ensureMailBotTable(env.DB);
@@ -15511,6 +15515,30 @@ async function mbManualSend(env, user, b) {
   const closed = MB_KEEP_OPEN.includes(row.template) ? null : await mbMarkClosed(env, orgId, row.zoho_id || row.ticket_id);
   const done = await env.DB.prepare('SELECT id, result, sent_by, sent_at, closed_at FROM bot_reply_log WHERE id = ?').bind(row.id).first();
   return { ok: true, row: done, closed };
+}
+
+// Every OPEN email ticket in Zoho Desk (= Zoho's "Email Cases" view), newest first,
+// with what the bot did on each (latest bot_reply_log row) — or null if not checked yet.
+async function mbZohoOpen(env) {
+  await ensureMailBotTable(env.DB);
+  if (!env.ZOHO_DESK_REFRESH_TOKEN) return { ok: false, error: 'ZOHO_DESK_REFRESH_TOKEN secret missing' };
+  const orgId = await mbOrgId(env);
+  const res = await zdCall(env, 'GET', '/tickets', { orgId, query: { from: '0', limit: '100', status: 'Open', sortBy: '-createdTime', include: 'contacts' } });
+  if (!res.ok) return { ok: false, error: 'Zoho tickets list ' + res.status };
+  const list = ((res.json && res.json.data) || []).filter(t => /email/i.test(t.channel || ''));
+  const bot = {};
+  for (let i = 0; i < list.length; i += 50) {
+    const part = list.slice(i, i + 50);
+    ((await env.DB.prepare('SELECT ticket_id, result, template, rating FROM bot_reply_log WHERE ticket_id IN (' + part.map(() => '?').join(',') + ') ORDER BY id')
+      .bind(...part.map(t => String(t.id))).all()).results || []).forEach(r => { bot[r.ticket_id] = r; });
+  }
+  const tickets = list.map(t => {
+    const c = t.contact || {};
+    return { id: String(t.id), number: t.ticketNumber, subject: t.subject || '', created: t.createdTime,
+      name: [c.firstName, c.lastName].filter(Boolean).join(' ') || t.contactName || '', email: c.email || t.email || '',
+      bot: bot[String(t.id)] || null };
+  });
+  return { ok: true, tickets };
 }
 
 async function mbList(env, days) {

@@ -1192,7 +1192,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .br-btn:hover { border-color: var(--accent); color: var(--text); }
 .br-btn.primary { background: var(--accent); border-color: var(--accent); color: #111; }
 .br-btn:disabled { opacity: .55; cursor: default; }
-.br-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+.br-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
 .br-stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
 .br-stat b { display: block; font-size: 22px; font-weight: 800; color: var(--text); line-height: 1.1; }
 .br-stat span { font-size: 11.5px; color: var(--text2); }
@@ -1279,6 +1279,8 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .br-rate-card .br-item { background: var(--bg, transparent); }
 .br-more > summary { cursor: pointer; font-size: 13px; font-weight: 800; color: var(--text); list-style: revert; }
 .br-more .br-box { background: transparent; }
+.br-zoho td { text-align: left !important; font-size: 12.5px; vertical-align: top; }
+.br-zoho th { text-align: left !important; }
 .br-empty { padding: 28px; text-align: center; color: var(--text2); font-size: 13px; }
 @media (max-width: 1000px) { .br-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } .br-row2, .br-cols { grid-template-columns: 1fr; } .br-bar .br-input { margin-left: 0; width: 100%; min-width: 0; } }
 </style>
@@ -1384,6 +1386,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   function isReply(r) { return r.result === 'sent' || r.result === 'dry_run'; }
   // Filter options (25-Nov-2026). "All" = everything except mails skipped for the team.
   var VIEWS = [
+    ['zoho', 'All tickets (Zoho open)', function () { return false; }],
     ['all', 'All', function (r) { return r.result !== 'skipped'; }],
     ['replies', 'Bot replies', isReply],
     ['unrated', 'Not rated', function (r) { return isReply(r) && !r.rating; }],
@@ -1430,6 +1433,8 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     };
     var pill = function (v, cls, label, num) { return '<button class="' + cls + (view === v ? ' on' : '') + '" data-view="' + v + '">' + label + ' ' + num + '</button>'; };
     document.getElementById('br-stats').innerHTML =
+      // All tickets = every open email case in Zoho right now (25-Nov-2026)
+      card('zoho', zohoList ? zohoList.length : (lastRun && lastRun.zoho_open != null ? lastRun.zoho_open : '—'), 'All tickets <span class="br-muted" style="display:block;font-size:10.5px">open email cases in Zoho</span>') +
       card('all', rows.length, 'Mails checked' + (lastRun && lastRun.zoho_open != null
         ? ' <span class="br-muted" style="display:block;font-size:10.5px">' + lastRun.zoho_open + ' open in Zoho now' + (lastRun.left ? ' · ' + lastRun.left + ' waiting' : ' · all checked') + '</span>' : '')) +
       card('replies', n(isReply), 'Bot replies') +
@@ -1500,7 +1505,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   function drawChips() {
     var sel = document.getElementById('br-filter');
     sel.innerHTML = VIEWS.map(function (v) {
-      return '<option value="' + v[0] + '"' + (v[0] === view ? ' selected' : '') + '>' + v[1] + ' (' + rows.filter(v[2]).length + ')</option>';
+      return '<option value="' + v[0] + '"' + (v[0] === view ? ' selected' : '') + '>' + v[1] + ' (' + (v[0] === 'zoho' ? (zohoList ? zohoList.length : '…') : rows.filter(v[2]).length) + ')</option>';
     }).join('');
     sel.onchange = function () { view = sel.value; drawStats(); drawList(); };
     var qi = document.getElementById('br-q');
@@ -1546,7 +1551,35 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     '</div>';
   }
 
+  // ── All tickets (open Zoho email cases) ──
+  var zohoList = null, zohoBusy = false;
+  async function loadZoho() {
+    if (zohoBusy) return; zohoBusy = true;
+    try { var r = await api('mailBotZohoOpen'); if (!r.ok) throw new Error(r.error || 'failed'); zohoList = r.tickets; }
+    catch (e) { zohoList = null; document.getElementById('br-list').innerHTML = '<div class="br-empty">Could not load Zoho tickets: ' + esc(e.message) + '</div>'; zohoBusy = false; return; }
+    zohoBusy = false; drawStats(); if (view === 'zoho') drawList();
+  }
+  function zohoBotBadge(b) {
+    if (!b) return '<span class="br-badge br-b-amber">Not checked yet</span>';
+    if (b.result === 'skipped') return '<span class="br-badge br-b-gray">Skipped (team)</span>';
+    if (b.result === 'sent') return '<span class="br-badge br-b-green">Bot sent' + (b.template ? ' · ' + esc(b.template) : '') + '</span>';
+    if (b.result === 'error') return '<span class="br-badge br-b-red">Error</span>';
+    return '<span class="br-badge br-b-amber">Bot draft' + (b.template ? ' · ' + esc(b.template) : '') + (b.rating ? ' · ' + esc(b.rating) : '') + '</span>';
+  }
+  function drawZohoList() {
+    var el = document.getElementById('br-list');
+    if (!zohoList) { el.innerHTML = '<div class="br-empty">Loading open tickets from Zoho…</div>'; loadZoho(); return; }
+    var ql = q.trim().toLowerCase();
+    var list = zohoList.filter(function (t) { return !ql || [t.number, t.subject, t.name, t.email].join(' ').toLowerCase().indexOf(ql) !== -1; });
+    el.innerHTML = list.length ? '<table class="br-sum br-zoho"><tr><th>Ticket</th><th>Subject</th><th>Customer</th><th>Created</th><th>Bot</th></tr>' +
+      list.map(function (t) {
+        return '<tr><td><a class="br-link" target="_blank" rel="noopener" href="' + ZOHO_TICKET_URL + encodeURIComponent(t.id) + '">#' + esc(t.number) + '</a></td>' +
+          '<td>' + esc(t.subject || '(No Subject)') + '</td><td>' + esc(t.name || t.email) + '</td><td>' + esc(when(t.created)) + '</td><td>' + zohoBotBadge(t.bot) + '</td></tr>';
+      }).join('') + '</table>' : '<div class="br-empty">Nothing here.</div>';
+  }
+
   function drawList() {
+    if (view === 'zoho') return drawZohoList();
     var f = (VIEWS.find(function (v) { return v[0] === view; }) || VIEWS[0])[2];
     var ql = q.trim().toLowerCase();
     var list = rows.filter(f).filter(function (r) {
@@ -1689,6 +1722,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     rows = res.rows || []; settings = res.settings; lastRun = res.last_run || null;
     document.getElementById('br-sub').textContent = 'Customer emails the bot checked in the last ' + days + ' days — rate every reply Good, Average or Bad.';
     draw();
+    loadZoho();   // All tickets card count — fresh from Zoho on every load
   }
 
   // Test any ticket — what would the bot reply? (nothing sent, nothing saved)
