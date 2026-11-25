@@ -1196,6 +1196,9 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .br-stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
 .br-stat b { display: block; font-size: 22px; font-weight: 800; color: var(--text); line-height: 1.1; }
 .br-stat span { font-size: 11.5px; color: var(--text2); }
+.br-stat { cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.br-stat:hover { border-color: var(--accent); }
+.br-stat.on { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
 .br-stat.good b { color: var(--green); } .br-stat.avg b { color: var(--accent); } .br-stat.bad b { color: var(--red); }
 .br-row2 { display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; margin-bottom: 16px; }
 .br-box { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; }
@@ -1323,6 +1326,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     ['good', 'Good', function (r) { return r.rating === 'good'; }],
     ['average', 'Average', function (r) { return r.rating === 'average'; }],
     ['bad', 'Bad', function (r) { return r.rating === 'bad'; }],
+    ['skipped', 'Skipped', function (r) { return r.result === 'skipped'; }],
     ['skipped_cancel', 'Skipped cancellations', function (r) { return r.result === 'skipped' && r.reply_type === 'cancellation'; }],
     ['errors', 'Errors', function (r) { return r.result === 'error'; }],
     ['all', 'All mails', function () { return true; }]
@@ -1339,18 +1343,23 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   function drawStats() {
     var replies = rows.filter(isReply);
     var n = function (f) { return replies.filter(f).length; };
+    // [css class, count, label, list view it opens] — click a card to filter the list (25-Nov-2026)
     var cells = [
-      ['', rows.length, 'Mails checked'],
-      ['', replies.length, 'Bot replies'],
-      ['', rows.filter(function (r) { return r.result === 'skipped'; }).length, 'Skipped (team)'],
-      ['', n(function (r) { return !r.rating; }), 'Not rated yet'],
-      ['good', n(function (r) { return r.rating === 'good'; }), 'Good'],
-      ['avg', n(function (r) { return r.rating === 'average'; }), 'Average'],
-      ['bad', n(function (r) { return r.rating === 'bad'; }), 'Bad']
+      ['', rows.length, 'Mails checked', 'all'],
+      ['', replies.length, 'Bot replies', 'replies'],
+      ['', rows.filter(function (r) { return r.result === 'skipped'; }).length, 'Skipped (team)', 'skipped'],
+      ['', n(function (r) { return !r.rating; }), 'Not rated yet', 'unrated'],
+      ['good', n(function (r) { return r.rating === 'good'; }), 'Good', 'good'],
+      ['avg', n(function (r) { return r.rating === 'average'; }), 'Average', 'average'],
+      ['bad', n(function (r) { return r.rating === 'bad'; }), 'Bad', 'bad']
     ];
     document.getElementById('br-stats').innerHTML = cells.map(function (c) {
-      return '<div class="br-stat ' + c[0] + '"><b>' + c[1] + '</b><span>' + c[2] + '</span></div>';
+      return '<div class="br-stat ' + c[0] + (view === c[3] ? ' on' : '') + '" data-view="' + c[3] + '" role="button" tabindex="0"><b>' + c[1] + '</b><span>' + c[2] + '</span></div>';
     }).join('');
+    document.querySelectorAll('#br-stats [data-view]').forEach(function (el) {
+      el.onclick = function () { view = el.getAttribute('data-view'); draw(); document.getElementById('br-chips').scrollIntoView({ block: 'start', behavior: 'smooth' }); };
+      el.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } };
+    });
   }
 
   function drawSummary() {
