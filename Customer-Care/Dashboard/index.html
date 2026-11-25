@@ -1961,6 +1961,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
 // ══════════════════════════════════════════════════════════════════
 (function () {
   var cases = [], tileFilter = '', tileChosen = false;
+  var ordersRaw = [];   // every courier row from the last load (re-book looks up a request's pickup here)
   var page = 1, PAGE_SIZE = 10;   // pagination — same 10-per-page as the Blinkit RO Ledger
 
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -3147,11 +3148,12 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (info.length && info.width && info.height) { o.length = Math.ceil(info.length); o.width = Math.ceil(info.width); o.height = Math.ceil(info.height); }
     if (info.weight || (info.length && info.width && info.height)) o._pkgSrc = 'listing';
   }
-  async function startPickup(r, btn, mode) {
+  // rebookOf (25-Nov-2026) = the courier-cancelled pickup this booking replaces.
+  async function startPickup(r, btn, mode, rebookOf) {
     var o = pickupOrder(r, mode);
     if (!o.name || !o.phone || !o.add || !/^\d{6}$/.test(o.pin)) { alert('The request is missing the name, number, address or PIN — fix it first.'); return; }
     btn.disabled = true; btn.textContent = 'Checking…';
-    sb = { mode: 'pickup', r: r, o: o, btn: btn, sv: {}, refused: {}, note: '' };
+    sb = { mode: 'pickup', r: r, o: o, btn: btn, sv: {}, refused: {}, note: '', rebook: rebookOf || null };
     await loadSkuSources();
     applySkuInfo(o);
     if (!o.total_amount) o.total_amount = '1000';
@@ -3161,8 +3163,12 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       if (alt) { sb.note = o.courier + " can't pick up from " + o.pin + ' — using ' + alt + '.'; o.courier = alt; }
     }
     btn.style.display = 'none';
-    ['req-foc', 'req-drn-refund', 'req-drn-replace'].forEach(function (id) { var x = document.getElementById(id); if (x) x.style.display = 'none'; });
+    ['req-foc', 'req-drn-refund', 'req-drn-replace', 'req-rebook'].forEach(function (id) { var x = document.getElementById(id); if (x) x.style.display = 'none'; });
     if (isDRN(r)) sb.note = (mode === 'refund' ? 'Return & Refund' : 'Replace & send back') + ' — pickup from the customer.' + (sb.note ? ' ' + sb.note : '');
+    if (rebookOf) {
+      var old = reqPickupLeg(r);
+      sb.note = 'Re-booking — ' + rebookOf + ' was ' + pickupDeadReason(old) + '. Call the customer first to fix a time.' + (sb.note ? ' ' + sb.note : '');
+    }
     renderSendBack();
     var panel = document.getElementById('cm-confirm'); if (panel) panel.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
@@ -3206,7 +3212,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         throw new Error(msg);
       }
       // Booked → mark the request approved with this pickup as its case
-      var a = await post('ccClaimAction', { claim_id: r.claim_id, kind: 'approve', case_id: order.order });
+      var a = await post('ccClaimAction', { claim_id: r.claim_id, kind: 'approve', case_id: order.order, rebook: !!sb.rebook });
       if (!a || !a.ok) alert('Pickup ' + order.order + ' booked, but the request was not marked approved: ' + ((a && a.error) || 'error'));
       sb = null;
       await load(false);
@@ -4369,8 +4375,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   // c = case (or null), r = request (or null), pay = { logistics, repair, final } when known.
   // → { steps: [{ state: done|cur|todo|warn|skip, note }], cur: index, outcome: {label, tone} | null }
   function computeSteps(c, r, pay) {
-    var rv = c && c.reverse, fw = c && c.forward;
-    var rvOk = !!(rv && rv.delhivery_ok && !rv.cancelled_at);
+    var rv = (c && c.reverse) || (r ? reqPickupLeg(r) : null), fw = c && c.forward;
+    // Courier cancelled the pickup before collecting it → Step 2 is open again (re-book), 25-Nov-2026
+    var rvCancelled = !!(rv && rv.delhivery_ok && !rv.cancelled_at && !rv.received_at && rv.track_stage === 'Cancelled');
+    var rvOk = !!(rv && rv.delhivery_ok && !rv.cancelled_at) && !rvCancelled;
     var fwOk = !!(fw && fw.delhivery_ok && !fw.cancelled_at && legStage(fw) !== 'Cancelled');
     var rs = rvOk ? legStage(rv) : '', fs = fwOk ? legStage(fw) : '';
     var oow = !!r && !isFreeReq(r) && !isNV(r);
@@ -4408,6 +4416,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       if (pay && oow && pay.logistics && pay.logistics.status === 'pending') notes[1] = 'Waiting for pickup payment · ' + rupees(pay.logistics.total);
       else if (pay && oow && !paid('logistics') && !payWaived(pay)) notes[1] = 'Send pickup link';
       else notes[1] = 'Approve & book pickup';
+      if (rvCancelled) { notes[1] = 'Pickup cancelled by ' + courierName(rv) + ' · re-book'; warn = true; }
       if (rv && rv.delhivery_ok === 0) { notes[1] = 'Booking failed · book again'; warn = true; }
     }
     if (cur === 2) {
@@ -4814,7 +4823,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     payment_link: 'Payment link sent', payment_received: 'Payment received', payment_void: 'Invoice voided', verified: 'Order verified', consent: 'Customer agreed to charges',
     invoice_request: 'Asked for invoice again', invoice_uploaded: 'Customer uploaded invoice',
     media_request: 'Asked for photos / video again', media_uploaded: 'Customer uploaded photos / video', whatsapp: 'WhatsApp', closed: 'Closed', feedback: 'Customer feedback',
-    handed_over: 'Customer collected', converted: 'Converted to warranty request' };
+    handed_over: 'Customer collected', converted: 'Converted to warranty request',
+    pickup_cancelled: 'Pickup cancelled by courier', rebooked: 'Pickup re-booked' };
   function canActReq() { return window.TM_ROLE === 'admin' || window.TM_ROLE === 'manager'; }
   function isNV(r) { return /^NV-/.test(r.claim_id || ''); }
   // Waiting for customer → WHAT we're waiting on (23-Nov-2026): the latest "ask" in the
@@ -4886,6 +4896,33 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     return null;
   }
   function reqCaseStatus(r) { var c = reqCase(r); return c && c.st ? c.st.label : ''; }
+
+  // Re-book pickup (25-Nov-2026): the request's current reverse pickup, and whether the
+  // courier cancelled / lost / returned it before it reached us (same rule as the Worker).
+  var DEAD_PICKUP_STAGES = ['Cancelled', 'RTO', 'RTO Delivered', 'Lost'];
+  function reqPickupLeg(r) {
+    if (!r || !r.case_id) return null;
+    for (var i = 0; i < ordersRaw.length; i++) {
+      var o = ordersRaw[i];
+      if (o.order_id === r.case_id && o.direction === 'reverse') return o;
+    }
+    return null;
+  }
+  function pickupDead(o) {
+    return !!o && !o.received_at && !o.self_courier && (!o.delhivery_ok || !!o.cancelled_at || DEAD_PICKUP_STAGES.indexOf(o.track_stage) !== -1);
+  }
+  // "cancelled by Delhivery: Reached maximum attempt count · Consignee unavailable (2 failed attempts)"
+  function pickupDeadReason(o) {
+    if (!o) return 'cancelled';
+    if (!o.delhivery_ok) return 'not booked (booking failed)';
+    if (o.cancelled_at) return 'cancelled by our team';
+    var si = {}; try { si = JSON.parse(o.scan_info || '{}') || {}; } catch (e) { si = {}; }
+    var parts = [];
+    if (si.last && si.last.d) parts.push(si.last.d);
+    if (si.undel && si.undel.d) parts.push(si.undel.d + (si.undel.n > 1 ? ' (' + si.undel.n + ' failed attempts)' : ''));
+    var what = o.track_stage === 'Lost' ? 'lost' : /^RTO/.test(o.track_stage || '') ? 'returned (RTO)' : 'cancelled';
+    return what + ' by ' + (o.courier || 'the courier') + (parts.length ? ': ' + parts.join(' · ') : '');
+  }
 
   // Repeat claim (14-Nov-2026): same order came back after we delivered it.
   //   priority = within 30 days → HIGH PRIORITY (red) · used = warranty already used → paid (SRN)
@@ -5007,6 +5044,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
           '<button type="button" class="case-act" id="req-drn-refund" title="Pick it up, then refund (Start refund after Received)">Return &amp; Refund</button>' : '') +
         (!drn && !r.case_id && !fin && !isNV(r) ? '<button type="button" class="case-act primary' + (oow ? ' locked' : '') + '" id="req-approve">' +
                 (oow ? '&#128274; Book pickup after payment' : 'Book Pickup') + '</button>' : '') +
+        // Re-book pickup (25-Nov-2026): the courier cancelled / lost / returned the pickup
+        // before it reached us → book a new one (same details). Pickup payment isn't asked again.
+        (r.case_id && !fin && pickupDead(reqPickupLeg(r)) ? '<button type="button" class="case-act primary" id="req-rebook" title="' +
+          esc('Last pickup ' + r.case_id + ' was ' + pickupDeadReason(reqPickupLeg(r))) + '">Re-book pickup</button>' : '') +
         // Send FOC part (07-Nov-2026): under warranty only — a free part goes to the
         // customer instead of taking the machine back. Out of warranty stays chargeable.
         // Send FOC part: under warranty, and delivery issues too (DRN, 17-Nov-2026 — e.g. a missing / dead battery)
@@ -5080,6 +5121,12 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if (rfoc) rfoc.addEventListener('click', function () { startFoc(r, rfoc); });
     var rdRep = document.getElementById('req-drn-replace');
     if (rdRep) rdRep.addEventListener('click', function () { startPickup(r, rdRep, 'replace'); });
+    // Re-book keeps the first booking's job (Refund / Replacement / Repair)
+    var rReb = document.getElementById('req-rebook');
+    if (rReb) rReb.addEventListener('click', function () {
+      var old = reqPickupLeg(r), job = String((old && old.job_type) || '');
+      startPickup(r, rReb, job === 'Refund' ? 'refund' : job === 'Replacement' ? 'replace' : undefined, r.case_id);
+    });
     var rdRef = document.getElementById('req-drn-refund');
     if (rdRef) rdRef.addEventListener('click', function () { startPickup(r, rdRef, 'refund'); });
     var rself = document.getElementById('req-self');
@@ -6307,7 +6354,8 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var res = await api('delhiveryListOrders&limit=500' + (force ? '&refresh=1' : ''));
       await reqP;
       if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
-      cases = buildCases(res.orders || []);
+      ordersRaw = res.orders || [];
+      cases = buildCases(ordersRaw);
       // On opening the page: always land on "Needs attention" (the main work
       // queue). A Refresh keeps whatever tile is selected.
       if (!tileChosen) {

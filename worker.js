@@ -6014,6 +6014,8 @@ export default {
     ctx.waitUntil(srWaProcessQueue(env).catch(err => console.error('wa queue:', err.message)));
     // Service requests — WhatsApp "Product received" / "Delivered" follow-ups. */15 ticks.
     ctx.waitUntil(srWaMilestones(env).catch(err => console.error('wa milestones:', err.message)));
+    // Service requests — log courier-cancelled pickups (with the reason) in the request history. */15 ticks.
+    ctx.waitUntil(srPickupCancelSweep(env).catch(err => console.error('pickup cancel log:', err.message)));
     // Mail bot — automatic replies to new customer emails in Zoho Desk. */15 ticks.
     ctx.waitUntil(mbRun(env).catch(err => console.error('mail bot:', err.message)));
     // Repair payments — mark requests Paid once Zoho shows the invoice paid. */15 ticks.
@@ -8123,6 +8125,49 @@ const SR_DEFAULT_TEXT = {
 const SR_FOC_TEXT = 'Good news: we are sending you the part free of cost under warranty, so you do not need to send the product back. ' +
   'It should reach you in a few days. We will email you the tracking details.';
 
+const SR_REBOOK_TEXT = 'We have booked a new pickup from your address, as the courier could not collect the product last time. ' +
+  'Please keep the product packed with its accessories and keep your phone reachable so the courier can contact you.';
+
+// ── Pickup cancelled by the courier (25-Nov-2026) ──
+// A reverse pickup the courier cancelled / lost / returned before it reached us.
+const SR_DEAD_PICKUP_STAGES = ['Cancelled', 'RTO', 'RTO Delivered', 'Lost'];
+function srPickupDead(o) {
+  return !!o && !o.received_at && (!o.delhivery_ok || !!o.cancelled_at || SR_DEAD_PICKUP_STAGES.includes(o.track_stage));
+}
+// The courier's reason, from the last scan + failed-attempt info kept in scan_info.
+function srPickupCancelReason(o) {
+  let si = {};
+  try { si = JSON.parse(o.scan_info || '{}') || {}; } catch (e) { si = {}; }
+  const parts = [];
+  if (si.last && si.last.d) parts.push(si.last.d);
+  if (si.undel && si.undel.d) parts.push(si.undel.d + (si.undel.n > 1 ? ' (' + si.undel.n + ' failed attempts)' : ''));
+  if (!parts.length && o.track_status) parts.push(o.track_status);
+  return { text: parts.join(' · ') || 'no reason given by the courier', at: si.last && si.last.t ? new Date(si.last.t).toISOString() : null };
+}
+// Adds "Pickup cancelled by courier" (with the reason) to the request history, once per pickup.
+async function srLogPickupCancel(DB, claimId, o) {
+  if (!claimId || !o || o.cancelled_at) return false;   // cancelled by our team → not the courier
+  const row = await DB.prepare('SELECT events_json FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
+  if (!row) return false;
+  if (srEvents(row).some(e => e.kind === 'pickup_cancelled' && e.case_id === o.order_id)) return false;
+  const what = !o.delhivery_ok ? 'failed to book' : o.track_stage === 'Lost' ? 'lost' : /^RTO/.test(o.track_stage || '') ? 'returned (RTO)' : 'cancelled';
+  const r = srPickupCancelReason(o);
+  const ev = { by: 'system', kind: 'pickup_cancelled', case_id: o.order_id,
+    note: 'Pickup ' + o.order_id + ' ' + what + ' by ' + (o.courier || 'the courier') + ' — ' + r.text };
+  if (r.at) ev.at = r.at;
+  await srAddEvent(DB, claimId, ev);
+  return true;
+}
+// Cron (*/15): log every courier-cancelled pickup of a website request in its history.
+async function srPickupCancelSweep(env) {
+  const rows = (await env.DB.prepare(`SELECT order_id, claim_id, courier, track_stage, track_status, scan_info, received_at, delhivery_ok, cancelled_at
+    FROM delhivery_orders WHERE direction = 'reverse' AND claim_id IS NOT NULL AND received_at IS NULL AND cancelled_at IS NULL
+      AND delhivery_ok = 1 AND track_stage IN ('Cancelled', 'RTO', 'RTO Delivered', 'Lost') AND created_at > datetime('now', '-60 days') LIMIT 50`).all()).results || [];
+  let n = 0;
+  for (const o of rows) if (await srLogPickupCancel(env.DB, o.claim_id, o)) n++;
+  return n;
+}
+
 // ── Team actions ──
 async function srAction(env, user, b) {
   await ensureServiceRequestCols(env.DB);
@@ -8133,6 +8178,7 @@ async function srAction(env, user, b) {
   const row = await env.DB.prepare('SELECT * FROM warranty_claims WHERE claim_id = ? OR prev_claim_id = ?').bind(claimId, claimId).first();
   if (!row) return { ok: false, error: 'No such request' };
   if (kind === 'approve' && /^NV-/.test(row.claim_id)) return { ok: false, error: 'Verify the order first (Verify order tab)' };
+  let rebookOf = null;   // set when this approve re-books a courier-cancelled pickup
   const msg = String(b.message || '').trim().slice(0, 1500);
   if (kind === 'note' && !msg) return { ok: false, error: 'Write the note first' };
   if (['ask_info', 'tip', 'quote', 'not_covered'].includes(kind) && !msg)
@@ -8143,21 +8189,33 @@ async function srAction(env, user, b) {
     const caseId = String(b.case_id || '').trim();
     if (!caseId) return { ok: false, error: 'Book the pickup first (case_id missing)' };
     // Never link a second pickup — e.g. Shikhar's Care Desk already booked one.
-    if (row.case_id && row.case_id !== caseId)
-      return { ok: false, error: 'This request already has a pickup booked (' + row.case_id + '). Cancel the extra booking.' };
+    if (row.case_id && row.case_id !== caseId) {
+      // Re-book (25-Nov-2026): allowed only once the courier has cancelled / lost /
+      // returned the current pickup and nothing reached us.
+      if (b.rebook !== true)
+        return { ok: false, error: 'This request already has a pickup booked (' + row.case_id + '). Cancel the extra booking.' };
+      const old = await env.DB.prepare('SELECT order_id, claim_id, courier, track_stage, track_status, scan_info, received_at, delhivery_ok, cancelled_at FROM delhivery_orders WHERE order_id = ? ORDER BY id DESC LIMIT 1').bind(row.case_id).first();
+      if (old && !srPickupDead(old))
+        return { ok: false, error: 'Pickup ' + row.case_id + ' is still live — it can be re-booked only after the courier cancels it.' };
+      if (old) await srLogPickupCancel(env.DB, row.claim_id, old);
+      rebookOf = row.case_id;
+    }
     sets.case_id = caseId;
   }
   let emailed = false;
   if (k.subject && !(kind === 'approve' && b.self_ship === true)) {
     // Send FOC part (07-Nov-2026): approve with a free part instead of a pickup
     const focApprove = kind === 'approve' && b.foc === true;
-    const lines = [focApprove ? SR_FOC_TEXT : SR_DEFAULT_TEXT[kind]];
+    const lines = [focApprove ? SR_FOC_TEXT : rebookOf ? SR_REBOOK_TEXT : SR_DEFAULT_TEXT[kind]];
     if (msg && kind !== 'approve' && kind !== 'resolve') lines.push('', msg);
     if (msg && (kind === 'approve' || kind === 'resolve')) lines.push('', msg);
-    emailed = await srEmailCustomer(env, row, focApprove ? 'Free part on its way' : k.subject, lines);
+    emailed = await srEmailCustomer(env, row, focApprove ? 'Free part on its way' : rebookOf ? 'Pickup booked again' : k.subject, lines);
   }
-  await srAddEvent(env.DB, row.claim_id, { by: (user && user.username) || 'unknown', kind, note: msg || null,
+  await srAddEvent(env.DB, row.claim_id, { by: (user && user.username) || 'unknown', kind: rebookOf ? 'rebooked' : kind,
+    note: rebookOf ? 'New pickup ' + sets.case_id + ' replaces cancelled ' + rebookOf + (msg ? ' — ' + msg : '') : (msg || null),
     case_id: sets.case_id || null, emailed }, sets);
+  // Re-booked pickup points back at the cancelled one.
+  if (rebookOf) await env.DB.prepare('UPDATE delhivery_orders SET prev_order_id = ? WHERE order_id = ?').bind(rebookOf, sets.case_id).run();
   // The booked pickup now carries the request ID → Dashboard shows it as the case ID.
   if (sets.case_id) { await ensureDelhiveryTable(env.DB); await setOrderClaimId(env.DB, sets.case_id, row.claim_id); }
   return { ok: true, emailed };
@@ -14444,7 +14502,8 @@ async function mbGetSettings(env) {
   let s = {};
   try { s = row && row.value ? JSON.parse(row.value) : {}; } catch (e) { s = {}; }
   if (!MB_MODES.includes(s.mode)) s.mode = 'dryrun';     // safe default: log only, never send
-  if (!Array.isArray(s.test_emails)) s.test_emails = ['onlinesales@bullet.co.in', 'naimuddin@bullet.co.in'];
+  // Test emails are set on the Bot Replies page (Test mode) — none built in.
+  if (!Array.isArray(s.test_emails)) s.test_emails = [];
   if (!s.start_at) {                                       // first run: ignore every older ticket
     s.start_at = new Date().toISOString();
     await mbSaveSettings(env, s);
