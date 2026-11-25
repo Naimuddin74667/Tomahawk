@@ -7326,7 +7326,7 @@ async function createEkartForwardOrder(env, o) {
       phone: Number(env.EKART_PICKUP_PHONE || EKART_SUPPORT_PHONE), pin: Number(env.EKART_PICKUP_PIN)
     },
     // RTO address — forward only (Ekart: ignore for reverse). All RTOs go
-    // to the "111- Customer Returns - Faique- ITH (REVERSE)" address
+    // to the "Tomahawk Tools" address
     // registered in Ekart (Customer Care only), not the pickup.
     return_location: (!reverse && env.EKART_RTO_NAME) ? {
       name: env.EKART_RTO_NAME, address: env.EKART_RTO_ADDRESS,
