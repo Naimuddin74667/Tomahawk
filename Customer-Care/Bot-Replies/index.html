@@ -1367,12 +1367,20 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     ['good', 'Good', function (r) { return r.rating === 'good'; }],
     ['average', 'Average', function (r) { return r.rating === 'average'; }],
     ['bad', 'Bad', function (r) { return r.rating === 'bad'; }],
+    ['followup', 'Customer replied', function (r) { return !!r.zoho_id; }],
     ['skipped', 'Skipped', function (r) { return r.result === 'skipped'; }],
     ['skipped_cancel', 'Skipped cancellations', function (r) { return r.result === 'skipped' && r.reply_type === 'cancellation'; }],
     ['errors', 'Errors', function (r) { return r.result === 'error'; }],
     ['all', 'All mails', function () { return true; }]
   ];
 
+  // Parent row: what happened after the bot's reply (25-Nov-2026)
+  function followBadge(r) {
+    if (r.followup === 'customer_replied') return ' <span class="br-badge br-b-red">Customer replied — team</span>';
+    if (r.followup === 'team_replied') return ' <span class="br-badge br-b-gray">Team replied</span>';
+    if (r.followup === 'bot_answered') return ' <span class="br-badge br-b-green">Customer replied — bot answered</span>';
+    return '';
+  }
   function resultBadge(r) {
     if (r.backfill && r.result === 'dry_run') return '<span class="br-badge br-b-gray" title="Was already open before the bot started — logged only, never sent">Old open ticket · not sent</span>';
     if (r.result === 'sent') return '<span class="br-badge br-b-green">' + (r.sent_by ? 'Sent manually · ' + esc(r.sent_by) + (r.sent_at ? ' · ' + esc(when(r.sent_at)) : '') : 'Sent') + '</span>' +
@@ -1474,12 +1482,13 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     }).join('');
     return '<div class="br-item" data-id="' + r.id + '">' +
       '<div class="br-item-top">' +
-        '<a class="br-link" target="_blank" rel="noopener" href="' + ZOHO_TICKET_URL + encodeURIComponent(r.ticket_id) + '">#' + esc(r.ticket_number) + '</a>' +
+        '<a class="br-link" target="_blank" rel="noopener" href="' + ZOHO_TICKET_URL + encodeURIComponent(r.zoho_id || r.ticket_id) + '">#' + esc(r.ticket_number) + '</a>' +
+        (r.zoho_id ? '<span class="br-badge br-b-red" title="The customer wrote again after the bot\'s reply">Follow-up</span>' : '') +
         '<span class="br-who">' + esc(r.customer_name || r.customer_email) + '</span>' +
         '<span class="br-muted">' + esc(r.customer_email) + ' · mail ' + esc(when(r.ticket_created)) + ' · bot ' + esc(when(r.processed_at)) + '</span>' +
         '<span style="margin-left:auto;display:flex;gap:6px">' +
           (r.template ? '<span class="br-badge br-b-gray">' + esc(r.template) + ' · ' + esc(TEMPLATE_NAMES[r.template] || '') + '</span>' : '') +
-          resultBadge(r) + '</span>' +
+          resultBadge(r) + followBadge(r) + '</span>' +
       '</div>' +
       (r.order_info ? '<div class="br-order">Order: <b>' + esc(r.order_info) + '</b></div>' : '') +
       (r.skip_reason ? '<div class="br-order">Skipped because: <b>' + esc(r.skip_reason) + '</b> — left for the team</div>' : '') +

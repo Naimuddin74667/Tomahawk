@@ -14517,7 +14517,8 @@ async function ensureMailBotTable(DB) {
     processed_at TEXT DEFAULT (datetime('now'))
   )`).run();
   // backfill = 1 → a ticket that was already open before the bot started (never sent)
-  for (const col of ['backfill INTEGER DEFAULT 0', 'sent_by TEXT', 'sent_at TEXT', 'closed_at TEXT', 'template_version INTEGER']) {   // added 25-Nov-2026
+  for (const col of ['backfill INTEGER DEFAULT 0', 'sent_by TEXT', 'sent_at TEXT', 'closed_at TEXT', 'template_version INTEGER',
+      'zoho_id TEXT', 'thread_count INTEGER', 'bot_thread_ids TEXT', 'bot_replies INTEGER DEFAULT 0', 'followup TEXT']) {   // added 25-Nov-2026
     try { await DB.prepare('ALTER TABLE bot_reply_log ADD COLUMN ' + col).run(); } catch (e) { /* already there */ }
   }
 }
@@ -14842,6 +14843,35 @@ async function mbTicketText(env, orgId, ticketId) {
   return mbStripQuoted(mbHtmlToText(html)).slice(0, 4000);
 }
 
+// ── Whole conversation (25-Nov-2026) ─────────────────────────────
+// Threads oldest → newest; 'in' = customer, 'out' = us. The bot decides from the
+// customer's LATEST message (earlier ones only help find an order number) and
+// never steps in once a team member has written on the ticket.
+async function mbConversation(env, orgId, ticketId) {
+  const th = await zdCall(env, 'GET', '/tickets/' + ticketId + '/threads', { orgId, query: { limit: '50' } });
+  const list = ((th.json && th.json.data) || []).slice().sort((x, y) => String(x.createdTime).localeCompare(String(y.createdTime)));
+  const ins = list.filter(x => x.direction === 'in'), outs = list.filter(x => x.direction === 'out');
+  let latestText = '';
+  const last = ins[ins.length - 1];
+  if (last) {
+    const one = await zdCall(env, 'GET', '/tickets/' + ticketId + '/threads/' + last.id, { orgId });
+    latestText = mbStripQuoted(mbHtmlToText((one.json && (one.json.content || one.json.summary)) || last.summary || ''));
+  }
+  if (!latestText && ins.length <= 1) latestText = await mbTicketText(env, orgId, ticketId);
+  const olderText = ins.slice(0, -1).map(x => mbHtmlToText(x.summary || '')).join('\n');
+  return { list, ins, outs, latestText: latestText.slice(0, 4000), olderText: olderText.slice(0, 3000), count: list.length || (ins.length + outs.length) };
+}
+// Our team's replies = 'out' threads the bot did not send (bot thread ids, or within 3 min of a bot send).
+function mbTeamReplies(conv, botIds, botSentAt) {
+  const ids = new Set(botIds || []);
+  const sentMs = botSentAt ? new Date(String(botSentAt).replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(botSentAt) ? '' : 'Z')).getTime() : 0;
+  return conv.outs.filter(o => {
+    if (ids.has(String(o.id))) return false;
+    const ms = new Date(o.createdTime).getTime();
+    return !(sentMs && ms >= sentMs - 60000 && ms <= sentMs + 180000);
+  });
+}
+
 // Works out the reply for one ticket (no sending). Used by the cron and by "Test a ticket".
 async function mbDecide(env, orgId, tk) {
   const contact = tk.contact || {};
@@ -14850,16 +14880,27 @@ async function mbDecide(env, orgId, tk) {
     ticket_id: String(tk.id), ticket_number: String(tk.ticketNumber || ''), ticket_created: tk.createdTime || null,
     customer_name: [contact.firstName, contact.lastName].filter(Boolean).join(' ') || '', customer_email: email,
     subject: String(tk.subject || '').slice(0, 300), mail_text: '', reply_type: 'other', template: '', order_no: '', order_info: '',
-    reply_text: '', reply_html: '', skip_reason: ''
+    reply_text: '', reply_html: '', skip_reason: '', thread_count: null
   };
   if (!email || /no-?reply|mailer-daemon|postmaster|@tomahawk\.tools$/i.test(email)) { out.skip_reason = 'System / internal sender'; return out; }
-  out.mail_text = await mbTicketText(env, orgId, tk.id);
-  const skip = mbCancelSkipReason(out.subject, out.mail_text);
-  if (skip === 'Not a cancellation mail') return mbDecideAskRef(env, out, contact);
+  const conv = await mbConversation(env, orgId, tk.id);
+  out.thread_count = conv.count;
+  out.mail_text = (conv.ins.length > 1 ? '[Latest of ' + conv.ins.length + ' mails from the customer]\n' : '') + conv.latestText;
+  if (conv.outs.length) {
+    out.skip_reason = 'Team already replied on this ticket — left for the team';
+    return out;
+  }
+  return mbClassify(env, out, contact, conv.latestText, conv.olderText);
+}
+// Picks the reply from the customer's text (latest message; older ones help find the order).
+async function mbClassify(env, out, contact, latest, older) {
+  const text = latest + (older ? '\n' + older : '');
+  const skip = mbCancelSkipReason(out.subject, latest);
+  if (skip === 'Not a cancellation mail') return mbDecideAskRef(env, Object.assign(out, { mail_text: out.mail_text || latest }), contact, text);
   if (skip) { out.skip_reason = skip; out.reply_type = 'cancellation'; return out; }
   out.reply_type = 'cancellation';
   const T = await mbTemplates(env);
-  const r = await mbBuildCancelReply(env, { subject: out.subject, text: out.mail_text, email, contactName: contact.firstName || out.customer_name });
+  const r = await mbBuildCancelReply(env, { subject: out.subject, text, email: out.customer_email, contactName: contact.firstName || out.customer_name });
   if (r.skip) { out.skip_reason = r.skip; return out; }
   const paras = mbCancelText(r, T);
   Object.assign(out, { template: r.template, template_version: (T[r.template] || {}).version || 1, order_no: r.order_no || '', order_info: r.order_info || '',
@@ -14876,23 +14917,24 @@ async function mbCloseTicket(env, orgId, ticketId) {
 async function mbMarkClosed(env, orgId, ticketId) {
   try {
     await mbCloseTicket(env, orgId, ticketId);
-    await env.DB.prepare("UPDATE bot_reply_log SET closed_at = datetime('now') WHERE ticket_id = ?").bind(String(ticketId)).run();
+    await env.DB.prepare("UPDATE bot_reply_log SET closed_at = datetime('now') WHERE COALESCE(zoho_id, ticket_id) = ?").bind(String(ticketId)).run();
     return true;
   } catch (e) { console.error('mailbot close', ticketId, e.message); return false; }
 }
 // Sent but not closed yet (close failed, or sent before auto-close existed) → close now.
 async function mbCloseSent(env, orgId) {
-  const rows = (await env.DB.prepare("SELECT ticket_id FROM bot_reply_log WHERE result = 'sent' AND closed_at IS NULL AND COALESCE(template, '') NOT IN ('AR1') LIMIT 10").all()).results || [];
-  for (const r of rows) await mbMarkClosed(env, orgId, r.ticket_id);
+  const rows = (await env.DB.prepare("SELECT COALESCE(zoho_id, ticket_id) AS zid FROM bot_reply_log WHERE result = 'sent' AND closed_at IS NULL AND COALESCE(template, '') NOT IN ('AR1') AND COALESCE(followup, '') = '' LIMIT 10").all()).results || [];
+  for (const r of rows) await mbMarkClosed(env, orgId, r.zid);
 }
 
 // AR1 — no order ID / request ID in the mail → ask for it (see MB_REQUEST_ID_RE above).
-async function mbDecideAskRef(env, out, contact) {
-  const all = out.subject + '\n' + out.mail_text;
+async function mbDecideAskRef(env, out, contact, fullText) {
+  const body = fullText || out.mail_text;
+  const all = out.subject + '\n' + body;
   if (MB_SYSTEM_SENDER_RE.test(out.customer_email)) { out.skip_reason = 'Automatic / system mail'; return out; }
   if (/left a \d star review|review request|newsletter|unsubscribe/i.test(all)) { out.skip_reason = 'Automatic / system mail'; return out; }
-  if (!out.mail_text.trim()) { out.skip_reason = 'Empty mail'; return out; }
-  if (mbHasReference(out.subject, out.mail_text)) { out.skip_reason = 'Mail has an order / request ID — left for the team'; return out; }
+  if (!body.trim()) { out.skip_reason = 'Empty mail'; return out; }
+  if (mbHasReference(out.subject, body)) { out.skip_reason = 'Mail has an order / request ID — left for the team'; return out; }
   if (shopifyConfigured(env)) {
     const orders = await mbShopifyOrdersByEmail(env, out.customer_email);
     if (orders.length) {
@@ -14905,6 +14947,15 @@ async function mbDecideAskRef(env, out, contact) {
   Object.assign(out, { reply_type: 'missing_reference', template: 'AR1', template_version: T.AR1.version, order_info: 'No order ID / request ID in the mail',
     reply_text: paras.join('\n\n'), reply_html: mbParasToHtml(paras) });
   return out;
+}
+
+// After a bot reply goes out: remember its Zoho thread (so it's never mistaken for a team reply).
+async function mbRememberSend(env, rowId, sendJson, threadCount) {
+  const row = await env.DB.prepare('SELECT bot_thread_ids FROM bot_reply_log WHERE id = ?').bind(rowId).first();
+  let ids = []; try { ids = JSON.parse((row && row.bot_thread_ids) || '[]'); } catch (e) { ids = []; }
+  if (sendJson && sendJson.id) ids.push(String(sendJson.id));
+  await env.DB.prepare('UPDATE bot_reply_log SET bot_thread_ids = ?, bot_replies = COALESCE(bot_replies, 0) + 1, thread_count = ? WHERE id = ?')
+    .bind(JSON.stringify(ids), threadCount == null ? null : threadCount, rowId).run();
 }
 
 async function mbSendReply(env, orgId, ticketId, to, html) {
@@ -14950,7 +15001,6 @@ async function mbRunInner(env, opts) {
     });
   } else console.warn('mailbot open list', openList.status, JSON.stringify(openList.json).slice(0, 200));
   const all = fresh.concat(old);
-  if (!all.length) return { ok: true, mode: s.mode, handled: 0 };
   const seen = new Set();
   for (let i = 0; i < all.length; i += 50) {
     const part = all.slice(i, i + 50);
@@ -14976,8 +15026,7 @@ async function mbRunInner(env, opts) {
       if (d.reply_text) {
         const send = !backfill && (s.mode === 'live' || (s.mode === 'test' && s.test_emails.map(x => String(x).toLowerCase()).includes(d.customer_email)));
         if (send) {
-          await mbSendReply(env, orgId, tk.id, d.customer_email, mbComposeHtml(d.reply_text, s)); result = 'sent';
-          if (!MB_KEEP_OPEN.includes(d.template)) await mbMarkClosed(env, orgId, tk.id);
+          d.sendJson = await mbSendReply(env, orgId, tk.id, d.customer_email, mbComposeHtml(d.reply_text, s)); result = 'sent';
         }
         else result = 'dry_run';
       }
@@ -14988,10 +15037,98 @@ async function mbRunInner(env, opts) {
       WHERE ticket_id = ?`).bind(tk.createdTime || null, d.customer_name || '', d.customer_email || '', d.subject || '', d.mail_text || '',
         d.reply_type || 'other', d.template || '', d.order_no || '', d.order_info || '', d.reply_text || '', result, d.skip_reason || '', error, backfill ? 1 : 0,
         d.template_version || null, String(tk.id)).run();
+    if (result === 'sent') {
+      const rid = await env.DB.prepare('SELECT id FROM bot_reply_log WHERE ticket_id = ?').bind(String(tk.id)).first();
+      if (rid) await mbRememberSend(env, rid.id, d.sendJson, d.thread_count != null ? d.thread_count + 1 : null);
+      if (!MB_KEEP_OPEN.includes(d.template)) await mbMarkClosed(env, orgId, tk.id);
+    } else if (d.thread_count != null) {
+      await env.DB.prepare('UPDATE bot_reply_log SET thread_count = ? WHERE ticket_id = ?').bind(d.thread_count, String(tk.id)).run();
+    }
     handled++;
   }
+  // Follow-ups: customer wrote again on a ticket the bot answered → see mbFollowUp().
+  const byId = {};
+  ((list.json && list.json.data) || []).concat((openList.ok && openList.json && openList.json.data) || []).forEach(t => { byId[String(t.id)] = t; });
+  handled += await mbFollowUps(env, orgId, s, byId);
   const left = fresh.concat(old).filter(t => !seen.has(String(t.id))).length - handled;
   return { ok: true, mode: s.mode, handled, left: Math.max(0, left) };
+}
+
+// ── Follow-ups (25-Nov-2026) ─────────────────────────────────────
+// A ticket the bot replied to gets new threads (Zoho's threadCount went up):
+//  - a team member wrote            → followup 'team_replied', the bot stays out
+//  - customer answered AR1          → decide again on that answer (max 2 bot replies
+//                                      per ticket; still no order ID → team)
+//  - customer replied to any other  → followup 'customer_replied', left for the team
+// Each follow-up is its own log row "<ticket id>:2" (zoho_id = the ticket), so it
+// can be rated and sent like any other reply.
+const MB_MAX_BOT_REPLIES = 2;
+async function mbFollowUps(env, orgId, s, byId) {
+  const rows = (await env.DB.prepare(`SELECT * FROM bot_reply_log WHERE result = 'sent' AND zoho_id IS NULL
+      AND COALESCE(followup, '') = '' AND processed_at > datetime('now', '-30 days') ORDER BY id DESC LIMIT 60`).all()).results || [];
+  let n = 0;
+  for (const row of rows) {
+    const tk = byId[row.ticket_id];
+    if (!tk || tk.threadCount == null) continue;
+    const tc = Number(tk.threadCount);
+    if (row.thread_count == null) {   // first look after a manual send: just set the baseline
+      await env.DB.prepare('UPDATE bot_reply_log SET thread_count = ? WHERE id = ?').bind(tc, row.id).run();
+      continue;
+    }
+    if (tc <= row.thread_count) continue;
+    try { await mbFollowUp(env, orgId, s, row, tk); } catch (e) { console.error('mailbot followup', row.ticket_id, e.message); }
+    if (++n >= 4) break;
+  }
+  return n;
+}
+async function mbFollowUp(env, orgId, s, row, tk) {
+  const conv = await mbConversation(env, orgId, row.ticket_id);
+  let botIds = []; try { botIds = JSON.parse(row.bot_thread_ids || '[]'); } catch (e) { botIds = []; }
+  await env.DB.prepare('UPDATE bot_reply_log SET thread_count = ? WHERE id = ?').bind(conv.count, row.id).run();
+  const sentMs = row.sent_at ? new Date(String(row.sent_at).replace(' ', 'T') + 'Z').getTime() : new Date(String(row.processed_at).replace(' ', 'T') + 'Z').getTime();
+  const team = mbTeamReplies(conv, botIds, row.sent_at || row.processed_at).filter(o => new Date(o.createdTime).getTime() > sentMs - 60000);
+  if (team.length) {
+    await env.DB.prepare("UPDATE bot_reply_log SET followup = 'team_replied' WHERE id = ?").bind(row.id).run();
+    return;
+  }
+  const newIns = conv.ins.filter(x => new Date(x.createdTime).getTime() > sentMs);
+  if (!newIns.length) return;
+  const childId = row.ticket_id + ':2';
+  const exists = await env.DB.prepare('SELECT id FROM bot_reply_log WHERE ticket_id = ?').bind(childId).first();
+  if (exists) { await env.DB.prepare("UPDATE bot_reply_log SET followup = 'customer_replied' WHERE id = ?").bind(row.id).run(); return; }
+  const contact = tk.contact || {};
+  const base = {
+    ticket_id: childId, ticket_number: row.ticket_number, ticket_created: newIns[newIns.length - 1].createdTime, customer_name: row.customer_name,
+    customer_email: row.customer_email, subject: row.subject, mail_text: conv.latestText, reply_type: 'followup', template: '', order_no: '', order_info: '',
+    reply_text: '', skip_reason: '', thread_count: conv.count
+  };
+  let d = base, result = 'skipped', status = 'customer_replied';
+  if (row.template === 'AR1' && (row.bot_replies || 1) < MB_MAX_BOT_REPLIES) {
+    // Customer answered "send us your order ID" → decide again on their answer
+    d = await mbClassify(env, Object.assign({}, base, { reply_type: 'other' }), contact, conv.latestText, conv.olderText);
+    if (d.template === 'AR1' || !d.reply_text) {
+      d.reply_text = ''; d.template = '';
+      d.skip_reason = 'Customer replied to "send your order ID"' + (d.skip_reason ? ' — ' + d.skip_reason : '') + ' — left for the team';
+    } else status = 'bot_answered';
+  } else {
+    d.skip_reason = 'Customer replied after the bot' + (row.template ? ' (' + row.template + ')' : '') + ' — left for the team';
+  }
+  if (d.reply_text) {
+    const send = s.mode === 'live' || (s.mode === 'test' && s.test_emails.map(x => String(x).toLowerCase()).includes(row.customer_email));
+    result = send ? 'sent' : 'dry_run';
+    if (send) d.sendJson = await mbSendReply(env, orgId, row.ticket_id, row.customer_email, mbComposeHtml(d.reply_text, s));
+  }
+  await env.DB.prepare(`INSERT OR IGNORE INTO bot_reply_log (ticket_id, zoho_id, ticket_number, ticket_created, customer_name, customer_email, subject, mail_text,
+      reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, backfill, template_version)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'followup', ?, ?, ?, ?, ?, ?, '', 0, ?)`).bind(childId, row.ticket_id, row.ticket_number, d.ticket_created || null,
+      row.customer_name || '', row.customer_email || '', row.subject || '', conv.latestText || '', d.template || '', d.order_no || '', d.order_info || '',
+      d.reply_text || '', result, d.skip_reason || '', d.template_version || null).run();
+  await env.DB.prepare('UPDATE bot_reply_log SET followup = ? WHERE id = ?').bind(result === 'sent' || status === 'bot_answered' ? 'bot_answered' : 'customer_replied', row.id).run();
+  if (result === 'sent') {
+    const c = await env.DB.prepare('SELECT id FROM bot_reply_log WHERE ticket_id = ?').bind(childId).first();
+    if (c) await mbRememberSend(env, c.id, d.sendJson, conv.count + 1);
+    if (!MB_KEEP_OPEN.includes(d.template)) await mbMarkClosed(env, orgId, row.ticket_id);
+  }
 }
 
 // "Test a ticket" on the Bot Replies page: shows what the bot would reply. Never sends, never logs.
@@ -15111,13 +15248,15 @@ async function mbManualSend(env, user, b) {
   const claim = await env.DB.prepare("UPDATE bot_reply_log SET result = 'sending' WHERE id = ? AND result IN ('dry_run', 'error')").bind(row.id).run();
   if (!claim.meta || !claim.meta.changes) return { ok: false, error: 'This reply is already being sent.' };
   try {
-    await mbSendReply(env, orgId, row.ticket_id, row.customer_email, mbComposeHtml(row.reply_text, s));
+    row.sendJson = await mbSendReply(env, orgId, row.zoho_id || row.ticket_id, row.customer_email, mbComposeHtml(row.reply_text, s));
   } catch (e) {
     await env.DB.prepare('UPDATE bot_reply_log SET result = ?, error = ? WHERE id = ?').bind(row.result, String(e.message || e).slice(0, 500), row.id).run();
     return { ok: false, error: e.message };
   }
   await env.DB.prepare(`UPDATE bot_reply_log SET result = 'sent', error = '', sent_by = ?, sent_at = datetime('now') WHERE id = ?`).bind(who, row.id).run();
-  const closed = MB_KEEP_OPEN.includes(row.template) ? null : await mbMarkClosed(env, orgId, row.ticket_id);
+  await mbRememberSend(env, row.id, row.sendJson, null);   // thread count re-read on the next run
+  if (row.zoho_id) await env.DB.prepare("UPDATE bot_reply_log SET followup = 'bot_answered' WHERE ticket_id = ?").bind(row.zoho_id).run();
+  const closed = MB_KEEP_OPEN.includes(row.template) ? null : await mbMarkClosed(env, orgId, row.zoho_id || row.ticket_id);
   const done = await env.DB.prepare('SELECT id, result, sent_by, sent_at, closed_at FROM bot_reply_log WHERE id = ?').bind(row.id).first();
   return { ok: true, row: done, closed };
 }
@@ -15126,7 +15265,7 @@ async function mbList(env, days) {
   await ensureMailBotTable(env.DB);
   const s = await mbGetSettings(env);
   const rows = (await env.DB.prepare(`SELECT id, ticket_id, ticket_number, ticket_created, customer_name, customer_email, subject, mail_text,
-      reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, rating, rating_note, rated_by, rated_at, processed_at, backfill, sent_by, sent_at, closed_at, template_version
+      reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, rating, rating_note, rated_by, rated_at, processed_at, backfill, sent_by, sent_at, closed_at, template_version, zoho_id, followup, bot_replies
     FROM bot_reply_log WHERE processed_at >= datetime('now', ?) ORDER BY processed_at DESC, id DESC LIMIT 1000`).bind('-' + days + ' days').all()).results || [];
   const lr = await env.DB.prepare("SELECT value FROM tm_settings WHERE key = 'mailbot_last_run'").first().catch(() => null);
   let lastRun = null; try { lastRun = lr && lr.value ? JSON.parse(lr.value) : null; } catch (e) { lastRun = null; }
