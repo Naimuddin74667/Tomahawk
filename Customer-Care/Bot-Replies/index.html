@@ -1570,9 +1570,14 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   rb.onclick = async function () {
     rb.disabled = true; rb.textContent = 'Checking…';
     try {
-      var res = await post('mailBotRunNow', {});
-      if (!res.ok) throw new Error(res.error || 'failed');
-      await load();
+      // Keeps going (15 mails per round) until every new mail + old open ticket is checked
+      for (var round = 0; round < 6; round++) {
+        var res = await post('mailBotRunNow', {});
+        if (!res.ok) throw new Error(res.error || 'failed');
+        await load();
+        if (!res.left || !res.handled) break;
+        rb.textContent = 'Checking… ' + res.left + ' left';
+      }
     } catch (e) { alert("Couldn't check: " + e.message); }
     rb.disabled = false; rb.innerHTML = '&#8635; Check new mails now';
   };

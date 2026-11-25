@@ -2324,7 +2324,7 @@ export default {
         } catch (e) { return json({ ok: false, error: e.message }, 500); }
       }
       if (request.method === 'POST' && act === 'mailBotRunNow') {
-        try { return json(await mbRun(env, {})); }
+        try { return json(await mbRun(env, { max: 15 })); }   // manual click: a bigger batch than the cron
         catch (e) { return json({ ok: false, error: e.message }, 500); }
       }
       if (request.method === 'POST' && act === 'mailBotTest') {
@@ -14817,7 +14817,7 @@ async function mbRun(env, opts) {
   const oldIds = new Set(old.map(t => String(t.id)));
   const todo = fresh.filter(t => !seen.has(String(t.id))).reverse()
     .concat(old.filter(t => !seen.has(String(t.id))).reverse())
-    .slice(0, MB_MAX_PER_RUN);
+    .slice(0, Math.min(20, opts.max || MB_MAX_PER_RUN));
 
   let handled = 0;
   for (const tk of todo) {
@@ -14842,7 +14842,8 @@ async function mbRun(env, opts) {
         d.reply_type || 'other', d.template || '', d.order_no || '', d.order_info || '', d.reply_text || '', result, d.skip_reason || '', error, backfill ? 1 : 0, String(tk.id)).run();
     handled++;
   }
-  return { ok: true, mode: s.mode, handled };
+  const left = fresh.concat(old).filter(t => !seen.has(String(t.id))).length - handled;
+  return { ok: true, mode: s.mode, handled, left: Math.max(0, left) };
 }
 
 // "Test a ticket" on the Bot Replies page: shows what the bot would reply. Never sends, never logs.
