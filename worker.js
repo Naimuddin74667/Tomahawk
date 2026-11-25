@@ -15486,6 +15486,7 @@ async function mbTestTicket(env, ticketNumber) {
   const num = String(ticketNumber || '').replace(/\D/g, '');
   if (!num) return { ok: false, error: 'Enter a ticket number, e.g. 10823' };
   const orgId = await mbOrgId(env);
+  mbAiBudget = Math.max(mbAiBudget, 1);   // a test / preview always gets its AI draft
   const r = await zdCall(env, 'GET', '/tickets/search', { orgId, query: { ticketNumber: num, limit: '1' } });
   const tk = ((r.json && r.json.data) || [])[0];
   if (!tk) return { ok: false, error: 'Ticket #' + num + ' not found (Zoho ' + r.status + ')' };

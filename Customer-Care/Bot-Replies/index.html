@@ -1279,6 +1279,9 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .br-rate-card .br-item { background: var(--bg, transparent); }
 .br-more > summary { cursor: pointer; font-size: 13px; font-weight: 800; color: var(--text); list-style: revert; }
 .br-more .br-box { background: transparent; }
+.br-zrow { cursor: pointer; }
+.br-zrow:hover td, .br-zrow.on td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.br-zdet > td { padding: 10px 0 14px !important; background: transparent; }
 .br-zoho td { text-align: left !important; font-size: 12.5px; vertical-align: top; }
 .br-zoho th { text-align: left !important; }
 .br-edit { width: 100%; box-sizing: border-box; border: 1px solid var(--border); font: inherit; font-size: 12.5px; resize: vertical; min-height: 160px; max-height: none; }
@@ -1422,6 +1425,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     return '';
   }
   function resultBadge(r) {
+    if (r.result === 'preview') return r.reply_text ? '<span class="br-badge br-b-gray">Preview · not saved</span>' : '<span class="br-badge br-b-gray">Preview · bot would skip</span>';
     if (r.backfill && r.result === 'dry_run') return '<span class="br-badge br-b-gray" title="Was already open before the bot started — logged only, never sent">Old open ticket · not sent</span>';
     if (r.result === 'sent') return '<span class="br-badge br-b-green">' + (r.sent_by ? 'Sent manually · ' + esc(r.sent_by) + (r.sent_at ? ' · ' + esc(when(r.sent_at)) : '') : 'Sent') + '</span>' +
       (r.template === 'AR1' ? ' <span class="br-badge br-b-gray" title="Waiting for the customer to send the order ID">Ticket kept open</span>' : r.closed_at ? ' <span class="br-badge br-b-gray" title="Zoho ticket closed ' + esc(when(r.closed_at)) + '">Ticket closed</span>' : ' <span class="br-badge br-b-amber" title="Will be closed on the next check">Closing…</span>');
@@ -1615,9 +1619,39 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     var list = zohoList.filter(function (t) { return !ql || [t.number, t.subject, t.name, t.email].join(' ').toLowerCase().indexOf(ql) !== -1; });
     el.innerHTML = list.length ? '<table class="br-sum br-zoho"><tr><th>Ticket</th><th>Type</th><th>Subject</th><th>Customer</th><th>Created</th><th>Bot</th></tr>' +
       list.map(function (t) {
-        return '<tr><td><a class="br-link" target="_blank" rel="noopener" href="' + ZOHO_TICKET_URL + encodeURIComponent(t.id) + '">#' + esc(t.number) + '</a></td><td>' + zohoType(t) + '</td>' +
-          '<td>' + esc(t.subject || '(No Subject)') + '</td><td>' + esc(t.name || t.email) + '</td><td>' + esc(when(t.created)) + '</td><td>' + zohoBotBadge(t.bot) + '</td></tr>';
+        return '<tr class="br-zrow' + (openTid === t.id ? ' on' : '') + '" data-tid="' + esc(t.id) + '"><td><a class="br-link" target="_blank" rel="noopener" href="' + ZOHO_TICKET_URL + encodeURIComponent(t.id) + '">#' + esc(t.number) + '</a></td><td>' + zohoType(t) + '</td>' +
+          '<td>' + esc(t.subject || '(No Subject)') + '</td><td>' + esc(t.name || t.email) + '</td><td>' + esc(when(t.created)) + '</td><td>' + zohoBotBadge(t.bot) + '</td></tr>' +
+          (openTid === t.id ? '<tr class="br-zdet"><td colspan="6"><div data-zdet></div></td></tr>' : '');
       }).join('') + '</table>' : '<div class="br-empty">Nothing here.</div>';
+    // Click a row → open the ticket right here (the # link still opens Zoho)
+    el.querySelectorAll('.br-zrow').forEach(function (tr) {
+      tr.onclick = function (e) {
+        if (e.target.closest('a')) return;
+        var id = tr.getAttribute('data-tid');
+        openTid = openTid === id ? null : id; drawZohoList();
+      };
+    });
+    var det = el.querySelector('[data-zdet]');
+    if (det) fillZohoDetail(det, zohoList.find(function (t) { return t.id === openTid; }));
+  }
+  var openTid = null, zPreview = {};
+  async function fillZohoDetail(box, t) {
+    if (!t) return;
+    // Bot already checked it → the same card as in the list (edit / send / rate)
+    var r = rawRows.filter(function (x) { return String(x.ticket_id) === t.id; }).sort(function (a, b) { return b.id - a.id; })[0];
+    if (r) { box.innerHTML = itemHtml(r); wireItem(box.querySelector('.br-item'), r); return; }
+    // Not checked yet → preview of what the bot would reply (nothing saved or sent)
+    var show = function (p) {
+      box.innerHTML = '<div class="br-hint" style="margin-bottom:8px">Bot hasn\'t checked this ticket yet — preview of what it would reply. Nothing is saved or sent.</div>' + itemHtml(p);
+    };
+    if (zPreview[t.id]) return show(zPreview[t.id]);
+    box.innerHTML = '<div class="br-empty">Loading ticket…</div>';
+    try {
+      var res = await post('mailBotTest', { ticket: t.number });
+      if (!res.ok) throw new Error(res.error || 'failed');
+      zPreview[t.id] = Object.assign({ id: 0, processed_at: null }, res.test, { result: 'preview' });
+      if (openTid === t.id) show(zPreview[t.id]);
+    } catch (e) { box.innerHTML = '<div class="br-empty" style="color:var(--red)">Could not load: ' + esc(e.message) + '</div>'; }
   }
 
   function drawList() {
@@ -1635,7 +1669,13 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     el.innerHTML = list.length ? list.map(itemHtml).join('') : '<div class="br-empty">Nothing here.</div>';
     el.querySelectorAll('.br-item').forEach(function (box) {
       var id = Number(box.getAttribute('data-id'));
-      var r = rows.find(function (x) { return x.id === id; });
+      wireItem(box, rows.find(function (x) { return x.id === id; }));
+    });
+  }
+
+  // Buttons on one reply card (list, or opened from the All tickets table)
+  function wireItem(box, r) {
+      if (!r) return;
       var note = box.querySelector('[data-note]');
       var sb = box.querySelector('[data-send]');
       var ta = box.querySelector('[data-edit]');
@@ -1658,7 +1698,6 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
         note.onkeydown = function (e) { if (e.key === 'Enter') note.blur(); };
         note.onchange = function () { save(r, r.rating || '', note.value); };
       }
-    });
   }
 
   // Edit · Refine with AI · Undo · Learn (25-Nov-2026)
