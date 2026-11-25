@@ -1597,7 +1597,8 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     var sendTip = 'Goes to ' + r.customer_email + ' on ticket #' + r.ticket_number + ' with the Customer Care signature' + (r.template === 'AR1' ? ' (ticket stays open)' : ' — then the Zoho ticket is closed');
     return '<div class="br-item open" data-id="' + r.id + '">' + head +
       '<div class="br-body">' +
-        '<div class="br-meta">' + esc(r.customer_email) + ' · mail ' + esc(when(r.ticket_created)) + (r.processed_at ? ' · bot ' + esc(when(r.processed_at)) : '') +
+        (r._checking ? '<div class="br-facts" style="color:var(--accent)">&#8635; Checking current order, courier and request status…</div>' : '') +
+        '<div class="br-meta">' + esc(r.customer_email) + ' · mail ' + esc(when(r.ticket_created)) + (r.processed_at ? ' · status checked ' + esc(when(r.processed_at)) : '') +
           (r.template ? ' · ' + esc(r.template) + ' ' + esc(TEMPLATE_NAMES[r.template] || '') : '') + followBadge(r) + '</div>' +
         (facts.length ? '<div class="br-facts">' + facts.map(function (f) { return '<div><span>' + f[0] + '</span><b>' + f[1] + '</b></div>'; }).join('') + '</div>' : '') +
         '<div class="br-cols">' +
@@ -1735,6 +1736,9 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       box.querySelector('[data-toggle]').onclick = function (e) {
         if (e.target.closest('a')) return;
         openIds[id] = !openIds[id]; drawList();
+        // Opening a draft checked 30+ min ago → re-check order, courier and request now (unless you edited it)
+        var age = r.processed_at ? Date.now() - (toDate(r.processed_at) || 0) : 0;
+        if (openIds[id] && isDraft(r) && canRate() && r._draft == null && age > 30 * 60000) autoRedraft(r);
       };
       if (openIds[id]) wireItem(box, r);
     });
@@ -1765,6 +1769,13 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
         note.onkeydown = function (e) { if (e.key === 'Enter') note.blur(); };
         note.onchange = function () { save(r, r.rating || '', note.value); };
       }
+  }
+
+  async function autoRedraft(r) {
+    r._checking = true; drawList();
+    try { var res = await post('mailBotRedraft', { id: r.id }); if (res.ok) Object.assign(r, res.row); }
+    catch (e) { /* keep the old draft */ }
+    r._checking = false; drawList();
   }
 
   // Edit · Refine with AI · Undo · Learn (25-Nov-2026)

@@ -15228,57 +15228,85 @@ async function mbIdsFromImages(env, attachments) {
 }
 
 // Facts the AI may use: website order (only if it belongs to the sender) + request status.
+// FACTS the AI may use — always the CURRENT state, checked at draft time (25-Nov-2026):
+//   website order (Shopify) + live courier tracking (Delhivery / Ekart) for each shipment
+//   service request (WRN/SRN/DRN/NV) + live tracking of its pickup and send-back
+// No order no. in the mail → the customer's recent website orders by email.
+// No request ID in the mail → the customer's open requests by email / mobile.
+async function mbOrderFacts(env, o, match) {
+  const facts = [];
+  const st = mbOrderState(o);
+  facts.push('Website order ' + o.name + ': placed ' + mbDate(o.createdAt) + ', Shopify status: ' +
+    ({ open: 'not yet handed to the courier (customer can cancel on the Track Order page)', shipped: 'handed to the courier', delivered: 'delivered' + (st.deliveredAt ? ' on ' + mbDate(st.deliveredAt) : ''), cancelled: 'cancelled' })[st.state] +
+    ', ' + (st.isCod ? 'COD' : st.paid ? 'prepaid' : 'payment ' + String(o.displayFinancialStatus || '').toLowerCase()) + ', ' + mbMoney(st.amount) +
+    ', items: ' + mbProductName(o.lineItems && o.lineItems.nodes) + (st.refunded > 0 ? ', refunded ' + mbMoney(st.refunded) + ' on ' + mbDate(st.lastRefund) : '') + '.');
+  if (match) facts.push('Note for the team: order ' + o.name + ' is on a different email — matched by ' + match + '.');
+  const ships = (await env.DB.prepare('SELECT awb, courier, track_stage, attempts, rto_reason FROM shopify_shipments WHERE order_name IN (?, ?)')
+    .bind(o.name, String(o.name).replace('#', '')).all().catch(() => ({ results: [] }))).results || [];
+  for (const sh of ships.slice(0, 2)) {
+    const lt = await mbLiveTrack(env, sh.awb, sh.courier, 'forward').catch(() => null);
+    facts.push('Courier tracking checked right now for ' + o.name + ' (' + (sh.courier || 'courier') + ' AWB ' + sh.awb + '): ' + mbTrackLine(lt, sh.track_stage) +
+      (sh.attempts ? ', delivery attempts: ' + sh.attempts : '') + (sh.rto_reason ? ', reason given: ' + sh.rto_reason : '') + '.');
+  }
+  if (!ships.length && st.state === 'shipped') facts.push('No courier tracking found yet for ' + o.name + '.');
+  return facts;
+}
+async function mbRequestFacts(env, row) {
+  let leg = '';
+  try {
+    const { rev, fwd } = await srCaseLegs(env.DB, row.case_id);
+    if (rev) {
+      const lt = !rev.received_at && rev.waybill && rev.courier !== 'Self-ship' ? await mbLiveTrack(env, rev.waybill, rev.courier, 'reverse').catch(() => null) : null;
+      leg = ' Pickup' + (rev.waybill ? ' (' + (rev.courier || 'Delhivery') + ' AWB ' + rev.waybill + ')' : '') + ': ' +
+        (rev.received_at ? 'product received at our service centre on ' + mbDate(rev.received_at) : mbTrackLine(lt, rev.track_stage || 'booked')) + '.';
+    } else leg = ' No pickup booked yet.';
+    if (fwd) {
+      const lt = fwd.waybill && !fwd.delivered_at ? await mbLiveTrack(env, fwd.waybill, fwd.courier, 'forward').catch(() => null) : null;
+      leg += ' Sent back' + (fwd.waybill ? ' (' + (fwd.courier || 'Delhivery') + ' AWB ' + fwd.waybill + ')' : '') + ': ' +
+        (fwd.delivered_at ? 'delivered to the customer on ' + mbDate(fwd.delivered_at) : mbTrackLine(lt, fwd.track_stage || 'booked')) + '.';
+    }
+  } catch (e) { /* ignore */ }
+  return 'Request ' + row.claim_id + ' (' + (row.product || '') + '), raised ' + mbDate(row.created_at) + ', status: ' + (row.status || 'new') + '.' + leg;
+}
 async function mbFactsFor(env, text, email, name) {
   const facts = [];
   const ids = mbExtractOrders('', text);
-  if (ids.web.length === 1 && shopifyConfigured(env)) {
-    const o = await mbShopifyOrderByNumber(env, ids.web[0]);
-    // Same customer? Email first; else the name or a mobile in the mail matches the order (25-Nov-2026)
-    const sameEmail = o && String(o.email || '').toLowerCase() === email;
-    const match = o && !sameEmail ? mbSameCustomer(o, name, text) : '';
-    if (o && (sameEmail || match)) {
-
-      const st = mbOrderState(o);
-      facts.push('Website order ' + o.name + ': placed ' + mbDate(o.createdAt) + ', ' +
-        ({ open: 'not yet handed to the courier (customer can cancel on the Track Order page)', shipped: 'with the courier', delivered: 'delivered' + (st.deliveredAt ? ' on ' + mbDate(st.deliveredAt) : ''), cancelled: 'cancelled' })[st.state] +
-        ', ' + (st.isCod ? 'COD' : st.paid ? 'prepaid' : 'payment ' + String(o.displayFinancialStatus || '').toLowerCase()) + ', ' + mbMoney(st.amount) +
-        ', items: ' + mbProductName(o.lineItems && o.lineItems.nodes) + (st.refunded > 0 ? ', refunded ' + mbMoney(st.refunded) + ' on ' + mbDate(st.lastRefund) : '') + '.');
-      if (match) facts.push('Note for the team: order ' + o.name + ' is on a different email — matched by ' + match + '.');
-      // Live courier tracking for this order (checked now, not from Shopify's status)
-      const ships = (await env.DB.prepare('SELECT awb, courier, track_stage, attempts, rto_reason FROM shopify_shipments WHERE order_name IN (?, ?)')
-        .bind(o.name, String(o.name).replace('#', '')).all().catch(() => ({ results: [] }))).results || [];
-      for (const sh of ships.slice(0, 2)) {
-        const lt = await mbLiveTrack(env, sh.awb, sh.courier, 'forward').catch(() => null);
-        facts.push('Courier tracking right now (' + (sh.courier || 'courier') + ' AWB ' + sh.awb + '): ' + mbTrackLine(lt, sh.track_stage) +
-          (sh.attempts ? ', delivery attempts: ' + sh.attempts : '') + (sh.rto_reason ? ', reason given: ' + sh.rto_reason : '') + '.');
-      }
-    } else if (o) facts.push('Order #' + ids.web[0] + ' exists but is not on this customer\'s email — do not share its details; ask them to confirm the order number and mobile number.');
-    else facts.push('No website order #' + ids.web[0] + ' was found.');
+  if (ids.web.length >= 1 && shopifyConfigured(env)) {
+    for (const num of ids.web.slice(0, 2)) {
+      const o = await mbShopifyOrderByNumber(env, num);
+      // Same customer? Email first; else the name or a mobile in the mail matches the order
+      const sameEmail = o && String(o.email || '').toLowerCase() === email;
+      const match = o && !sameEmail ? mbSameCustomer(o, name, text) : '';
+      if (o && (sameEmail || match)) facts.push(...await mbOrderFacts(env, o, match));
+      else if (o) facts.push('Order #' + num + ' exists but is not on this customer\'s email — do not share its details; ask them to confirm the order number and mobile number.');
+      else facts.push('No website order #' + num + ' was found.');
+    }
+  } else if (!ids.amazon.length && !ids.flipkart.length && email && shopifyConfigured(env)) {
+    // No order no. in the mail → their recent website orders (last 60 days)
+    const recent = (await mbShopifyOrdersByEmail(env, email).catch(() => [])).filter(o => Date.now() - new Date(o.createdAt).getTime() < 60 * 864e5).slice(0, 2);
+    if (recent.length) {
+      facts.push('No order number in the mail. This customer\'s recent website orders (same email):');
+      for (const o of recent) facts.push(...await mbOrderFacts(env, o, ''));
+    }
   }
   if (ids.amazon.length) facts.push('Amazon order ' + ids.amazon[0] + ' — returns/refunds/cancellation go through Amazon; warranty/repair through our service request page.');
   if (ids.flipkart.length) facts.push('Flipkart order ' + ids.flipkart[0] + ' — returns/refunds/cancellation go through Flipkart; warranty/repair through our service request page.');
   const rq = (text.match(/\b(WRN|SRN|DRN|NV)-?\d{6}-?\d{1,3}\b/i) || [])[0];
   if (rq) {
     const id = rq.toUpperCase().replace(/^([A-Z]+)-?(\d{6})-?(\d+)$/, '$1-$2-$3');
-    const row = await env.DB.prepare('SELECT claim_id, status, product, case_id, created_at, request_type FROM warranty_claims WHERE claim_id = ? OR prev_claim_id = ?').bind(id, id).first().catch(() => null);
-    if (row) {
-      let leg = '';
-      try {
-        const { rev, fwd } = await srCaseLegs(env.DB, row.case_id);
-        // Live courier status for the pickup and the send-back (checked now)
-        if (rev) {
-          const lt = !rev.received_at && rev.waybill && rev.courier !== 'Self-ship' ? await mbLiveTrack(env, rev.waybill, rev.courier, 'reverse').catch(() => null) : null;
-          leg = ' Pickup' + (rev.waybill ? ' (' + (rev.courier || 'Delhivery') + ' AWB ' + rev.waybill + ')' : '') + ': ' +
-            (rev.received_at ? 'product received at our service centre on ' + mbDate(rev.received_at) : mbTrackLine(lt, rev.track_stage || 'booked')) + '.';
-        }
-        if (fwd) {
-          const lt = fwd.waybill && !fwd.delivered_at ? await mbLiveTrack(env, fwd.waybill, fwd.courier, 'forward').catch(() => null) : null;
-          leg += ' Sent back' + (fwd.waybill ? ' (' + (fwd.courier || 'Delhivery') + ' AWB ' + fwd.waybill + ')' : '') + ': ' +
-            (fwd.delivered_at ? 'delivered to the customer on ' + mbDate(fwd.delivered_at) : mbTrackLine(lt, fwd.track_stage || 'booked')) + '.';
-        }
-      } catch (e) { /* ignore */ }
-      facts.push('Request ' + row.claim_id + ' (' + (row.product || '') + '), raised ' + mbDate(row.created_at) + ', status: ' + (row.status || 'new') + '.' + leg);
-    } else facts.push('Request ' + id + ' was not found in our system.');
+    const row = await env.DB.prepare('SELECT claim_id, status, product, case_id, created_at FROM warranty_claims WHERE claim_id = ? OR prev_claim_id = ?').bind(id, id).first().catch(() => null);
+    facts.push(row ? await mbRequestFacts(env, row) : 'Request ' + id + ' was not found in our system.');
+  } else {
+    // No request ID in the mail → this customer's requests by email or a mobile in the mail (last 90 days)
+    const mob = ((String(text).match(/(?:\+?91[\s-]?)?[6-9]\d{4}[\s-]?\d{5}/) || [])[0] || '').replace(/\D/g, '').slice(-10);
+    const rowsQ = await env.DB.prepare(`SELECT claim_id, status, product, case_id, created_at FROM warranty_claims
+      WHERE (LOWER(email) = ? OR (? != '' AND SUBSTR(REPLACE(phone, ' ', ''), -10) = ?)) AND created_at >= datetime('now', '-90 days')
+      ORDER BY created_at DESC LIMIT 2`).bind(email || '-', mob, mob).all().catch(() => ({ results: [] }));
+    const rows = rowsQ.results || [];
+    if (rows.length) {
+      facts.push('No request ID in the mail. This customer\'s service / warranty requests (matched by email or mobile):');
+      for (const row of rows) facts.push(await mbRequestFacts(env, row));
+    }
   }
   return facts;
 }
@@ -15348,6 +15376,7 @@ async function mbAiDraft(env, orgId, tk, d, contact, conv) {
       '\n   Why: ' + l.reason).join('\n') + '\n' : '',
     'FORMAT: no greeting line and no sign-off (they are added automatically). Plain text, short paragraphs separated by a blank line, no markdown.',
     'Answer in EXACTLY this format, nothing else:\nUPSET: yes or no\nTEAM: one line on what our team must check (or "none")\nDRAFT:\n<the reply text>',
+    'STATUS RULE: courier tracking and request status in the FACTS were checked right now. If they differ from what the customer says or from the Shopify status, trust the live tracking and tell the customer the current status plainly (e.g. "As per the courier, your order was delivered on 24 Nov at 3:10 pm").',
     '', 'FACTS (the only facts you may use):', facts.length ? facts.map(f => '- ' + f).join('\n') : '- No order or request facts found.',
     '', 'EARLIER TICKETS FROM THIS CUSTOMER:', hist.text || 'None.',
     '', 'SUBJECT: ' + (d.subject || ''), '', 'CUSTOMER\'S LATEST MAIL:', (conv.latestText || '').slice(0, 2500),
@@ -15669,7 +15698,7 @@ async function mbRedraft(env, b) {
   const d = await mbDecide(env, orgId, tk);
   if (!d.reply_text) return { ok: false, error: 'The bot has no reply for this ticket — ' + (d.skip_reason || d.ai_note || 'left for the team') };
   await env.DB.prepare(`UPDATE bot_reply_log SET reply_text = ?, template = ?, template_version = ?, reply_type = ?, order_no = ?, order_info = ?,
-      ai_note = ?, priority = ?, history = ?, skip_reason = '', error = '', result = CASE WHEN result IN ('error', 'skipped') THEN 'dry_run' ELSE result END
+      ai_note = ?, priority = ?, history = ?, skip_reason = '', error = '', processed_at = datetime('now'), result = CASE WHEN result IN ('error', 'skipped') THEN 'dry_run' ELSE result END
     WHERE id = ?`).bind(d.reply_text, d.template || '', d.template_version || null, d.reply_type || '', d.order_no || '', d.order_info || '',
       d.ai_note || null, d.priority || null, d.history || null, row.id).run();
   return { ok: true, row: await env.DB.prepare('SELECT * FROM bot_reply_log WHERE id = ?').bind(row.id).first() };
