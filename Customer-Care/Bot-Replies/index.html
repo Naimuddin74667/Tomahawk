@@ -1552,12 +1552,20 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   }
 
   // ── All tickets (open Zoho email cases) ──
-  var zohoList = null, zohoBusy = false;
+  var zohoList = null, zohoBusy = false, rawRows = [];
+  // Closed tickets drop off the page (25-Nov-2026): keep only rows whose Zoho ticket is
+  // still open. Exception: replies the bot itself sent (the bot closes those tickets) —
+  // kept so they can still be rated.
+  function applyOpen() {
+    if (!zohoList) { rows = rawRows; return; }
+    var open = new Set(zohoList.map(function (t) { return String(t.id); }));
+    rows = rawRows.filter(function (r) { return r.result === 'sent' || open.has(String(r.ticket_id)); });
+  }
   async function loadZoho() {
     if (zohoBusy) return; zohoBusy = true;
     try { var r = await api('mailBotZohoOpen'); if (!r.ok) throw new Error(r.error || 'failed'); zohoList = r.tickets; }
     catch (e) { zohoList = null; document.getElementById('br-list').innerHTML = '<div class="br-empty">Could not load Zoho tickets: ' + esc(e.message) + '</div>'; zohoBusy = false; return; }
-    zohoBusy = false; drawStats(); if (view === 'zoho') drawList();
+    zohoBusy = false; applyOpen(); draw();
   }
   function zohoBotBadge(b) {
     if (!b) return '<span class="br-badge br-b-amber">Not checked yet</span>';
@@ -1719,7 +1727,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   async function load() {
     var res = await api('mailBotList', '&days=' + days);
     if (!res.ok) throw new Error(res.error || 'failed');
-    rows = res.rows || []; settings = res.settings; lastRun = res.last_run || null;
+    rawRows = res.rows || []; applyOpen(); settings = res.settings; lastRun = res.last_run || null;
     document.getElementById('br-sub').textContent = 'Customer emails the bot checked in the last ' + days + ' days — rate every reply Good, Average or Bad.';
     draw();
     loadZoho();   // All tickets card count — fresh from Zoho on every load
