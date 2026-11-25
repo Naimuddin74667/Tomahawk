@@ -294,3 +294,10 @@ Owner approved the demos (Siddique + Naushad screens). Shared maths `UberReport.
 - **22 Nov:** driver/manager Day-wise = last 7 days only (no "Show all" — history is in Earnings); settled days tagged Paid and show ✓ instead of old balances. SW cache `mns-tours-v21`.
 - **22 Nov:** driver/manager Day-wise columns now **Day (+Paid/Pending) · Earning · Cash · Online · Other (Drive Pass + Uber share) · Settlement** (rent − (Online + Other) → "You give ₹X"/"Get ₹X", manager: "Collect"/"Give"). Rent/Balance columns removed. Row fields `due, earned, cashColl, online, otherU` from `ledgerRows`. SW cache `mns-tours-v22`.
 - **22 Nov:** Day-wise columns in calculation order: Earning · Cash · Online · Other · **Rent** · Settlement. SW cache `mns-tours-v23`.
+
+## 15. Car off → Siddique's ledger (25 Nov 2026)
+Owner marked 24 Nov all-day off for the car, but Siddique's Driver ledger still showed ₹600 — car-off (Rent book, `DB.offs`) never reached the ledger.
+**Rule (owner):** a car-off half belongs to either Naushad's or Siddique's shift; whole day off → both.
+- Car off popup (`openPeriod`): one half off → "Whose shift was off? Naushad / Siddique" (must pick); both halves off → note that both rents are off. Choice saved as `who` on the off record (`'driver'`, ledger driver id, or `'all'`).
+- `syncCarOffToLedger`: whole day off, or Siddique's half → adds a ledger "Rent off" entry (full ₹600, note `Car off (auto)`) for that date, unless a Rent-off entry already exists; turning the car back on / switching to Naushad removes only the `Car off (auto)` entries. Naushad's ₹1,200 rent cut works as before (₹600 per half).
+- No worker change. SW cache `mns-tours-v24`.

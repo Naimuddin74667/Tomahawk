@@ -573,9 +573,36 @@ function periodHalves(day, drv) {
   return [{ date: ymd(addDays(parseYmd(day), -1)), half: 'night' }, { date: day, half: 'day' }];
 }
 function isOff(driverId, date, half) { return (DB.offs || []).some(o => o.driverId === driverId && o.date === date && o.half === half); }
-function setOff(driverId, date, half, off) {
-  DB.offs = (DB.offs || []).filter(o => !(o.driverId === driverId && o.date === date && o.half === half));
-  if (off) DB.offs.push({ id: uid(), driverId, date, half });
+/* who = whose shift the off half was: 'driver' (the rent driver, e.g. Naushad), a Driver-ledger driver id (e.g. Siddique),
+   'all' (whole day off → both), or '' (not asked — older records / no ledger drivers). */
+function offWho(driverId, date, half) { const o = (DB.offs || []).find(o => o.driverId === driverId && o.date === date && o.half === half); return o ? (o.who || '') : ''; }
+function setOff(driverId, date, half, off, who) {
+  const old = (DB.offs || []).find(o => o.driverId === driverId && o.date === date && o.half === half);
+  if (off && old && (who === undefined || (old.who || '') === who)) return;   // unchanged → no change-log noise
+  DB.offs = (DB.offs || []).filter(o => o !== old);
+  if (off) DB.offs.push(Object.assign({ id: uid(), driverId, date, half }, who ? { who } : {}));
+}
+/* Car off also cuts Driver-ledger rent (Siddique's ₹600) for that date:
+   whole day off → every ledger driver working that day; one half off → only if that half was his shift.
+   Adds/removes a "Rent off" ledger entry tagged CAR_OFF_NOTE, so manual entries are never touched. */
+const CAR_OFF_NOTE = 'Car off (auto)';
+const ldActiveOn = date => LEDGER ? LEDGER.drivers.filter(d => d.startDate <= date && (!d.endDate || d.endDate >= date)) : [];
+async function syncCarOffToLedger(day, nOff, who) {
+  if (!LEDGER || !cloudCfg() || isViewer()) return;
+  let changed = 0;
+  for (const L of ldActiveOn(day)) {
+    const want = nOff === 2 || (nOff === 1 && who === L.id);
+    const waives = LEDGER.entries.filter(e => e.driverId === L.id && e.date === day && e.kind === 'waive');
+    const auto = waives.filter(e => e.note === CAR_OFF_NOTE);
+    if (want && !waives.length) {
+      const r = await cloudFetch('/ledger/entry', { method:'POST', body: JSON.stringify({ driverId: L.id, kind: 'waive', date: day, amount: num(L.rent), note: CAR_OFF_NOTE }) }).catch(() => null);
+      if (r && r.status < 400) changed++; else toast('Could not update ' + L.name.split(' ')[0] + '’s ledger — try again');
+    } else if (!want) for (const e of auto) {
+      const r = await cloudFetch('/ledger/entry/delete', { method:'POST', body: JSON.stringify({ id: e.id }) }).catch(() => null);
+      if (r && r.status < 400) changed++; else toast('Could not update ' + L.name.split(' ')[0] + '’s ledger — try again');
+    }
+  }
+  if (changed) { await loadLedger(); if (currentPage === 'earnings') drawEarnings(); }
 }
 function halfLabel(x) { return fmtShort(x.date) + ' ' + x.half; }
 
@@ -585,15 +612,25 @@ function openPeriod(driverId, day) {
   const drv = DB.drivers.find(d => d.id === driverId); if (!drv) return;
   const halves = periodHalves(day, drv), half = num(drv.rentAmount) / 2;
   const ran = halves.map(x => !isOff(driverId, x.date, x.half));
+  // Whose shift the single off half was (asked only when Driver-ledger drivers work that day)
+  let shift = (halves.map(x => offWho(driverId, x.date, x.half)).find(w => w && w !== 'all')) || '';
+  if (cloudCfg() && !LEDGER) loadLedger().then(() => { if (document.getElementById('overlay').classList.contains('open')) draw(); });
   const draw = () => {
-    const n = ran.filter(Boolean).length, amt = half * n;
+    const n = ran.filter(Boolean).length, amt = half * n, ld = ldActiveOn(day), first = s => esc(s.split(' ')[0]);
     const per = driverLedger(drv).periods.find(p => p.from === day);
     const alreadyPaid = per ? per.paid : 0;
     const toPay = Math.max(0, amt - alreadyPaid);
+    const shiftHtml = !ld.length || n === 2 ? ''
+      : n === 0 ? `<div class="muted" style="font-size:13px;margin-top:10px">Whole day off — ${first(drv.name)} ₹0 and ${ld.map(l => first(l.name) + '’s ' + inr(num(l.rent))).join(', ')} rent off too.</div>`
+      : `<div style="margin-top:12px;font-size:13px"><b>Whose shift was off?</b>
+          <div class="btn-row" style="margin-top:6px">${[{ id: 'driver', name: drv.name }, ...ld].map(o =>
+            `<button class="btn sm ${shift === o.id ? 'primary' : ''}" onclick="window._sw('${o.id}')">${first(o.name)}</button>`).join('')}</div>
+          ${shift && shift !== 'driver' ? `<div class="muted" style="margin-top:4px">${first((ld.find(l => l.id === shift) || {}).name || '')}’s rent for ${fmtShort(day)} will be marked off.</div>` : ''}</div>`;
     document.getElementById('modal').innerHTML = `<h3>${esc(drv.name)}</h3>
       <p class="muted" style="margin:-6px 0 14px;font-size:13px">Rent for ${periodLabel(drv, { from: day })} · tap to mark the car off</p>
       <div class="half-grid">${halves.map((x, i) => `<button class="half ${ran[i] ? 'on' : 'off'}" onclick="window._pt(${i})">
           <b>${halfLabel(x)}</b><span>${ran[i] ? 'Ran · ' + inr(half) : 'Car off · ₹0'}</span></button>`).join('')}</div>
+      ${shiftHtml}
       <div class="rc-amt" style="margin-top:14px">${inr(amt)}</div>
       ${alreadyPaid ? `<div class="muted" style="font-size:13px;margin:-6px 0 12px">Already received ${inr(alreadyPaid)}</div>` : ''}
       ${toPay > 0 ? `<button class="btn primary rc-yes" onclick="window._ps(true)">✓ Save &amp; received ${inr(toPay)}</button>` : ''}
@@ -601,8 +638,13 @@ function openPeriod(driverId, day) {
       <button class="btn rc-yes" style="margin-top:8px" onclick="closeModal()">Cancel</button>`;
   };
   window._pt = i => { ran[i] = !ran[i]; draw(); };
+  window._sw = id => { shift = id; draw(); };
   window._ps = received => {
-    halves.forEach((x, i) => setOff(driverId, x.date, x.half, !ran[i]));
+    const nOff = ran.filter(r => !r).length, ldOn = ldActiveOn(day).length > 0;
+    if (nOff === 1 && ldOn && !shift) { toast('Pick whose shift was off'); return; }
+    const who = !ldOn ? undefined : nOff === 2 ? 'all' : shift;
+    halves.forEach((x, i) => setOff(driverId, x.date, x.half, !ran[i], who));
+    syncCarOffToLedger(day, nOff, shift);
     const per = driverLedger(drv).periods.find(p => p.from === day);
     const toPay = per ? Math.max(0, per.due - per.paid) : 0;
     const paid = received && toPay > 0;
