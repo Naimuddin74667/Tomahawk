@@ -1351,9 +1351,11 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   var kind = 'all';
   var KINDS = [
     ['all', 'All tickets', function () { return true; }],
-    ['new', 'New tickets', function (r) { return !r.zoho_id && !r.backfill; }],
-    ['old', 'Old open tickets', function (r) { return !r.zoho_id && !!r.backfill; }],
-    ['followup', 'Follow-ups', function (r) { return !!r.zoho_id; }]
+    ['new', 'New tickets', function (r) { return !r.zoho_id && !r.backfill && r.ticket_kind !== 'followup'; }],
+    // Follow-up = a NEW ticket continuing an earlier conversation (Re: mail / earlier ticket) — bot drafts only
+    ['followup', 'Follow-ups', function (r) { return !r.zoho_id && r.ticket_kind === 'followup'; }],
+    ['old', 'Old open tickets', function (r) { return !r.zoho_id && !!r.backfill && r.ticket_kind !== 'followup'; }],
+    ['same', 'Replied on same ticket', function (r) { return !!r.zoho_id; }]
   ];
   function kindTest() { return (KINDS.find(function (k) { return k[0] === kind; }) || KINDS[0])[2]; }
 
@@ -1398,6 +1400,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       (r.template === 'AR1' ? ' <span class="br-badge br-b-gray" title="Waiting for the customer to send the order ID">Ticket kept open</span>' : r.closed_at ? ' <span class="br-badge br-b-gray" title="Zoho ticket closed ' + esc(when(r.closed_at)) + '">Ticket closed</span>' : ' <span class="br-badge br-b-amber" title="Will be closed on the next check">Closing…</span>');
     if (r.result === 'test') return '<span class="br-badge br-b-amber">Test · not sent</span>';
     if (r.result === 'sending') return '<span class="br-badge br-b-gray">Sending…</span>';
+    if (r.result === 'dry_run' && r.ticket_kind === 'followup') return '<span class="br-badge br-b-amber" title="Follow-up tickets are never sent automatically">Draft · review &amp; send</span>';
     if (r.result === 'dry_run') return '<span class="br-badge br-b-amber">Dry run · not sent</span>';
     if (r.result === 'error') return '<span class="br-badge br-b-red">Error</span>';
     if (r.result === 'working') return '<span class="br-badge br-b-gray">Working…</span>';
@@ -1500,7 +1503,9 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     return '<div class="br-item" data-id="' + r.id + '">' +
       '<div class="br-item-top">' +
         '<a class="br-link" target="_blank" rel="noopener" href="' + ZOHO_TICKET_URL + encodeURIComponent(r.zoho_id || r.ticket_id) + '">#' + esc(r.ticket_number) + '</a>' +
-        (r.zoho_id ? '<span class="br-badge br-b-red" title="The customer wrote again after the bot\'s reply">Follow-up</span>'
+        (r.zoho_id ? '<span class="br-badge br-b-red" title="The customer wrote again on the same ticket after the bot\'s reply">Replied on same ticket</span>'
+          : r.ticket_kind === 'followup' ? '<span class="br-badge br-b-amber" title="New ticket continuing an earlier conversation — the bot only drafts, the team sends">Follow-up' +
+              (r.prev_ticket ? ' of #' + esc(r.prev_ticket) : '') + '</span>'
           : r.backfill ? '<span class="br-badge br-b-gray" title="Was already open before the bot started">Old open</span>'
           : r.id ? '<span class="br-badge br-b-green" title="Mail came in after the bot started">New</span>' : '') +
         '<span class="br-who">' + esc(r.customer_name || r.customer_email) + '</span>' +

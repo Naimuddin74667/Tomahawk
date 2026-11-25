@@ -14518,7 +14518,7 @@ async function ensureMailBotTable(DB) {
   )`).run();
   // backfill = 1 → a ticket that was already open before the bot started (never sent)
   for (const col of ['backfill INTEGER DEFAULT 0', 'sent_by TEXT', 'sent_at TEXT', 'closed_at TEXT', 'template_version INTEGER',
-      'zoho_id TEXT', 'thread_count INTEGER', 'bot_thread_ids TEXT', 'bot_replies INTEGER DEFAULT 0', 'followup TEXT']) {   // added 25-Nov-2026
+      'zoho_id TEXT', 'thread_count INTEGER', 'bot_thread_ids TEXT', 'bot_replies INTEGER DEFAULT 0', 'followup TEXT', 'ticket_kind TEXT', 'prev_ticket TEXT']) {   // added 25-Nov-2026
     try { await DB.prepare('ALTER TABLE bot_reply_log ADD COLUMN ' + col).run(); } catch (e) { /* already there */ }
   }
 }
@@ -15021,10 +15021,12 @@ async function mbRunInner(env, opts) {
     if (!claim.meta || !claim.meta.changes) continue;
     let d = null, result = 'skipped', error = '';
     const backfill = oldIds.has(String(tk.id));
+    let fu = null;
     try {
       d = await mbDecide(env, orgId, tk);
+      try { fu = await mbDetectFollowUpTicket(env, orgId, tk, d.customer_email); } catch (e) { console.warn('mailbot followup check', tk.id, e.message); }
       if (d.reply_text) {
-        const send = !backfill && (s.mode === 'live' || (s.mode === 'test' && s.test_emails.map(x => String(x).toLowerCase()).includes(d.customer_email)));
+        const send = !backfill && !fu && (s.mode === 'live' || (s.mode === 'test' && s.test_emails.map(x => String(x).toLowerCase()).includes(d.customer_email)));
         if (send) {
           d.sendJson = await mbSendReply(env, orgId, tk.id, d.customer_email, mbComposeHtml(d.reply_text, s)); result = 'sent';
         }
@@ -15037,6 +15039,8 @@ async function mbRunInner(env, opts) {
       WHERE ticket_id = ?`).bind(tk.createdTime || null, d.customer_name || '', d.customer_email || '', d.subject || '', d.mail_text || '',
         d.reply_type || 'other', d.template || '', d.order_no || '', d.order_info || '', d.reply_text || '', result, d.skip_reason || '', error, backfill ? 1 : 0,
         d.template_version || null, String(tk.id)).run();
+    await env.DB.prepare('UPDATE bot_reply_log SET ticket_kind = ?, prev_ticket = ? WHERE ticket_id = ?')
+      .bind(fu ? 'followup' : 'new', fu ? (fu.prev_ticket || null) : null, String(tk.id)).run();
     if (result === 'sent') {
       const rid = await env.DB.prepare('SELECT id FROM bot_reply_log WHERE ticket_id = ?').bind(String(tk.id)).first();
       if (rid) await mbRememberSend(env, rid.id, d.sendJson, d.thread_count != null ? d.thread_count + 1 : null);
@@ -15052,6 +15056,25 @@ async function mbRunInner(env, opts) {
   handled += await mbFollowUps(env, orgId, s, byId);
   const left = fresh.concat(old).filter(t => !seen.has(String(t.id))).length - handled;
   return { ok: true, mode: s.mode, handled, left: Math.max(0, left) };
+}
+
+// ── Follow-up TICKETS (25-Nov-2026) ─────────────────────────────
+// A NEW Zoho ticket that continues an earlier conversation: the subject is a reply
+// ("Re:" / "Fwd:") or the same customer had an earlier ticket in the last 60 days
+// with a conversation on it. For these the bot only DRAFTS — never sends on its own
+// (even in Live); the team reviews and uses "Send to customer". Training phase.
+async function mbDetectFollowUpTicket(env, orgId, tk, email) {
+  const isReply = /^\s*(re|fwd?|fw)\s*:/i.test(String(tk.subject || ''));
+  let prev = null;
+  if (email) {
+    const r = await zdCall(env, 'GET', '/tickets/search', { orgId, query: { email, limit: '20' } });
+    const since = Date.now() - 60 * 864e5, mine = new Date(tk.createdTime).getTime();
+    prev = ((r.json && r.json.data) || []).find(t => String(t.id) !== String(tk.id) &&
+      new Date(t.createdTime).getTime() < mine && new Date(t.createdTime).getTime() >= since &&
+      (Number(t.threadCount) > 1 || /closed/i.test(t.status || ''))) || null;
+  }
+  if (!isReply && !prev) return null;
+  return { prev_ticket: prev ? String(prev.ticketNumber || '') : '', why: isReply ? 'reply subject' : 'earlier ticket' };
 }
 
 // ── Follow-ups (25-Nov-2026) ─────────────────────────────────────
@@ -15265,7 +15288,7 @@ async function mbList(env, days) {
   await ensureMailBotTable(env.DB);
   const s = await mbGetSettings(env);
   const rows = (await env.DB.prepare(`SELECT id, ticket_id, ticket_number, ticket_created, customer_name, customer_email, subject, mail_text,
-      reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, rating, rating_note, rated_by, rated_at, processed_at, backfill, sent_by, sent_at, closed_at, template_version, zoho_id, followup, bot_replies
+      reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, rating, rating_note, rated_by, rated_at, processed_at, backfill, sent_by, sent_at, closed_at, template_version, zoho_id, followup, bot_replies, ticket_kind, prev_ticket
     FROM bot_reply_log WHERE processed_at >= datetime('now', ?) ORDER BY processed_at DESC, id DESC LIMIT 1000`).bind('-' + days + ' days').all()).results || [];
   const lr = await env.DB.prepare("SELECT value FROM tm_settings WHERE key = 'mailbot_last_run'").first().catch(() => null);
   let lastRun = null; try { lastRun = lr && lr.value ? JSON.parse(lr.value) : null; } catch (e) { lastRun = null; }
