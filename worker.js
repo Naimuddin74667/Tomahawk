@@ -15649,7 +15649,8 @@ async function mbManualSend(env, user, b) {
   await env.DB.prepare(`UPDATE bot_reply_log SET result = 'sent', error = '', sent_by = ?, sent_at = datetime('now') WHERE id = ?`).bind(who, row.id).run();
   await mbRememberSend(env, row.id, row.sendJson, null);   // thread count re-read on the next run
   if (row.zoho_id) await env.DB.prepare("UPDATE bot_reply_log SET followup = 'bot_answered' WHERE ticket_id = ?").bind(row.zoho_id).run();
-  const closed = MB_KEEP_OPEN.includes(row.template) ? null : await mbMarkClosed(env, orgId, row.zoho_id || row.ticket_id);
+  // Team clicked Send → close the Zoho ticket (AI drafts too). Only "send your order ID" (AR1) stays open. (25-Nov-2026)
+  const closed = row.template === 'AR1' ? null : await mbMarkClosed(env, orgId, row.zoho_id || row.ticket_id);
   const done = await env.DB.prepare('SELECT id, result, sent_by, sent_at, closed_at FROM bot_reply_log WHERE id = ?').bind(row.id).first();
   return { ok: true, row: done, closed };
 }
