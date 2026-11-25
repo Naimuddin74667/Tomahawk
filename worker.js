@@ -1435,7 +1435,7 @@ const ACTION_TIERS = {
   delhiveryRepairDone: 'manager_up', // Step 5 done (Repair done / Replacement ready) → unlocks Send back
   delhiveryReplaceSwitch: 'manager_up', // Repair → Replacement (can't be repaired) / back to repair (14-Nov-2026)
   // Customer's own order ID (Flipkart / Amazon / Shopify) on a case + live lookup.
-  ccSetOrderId: 'manager_up', ccOrderLookup: 'viewer_read',
+  ccSetOrderId: 'manager_up', ccOrderLookup: 'viewer_read', ccDeliveredDate: 'viewer_read',
   // Internal notes on requests / cases (20-Nov-2026)
   ccNotesList: 'viewer_read', ccNoteAdd: 'manager_up',
   // Customer Care → Bot Replies: automatic email replies log + review (25-Nov-2026)
@@ -1496,7 +1496,7 @@ const ACTION_TIERS = {
 
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
-const ALWAYS_GATED = new Set(['mailBotList', 'mailBotRate', 'mailBotTest', 'mailBotSend', 'mailBotTemplates', 'ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
+const ALWAYS_GATED = new Set(['ccDeliveredDate', 'mailBotList', 'mailBotRate', 'mailBotTest', 'mailBotSend', 'mailBotTemplates', 'ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
   'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccPaymentWaive', 'ccLogisticsQuote', 'ccVersion',
   'shopShipList', 'shopShipRefresh', 'shopShipReceived']);
 
@@ -5342,6 +5342,12 @@ export default {
           let order = null;
           if (mid) { try { order = await ccOrderLookup(env, mid); } catch (e) { order = { found: false, error: e.message }; } }
           return json({ ok: true, market_order_id: mid, order });
+        }
+        // ── Delivery date for a request's order (25-Nov-2026) — website orders via
+        //   Shopify + live courier scan; saved on the request so it's looked up once.
+        if (act === 'ccDeliveredDate') {
+          try { return json(await ccDeliveredDate(env, String(url.searchParams.get('claim_id') || body.claim_id || '').trim())); }
+          catch (e) { return json({ ok: false, error: e.message }, 502); }
         }
         // ── Live details for a customer order ID (?id=OD…) from the Supabase mirror.
         if (act === 'ccOrderLookup') {
@@ -10926,6 +10932,31 @@ function istDaysSince(iso) {
 }
 
 // Live courier check of one website parcel → { stage, delivered_at } (best effort).
+async function ccDeliveredDate(env, claimId) {
+  await ensureServiceRequestCols(env.DB);
+  const r = await env.DB.prepare('SELECT claim_id, platform, order_id, delivered_at FROM warranty_claims WHERE claim_id = ?').bind(claimId).first();
+  if (!r) return { ok: false, error: 'No such request' };
+  if (r.delivered_at) return { ok: true, delivered_at: r.delivered_at, cached: true };
+  const num = String(r.order_id || '').replace(/\D/g, '');
+  if (!/website|shopify/i.test(r.platform || '') || !num || num.length > 6) return { ok: true, delivered_at: null, reason: 'Only website orders can be looked up' };
+  if (!shopifyConfigured(env)) return { ok: true, delivered_at: null, reason: 'Shopify not configured' };
+  const data = await shopifyGql(env, `query($q: String!) { orders(first: 5, query: $q) { nodes {
+      name fulfillments(first: 10) { status deliveredAt displayStatus trackingInfo(first: 3) { company number } } } } }`, { q: 'name:' + num });
+  const o = ((data && data.orders && data.orders.nodes) || []).find(x => String(x.name).replace(/\D/g, '') === num);
+  if (!o) return { ok: true, delivered_at: null, reason: 'Order not found in Shopify' };
+  const dates = [];
+  for (const f of (o.fulfillments || []).filter(x => String(x.status || '').toUpperCase() !== 'CANCELLED')) {
+    const ti = (f.trackingInfo || [])[0] || {};
+    const live = await drnParcelDelivered(env, ti.company, ti.number).catch(() => ({}));
+    const at = live.delivered_at || f.deliveredAt || null;
+    if (at) dates.push(at);
+  }
+  if (!dates.length) return { ok: true, delivered_at: null, reason: 'Not delivered yet' };
+  const at = dates.sort().pop();
+  await env.DB.prepare('UPDATE warranty_claims SET delivered_at = ? WHERE claim_id = ? AND delivered_at IS NULL').bind(at, claimId).run();
+  return { ok: true, delivered_at: at };
+}
+
 async function drnParcelDelivered(env, company, awb) {
   const courier = /ekart/i.test(company || '') ? 'Ekart' : /delhivery/i.test(company || '') ? 'Delhivery' : '';
   awb = String(awb || '').trim();
