@@ -1267,6 +1267,13 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .br-r.average.on { background: var(--accent); border-color: var(--accent); color: #111; }
 .br-r.bad.on { background: var(--red); border-color: var(--red); color: #fff; }
 .br-note { flex: 1; min-width: 200px; border-radius: 10px; }
+.br-rate-card { margin-bottom: 16px; }
+.br-rc-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.br-rc-head .br-filter { margin-left: auto; cursor: pointer; }
+.br-rc-head #br-q { min-width: 240px; }
+.br-rate-card .br-item { background: var(--bg, transparent); }
+.br-more > summary { cursor: pointer; font-size: 13px; font-weight: 800; color: var(--text); list-style: revert; }
+.br-more .br-box { background: transparent; }
 .br-empty { padding: 28px; text-align: center; color: var(--text2); font-size: 13px; }
 @media (max-width: 1000px) { .br-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } .br-row2, .br-cols { grid-template-columns: 1fr; } .br-bar .br-input { margin-left: 0; width: 100%; min-width: 0; } }
 </style>
@@ -1288,41 +1295,46 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   <!-- What the current mode means, in one line -->
   <div class="br-mode-bar" id="br-mode-hint"></div>
 
-  <!-- R1: counts for the selected period -->
-  <div class="br-stats" id="br-stats"></div>
+  <!-- R2: Rate Bot — one card, one list (simplified 25-Nov-2026).
+       Not rated replies always on top; Filter picks Good / Average / Bad etc. -->
+  <div class="br-box br-rate-card">
+    <div class="br-rc-head">
+      <h3 style="margin:0">Rate Bot</h3>
+      <span class="br-badge br-b-amber" id="br-torate"></span>
+      <span class="br-muted" id="br-zoho"></span>
+      <select class="br-input br-filter" id="br-filter" aria-label="Filter"></select>
+      <input class="br-input" id="br-q" placeholder="Search ticket, order, customer…">
+    </div>
+    <div id="br-list"></div>
+  </div>
 
-  <!-- R2: Col A = bot mode + test a ticket · Col B = rating summary per reply -->
-  <div class="br-row2">
-    <div class="br-box">
-      <h3>Test a ticket</h3>
-      <div class="br-test" style="margin-top:0">
-        <input class="br-input" id="br-test-no" placeholder="Zoho ticket no., e.g. 10823" style="flex:1">
-        <button class="br-btn" id="br-test-btn">Show bot reply</button>
+  <!-- R3: More tools — collapsed (Test a ticket · Ratings by reply · Reply texts) -->
+  <details class="br-box br-more">
+    <summary>More tools <span class="br-muted">— test a ticket · ratings by reply · reply texts</span></summary>
+    <div class="br-row2" style="margin-top:14px">
+      <div class="br-box">
+        <h3>Test a ticket</h3>
+        <div class="br-test" style="margin-top:0">
+          <input class="br-input" id="br-test-no" placeholder="Zoho ticket no., e.g. 10823" style="flex:1">
+          <button class="br-btn" id="br-test-btn">Show bot reply</button>
+        </div>
+        <div class="br-hint" style="margin-top:6px">Shows what the bot would reply to any ticket — nothing is sent or saved.</div>
+        <div id="br-test-out"></div>
       </div>
-      <div class="br-hint" style="margin-top:6px">Shows what the bot would reply to any ticket — nothing is sent or saved.</div>
-      <div id="br-test-out"></div>
+      <div class="br-box">
+        <h3>Ratings by reply</h3>
+        <div id="br-sum"></div>
+      </div>
     </div>
     <div class="br-box">
-      <h3>Ratings by reply</h3>
-      <div id="br-sum"></div>
+      <div class="br-tpl-head">
+        <h3 style="margin:0">Reply texts</h3>
+        <span class="br-hint">How the bot words each reply. Your Average / Bad notes show here — edit the text or let the bot suggest a better one.</span>
+        <button class="br-btn" id="br-tpl-toggle" style="margin-left:auto">Show</button>
+      </div>
+      <div id="br-tpl" hidden></div>
     </div>
-  </div>
-
-  <!-- R3: Reply texts — editable, versioned, improved from Average / Bad notes (25-Nov-2026) -->
-  <div class="br-box" style="margin-bottom:16px">
-    <div class="br-tpl-head">
-      <h3 style="margin:0">Reply texts</h3>
-      <span class="br-hint">How the bot words each reply. Your Average / Bad notes show here — edit the text or let the bot suggest a better one.</span>
-      <button class="br-btn" id="br-tpl-toggle" style="margin-left:auto">Show</button>
-    </div>
-    <div id="br-tpl" hidden></div>
-  </div>
-
-  <!-- R4: ticket tabs (New / Old open / Follow-ups) + status chips + list -->
-  <div class="br-seg" id="br-kinds" role="group" aria-label="Tickets" style="margin-bottom:10px"></div>
-  <!-- list -->
-  <div class="br-bar" id="br-chips"></div>
-  <div id="br-list"></div>
+  </details>
 </div>
 
 <script>
@@ -1345,20 +1357,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     ['test', 'Test', 'Replies are sent only to the test emails (%TEST%). Everyone else is a dry run.'],
     ['live', 'Live', 'Replies are sent to customers.']
   ];
-  var rows = [], settings = null, view = 'replies', q = '', days = 31;
-  // Ticket tabs (25-Nov-2026): which tickets — new mails, old open backlog, or customer follow-ups.
-  // Works together with the status chips below (e.g. Follow-ups + Not rated).
-  var kind = 'all';
-  var KINDS = [
-    ['all', 'All tickets', function () { return true; }],
-    ['new', 'New tickets', function (r) { return !r.zoho_id && !r.backfill && r.ticket_kind !== 'followup'; }],
-    // Follow-up = a NEW ticket continuing an earlier conversation (Re: mail / earlier ticket) — bot drafts only
-    ['followup', 'Follow-ups', function (r) { return !r.zoho_id && r.ticket_kind === 'followup'; }],
-    ['old', 'Old open tickets', function (r) { return !r.zoho_id && !!r.backfill && r.ticket_kind !== 'followup'; }],
-    ['same', 'Replied on same ticket', function (r) { return !!r.zoho_id; }]
-  ];
-  function kindTest() { return (KINDS.find(function (k) { return k[0] === kind; }) || KINDS[0])[2]; }
-
+  var rows = [], settings = null, view = 'all', q = '', days = 31;
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function sessToken() { var s = window.TM_getSession && window.TM_getSession(); return (s && s.token) || ''; }
   async function api(action, params) {
@@ -1375,18 +1374,17 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   function when(s) { var d = toDate(s); return d ? d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''; }
 
   function isReply(r) { return r.result === 'sent' || r.result === 'dry_run'; }
+  // Filter options (25-Nov-2026). "All" = everything except mails skipped for the team.
   var VIEWS = [
-    ['replies', 'Replies', isReply],
+    ['all', 'All', function (r) { return r.result !== 'skipped'; }],
     ['unrated', 'Not rated', function (r) { return isReply(r) && !r.rating; }],
     ['good', 'Good', function (r) { return r.rating === 'good'; }],
     ['average', 'Average', function (r) { return r.rating === 'average'; }],
     ['bad', 'Bad', function (r) { return r.rating === 'bad'; }],
     ['ai', 'AI drafts', function (r) { return r.template === 'AI1'; }],
     ['upset', 'Upset customers', function (r) { return r.priority === 'upset'; }],
-    ['skipped', 'Skipped', function (r) { return r.result === 'skipped'; }],
-    ['skipped_cancel', 'Skipped cancellations', function (r) { return r.result === 'skipped' && r.reply_type === 'cancellation'; }],
-    ['errors', 'Errors', function (r) { return r.result === 'error'; }],
-    ['all', 'All mails', function () { return true; }]
+    ['skipped', 'Skipped (team)', function (r) { return r.result === 'skipped'; }],
+    ['errors', 'Errors', function (r) { return r.result === 'error'; }]
   ];
 
   // Parent row: what happened after the bot's reply (25-Nov-2026)
@@ -1410,27 +1408,14 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     return '<span class="br-badge br-b-gray">Skipped</span>';
   }
 
+  // Card header: "N to rate" + Zoho open / waiting count
   function drawStats() {
-    var replies = rows.filter(isReply);
-    var n = function (f) { return replies.filter(f).length; };
-    // [css class, count, label, list view it opens] — click a card to filter the list (25-Nov-2026)
-    var cells = [
-      ['', rows.length, 'Mails checked' + (lastRun && lastRun.zoho_open != null
-        ? ' <span class="br-muted" style="display:block;font-size:10.5px">' + lastRun.zoho_open + ' open in Zoho now' + (lastRun.left ? ' · ' + lastRun.left + ' waiting' : ' · all checked') + '</span>' : ''), 'all'],
-      ['', replies.length, 'Bot replies', 'replies'],
-      ['', rows.filter(function (r) { return r.result === 'skipped'; }).length, 'Skipped (team)', 'skipped'],
-      ['', n(function (r) { return !r.rating; }), 'Not rated yet', 'unrated'],
-      ['good', n(function (r) { return r.rating === 'good'; }), 'Good', 'good'],
-      ['avg', n(function (r) { return r.rating === 'average'; }), 'Average', 'average'],
-      ['bad', n(function (r) { return r.rating === 'bad'; }), 'Bad', 'bad']
-    ];
-    document.getElementById('br-stats').innerHTML = cells.map(function (c) {
-      return '<div class="br-stat ' + c[0] + (view === c[3] ? ' on' : '') + '" data-view="' + c[3] + '" role="button" tabindex="0"><b>' + c[1] + '</b><span>' + c[2] + '</span></div>';
-    }).join('');
-    document.querySelectorAll('#br-stats [data-view]').forEach(function (el) {
-      el.onclick = function () { view = el.getAttribute('data-view'); draw(); document.getElementById('br-chips').scrollIntoView({ block: 'start', behavior: 'smooth' }); };
-      el.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } };
-    });
+    var toRate = rows.filter(function (r) { return isReply(r) && !r.rating; }).length;
+    var b = document.getElementById('br-torate');
+    b.textContent = toRate ? toRate + ' to rate' : 'All rated';
+    b.className = 'br-badge ' + (toRate ? 'br-b-amber' : 'br-b-green');
+    document.getElementById('br-zoho').textContent = rows.length + ' mails checked' + (lastRun && lastRun.zoho_open != null
+      ? ' · ' + lastRun.zoho_open + ' open in Zoho' + (lastRun.left ? ' · ' + lastRun.left + ' waiting' : '') : '');
   }
 
   function drawSummary() {
@@ -1485,16 +1470,11 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   }
 
   function drawChips() {
-    var kt = kindTest();
-    document.getElementById('br-kinds').innerHTML = KINDS.map(function (k) {
-      return '<button class="br-seg-b' + (k[0] === kind ? ' on' : '') + '" data-kind="' + k[0] + '" style="--mode-c:var(--accent)">' + k[1] +
-        ' <i style="width:auto;height:auto;background:none;font-style:normal;opacity:.7">' + rows.filter(k[2]).length + '</i></button>';
+    var sel = document.getElementById('br-filter');
+    sel.innerHTML = VIEWS.map(function (v) {
+      return '<option value="' + v[0] + '"' + (v[0] === view ? ' selected' : '') + '>' + v[1] + ' (' + rows.filter(v[2]).length + ')</option>';
     }).join('');
-    document.querySelectorAll('#br-kinds [data-kind]').forEach(function (b) { b.onclick = function () { kind = b.getAttribute('data-kind'); draw(); }; });
-    document.getElementById('br-chips').innerHTML = VIEWS.map(function (v) {
-      return '<button class="br-chip' + (v[0] === view ? ' on' : '') + '" data-view="' + v[0] + '">' + v[1] + '<i>' + rows.filter(kt).filter(v[2]).length + '</i></button>';
-    }).join('') + '<input class="br-input" id="br-q" placeholder="Search ticket, order, customer…" value="' + esc(q) + '">';
-    document.querySelectorAll('#br-chips [data-view]').forEach(function (b) { b.onclick = function () { view = b.getAttribute('data-view'); draw(); }; });
+    sel.onchange = function () { view = sel.value; drawList(); };
     var qi = document.getElementById('br-q');
     qi.oninput = function () { q = qi.value; drawList(); };
   }
@@ -1541,9 +1521,13 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   function drawList() {
     var f = (VIEWS.find(function (v) { return v[0] === view; }) || VIEWS[0])[2];
     var ql = q.trim().toLowerCase();
-    var list = rows.filter(kindTest()).filter(f).filter(function (r) {
+    var list = rows.filter(f).filter(function (r) {
       return !ql || [r.ticket_number, r.order_no, r.customer_name, r.customer_email, r.subject, r.template].join(' ').toLowerCase().indexOf(ql) !== -1;
     });
+    // Not rated replies always on top, newest first; then the rest, newest first
+    var unr = function (r) { return isReply(r) && !r.rating ? 0 : 1; };
+    var t = function (r) { var d = toDate(r.processed_at); return d ? d.getTime() : 0; };
+    list.sort(function (a, b) { return unr(a) - unr(b) || t(b) - t(a); });
     var el = document.getElementById('br-list');
     el.innerHTML = list.length ? list.map(itemHtml).join('') : '<div class="br-empty">Nothing here.</div>';
     el.querySelectorAll('.br-item').forEach(function (box) {
