@@ -14971,7 +14971,7 @@ async function mbRun(env, opts) {
   if (r && r.mode !== 'off') {
     try {
       await env.DB.prepare("INSERT INTO tm_settings (key, value) VALUES ('mailbot_last_run', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-        .bind(JSON.stringify({ at: new Date().toISOString(), handled: r.handled || 0, left: r.left || 0, ok: !!r.ok, error: r.error || '', manual: !!(opts && opts.max) })).run();
+        .bind(JSON.stringify({ at: new Date().toISOString(), handled: r.handled || 0, left: r.left || 0, zoho_open: r.zoho_open, ok: !!r.ok, error: r.error || '', manual: !!(opts && opts.max) })).run();
     } catch (e) { /* never block the run */ }
   }
   return r;
@@ -14991,9 +14991,10 @@ async function mbRunInner(env, opts) {
     .filter(t => isEmail(t) && new Date(t.createdTime).getTime() >= startMs);
   // Old tickets still OPEN from the last MB_BACKFILL_DAYS days (created before the bot
   // started): logged for review only — never sent, the team may already have replied.
-  let old = [];
+  let old = [], zohoOpen = null;
   const openList = await zdCall(env, 'GET', '/tickets', { orgId, query: { from: '0', limit: '100', status: 'Open', sortBy: '-createdTime', include: 'contacts' } });
   if (openList.ok) {
+    zohoOpen = ((openList.json && openList.json.data) || []).filter(isEmail).length;   // = Zoho's "Email Cases" open count
     const sinceMs = Date.now() - MB_BACKFILL_DAYS * 864e5;
     old = ((openList.json && openList.json.data) || []).filter(t => {
       const ms = new Date(t.createdTime).getTime();
@@ -15055,7 +15056,7 @@ async function mbRunInner(env, opts) {
   ((list.json && list.json.data) || []).concat((openList.ok && openList.json && openList.json.data) || []).forEach(t => { byId[String(t.id)] = t; });
   handled += await mbFollowUps(env, orgId, s, byId);
   const left = fresh.concat(old).filter(t => !seen.has(String(t.id))).length - handled;
-  return { ok: true, mode: s.mode, handled, left: Math.max(0, left) };
+  return { ok: true, mode: s.mode, handled, left: Math.max(0, left), zoho_open: zohoOpen };
 }
 
 // ── Follow-up TICKETS (25-Nov-2026) ─────────────────────────────
