@@ -302,3 +302,6 @@ Owner marked 24 Nov all-day off for the car, but Siddique's Driver ledger still 
 - `syncCarOffToLedger`: whole day off, or Siddique's half → adds a ledger "Rent off" entry (full ₹600, note `Car off (auto)`) for that date, unless a Rent-off entry already exists; turning the car back on / switching to Naushad removes only the `Car off (auto)` entries. Naushad's ₹1,200 rent cut works as before (₹600 per half).
 - No worker change. SW cache `mns-tours-v24`.
 - **Fix (25 Nov, later):** 24 Nov was marked off before the new code reached the phone, so no ledger entry was made. Owner app now reconciles after every ledger load: any car-off day from 24 Nov on (whole day, or a half marked as Siddique's shift) without a Rent-off entry gets a `Car off (auto)` entry. The popup also loads the ledger first if it isn't loaded. SW cache `mns-tours-v25`.
+
+## 16. Phone navigation: ☰ menu instead of bottom bar (25 Nov 2026)
+Owner asked for a hamburger menu. On phones (≤820px) the bottom tab bar is gone; ☰ in the top bar opens the sidebar as a slide-in panel (all 7 pages, active page highlighted, Theme/Install at the bottom). Tap a page, the dark area, or Esc to close. Top bar shows the current page name under the app name. Desktop sidebar unchanged; driver/manager screens unchanged. SW cache `mns-tours-v26`.
