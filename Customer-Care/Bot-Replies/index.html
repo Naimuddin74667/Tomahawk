@@ -1287,6 +1287,22 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .br-edit { width: 100%; box-sizing: border-box; border: 1px solid var(--border); font: inherit; font-size: 12.5px; resize: vertical; min-height: 160px; max-height: none; }
 .br-edit:focus { outline: none; border-color: var(--accent); }
 .br-edit-acts, .br-learn { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.br-rate-card .br-item { padding: 0; margin-bottom: 8px; border-radius: 12px; }
+.br-row { display: flex; align-items: center; gap: 10px; padding: 11px 14px; cursor: pointer; font-size: 12.5px; min-width: 0; }
+.br-row:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); border-radius: 12px; }
+.br-item.open > .br-row { border-bottom: 1px solid var(--border); border-radius: 12px 12px 0 0; }
+.br-chev { width: 12px; color: var(--text2); flex: 0 0 auto; }
+.br-row .br-who { font-weight: 700; color: var(--text); white-space: nowrap; flex: 0 0 auto; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.br-subj { flex: 1; min-width: 0; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.br-when { white-space: nowrap; flex: 0 0 auto; }
+.br-body { padding: 14px 16px 16px; }
+.br-meta { font-size: 11.5px; color: var(--text2); margin-bottom: 10px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.br-facts { display: grid; gap: 5px; margin-bottom: 12px; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--text2) 6%, transparent); font-size: 12.5px; }
+.br-facts div { display: grid; grid-template-columns: 110px 1fr; gap: 10px; }
+.br-facts span { color: var(--text2); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; padding-top: 1px; }
+.br-facts b { font-weight: 600; color: var(--text); }
+.br-acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+.br-pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 12px; font-size: 12.5px; color: var(--text2); }
 .br-empty { padding: 28px; text-align: center; color: var(--text2); font-size: 13px; }
 @media (max-width: 1000px) { .br-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } .br-row2, .br-cols { grid-template-columns: 1fr; } .br-bar .br-input { margin-left: 0; width: 100%; min-width: 0; } }
 </style>
@@ -1463,7 +1479,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
         '<b>' + toRate + '</b><span>Sent · not rated yet</span><div class="br-rt">' +
         pill('good', 'g', 'Good', rated('good')) + pill('average', 'a', 'Average', rated('average')) + pill('bad', 'b', 'Bad', rated('bad')) + '</div></div>';
     document.querySelectorAll('#br-stats [data-view]').forEach(function (el) {
-      el.onclick = function (e) { e.stopPropagation(); view = el.getAttribute('data-view'); draw(); document.getElementById('br-filter').scrollIntoView({ block: 'center', behavior: 'smooth' }); };
+      el.onclick = function (e) { e.stopPropagation(); view = el.getAttribute('data-view'); page = 0; draw(); document.getElementById('br-filter').scrollIntoView({ block: 'center', behavior: 'smooth' }); };
       el.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } };
     });
     document.getElementById('br-zoho').textContent = rows.length + ' mails checked' + (lastRun && lastRun.zoho_open != null
@@ -1526,60 +1542,100 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     sel.innerHTML = VIEWS.map(function (v) {
       return '<option value="' + v[0] + '"' + (v[0] === view ? ' selected' : '') + '>' + v[1] + ' (' + (v[0] === 'zoho' ? (zohoList ? zohoList.length : '…') : rows.filter(v[2]).length) + ')</option>';
     }).join('');
-    sel.onchange = function () { view = sel.value; drawStats(); drawList(); };
+    sel.onchange = function () { view = sel.value; page = 0; drawStats(); drawList(); };
     var qi = document.getElementById('br-q');
-    qi.oninput = function () { q = qi.value; drawList(); };
+    qi.oninput = function () { q = qi.value; page = 0; drawList(); };
   }
 
   // Team can edit / refine / learn on any reply not sent yet (25-Nov-2026)
   function canEdit(r) { return canRate() && !!r.reply_text && ['dry_run', 'error', 'test'].indexOf(r.result) !== -1; }
 
-  function itemHtml(r) {
+  // One ticket = a collapsed one-line row; click it to open the full card (25-Nov-2026).
+  var openIds = {};
+  function kindBadge(r) {
+    return r.zoho_id ? '<span class="br-badge br-b-red" title="Customer wrote again on the same ticket after the bot\'s reply">Replied again</span>'
+      : r.ticket_kind === 'followup' ? '<span class="br-badge br-b-amber"' + (r.prev_ticket ? ' title="Follow-up of #' + esc(r.prev_ticket) + '"' : '') + '>Follow-up</span>'
+      : r.backfill ? '<span class="br-badge br-b-gray" title="Was already open before the bot started">Old open</span>'
+      : '<span class="br-badge br-b-green">New</span>';
+  }
+  // Plain-words status for the row
+  function statusBadge(r) {
+    if (r.result === 'preview') return resultBadge(r);
+    if (r.result === 'sent') return '<span class="br-badge br-b-green">Sent' + (r.rating ? ' · ' + esc(r.rating) : ' · not rated') + '</span>';
+    if (isDraft(r)) return '<span class="br-badge br-b-amber">Draft ready</span>';
+    if (r.result === 'error') return '<span class="br-badge br-b-red">Error</span>';
+    if (r.result === 'skipped') return '<span class="br-badge br-b-gray">Skipped (team)</span>';
+    return resultBadge(r);
+  }
+  function itemHtml(r, forceOpen) {
+    var open = forceOpen || !!openIds[r.id];
+    var head = '<div class="br-row" data-toggle>' +
+      '<span class="br-chev">' + (forceOpen ? '' : open ? '&#9662;' : '&#9656;') + '</span>' +
+      '<a class="br-link" target="_blank" rel="noopener" title="Open in Zoho" href="' + ZOHO_TICKET_URL + encodeURIComponent(r.zoho_id || r.ticket_id) + '">#' + esc(r.ticket_number) + '</a>' +
+      (r.id ? kindBadge(r) : '') +
+      '<span class="br-who">' + esc(r.customer_name || r.customer_email) + '</span>' +
+      '<span class="br-subj">' + esc(r.subject || '(No Subject)') + '</span>' +
+      (r.priority === 'upset' ? '<span class="br-badge br-b-red" title="Upset customer — handle with priority">&#9888; Upset</span>' : '') +
+      statusBadge(r) +
+      '<span class="br-muted br-when">' + esc(when(r.ticket_created)) + '</span>' +
+    '</div>';
+    if (!open) return '<div class="br-item" data-id="' + r.id + '">' + head + '</div>';
+
     var canR = canRate() && isRateable(r);
     var rateBtns = ['good', 'average', 'bad'].map(function (k) {
       return '<button class="br-r ' + k + (r.rating === k ? ' on' : '') + '" data-rate="' + k + '"' + (canR ? '' : ' disabled') + '>' + k.charAt(0).toUpperCase() + k.slice(1) + '</button>';
     }).join('');
-    return '<div class="br-item" data-id="' + r.id + '">' +
-      '<div class="br-item-top">' +
-        '<a class="br-link" target="_blank" rel="noopener" href="' + ZOHO_TICKET_URL + encodeURIComponent(r.zoho_id || r.ticket_id) + '">#' + esc(r.ticket_number) + '</a>' +
-        (r.zoho_id ? '<span class="br-badge br-b-red" title="The customer wrote again on the same ticket after the bot\'s reply">Replied on same ticket</span>'
-          : r.ticket_kind === 'followup' ? '<span class="br-badge br-b-amber" title="New ticket continuing an earlier conversation — the bot only drafts, the team sends">Follow-up' +
-              (r.prev_ticket ? ' of #' + esc(r.prev_ticket) : '') + '</span>'
-          : r.backfill ? '<span class="br-badge br-b-gray" title="Was already open before the bot started">Old open</span>'
-          : r.id ? '<span class="br-badge br-b-green" title="Mail came in after the bot started">New</span>' : '') +
-        '<span class="br-who">' + esc(r.customer_name || r.customer_email) + '</span>' +
-        '<span class="br-muted">' + esc(r.customer_email) + ' · mail ' + esc(when(r.ticket_created)) + ' · bot ' + esc(when(r.processed_at)) + '</span>' +
-        '<span style="margin-left:auto;display:flex;gap:6px">' +
-          (r.template ? '<span class="br-badge br-b-gray">' + esc(r.template) + ' · ' + esc(TEMPLATE_NAMES[r.template] || '') + '</span>' : '') +
-          resultBadge(r) + followBadge(r) + '</span>' +
-      '</div>' +
-      (r.priority === 'upset' ? '<div class="br-order" style="color:var(--red)"><b>&#9888; Upset customer</b> — handle with priority</div>' : '') +
-      (r.order_info ? '<div class="br-order">Order: <b>' + esc(r.order_info) + '</b></div>' : '') +
-      (r.history ? '<div class="br-order">Earlier tickets: ' + String(r.history).split(',').map(function (n) { return '<b>#' + esc(n) + '</b>'; }).join(', ') + ' <span class="br-muted">(used by the AI for context)</span></div>' : '') +
-      (r.ai_note ? '<div class="br-order" style="color:var(--accent)"><b>' + esc(r.ai_note) + '</b></div>' : '') +
-      (r.skip_reason ? '<div class="br-order">Skipped because: <b>' + esc(r.skip_reason) + '</b> — left for the team</div>' : '') +
-      (r.error ? '<div class="br-order" style="color:var(--red)">' + esc(r.error) + '</div>' : '') +
-      '<div class="br-cols">' +
-        '<div><div class="br-col-h">Customer mail — ' + esc(r.subject) + '</div><div class="br-text">' + esc(r.mail_text || '(empty)') + '</div></div>' +
-        (canEdit(r)
-          ? '<div><div class="br-col-h">Bot reply <span class="br-muted" style="text-transform:none;letter-spacing:0">— edit or type your own</span></div>' +
-            '<textarea class="br-text reply br-edit" data-edit rows="9">' + esc(r._draft != null ? r._draft : r.reply_text) + '</textarea>' +
-            '<div class="br-edit-acts"><button class="br-btn" data-redraft title="Check the order, courier tracking and request again now, and write a fresh draft">&#8635; Redraft</button>' +
+    // What the bot found — short labelled lines
+    var facts = [
+      r.order_info ? ['Order', esc(r.order_info)] : null,
+      r.ai_note ? ['Bot note', esc(r.ai_note)] : null,
+      r.skip_reason ? ['Skipped', esc(r.skip_reason) + ' — left for the team'] : null,
+      r.history ? ['Earlier tickets', String(r.history).split(',').map(function (n) { return '#' + esc(n); }).join(', ')] : null,
+      r.error ? ['Error', '<span style="color:var(--red)">' + esc(r.error) + '</span>'] : null
+    ].filter(Boolean);
+    var showSend = canRate() && r.reply_text && ['dry_run', 'error', 'test'].indexOf(r.result) !== -1;
+    var sendTip = 'Goes to ' + r.customer_email + ' on ticket #' + r.ticket_number + ' with the Customer Care signature' + (r.template === 'AR1' ? ' (ticket stays open)' : ' — then the Zoho ticket is closed');
+    return '<div class="br-item open" data-id="' + r.id + '">' + head +
+      '<div class="br-body">' +
+        '<div class="br-meta">' + esc(r.customer_email) + ' · mail ' + esc(when(r.ticket_created)) + (r.processed_at ? ' · bot ' + esc(when(r.processed_at)) : '') +
+          (r.template ? ' · ' + esc(r.template) + ' ' + esc(TEMPLATE_NAMES[r.template] || '') : '') + followBadge(r) + '</div>' +
+        (facts.length ? '<div class="br-facts">' + facts.map(function (f) { return '<div><span>' + f[0] + '</span><b>' + f[1] + '</b></div>'; }).join('') + '</div>' : '') +
+        '<div class="br-cols">' +
+          '<div><div class="br-col-h">Customer mail</div><div class="br-text">' + esc(r.mail_text || '(empty)') + '</div></div>' +
+          '<div><div class="br-col-h">' + (canEdit(r) ? 'Reply — edit or type your own' : 'Bot reply') + '</div>' +
+            (canEdit(r) ? '<textarea class="br-text reply br-edit" data-edit rows="9">' + esc(r._draft != null ? r._draft : r.reply_text) + '</textarea>'
+              : '<div class="br-text reply">' + (r.reply_text ? esc(r.reply_text) : '<span class="br-muted">No reply — the team answers this one.</span>') + '</div>') +
+          '</div>' +
+        '</div>' +
+        // One action bar: tools left, Send right
+        (canEdit(r) || showSend ? '<div class="br-acts">' +
+          (canEdit(r) ? '<button class="br-btn" data-redraft title="Check the order, courier tracking and request again now, and write a fresh draft">&#8635; Redraft</button>' +
             '<button class="br-btn" data-refine>&#10024; Refine with AI</button>' +
             '<button class="br-btn" data-undo' + (r._undo != null ? '' : ' hidden') + '>&#8630; Undo</button>' +
-            '<button class="br-btn" data-learn style="margin-left:auto">&#129504; Learn</button></div>' +
-            '<div class="br-learn" data-learn-box hidden><input class="br-input" data-reason placeholder="Why this reply? e.g. order no. already given — check courier, don\'t ask again (min 20 chars)" style="flex:1">' +
-            '<button class="br-btn primary" data-learn-save>Save lesson</button></div></div>'
-          : '<div><div class="br-col-h">Bot reply</div><div class="br-text reply">' + (r.reply_text ? esc(r.reply_text) : '<span class="br-muted">No reply — the team answers this one.</span>') + '</div></div>') +
-      '</div>' +
-      // Send to customer (25-Nov-2026): any reply not sent yet — dry run, old open ticket, error, or a test result
-      (canRate() && r.reply_text && ['dry_run', 'error', 'test'].indexOf(r.result) !== -1
-        ? '<div class="br-send"><button class="br-btn primary" data-send' + (r.id ? '' : ' data-ticket="' + esc(r.ticket_number) + '"') + '>&#9993; Send to customer</button>' +
-          '<span class="br-muted">Goes to ' + esc(r.customer_email) + ' on ticket #' + esc(r.ticket_number) + ', with the full Customer Care signature' + (r.template === 'AR1' ? ' (ticket stays open).' : ' — then the Zoho ticket is closed.') + '</span></div>' : '') +
-      (isRateable(r) ? '<div class="br-rate">' + rateBtns +
-        '<input class="br-input br-note" data-note placeholder="Note — needed for Average / Bad, e.g. should mention refund timing" value="' + esc(r.rating_note || '') + '"' + (canR ? '' : ' disabled') + '>' +
-        (r.rated_by ? '<span class="br-muted">by ' + esc(r.rated_by) + ' · ' + esc(when(r.rated_at)) + '</span>' : '') + '</div>' : '') +
-    '</div>';
+            '<button class="br-btn" data-learn>&#129504; Learn</button>' : '') +
+          (showSend ? '<button class="br-btn primary" data-send title="' + esc(sendTip) + '" style="margin-left:auto">&#9993; Send to customer</button>' : '') +
+        '</div>' : '') +
+        (canEdit(r) ? '<div class="br-learn" data-learn-box hidden><input class="br-input" data-reason placeholder="Why this reply? e.g. order no. already given — check courier, don\'t ask again (min 20 chars)" style="flex:1">' +
+          '<button class="br-btn primary" data-learn-save>Save lesson</button></div>' : '') +
+        (isRateable(r) ? '<div class="br-rate"><span class="br-col-h" style="margin:0">Rate this reply</span>' + rateBtns +
+          '<input class="br-input br-note" data-note placeholder="Note — needed for Average / Bad" value="' + esc(r.rating_note || '') + '"' + (canR ? '' : ' disabled') + '>' +
+          (r.rated_by ? '<span class="br-muted">by ' + esc(r.rated_by) + ' · ' + esc(when(r.rated_at)) + '</span>' : '') + '</div>' : '') +
+      '</div></div>';
+  }
+
+  // 10 per page (25-Nov-2026)
+  var PAGE = 10, page = 0;
+  function pagerHtml(total) {
+    var pages = Math.ceil(total / PAGE);
+    if (pages <= 1) return '';
+    return '<div class="br-pager"><button class="br-btn" data-pg="-1"' + (page ? '' : ' disabled') + '>&#8249; Prev</button>' +
+      '<span>Page ' + (page + 1) + ' of ' + pages + ' · ' + total + ' tickets</span>' +
+      '<button class="br-btn" data-pg="1"' + (page < pages - 1 ? '' : ' disabled') + '>Next &#8250;</button></div>';
+  }
+  function wirePager(el, redraw) {
+    el.querySelectorAll('[data-pg]').forEach(function (b) {
+      b.onclick = function () { page += Number(b.getAttribute('data-pg')); redraw(); document.getElementById('br-filter').scrollIntoView({ block: 'start', behavior: 'smooth' }); };
+    });
   }
 
   // ── All tickets (open Zoho email cases) ──
@@ -1616,13 +1672,16 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     var el = document.getElementById('br-list');
     if (!zohoList) { el.innerHTML = '<div class="br-empty">Loading open tickets from Zoho…</div>'; loadZoho(); return; }
     var ql = q.trim().toLowerCase();
-    var list = zohoList.filter(function (t) { return !ql || [t.number, t.subject, t.name, t.email].join(' ').toLowerCase().indexOf(ql) !== -1; });
+    var all = zohoList.filter(function (t) { return !ql || [t.number, t.subject, t.name, t.email].join(' ').toLowerCase().indexOf(ql) !== -1; });
+    page = Math.min(page, Math.max(0, Math.ceil(all.length / PAGE) - 1));
+    var list = all.slice(page * PAGE, page * PAGE + PAGE);
     el.innerHTML = list.length ? '<table class="br-sum br-zoho"><tr><th>Ticket</th><th>Type</th><th>Subject</th><th>Customer</th><th>Created</th><th>Bot</th></tr>' +
       list.map(function (t) {
         return '<tr class="br-zrow' + (openTid === t.id ? ' on' : '') + '" data-tid="' + esc(t.id) + '"><td><a class="br-link" target="_blank" rel="noopener" href="' + ZOHO_TICKET_URL + encodeURIComponent(t.id) + '">#' + esc(t.number) + '</a></td><td>' + zohoType(t) + '</td>' +
           '<td>' + esc(t.subject || '(No Subject)') + '</td><td>' + esc(t.name || t.email) + '</td><td>' + esc(when(t.created)) + '</td><td>' + zohoBotBadge(t.bot) + '</td></tr>' +
           (openTid === t.id ? '<tr class="br-zdet"><td colspan="6"><div data-zdet></div></td></tr>' : '');
-      }).join('') + '</table>' : '<div class="br-empty">Nothing here.</div>';
+      }).join('') + '</table>' + pagerHtml(all.length) : '<div class="br-empty">Nothing here.</div>';
+    wirePager(el, drawZohoList);
     // Click a row → open the ticket right here (the # link still opens Zoho)
     el.querySelectorAll('.br-zrow').forEach(function (tr) {
       tr.onclick = function (e) {
@@ -1639,10 +1698,10 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     if (!t) return;
     // Bot already checked it → the same card as in the list (edit / send / rate)
     var r = rawRows.filter(function (x) { return String(x.ticket_id) === t.id; }).sort(function (a, b) { return b.id - a.id; })[0];
-    if (r) { box.innerHTML = itemHtml(r); wireItem(box.querySelector('.br-item'), r); return; }
+    if (r) { box.innerHTML = itemHtml(r, true); wireItem(box.querySelector('.br-item'), r); return; }
     // Not checked yet → preview of what the bot would reply (nothing saved or sent)
     var show = function (p) {
-      box.innerHTML = '<div class="br-hint" style="margin-bottom:8px">Bot hasn\'t checked this ticket yet — preview of what it would reply. Nothing is saved or sent.</div>' + itemHtml(p);
+      box.innerHTML = '<div class="br-hint" style="margin-bottom:8px">Bot hasn\'t checked this ticket yet — preview of what it would reply. Nothing is saved or sent.</div>' + itemHtml(p, true);
     };
     if (zPreview[t.id]) return show(zPreview[t.id]);
     box.innerHTML = '<div class="br-empty">Loading ticket…</div>';
@@ -1666,10 +1725,18 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     var t = function (r) { var d = toDate(r.processed_at); return d ? d.getTime() : 0; };
     list.sort(function (a, b) { return unr(a) - unr(b) || t(b) - t(a); });
     var el = document.getElementById('br-list');
-    el.innerHTML = list.length ? list.map(itemHtml).join('') : '<div class="br-empty">Nothing here.</div>';
+    page = Math.min(page, Math.max(0, Math.ceil(list.length / PAGE) - 1));
+    el.innerHTML = list.length ? list.slice(page * PAGE, page * PAGE + PAGE).map(function (r) { return itemHtml(r); }).join('') + pagerHtml(list.length)
+      : '<div class="br-empty">Nothing here.</div>';
+    wirePager(el, drawList);
     el.querySelectorAll('.br-item').forEach(function (box) {
       var id = Number(box.getAttribute('data-id'));
-      wireItem(box, rows.find(function (x) { return x.id === id; }));
+      var r = rows.find(function (x) { return x.id === id; });
+      box.querySelector('[data-toggle]').onclick = function (e) {
+        if (e.target.closest('a')) return;
+        openIds[id] = !openIds[id]; drawList();
+      };
+      if (openIds[id]) wireItem(box, r);
     });
   }
 
@@ -1882,7 +1949,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       // Already sent from the log → show it as sent (no second send)
       var tr = Object.assign({ id: 0, processed_at: null }, t, {
         result: t.logged_result === 'sent' ? 'sent' : t.reply_text ? 'test' : 'skipped' });
-      out.innerHTML = '<div style="margin-top:10px">' + itemHtml(tr) + '</div>';
+      out.innerHTML = '<div style="margin-top:10px">' + itemHtml(tr, true) + '</div>';
       var tsb = out.querySelector('[data-send]');
       if (tsb) tsb.onclick = function () { sendReply({ ticket: t.ticket_number }, tr, tsb); };
     } catch (e) { out.innerHTML = '<div class="br-hint" style="margin-top:10px;color:var(--red)">' + esc(e.message) + '</div>'; }
