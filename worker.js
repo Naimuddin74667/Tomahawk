@@ -1439,7 +1439,7 @@ const ACTION_TIERS = {
   // Internal notes on requests / cases (20-Nov-2026)
   ccNotesList: 'viewer_read', ccNoteAdd: 'manager_up',
   // Customer Care → Bot Replies: automatic email replies log + review (25-Nov-2026)
-  mailBotList: 'viewer_read', mailBotZohoOpen: 'viewer_read', mailBotRefine: 'manager_up', mailBotLearn: 'manager_up', mailBotLessons: 'viewer_read', mailBotLessonDelete: 'manager_up', mailBotRate: 'manager_up', mailBotTest: 'manager_up', mailBotSend: 'manager_up', mailBotTemplates: 'viewer_read', mailBotTemplateSave: 'admin_only', mailBotSuggest: 'admin_only', mailBotSettings: 'admin_only', mailBotRunNow: 'admin_only',
+  mailBotList: 'viewer_read', mailBotZohoOpen: 'viewer_read', mailBotRefine: 'manager_up', mailBotRedraft: 'manager_up', mailBotLearn: 'manager_up', mailBotLessons: 'viewer_read', mailBotLessonDelete: 'manager_up', mailBotRate: 'manager_up', mailBotTest: 'manager_up', mailBotSend: 'manager_up', mailBotTemplates: 'viewer_read', mailBotTemplateSave: 'admin_only', mailBotSuggest: 'admin_only', mailBotSettings: 'admin_only', mailBotRunNow: 'admin_only',
   // Dashboard "Raise ticket" — record (or clear) a courier escalation ticket on one leg.
   ccMarkEscalation: 'manager_up',
   // RTO received → close the case instead of re-sending (06-Nov-2026).
@@ -1496,7 +1496,7 @@ const ACTION_TIERS = {
 
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
-const ALWAYS_GATED = new Set(['ccDeliveredDate', 'mailBotList', 'mailBotZohoOpen', 'mailBotRefine', 'mailBotLearn', 'mailBotLessons', 'mailBotLessonDelete', 'mailBotRate', 'mailBotTest', 'mailBotSend', 'mailBotTemplates', 'ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
+const ALWAYS_GATED = new Set(['ccDeliveredDate', 'mailBotList', 'mailBotZohoOpen', 'mailBotRefine', 'mailBotRedraft', 'mailBotLearn', 'mailBotLessons', 'mailBotLessonDelete', 'mailBotRate', 'mailBotTest', 'mailBotSend', 'mailBotTemplates', 'ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
   'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccPaymentWaive', 'ccLogisticsQuote', 'ccVersion',
   'shopShipList', 'shopShipRefresh', 'shopShipReceived']);
 
@@ -2304,6 +2304,9 @@ export default {
       // Team-written replies (25-Nov-2026): refine with AI · learn (lesson + reason) · lessons list
       if (request.method === 'POST' && act === 'mailBotRefine') {
         try { return json(await mbRefine(env, body || {})); } catch (e) { return json({ ok: false, error: e.message }, 500); }
+      }
+      if (request.method === 'POST' && act === 'mailBotRedraft') {
+        try { return json(await mbRedraft(env, body || {})); } catch (e) { return json({ ok: false, error: e.message }, 500); }
       }
       if (request.method === 'POST' && act === 'mailBotLearn') {
         return json(await mbLearn(env, authResult.user || (await resolveSession(request, env.DB)), body || {}));
@@ -14697,6 +14700,7 @@ function mbExtractOrders(subject, text) {
 }
 
 const MB_ORDER_FIELDS = `id name createdAt cancelledAt email phone displayFinancialStatus paymentGatewayNames
+  shippingAddress { name phone }
   totalPriceSet { shopMoney { amount } }
   lineItems(first: 5) { nodes { title quantity } }
   fulfillments(first: 10) { status displayStatus deliveredAt createdAt }
@@ -15224,17 +15228,30 @@ async function mbIdsFromImages(env, attachments) {
 }
 
 // Facts the AI may use: website order (only if it belongs to the sender) + request status.
-async function mbFactsFor(env, text, email) {
+async function mbFactsFor(env, text, email, name) {
   const facts = [];
   const ids = mbExtractOrders('', text);
   if (ids.web.length === 1 && shopifyConfigured(env)) {
     const o = await mbShopifyOrderByNumber(env, ids.web[0]);
-    if (o && String(o.email || '').toLowerCase() === email) {
+    // Same customer? Email first; else the name or a mobile in the mail matches the order (25-Nov-2026)
+    const sameEmail = o && String(o.email || '').toLowerCase() === email;
+    const match = o && !sameEmail ? mbSameCustomer(o, name, text) : '';
+    if (o && (sameEmail || match)) {
+
       const st = mbOrderState(o);
       facts.push('Website order ' + o.name + ': placed ' + mbDate(o.createdAt) + ', ' +
         ({ open: 'not yet handed to the courier (customer can cancel on the Track Order page)', shipped: 'with the courier', delivered: 'delivered' + (st.deliveredAt ? ' on ' + mbDate(st.deliveredAt) : ''), cancelled: 'cancelled' })[st.state] +
         ', ' + (st.isCod ? 'COD' : st.paid ? 'prepaid' : 'payment ' + String(o.displayFinancialStatus || '').toLowerCase()) + ', ' + mbMoney(st.amount) +
         ', items: ' + mbProductName(o.lineItems && o.lineItems.nodes) + (st.refunded > 0 ? ', refunded ' + mbMoney(st.refunded) + ' on ' + mbDate(st.lastRefund) : '') + '.');
+      if (match) facts.push('Note for the team: order ' + o.name + ' is on a different email — matched by ' + match + '.');
+      // Live courier tracking for this order (checked now, not from Shopify's status)
+      const ships = (await env.DB.prepare('SELECT awb, courier, track_stage, attempts, rto_reason FROM shopify_shipments WHERE order_name IN (?, ?)')
+        .bind(o.name, String(o.name).replace('#', '')).all().catch(() => ({ results: [] }))).results || [];
+      for (const sh of ships.slice(0, 2)) {
+        const lt = await mbLiveTrack(env, sh.awb, sh.courier, 'forward').catch(() => null);
+        facts.push('Courier tracking right now (' + (sh.courier || 'courier') + ' AWB ' + sh.awb + '): ' + mbTrackLine(lt, sh.track_stage) +
+          (sh.attempts ? ', delivery attempts: ' + sh.attempts : '') + (sh.rto_reason ? ', reason given: ' + sh.rto_reason : '') + '.');
+      }
     } else if (o) facts.push('Order #' + ids.web[0] + ' exists but is not on this customer\'s email — do not share its details; ask them to confirm the order number and mobile number.');
     else facts.push('No website order #' + ids.web[0] + ' was found.');
   }
@@ -15246,11 +15263,67 @@ async function mbFactsFor(env, text, email) {
     const row = await env.DB.prepare('SELECT claim_id, status, product, case_id, created_at, request_type FROM warranty_claims WHERE claim_id = ? OR prev_claim_id = ?').bind(id, id).first().catch(() => null);
     if (row) {
       let leg = '';
-      try { const { rev, fwd } = await srCaseLegs(env.DB, row.case_id); if (rev) leg = ' Pickup: ' + (rev.received_at ? 'product received at our service centre' : (rev.track_stage || 'booked')) + '.'; if (fwd) leg += ' Sent back: ' + (fwd.track_stage || 'booked') + '.'; } catch (e) { /* ignore */ }
+      try {
+        const { rev, fwd } = await srCaseLegs(env.DB, row.case_id);
+        // Live courier status for the pickup and the send-back (checked now)
+        if (rev) {
+          const lt = !rev.received_at && rev.waybill && rev.courier !== 'Self-ship' ? await mbLiveTrack(env, rev.waybill, rev.courier, 'reverse').catch(() => null) : null;
+          leg = ' Pickup' + (rev.waybill ? ' (' + (rev.courier || 'Delhivery') + ' AWB ' + rev.waybill + ')' : '') + ': ' +
+            (rev.received_at ? 'product received at our service centre on ' + mbDate(rev.received_at) : mbTrackLine(lt, rev.track_stage || 'booked')) + '.';
+        }
+        if (fwd) {
+          const lt = fwd.waybill && !fwd.delivered_at ? await mbLiveTrack(env, fwd.waybill, fwd.courier, 'forward').catch(() => null) : null;
+          leg += ' Sent back' + (fwd.waybill ? ' (' + (fwd.courier || 'Delhivery') + ' AWB ' + fwd.waybill + ')' : '') + ': ' +
+            (fwd.delivered_at ? 'delivered to the customer on ' + mbDate(fwd.delivered_at) : mbTrackLine(lt, fwd.track_stage || 'booked')) + '.';
+        }
+      } catch (e) { /* ignore */ }
       facts.push('Request ' + row.claim_id + ' (' + (row.product || '') + '), raised ' + mbDate(row.created_at) + ', status: ' + (row.status || 'new') + '.' + leg);
     } else facts.push('Request ' + id + ' was not found in our system.');
   }
   return facts;
+}
+
+// Does an order on another email belong to this customer? → 'name' / 'mobile' / ''
+function mbSameCustomer(o, name, text) {
+  const a = o.shippingAddress || {};
+  const digits = s => String(s || '').replace(/\D/g, '').slice(-10);
+  const phones = [digits(a.phone), digits(o.phone)].filter(p => p.length === 10);
+  const inMail = (String(text || '').match(/(?:\+?91[\s-]?)?[6-9]\d{4}[\s-]?\d{5}/g) || []).map(digits);
+  if (phones.some(p => inMail.includes(p))) return 'mobile';
+  const words = s => String(s || '').toLowerCase().replace(/[^a-z ]+/g, ' ').split(/\s+/).filter(w => w.length > 2);
+  const mine = words(name), theirs = words(a.name);
+  if (mine.length && theirs.length && mine[0] === theirs[0] && (mine.length < 2 || theirs.length < 2 || mine.some(w => w !== mine[0] && theirs.includes(w)))) return 'name';
+  return '';
+}
+// One AWB, tracked live right now → { stage, status, last: {t, s, l} } or null
+async function mbLiveTrack(env, awb, courier, direction) {
+  if (!awb) return null;
+  if (/ekart/i.test(courier || '')) {
+    const r = await fetch(ekartBase(env) + '/api/v1/track/' + encodeURIComponent(awb));
+    const j = await r.json();
+    if (!j || !j.track) return null;
+    const d = deriveEkartStage(j.track, direction);
+    const list = (j.track.details || []).map(x => ({ t: Number(x.ctime) || 0, s: String(x.desc || x.status || ''), l: String(x.location || '') })).sort((a, b) => b.t - a.t);
+    return { stage: d.stage, status: d.rawStatus, last: list[0] || null };
+  }
+  if (!env.DELHIVERY_API_TOKEN) return null;
+  const base = env.DELHIVERY_BASE_URL || 'https://track.delhivery.com';
+  const r = await fetch(base + '/api/v1/packages/json/?waybill=' + encodeURIComponent(awb), { headers: { 'Authorization': 'Token ' + env.DELHIVERY_API_TOKEN } });
+  const j = await r.json();
+  const sh = ((j && j.ShipmentData) || [])[0]; const s = sh && sh.Shipment;
+  if (!s) return null;
+  const d = deriveDelhiveryStage(s, direction);
+  const list = (s.Scans || []).map(x => x.ScanDetail || x).map(x => {
+    const iso = istToIso(x.ScanDateTime || x.StatusDateTime);
+    return { t: iso ? Date.parse(iso) : 0, s: String(x.Instructions || x.Scan || x.Status || ''), l: String(x.ScannedLocation || x.StatusLocation || '') };
+  }).sort((a, b) => b.t - a.t);
+  return { stage: d.stage, status: d.rawStatus, last: list[0] || null };
+}
+function mbTrackLine(lt, fallbackStage) {
+  if (!lt) return (fallbackStage || 'status not available') + ' (last saved status)';
+  const l = lt.last;
+  return lt.stage + (l && l.t ? ' — last update "' + l.s + '"' + (l.l ? ' at ' + l.l : '') + ' on ' +
+    new Date(l.t).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '');
 }
 
 async function mbAiDraft(env, orgId, tk, d, contact, conv) {
@@ -15263,7 +15336,7 @@ async function mbAiDraft(env, orgId, tk, d, contact, conv) {
   }
   const hist = await mbCustomerHistory(env, orgId, d.customer_email, tk.id).catch(() => ({ numbers: [], text: '' }));
   if (hist.numbers.length) d.history = hist.numbers.join(',');
-  const facts = await mbFactsFor(env, text + '\n' + (d.subject || ''), d.customer_email).catch(() => []);
+  const facts = await mbFactsFor(env, text + '\n' + (d.subject || ''), d.customer_email, [contact.firstName, contact.lastName].filter(Boolean).join(' ') || d.customer_name).catch(() => []);
   const T = await mbTemplates(env);
   const lessons = await mbLessonsFor(env, (d.subject || '') + '\n' + (conv.latestText || '')).catch(() => []);
   if (lessons.length) notes.push('Used ' + lessons.length + ' team lesson' + (lessons.length > 1 ? 's' : ''));
@@ -15579,6 +15652,28 @@ async function mbLearn(env, user, b) {
       (user && user.username) || 'admin').first();
   return { ok: true, lesson: r };
 }
+// ↻ Redraft (25-Nov-2026): work the reply out again NOW — fresh order + live courier
+// tracking + request status + team lessons — and replace the unsent draft on the log.
+async function mbRedraft(env, b) {
+  await ensureMailBotTable(env.DB);
+  const row = await env.DB.prepare('SELECT * FROM bot_reply_log WHERE id = ?').bind(parseInt(b.id, 10) || 0).first();
+  if (!row) return { ok: false, error: 'Reply not found' };
+  if (['sent', 'sending'].includes(row.result)) return { ok: false, error: 'Already sent — nothing to redraft.' };
+  const orgId = await mbOrgId(env);
+  const t = await zdCall(env, 'GET', '/tickets/' + (row.zoho_id || row.ticket_id), { orgId, query: { include: 'contacts' } });
+  if (!t.ok) return { ok: false, error: 'Zoho ticket ' + t.status };
+  const tk = t.json;
+  if (!tk.contact && tk.contactId) { const c = await zdCall(env, 'GET', '/contacts/' + tk.contactId, { orgId }); if (c.ok) tk.contact = c.json; }
+  mbAiBudget = 3;
+  const d = await mbDecide(env, orgId, tk);
+  if (!d.reply_text) return { ok: false, error: 'The bot has no reply for this ticket — ' + (d.skip_reason || d.ai_note || 'left for the team') };
+  await env.DB.prepare(`UPDATE bot_reply_log SET reply_text = ?, template = ?, template_version = ?, reply_type = ?, order_no = ?, order_info = ?,
+      ai_note = ?, priority = ?, history = ?, skip_reason = '', error = '', result = CASE WHEN result IN ('error', 'skipped') THEN 'dry_run' ELSE result END
+    WHERE id = ?`).bind(d.reply_text, d.template || '', d.template_version || null, d.reply_type || '', d.order_no || '', d.order_info || '',
+      d.ai_note || null, d.priority || null, d.history || null, row.id).run();
+  return { ok: true, row: await env.DB.prepare('SELECT * FROM bot_reply_log WHERE id = ?').bind(row.id).first() };
+}
+
 // Refine a reply the team typed: same meaning and facts, simple polite English.
 async function mbRefine(env, b) {
   if (!env.AI) return { ok: false, error: 'AI not available' };

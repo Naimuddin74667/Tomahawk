@@ -1560,7 +1560,8 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
         (canEdit(r)
           ? '<div><div class="br-col-h">Bot reply <span class="br-muted" style="text-transform:none;letter-spacing:0">— edit or type your own</span></div>' +
             '<textarea class="br-text reply br-edit" data-edit rows="9">' + esc(r._draft != null ? r._draft : r.reply_text) + '</textarea>' +
-            '<div class="br-edit-acts"><button class="br-btn" data-refine>&#10024; Refine with AI</button>' +
+            '<div class="br-edit-acts"><button class="br-btn" data-redraft title="Check the order, courier tracking and request again now, and write a fresh draft">&#8635; Redraft</button>' +
+            '<button class="br-btn" data-refine>&#10024; Refine with AI</button>' +
             '<button class="br-btn" data-undo' + (r._undo != null ? '' : ' hidden') + '>&#8630; Undo</button>' +
             '<button class="br-btn" data-learn style="margin-left:auto">&#129504; Learn</button></div>' +
             '<div class="br-learn" data-learn-box hidden><input class="br-input" data-reason placeholder="Why this reply? e.g. order no. already given — check courier, don\'t ask again (min 20 chars)" style="flex:1">' +
@@ -1664,6 +1665,16 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   function wireEdit(box, ta, r) {
     var undo = box.querySelector('[data-undo]'), lb = box.querySelector('[data-learn-box]');
     ta.oninput = function () { r._draft = ta.value; };
+    box.querySelector('[data-redraft]').onclick = async function () {
+      var b = this;
+      if (r._draft != null && r._draft !== r.reply_text && !confirm('Replace your edits with a fresh bot draft?')) return;
+      b.disabled = true; b.textContent = 'Checking order & tracking…';
+      try {
+        var res = await post('mailBotRedraft', { id: r.id });
+        if (!res.ok) throw new Error(res.error || 'failed');
+        Object.assign(r, res.row); r._draft = null; r._undo = null; drawList();
+      } catch (e) { alert("Couldn't redraft: " + e.message); b.disabled = false; b.innerHTML = '&#8635; Redraft'; }
+    };
     box.querySelector('[data-refine]').onclick = async function () {
       var b = this; if (!ta.value.trim()) return;
       b.disabled = true; b.textContent = 'Refining…';
