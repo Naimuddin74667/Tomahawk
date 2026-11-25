@@ -1439,7 +1439,7 @@ const ACTION_TIERS = {
   // Internal notes on requests / cases (20-Nov-2026)
   ccNotesList: 'viewer_read', ccNoteAdd: 'manager_up',
   // Customer Care → Bot Replies: automatic email replies log + review (25-Nov-2026)
-  mailBotList: 'viewer_read', mailBotRate: 'manager_up', mailBotTest: 'manager_up', mailBotSend: 'manager_up', mailBotSettings: 'admin_only', mailBotRunNow: 'admin_only',
+  mailBotList: 'viewer_read', mailBotRate: 'manager_up', mailBotTest: 'manager_up', mailBotSend: 'manager_up', mailBotTemplates: 'viewer_read', mailBotTemplateSave: 'admin_only', mailBotSuggest: 'admin_only', mailBotSettings: 'admin_only', mailBotRunNow: 'admin_only',
   // Dashboard "Raise ticket" — record (or clear) a courier escalation ticket on one leg.
   ccMarkEscalation: 'manager_up',
   // RTO received → close the case instead of re-sending (06-Nov-2026).
@@ -1496,7 +1496,7 @@ const ACTION_TIERS = {
 
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
-const ALWAYS_GATED = new Set(['mailBotList', 'mailBotRate', 'mailBotTest', 'mailBotSend', 'ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
+const ALWAYS_GATED = new Set(['mailBotList', 'mailBotRate', 'mailBotTest', 'mailBotSend', 'mailBotTemplates', 'ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
   'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccPaymentWaive', 'ccLogisticsQuote', 'ccVersion',
   'shopShipList', 'shopShipRefresh', 'shopShipReceived']);
 
@@ -2303,6 +2303,8 @@ export default {
         const rating = ['good', 'average', 'bad', ''].includes(body && body.rating) ? body.rating : null;
         if (!id || rating === null) return json({ ok: false, error: 'Bad rating' }, 400);
         const note = String((body && body.note) || '').trim().slice(0, 500);
+        // Average / Bad need a reason — that's what the reply gets improved from (25-Nov-2026)
+        if ((rating === 'average' || rating === 'bad') && note.length < 3) return json({ ok: false, error: 'Add a note — what should be better in this reply?' }, 400);
         const user = authResult.user || (await resolveSession(request, env.DB));
         const who = (user && user.username) || 'admin';
         const row = await env.DB.prepare(`UPDATE bot_reply_log SET rating = ?, rating_note = ?, rated_by = ?, rated_at = datetime('now')
@@ -2316,6 +2318,18 @@ export default {
         if (body && typeof body.signature_html === 'string') s.signature_html = mbCleanSignature(body.signature_html);
         await mbSaveSettings(env, s);
         return json({ ok: true, settings: mbPublicSettings(s) });
+      }
+      // Reply texts: list (with per-version ratings + notes), save a new version, AI suggestion
+      if (request.method === 'GET' && action === 'mailBotTemplates') {
+        return json(await mbTemplateOverview(env));
+      }
+      if (request.method === 'POST' && act === 'mailBotTemplateSave') {
+        const user = authResult.user || (await resolveSession(request, env.DB));
+        return json(await mbSaveTemplate(env, String((body && body.template) || ''), String((body && body.body) || ''), (body && body.source) || 'edit', (user && user.username) || 'admin'));
+      }
+      if (request.method === 'POST' && act === 'mailBotSuggest') {
+        try { return json(await mbSuggestTemplate(env, String((body && body.template) || ''))); }
+        catch (e) { return json({ ok: false, error: e.message }, 500); }
       }
       if (request.method === 'POST' && act === 'mailBotSend') {
         try {
@@ -14503,7 +14517,7 @@ async function ensureMailBotTable(DB) {
     processed_at TEXT DEFAULT (datetime('now'))
   )`).run();
   // backfill = 1 → a ticket that was already open before the bot started (never sent)
-  for (const col of ['backfill INTEGER DEFAULT 0', 'sent_by TEXT', 'sent_at TEXT', 'closed_at TEXT']) {   // added 25-Nov-2026
+  for (const col of ['backfill INTEGER DEFAULT 0', 'sent_by TEXT', 'sent_at TEXT', 'closed_at TEXT', 'template_version INTEGER']) {   // added 25-Nov-2026
     try { await DB.prepare('ALTER TABLE bot_reply_log ADD COLUMN ' + col).run(); } catch (e) { /* already there */ }
   }
 }
@@ -14686,31 +14700,88 @@ async function mbBuildCancelReply(env, t) {
 }
 
 // The reply wording (agreed 25-Nov-2026). Returns an array of paragraphs.
-function mbCancelText(r) {
-  const n = r.order_no;
-  const out = ['Hi' + (r.name ? ' ' + r.name : '') + ','];
-  if (r.template === 'CX1') {
-    out.push('Your order ' + n + ' for ' + r.product + " hasn't been dispatched yet, so you can cancel it yourself in a few seconds:");
-    out.push('1. Open ' + MB_TRACK_LINK + '\n2. Enter your order number ' + n + ' and your mobile number\n3. Click "Cancel order" at the bottom of the order details\n4. Confirm with the OTP sent to your WhatsApp');
-    if (r.st.paid) out.push('Once cancelled, ' + mbMoney(r.st.amount) + ' will be refunded to your original payment method within 7–10 working days.');
-  } else if (r.template === 'CX2') {
-    out.push('Your order ' + n + ' has already been picked up by our courier partner, so it can no longer be cancelled. You can follow its live status here: ' + MB_TRACK_LINK);
-  } else if (r.template === 'CX3') {
-    let line = 'Your order ' + n + ' is already cancelled.';
-    if (r.st.refunded > 0) line += ' A refund of ' + mbMoney(r.st.refunded) + ' was processed on ' + mbDate(r.st.lastRefund) + '.';
-    else if (r.st.paid) line += ' Your refund will be processed within 7–10 working days.';
-    out.push(line);
-  } else if (r.template === 'CX4') {
-    out.push('Our records show order ' + n + ' was delivered' + (r.st.deliveredAt ? ' on ' + mbDate(r.st.deliveredAt) : '') +
-      ", so it can't be cancelled. If there's an issue with the product, you can report it here within 7 days of delivery: " + MB_DRN_LINK);
-  } else if (r.template === 'CX5') {
-    out.push('This order was placed on ' + r.platform + ', so it can only be cancelled from the "Your Orders" section of the ' + r.platform + ' app.');
-  } else {
-    out.push("We couldn't find the order from your mail. You can see and cancel your website orders yourself here: " + MB_TRACK_LINK +
-      '. Just verify your mobile number with the WhatsApp OTP to see all your orders.');
-  }
-  out.push('Thanks & Regards,');   // full signature is added only in the email (mbComposeHtml)
+// ── Reply texts (editable, versioned — 25-Nov-2026) ──
+// Each reply type's middle part lives in D1 bot_reply_templates (newest active
+// version wins), falling back to these defaults (= version 1). "Hi {name}," and
+// "Thanks & Regards," are added around it. A blank line starts a new paragraph;
+// paragraphs whose fill-ins are all empty are dropped (e.g. {prepaid_line} on COD).
+const MB_DEFAULT_TEXTS = {
+  CX1: 'Your order {order_no} for {product} hasn\'t been dispatched yet, so you can cancel it yourself in a few seconds:\n\n' +
+       '1. Open {track_link}\n2. Enter your order number {order_no} and your mobile number\n3. Click "Cancel order" at the bottom of the order details\n4. Confirm with the OTP sent to your WhatsApp\n\n{prepaid_line}',
+  CX2: 'Your order {order_no} has already been picked up by our courier partner, so it can no longer be cancelled. You can follow its live status here: {track_link}',
+  CX3: 'Your order {order_no} is already cancelled. {refund_line}',
+  CX4: 'Our records show order {order_no} was delivered{delivered_on}, so it can\'t be cancelled. If there\'s an issue with the product, you can report it here within 7 days of delivery: {drn_link}',
+  CX5: 'This order was placed on {platform}, so it can only be cancelled from the "Your Orders" section of the {platform} app.',
+  CX6: 'We couldn\'t find the order from your mail. You can see and cancel your website orders yourself here: {track_link}. Just verify your mobile number with the WhatsApp OTP to see all your orders.',
+  AR1: 'Thank you for writing to us. To help you quickly, please reply to this mail with one of these:\n\n' +
+       '• Your order ID — website order like #3370, Amazon order like 402-1234567-1234567, or Flipkart order like OD123456789012345678\n' +
+       '• Or your request ID, if you have already raised a request (like WRN-261121-01)'
+};
+// Fill-ins each reply type may use (the editor and the AI suggestion are checked against this).
+const MB_FILL_INS = {
+  CX1: ['order_no', 'product', 'track_link', 'prepaid_line', 'amount'],
+  CX2: ['order_no', 'product', 'track_link'],
+  CX3: ['order_no', 'product', 'refund_line', 'amount'],
+  CX4: ['order_no', 'product', 'delivered_on', 'drn_link'],
+  CX5: ['order_no', 'platform'],
+  CX6: ['track_link'],
+  AR1: []
+};
+// Fill-ins a reply must keep (removing them would break the reply's purpose).
+const MB_REQUIRED_FILL_INS = { CX1: ['order_no', 'track_link'], CX2: ['order_no', 'track_link'], CX3: ['order_no', 'refund_line'],
+  CX4: ['order_no', 'drn_link'], CX5: ['platform'], CX6: ['track_link'], AR1: [] };
+
+async function ensureMbTemplateTable(DB) {
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS bot_reply_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, template TEXT NOT NULL, version INTEGER NOT NULL, body TEXT NOT NULL,
+    source TEXT, created_by TEXT, created_at TEXT DEFAULT (datetime('now')), active INTEGER DEFAULT 1
+  )`).run();
+}
+// → { CX1: { version, body }, … } — active D1 version, else the default as v1.
+async function mbTemplates(env) {
+  await ensureMbTemplateTable(env.DB);
+  const rows = (await env.DB.prepare('SELECT template, version, body FROM bot_reply_templates WHERE active = 1').all()).results || [];
+  const out = {};
+  Object.keys(MB_DEFAULT_TEXTS).forEach(k => { out[k] = { version: 1, body: MB_DEFAULT_TEXTS[k] }; });
+  rows.forEach(r => { if (out[r.template] && r.version >= out[r.template].version) out[r.template] = { version: r.version, body: r.body }; });
   return out;
+}
+function mbFillIns(body) { return [...new Set((String(body).match(/\{([a-z_]+)\}/g) || []).map(x => x.slice(1, -1)))]; }
+// Problems with a reply text, or '' when it's fine.
+function mbCheckTemplate(code, body) {
+  if (!MB_DEFAULT_TEXTS[code]) return 'Unknown reply type';
+  const b = String(body || '').trim();
+  if (b.length < 15) return 'The reply text is too short.';
+  if (b.length > 2000) return 'The reply text is too long (max 2000 characters).';
+  const bad = mbFillIns(b).filter(f => !MB_FILL_INS[code].includes(f));
+  if (bad.length) return 'Unknown fill-in: ' + bad.map(f => '{' + f + '}').join(', ') + '. Allowed: ' + (MB_FILL_INS[code].map(f => '{' + f + '}').join(', ') || 'none');
+  const missing = MB_REQUIRED_FILL_INS[code].filter(f => !b.includes('{' + f + '}'));
+  if (missing.length) return 'Keep ' + missing.map(f => '{' + f + '}').join(', ') + ' — the reply needs it.';
+  if (/^\s*(hi|hello|dear)\b/i.test(b) || /(thanks|regards)\s*,?\s*$/i.test(b)) return 'Leave out the greeting and the "Thanks & Regards" — they are added automatically.';
+  return '';
+}
+// Renders greeting + body + sign-off into paragraphs.
+function mbRender(tpl, name, vars) {
+  const paras = String(tpl.body).split(/\n\s*\n/).map(p => {
+    const used = mbFillIns(p);
+    const filled = p.replace(/\{([a-z_]+)\}/g, (m, k) => (vars[k] != null ? String(vars[k]) : ''));
+    // Drop a paragraph that is only fill-ins and they all came out empty
+    if (used.length && !filled.replace(/\s+/g, '').length) return '';
+    return filled.replace(/[ \t]+$/gm, '').replace(/ {2,}/g, ' ').trim();
+  }).filter(Boolean);
+  return ['Hi' + (name ? ' ' + name : '') + ','].concat(paras, ['Thanks & Regards,']);
+}
+function mbCancelText(r, T) {
+  const st = r.st || {};
+  const vars = {
+    order_no: r.order_no || '', product: r.product || 'your product', platform: r.platform || '',
+    track_link: MB_TRACK_LINK, drn_link: MB_DRN_LINK, amount: st.amount ? mbMoney(st.amount) : '',
+    prepaid_line: st.paid ? 'Once cancelled, ' + mbMoney(st.amount) + ' will be refunded to your original payment method within 7–10 working days.' : '',
+    refund_line: st.refunded > 0 ? 'A refund of ' + mbMoney(st.refunded) + ' was processed on ' + mbDate(st.lastRefund) + '.'
+      : st.paid ? 'Your refund will be processed within 7–10 working days.' : '',
+    delivered_on: st.deliveredAt ? ' on ' + mbDate(st.deliveredAt) : ''
+  };
+  return mbRender(T[r.template] || T.CX6, r.name, vars);
 }
 // ── Reply type 2 (25-Nov-2026): AR1 — ask for the order ID / request ID ──
 // Any customer mail with no order ID and no request ID, from a sender who has no
@@ -14726,13 +14797,7 @@ function mbHasReference(subject, text) {
   // Flipkart order without "OD", AWB / tracking numbers: any 12+ digit number
   return /\b\d{12,22}\b/.test(all.replace(/\s/g, ' '));
 }
-function mbAskRefText(name) {
-  return ['Hi' + (name ? ' ' + name : '') + ',',
-    'Thank you for writing to us. To help you quickly, please reply to this mail with one of these:',
-    '• Your order ID — website order like #3370, Amazon order like 402-1234567-1234567, or Flipkart order like OD123456789012345678\n' +
-    '• Or your request ID, if you have already raised a request (like WRN-261121-01)',
-    'Thanks & Regards,'];
-}
+function mbAskRefText(name, T) { return mbRender(T.AR1, name, {}); }
 // Replies that keep the ticket open after sending (the customer needs to answer).
 const MB_KEEP_OPEN = ['AR1'];
 
@@ -14793,10 +14858,11 @@ async function mbDecide(env, orgId, tk) {
   if (skip === 'Not a cancellation mail') return mbDecideAskRef(env, out, contact);
   if (skip) { out.skip_reason = skip; out.reply_type = 'cancellation'; return out; }
   out.reply_type = 'cancellation';
+  const T = await mbTemplates(env);
   const r = await mbBuildCancelReply(env, { subject: out.subject, text: out.mail_text, email, contactName: contact.firstName || out.customer_name });
   if (r.skip) { out.skip_reason = r.skip; return out; }
-  const paras = mbCancelText(r);
-  Object.assign(out, { template: r.template, order_no: r.order_no || '', order_info: r.order_info || '',
+  const paras = mbCancelText(r, T);
+  Object.assign(out, { template: r.template, template_version: (T[r.template] || {}).version || 1, order_no: r.order_no || '', order_info: r.order_info || '',
     reply_text: paras.join('\n\n'), reply_html: mbParasToHtml(paras) });
   return out;
 }
@@ -14834,8 +14900,9 @@ async function mbDecideAskRef(env, out, contact) {
       return out;
     }
   }
-  const paras = mbAskRefText(mbFirstName(contact.firstName || out.customer_name));
-  Object.assign(out, { reply_type: 'missing_reference', template: 'AR1', order_info: 'No order ID / request ID in the mail',
+  const T = await mbTemplates(env);
+  const paras = mbAskRefText(mbFirstName(contact.firstName || out.customer_name), T);
+  Object.assign(out, { reply_type: 'missing_reference', template: 'AR1', template_version: T.AR1.version, order_info: 'No order ID / request ID in the mail',
     reply_text: paras.join('\n\n'), reply_html: mbParasToHtml(paras) });
   return out;
 }
@@ -14849,7 +14916,16 @@ async function mbSendReply(env, orgId, ticketId, to, html) {
 
 // Cron entry: look at new email tickets and answer what we can.
 async function mbRun(env, opts) {
-  opts = opts || {};
+  const r = await mbRunInner(env, opts || {});
+  if (r && r.mode !== 'off') {
+    try {
+      await env.DB.prepare("INSERT INTO tm_settings (key, value) VALUES ('mailbot_last_run', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .bind(JSON.stringify({ at: new Date().toISOString(), handled: r.handled || 0, left: r.left || 0, ok: !!r.ok, error: r.error || '', manual: !!(opts && opts.max) })).run();
+    } catch (e) { /* never block the run */ }
+  }
+  return r;
+}
+async function mbRunInner(env, opts) {
   await ensureMailBotTable(env.DB);
   const s = await mbGetSettings(env);
   if (s.mode === 'off' && !opts.force) return { ok: true, mode: 'off', handled: 0 };
@@ -14908,9 +14984,10 @@ async function mbRun(env, opts) {
     } catch (e) { result = 'error'; error = String(e.message || e).slice(0, 500); console.error('mailbot', tk.id, error); }
     d = d || { customer_email: tk.email || '', subject: tk.subject || '' };
     await env.DB.prepare(`UPDATE bot_reply_log SET ticket_created = ?, customer_name = ?, customer_email = ?, subject = ?, mail_text = ?,
-        reply_type = ?, template = ?, order_no = ?, order_info = ?, reply_text = ?, result = ?, skip_reason = ?, error = ?, backfill = ?, processed_at = datetime('now')
+        reply_type = ?, template = ?, order_no = ?, order_info = ?, reply_text = ?, result = ?, skip_reason = ?, error = ?, backfill = ?, template_version = ?, processed_at = datetime('now')
       WHERE ticket_id = ?`).bind(tk.createdTime || null, d.customer_name || '', d.customer_email || '', d.subject || '', d.mail_text || '',
-        d.reply_type || 'other', d.template || '', d.order_no || '', d.order_info || '', d.reply_text || '', result, d.skip_reason || '', error, backfill ? 1 : 0, String(tk.id)).run();
+        d.reply_type || 'other', d.template || '', d.order_no || '', d.order_info || '', d.reply_text || '', result, d.skip_reason || '', error, backfill ? 1 : 0,
+        d.template_version || null, String(tk.id)).run();
     handled++;
   }
   const left = fresh.concat(old).filter(t => !seen.has(String(t.id))).length - handled;
@@ -14938,6 +15015,69 @@ async function mbTestTicket(env, ticketNumber) {
   return { ok: true, test: d };
 }
 
+// ── Reply texts page data: current text, each version's ratings, Average/Bad notes ──
+async function mbTemplateOverview(env) {
+  await ensureMailBotTable(env.DB);
+  const T = await mbTemplates(env);
+  const hist = (await env.DB.prepare('SELECT template, version, body, source, created_by, created_at FROM bot_reply_templates ORDER BY template, version DESC').all()).results || [];
+  const stats = (await env.DB.prepare(`SELECT template, COALESCE(template_version, 1) AS version, COUNT(*) AS replies,
+      SUM(rating = 'good') AS good, SUM(rating = 'average') AS average, SUM(rating = 'bad') AS bad
+    FROM bot_reply_log WHERE template != '' AND result IN ('sent', 'dry_run') GROUP BY template, COALESCE(template_version, 1)`).all()).results || [];
+  const notes = (await env.DB.prepare(`SELECT template, COALESCE(template_version, 1) AS version, rating, rating_note, ticket_number, rated_by, rated_at
+    FROM bot_reply_log WHERE rating IN ('average', 'bad') AND COALESCE(rating_note, '') != '' ORDER BY rated_at DESC LIMIT 200`).all()).results || [];
+  const list = Object.keys(MB_DEFAULT_TEXTS).map(code => ({
+    code, version: T[code].version, body: T[code].body, fill_ins: MB_FILL_INS[code], required: MB_REQUIRED_FILL_INS[code],
+    history: hist.filter(h => h.template === code),
+    stats: stats.filter(x => x.template === code),
+    notes: notes.filter(x => x.template === code)
+  }));
+  return { ok: true, templates: list };
+}
+async function mbSaveTemplate(env, code, body, source, who) {
+  const problem = mbCheckTemplate(code, body);
+  if (problem) return { ok: false, error: problem };
+  const T = await mbTemplates(env);
+  if (String(body).trim() === String(T[code].body).trim()) return { ok: false, error: 'No change from the current text.' };
+  const version = T[code].version + 1;
+  await env.DB.batch([
+    env.DB.prepare('UPDATE bot_reply_templates SET active = 0 WHERE template = ?').bind(code),
+    env.DB.prepare('INSERT INTO bot_reply_templates (template, version, body, source, created_by, active) VALUES (?, ?, ?, ?, ?, 1)')
+      .bind(code, version, String(body).trim(), source === 'ai' ? 'ai' : 'edit', who)
+  ]);
+  return { ok: true, template: code, version };
+}
+// "Suggest a better reply": Workers AI rewrites the reply text from the team's
+// Average / Bad notes. Only a suggestion — an admin must click "Use this" to save it.
+async function mbSuggestTemplate(env, code) {
+  if (!MB_DEFAULT_TEXTS[code]) return { ok: false, error: 'Unknown reply type' };
+  if (!env.AI) return { ok: false, error: 'Workers AI not available on this Worker' };
+  const T = await mbTemplates(env);
+  const notes = (await env.DB.prepare(`SELECT rating, rating_note FROM bot_reply_log WHERE template = ? AND rating IN ('average', 'bad')
+    AND COALESCE(rating_note, '') != '' ORDER BY rated_at DESC LIMIT 20`).bind(code).all()).results || [];
+  if (!notes.length) return { ok: false, error: 'No Average / Bad notes for ' + code + ' yet — rate a few replies first.' };
+  const fills = MB_FILL_INS[code];
+  const prompt = [
+    'You improve one customer-care email reply for TOMAHAWK Tools, an Indian power-tools brand.',
+    'Rewrite the REPLY TEXT below so it fixes the TEAM NOTES. Keep it short, polite, clear Indian English.',
+    'Rules:',
+    '- Keep every {fill_in} exactly as written; only these fill-ins exist: ' + (fills.map(f => '{' + f + '}').join(', ') || 'none') + '. Never invent new ones.',
+    '- Must keep: ' + (MB_REQUIRED_FILL_INS[code].map(f => '{' + f + '}').join(', ') || 'nothing special') + '.',
+    '- No greeting and no sign-off (they are added automatically).',
+    '- Do not promise anything not in the text: no refunds, returns, replacements, dates or discounts that are not already there.',
+    '- Use a blank line between paragraphs. Plain text only, no markdown.',
+    '', 'REPLY TEXT:', T[code].body, '', 'TEAM NOTES:',
+    ...notes.map(n => '- (' + n.rating + ') ' + n.rating_note),
+    '', 'Answer with the new reply text only.'
+  ].join('\n');
+  const out = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', { messages: [{ role: 'user', content: prompt }], max_tokens: 700, temperature: 0.3 });
+  let text = String((out && out.response) || '').trim()
+    .replace(/^```[a-z]*\s*|```$/g, '').replace(/^(here is|here's)[^\n]*\n+/i, '').trim();
+  // Strip a greeting / sign-off the model added anyway
+  text = text.replace(/^(hi|hello|dear)\b[^\n]*\n+/i, '').replace(/\n+(thanks|regards|thank you|warm regards)[\s\S]*$/i, '').trim();
+  const problem = mbCheckTemplate(code, text);
+  return { ok: true, template: code, current: T[code].body, suggestion: text, problem, notes_used: notes.length };
+}
+
 // "Send to customer" on the Bot Replies page (25-Nov-2026): sends a reply the bot
 // only logged (dry run / old open ticket), or a "Test a ticket" result, through Zoho
 // on the same ticket. Works in every mode. Never sends the same ticket twice.
@@ -14957,9 +15097,10 @@ async function mbManualSend(env, user, b) {
     else {
       if (!d.reply_text) return { ok: false, error: 'The bot has no reply for this ticket — ' + (d.skip_reason || 'left for the team') };
       await env.DB.prepare(`INSERT OR IGNORE INTO bot_reply_log (ticket_id, ticket_number, ticket_created, customer_name, customer_email, subject, mail_text,
-          reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, backfill)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'dry_run', '', '', 0)`).bind(d.ticket_id, d.ticket_number, d.ticket_created || null, d.customer_name || '',
-          d.customer_email || '', d.subject || '', d.mail_text || '', d.reply_type || 'cancellation', d.template || '', d.order_no || '', d.order_info || '', d.reply_text).run();
+          reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, backfill, template_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'dry_run', '', '', 0, ?)`).bind(d.ticket_id, d.ticket_number, d.ticket_created || null, d.customer_name || '',
+          d.customer_email || '', d.subject || '', d.mail_text || '', d.reply_type || 'cancellation', d.template || '', d.order_no || '', d.order_info || '', d.reply_text,
+          d.template_version || null).run();
       row = await env.DB.prepare('SELECT * FROM bot_reply_log WHERE ticket_id = ?').bind(d.ticket_id).first();
     }
   }
@@ -14985,9 +15126,11 @@ async function mbList(env, days) {
   await ensureMailBotTable(env.DB);
   const s = await mbGetSettings(env);
   const rows = (await env.DB.prepare(`SELECT id, ticket_id, ticket_number, ticket_created, customer_name, customer_email, subject, mail_text,
-      reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, rating, rating_note, rated_by, rated_at, processed_at, backfill, sent_by, sent_at, closed_at
+      reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, rating, rating_note, rated_by, rated_at, processed_at, backfill, sent_by, sent_at, closed_at, template_version
     FROM bot_reply_log WHERE processed_at >= datetime('now', ?) ORDER BY processed_at DESC, id DESC LIMIT 1000`).bind('-' + days + ' days').all()).results || [];
-  return { ok: true, rows, settings: mbPublicSettings(s), days };
+  const lr = await env.DB.prepare("SELECT value FROM tm_settings WHERE key = 'mailbot_last_run'").first().catch(() => null);
+  let lastRun = null; try { lastRun = lr && lr.value ? JSON.parse(lr.value) : null; } catch (e) { lastRun = null; }
+  return { ok: true, rows, settings: mbPublicSettings(s), last_run: lastRun, days };
 }
 function mbPublicSettings(s) {
   return { mode: s.mode, start_at: s.start_at, test_emails: s.test_emails, signature_html: s.signature_html || '' };

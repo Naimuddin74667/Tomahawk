@@ -1209,6 +1209,16 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   padding: 9px 14px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--mode-c) 40%, transparent); background: color-mix(in srgb, var(--mode-c) 7%, transparent); }
 .br-mode-bar b { color: var(--text); }
 .br-mode-bar .br-mode-meta { margin-left: auto; font-size: 11.5px; }
+.br-tpl-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.br-tpl-card { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-top: 12px; }
+.br-tpl-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; font-size: 12.5px; }
+.br-tpl-ta { width: 100%; min-height: 110px; box-sizing: border-box; font: inherit; font-size: 12.5px; line-height: 1.5; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); resize: vertical; }
+.br-tpl-ta:focus { outline: none; border-color: var(--accent); }
+.br-tpl-notes { margin: 8px 0; font-size: 12px; }
+.br-tpl-notes div { padding: 4px 0; border-bottom: 1px dashed var(--border); }
+.br-tpl-sug { margin-top: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.br-fill { display: inline-block; font-family: 'DM Mono', ui-monospace, monospace; font-size: 11px; padding: 1px 6px; border-radius: 6px; background: color-mix(in srgb, var(--text2) 12%, transparent); margin: 2px 3px 0 0; }
 .br-send { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
 .br-sig { min-height: 70px; max-height: 240px; overflow: auto; border: 1px dashed var(--border); border-radius: 10px; padding: 10px 12px; font-size: 12.5px; background: var(--surface); }
 .br-sig[contenteditable="true"]:focus { outline: none; border-color: var(--accent); border-style: solid; }
@@ -1298,7 +1308,17 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     </div>
   </div>
 
-  <!-- R3: list -->
+  <!-- R3: Reply texts — editable, versioned, improved from Average / Bad notes (25-Nov-2026) -->
+  <div class="br-box" style="margin-bottom:16px">
+    <div class="br-tpl-head">
+      <h3 style="margin:0">Reply texts</h3>
+      <span class="br-hint">How the bot words each reply. Your Average / Bad notes show here — edit the text or let the bot suggest a better one.</span>
+      <button class="br-btn" id="br-tpl-toggle" style="margin-left:auto">Show</button>
+    </div>
+    <div id="br-tpl" hidden></div>
+  </div>
+
+  <!-- R4: list -->
   <div class="br-bar" id="br-chips"></div>
   <div id="br-list"></div>
 </div>
@@ -1404,6 +1424,16 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       }).join('') + '</table><div class="br-hint" style="margin-top:8px">Good % counts rated replies only.</div>';
   }
 
+  // "Last checked 12:45 pm · next ~1:00 pm" — the Worker checks Zoho every 15 min (:00 :15 :30 :45)
+  var lastRun = null;
+  function lastRunText() {
+    if (!settings || settings.mode === 'off') return '';
+    var now = new Date(), nx = new Date(now); nx.setSeconds(0, 0); nx.setMinutes(Math.floor(now.getMinutes() / 15) * 15 + 15);
+    var t = function (d) { return d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }); };
+    var lr = lastRun && toDate(lastRun.at);
+    return (lr ? 'Last checked ' + esc(t(lr)) + (lastRun.handled ? ' (' + lastRun.handled + ' mail' + (lastRun.handled > 1 ? 's' : '') + ')' : ' (no new mails)') +
+      (lastRun.error ? ' · <span style="color:var(--red)">' + esc(lastRun.error) + '</span>' : '') + ' · ' : '') + 'next check ~' + esc(t(nx)) + ' · ';
+  }
   function drawModes() {
     var cur = settings ? settings.mode : '';
     document.getElementById('br-modes').innerHTML = '<span class="br-seg-lbl">Bot</span>' + MODES.map(function (m) {
@@ -1414,7 +1444,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     var bar = document.getElementById('br-mode-hint');
     bar.className = 'br-mode-bar m-' + cur;
     bar.innerHTML = '<i></i><b>' + esc(m ? m[1] : '') + '</b><span>' + (m ? esc(m[2].replace('%TEST%', (settings.test_emails || []).join(', '))) : '') + '</span>' +
-      '<span class="br-mode-meta">Checking mails from ' + esc(when(settings && settings.start_at)) + ' · Replies on: <b>Cancellations · Ask for order ID</b>' +
+      '<span class="br-mode-meta">' + lastRunText() + 'Checking mails from ' + esc(when(settings && settings.start_at)) + ' · Replies on: <b>Cancellations · Ask for order ID</b>' +
       (isAdmin() ? '' : ' · Only admins can change the mode') + '</span>';
     document.querySelectorAll('#br-modes [data-mode]').forEach(function (b) {
       b.onclick = async function () {
@@ -1463,7 +1493,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
         ? '<div class="br-send"><button class="br-btn primary" data-send' + (r.id ? '' : ' data-ticket="' + esc(r.ticket_number) + '"') + '>&#9993; Send to customer</button>' +
           '<span class="br-muted">Goes to ' + esc(r.customer_email) + ' on ticket #' + esc(r.ticket_number) + ', with the full Customer Care signature' + (r.template === 'AR1' ? ' (ticket stays open).' : ' — then the Zoho ticket is closed.') + '</span></div>' : '') +
       (isReply(r) ? '<div class="br-rate">' + rateBtns +
-        '<input class="br-input br-note" data-note placeholder="Note (optional) — e.g. wrong refund line" value="' + esc(r.rating_note || '') + '"' + (canR ? '' : ' disabled') + '>' +
+        '<input class="br-input br-note" data-note placeholder="Note — needed for Average / Bad, e.g. should mention refund timing" value="' + esc(r.rating_note || '') + '"' + (canR ? '' : ' disabled') + '>' +
         (r.rated_by ? '<span class="br-muted">by ' + esc(r.rated_by) + ' · ' + esc(when(r.rated_at)) + '</span>' : '') + '</div>' : '') +
     '</div>';
   }
@@ -1483,7 +1513,17 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       var sb = box.querySelector('[data-send]');
       if (sb) sb.onclick = function () { sendReply({ id: r.id }, r, sb); };
       box.querySelectorAll('[data-rate]').forEach(function (b) {
-        b.onclick = function () { var k = b.getAttribute('data-rate'); save(r, r.rating === k ? '' : k, note ? note.value : r.rating_note); };
+        b.onclick = function () {
+          var k = b.getAttribute('data-rate'), nv = note ? note.value.trim() : (r.rating_note || '');
+          if (r.rating === k) return save(r, '', nv);
+          // Average / Bad need a reason — the reply texts are improved from these notes
+          if ((k === 'average' || k === 'bad') && nv.length < 3) {
+            nv = (prompt('What should be better in this reply? (needed for ' + (k === 'bad' ? 'Bad' : 'Average') + ')', '') || '').trim();
+            if (nv.length < 3) return;
+            if (note) note.value = nv;
+          }
+          save(r, k, nv);
+        };
       });
       if (note) {
         note.onkeydown = function (e) { if (e.key === 'Enter') note.blur(); };
@@ -1505,6 +1545,82 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     } catch (e) { alert("Couldn't send: " + e.message); btn.disabled = false; btn.innerHTML = '&#9993; Send to customer'; }
   }
 
+  // ── Reply texts ──────────────────────────────────────────────────
+  var tplData = null, tplOpen = false, tplSug = {};
+  var FILL_HELP = { order_no: 'order no., e.g. #3370', product: 'product name', track_link: 'Track Order page link', drn_link: 'delivery issue page link',
+    platform: 'Amazon / Flipkart', amount: 'order amount', prepaid_line: 'refund line — prepaid orders only', refund_line: 'refund status line (prepaid only)',
+    delivered_on: '" on 20 Nov 2026"' };
+  document.getElementById('br-tpl-toggle').onclick = function () {
+    tplOpen = !tplOpen; this.textContent = tplOpen ? 'Hide' : 'Show';
+    document.getElementById('br-tpl').hidden = !tplOpen;
+    if (tplOpen) loadTemplates();
+  };
+  async function loadTemplates() {
+    var el = document.getElementById('br-tpl');
+    if (!tplData) el.innerHTML = '<div class="br-hint" style="margin-top:10px">Loading…</div>';
+    try {
+      var res = await api('mailBotTemplates');
+      if (!res.ok) throw new Error(res.error || 'failed');
+      tplData = res.templates; drawTemplates();
+    } catch (e) { el.innerHTML = '<div class="br-hint" style="margin-top:10px;color:var(--red)">' + esc(e.message) + '</div>'; }
+  }
+  function verStats(t) {
+    return (t.stats || []).slice().sort(function (a, b) { return b.version - a.version; }).map(function (x) {
+      var rated = (x.good || 0) + (x.average || 0) + (x.bad || 0);
+      return 'v' + x.version + ': ' + x.replies + ' repl' + (x.replies === 1 ? 'y' : 'ies') + (rated ? ' · ' + Math.round((x.good || 0) * 100 / rated) + '% good (' + (x.good || 0) + '/' + (x.average || 0) + '/' + (x.bad || 0) + ')' : ' · not rated');
+    }).join('   ·   ') || 'No replies yet';
+  }
+  function drawTemplates() {
+    var el = document.getElementById('br-tpl');
+    el.innerHTML = tplData.map(function (t) {
+      var sug = tplSug[t.code];
+      return '<div class="br-tpl-card" data-tpl="' + t.code + '">' +
+        '<div class="br-tpl-top"><b>' + t.code + '</b><span class="br-muted">' + esc(TEMPLATE_NAMES[t.code] || '') + '</span>' +
+          '<span class="br-badge br-b-amber">v' + t.version + ' in use</span><span class="br-muted" style="margin-left:auto">' + esc(verStats(t)) + '</span></div>' +
+        (t.notes.length ? '<div class="br-tpl-notes"><div class="br-col-h">Team notes (Average / Bad)</div>' + t.notes.slice(0, 6).map(function (n) {
+          return '<div><span class="br-badge ' + (n.rating === 'bad' ? 'br-b-red' : 'br-b-amber') + '">' + esc(n.rating) + ' · v' + n.version + '</span> ' + esc(n.rating_note) +
+            ' <span class="br-muted">#' + esc(n.ticket_number) + ' · ' + esc(n.rated_by || '') + '</span></div>';
+        }).join('') + '</div>' : '<div class="br-hint" style="margin:6px 0">No Average / Bad notes yet.</div>') +
+        '<textarea class="br-tpl-ta" data-ta' + (isAdmin() ? '' : ' readonly') + '>' + esc(t.body) + '</textarea>' +
+        '<div class="br-hint" style="margin-top:4px">Fill-ins: ' + (t.fill_ins.length ? t.fill_ins.map(function (f) {
+          return '<span class="br-fill" title="' + esc(FILL_HELP[f] || '') + '">{' + f + '}</span>'; }).join('') : 'none') +
+          ' · "Hi {name}," and "Thanks &amp; Regards," are added automatically · blank line = new paragraph</div>' +
+        (isAdmin() ? '<div class="br-send" style="margin-top:8px"><button class="br-btn primary" data-save>Save as v' + (t.version + 1) + '</button>' +
+          '<button class="br-btn" data-suggest' + (t.notes.length ? '' : ' disabled title="Needs Average / Bad notes first"') + '>&#10024; Suggest a better reply</button></div>' : '') +
+        (sug ? '<div class="br-tpl-sug"><div class="br-col-h">Suggested from ' + sug.notes_used + ' note' + (sug.notes_used > 1 ? 's' : '') + ' — check it before using</div>' +
+          '<div class="br-text reply" style="max-height:none">' + esc(sug.suggestion) + '</div>' +
+          (sug.problem ? '<div class="br-hint" style="color:var(--red);margin-top:6px">' + esc(sug.problem) + ' — edit it before saving.</div>' : '') +
+          '<div class="br-send"><button class="br-btn primary" data-use>Use this</button><button class="br-btn" data-discard>Discard</button></div></div>' : '') +
+        (t.history.length ? '<details style="margin-top:8px"><summary class="br-muted" style="cursor:pointer">Earlier versions (' + t.history.length + ')</summary>' +
+          t.history.map(function (h) { return '<div class="br-tpl-notes"><div><b>v' + h.version + '</b> <span class="br-muted">' + esc(h.source === 'ai' ? 'AI suggestion' : 'edited') +
+            ' · ' + esc(h.created_by || '') + ' · ' + esc(when(h.created_at)) + '</span><div class="br-text" style="margin-top:4px">' + esc(h.body) + '</div></div></div>'; }).join('') +
+          '<div class="br-hint">v1 = the original text.</div></details>' : '') +
+      '</div>';
+    }).join('');
+    el.querySelectorAll('[data-tpl]').forEach(function (card) {
+      var code = card.getAttribute('data-tpl'), ta = card.querySelector('[data-ta]');
+      var sv = card.querySelector('[data-save]'), sg = card.querySelector('[data-suggest]');
+      var use = card.querySelector('[data-use]'), dis = card.querySelector('[data-discard]');
+      if (sv) sv.onclick = async function () {
+        sv.disabled = true;
+        var res = await post('mailBotTemplateSave', { template: code, body: ta.value, source: card.dataset.src || 'edit' });
+        sv.disabled = false;
+        if (!res.ok) { alert("Couldn't save: " + (res.error || 'failed')); return; }
+        delete tplSug[code]; await loadTemplates();
+      };
+      if (sg) sg.onclick = async function () {
+        sg.disabled = true; sg.textContent = 'Thinking…';
+        try {
+          var res = await post('mailBotSuggest', { template: code });
+          if (!res.ok) throw new Error(res.error || 'failed');
+          tplSug[code] = res; drawTemplates();
+        } catch (e) { alert("Couldn't suggest: " + e.message); sg.disabled = false; sg.innerHTML = '&#10024; Suggest a better reply'; }
+      };
+      if (use) use.onclick = function () { ta.value = tplSug[code].suggestion; card.dataset.src = 'ai'; ta.focus(); use.textContent = 'Copied in — now Save'; };
+      if (dis) dis.onclick = function () { delete tplSug[code]; drawTemplates(); };
+    });
+  }
+
   async function save(r, rating, note) {
     var res = await post('mailBotRate', { id: r.id, rating: rating, note: note || '' });
     if (!res.ok) { alert("Couldn't save: " + (res.error || 'failed')); return; }
@@ -1517,7 +1633,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   async function load() {
     var res = await api('mailBotList', '&days=' + days);
     if (!res.ok) throw new Error(res.error || 'failed');
-    rows = res.rows || []; settings = res.settings;
+    rows = res.rows || []; settings = res.settings; lastRun = res.last_run || null;
     document.getElementById('br-sub').textContent = 'Customer emails the bot checked in the last ' + days + ' days — rate every reply Good, Average or Bad.';
     draw();
   }
