@@ -1192,7 +1192,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .br-btn:hover { border-color: var(--accent); color: var(--text); }
 .br-btn.primary { background: var(--accent); border-color: var(--accent); color: #111; }
 .br-btn:disabled { opacity: .55; cursor: default; }
-.br-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+.br-stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
 .br-stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
 .br-stat b { display: block; font-size: 22px; font-weight: 800; color: var(--text); line-height: 1.1; }
 .br-stat span { font-size: 11.5px; color: var(--text2); }
@@ -1394,16 +1394,21 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   function toDate(s) { if (!s) return null; var d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : String(s).replace(' ', 'T') + 'Z'); return isNaN(d) ? null : d; }
   function when(s) { var d = toDate(s); return d ? d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''; }
 
+  function isDraft(r) { return !!r.reply_text && ['dry_run', 'error', 'test'].indexOf(r.result) !== -1; }
+  function isRateable(r) { return r.result === 'sent'; }
   function isReply(r) { return r.result === 'sent' || r.result === 'dry_run'; }
   // Filter options (25-Nov-2026). "All" = everything except mails skipped for the team.
   var VIEWS = [
     ['zoho', 'All tickets (Zoho open)', function () { return false; }],
     ['all', 'All', function (r) { return r.result !== 'skipped'; }],
     ['replies', 'Bot replies', isReply],
-    ['unrated', 'Not rated', function (r) { return isReply(r) && !r.rating; }],
-    ['good', 'Good', function (r) { return r.rating === 'good'; }],
-    ['average', 'Average', function (r) { return r.rating === 'average'; }],
-    ['bad', 'Bad', function (r) { return r.rating === 'bad'; }],
+    // Bot Draft = understood by the bot, reply ready, not sent yet (25-Nov-2026)
+    ['drafts', 'Bot Draft', function (r) { return isDraft(r); }],
+    // Rating covers only replies we agreed to send — sent to the customer (25-Nov-2026)
+    ['unrated', 'Not rated', function (r) { return isRateable(r) && !r.rating; }],
+    ['good', 'Good', function (r) { return isRateable(r) && r.rating === 'good'; }],
+    ['average', 'Average', function (r) { return isRateable(r) && r.rating === 'average'; }],
+    ['bad', 'Bad', function (r) { return isRateable(r) && r.rating === 'bad'; }],
     ['ai', 'AI drafts', function (r) { return r.template === 'AI1'; }],
     ['upset', 'Upset customers', function (r) { return r.priority === 'upset'; }],
     ['skipped', 'Skipped (team)', function (r) { return r.result === 'skipped'; }],
@@ -1433,12 +1438,12 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 
   // Card header: "N to rate" + Zoho open / waiting count
   function drawStats() {
-    var toRate = rows.filter(function (r) { return isReply(r) && !r.rating; }).length;
+    var toRate = rows.filter(function (r) { return isRateable(r) && !r.rating; }).length;
     var b = document.getElementById('br-torate');
     b.textContent = toRate ? toRate + ' to rate' : 'All rated';
     b.className = 'br-badge ' + (toRate ? 'br-b-amber' : 'br-b-green');
     var n = function (f) { return rows.filter(f).length; };
-    var rated = function (k) { return n(function (r) { return r.rating === k; }); };
+    var rated = function (k) { return n(function (r) { return isRateable(r) && r.rating === k; }); };
     var card = function (v, num, label) {
       return '<div class="br-stat' + (view === v ? ' on' : '') + '" data-view="' + v + '" role="button" tabindex="0"><b>' + num + '</b><span>' + label + '</span></div>';
     };
@@ -1449,10 +1454,11 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       card('all', rows.length, 'Mails checked' + (lastRun && lastRun.zoho_open != null
         ? ' <span class="br-muted" style="display:block;font-size:10.5px">' + lastRun.zoho_open + ' open in Zoho now' + (lastRun.left ? ' · ' + lastRun.left + ' waiting' : ' · all checked') + '</span>' : '')) +
       card('replies', n(isReply), 'Bot replies') +
+      card('drafts', n(isDraft), 'Bot Draft <span class="br-muted" style="display:block;font-size:10.5px">reply ready · not sent</span>') +
       card('skipped', n(function (r) { return r.result === 'skipped'; }), 'Skipped (team)') +
       // One card for rating: big number = not rated; Good / Average / Bad as small filter pills
       '<div class="br-stat br-stat-rate' + (['unrated', 'good', 'average', 'bad'].indexOf(view) !== -1 ? ' on' : '') + '" data-view="unrated" role="button" tabindex="0">' +
-        '<b>' + toRate + '</b><span>Not rated yet</span><div class="br-rt">' +
+        '<b>' + toRate + '</b><span>Sent · not rated yet</span><div class="br-rt">' +
         pill('good', 'g', 'Good', rated('good')) + pill('average', 'a', 'Average', rated('average')) + pill('bad', 'b', 'Bad', rated('bad')) + '</div></div>';
     document.querySelectorAll('#br-stats [data-view]').forEach(function (el) {
       el.onclick = function (e) { e.stopPropagation(); view = el.getAttribute('data-view'); draw(); document.getElementById('br-filter').scrollIntoView({ block: 'center', behavior: 'smooth' }); };
@@ -1527,7 +1533,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   function canEdit(r) { return canRate() && !!r.reply_text && ['dry_run', 'error', 'test'].indexOf(r.result) !== -1; }
 
   function itemHtml(r) {
-    var canR = canRate() && isReply(r);
+    var canR = canRate() && isRateable(r);
     var rateBtns = ['good', 'average', 'bad'].map(function (k) {
       return '<button class="br-r ' + k + (r.rating === k ? ' on' : '') + '" data-rate="' + k + '"' + (canR ? '' : ' disabled') + '>' + k.charAt(0).toUpperCase() + k.slice(1) + '</button>';
     }).join('');
@@ -1567,7 +1573,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       (canRate() && r.reply_text && ['dry_run', 'error', 'test'].indexOf(r.result) !== -1
         ? '<div class="br-send"><button class="br-btn primary" data-send' + (r.id ? '' : ' data-ticket="' + esc(r.ticket_number) + '"') + '>&#9993; Send to customer</button>' +
           '<span class="br-muted">Goes to ' + esc(r.customer_email) + ' on ticket #' + esc(r.ticket_number) + ', with the full Customer Care signature' + (r.template === 'AR1' ? ' (ticket stays open).' : ' — then the Zoho ticket is closed.') + '</span></div>' : '') +
-      (isReply(r) ? '<div class="br-rate">' + rateBtns +
+      (isRateable(r) ? '<div class="br-rate">' + rateBtns +
         '<input class="br-input br-note" data-note placeholder="Note — needed for Average / Bad, e.g. should mention refund timing" value="' + esc(r.rating_note || '') + '"' + (canR ? '' : ' disabled') + '>' +
         (r.rated_by ? '<span class="br-muted">by ' + esc(r.rated_by) + ' · ' + esc(when(r.rated_at)) + '</span>' : '') + '</div>' : '') +
     '</div>';
@@ -1616,7 +1622,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       return !ql || [r.ticket_number, r.order_no, r.customer_name, r.customer_email, r.subject, r.template].join(' ').toLowerCase().indexOf(ql) !== -1;
     });
     // Not rated replies always on top, newest first; then the rest, newest first
-    var unr = function (r) { return isReply(r) && !r.rating ? 0 : 1; };
+    var unr = function (r) { return isRateable(r) && !r.rating ? 0 : 1; };
     var t = function (r) { var d = toDate(r.processed_at); return d ? d.getTime() : 0; };
     list.sort(function (a, b) { return unr(a) - unr(b) || t(b) - t(a); });
     var el = document.getElementById('br-list');
