@@ -15060,22 +15060,14 @@ async function mbRunInner(env, opts) {
 }
 
 // ── Follow-up TICKETS (25-Nov-2026) ─────────────────────────────
-// A NEW Zoho ticket that continues an earlier conversation: the subject is a reply
-// ("Re:" / "Fwd:") or the same customer had an earlier ticket in the last 60 days
-// with a conversation on it. For these the bot only DRAFTS — never sends on its own
+// A NEW Zoho ticket that continues an earlier conversation: the customer replied to
+// one of our mails (subject "Re:" / "Fwd:"). For these the bot only DRAFTS — never sends on its own
 // (even in Live); the team reviews and uses "Send to customer". Training phase.
 async function mbDetectFollowUpTicket(env, orgId, tk, email) {
+  // 25-Nov-2026: only a REPLY to one of our mails counts (the reply history is on the
+  // ticket). A customer simply having other tickets with us does not make it a follow-up.
   const isReply = /^\s*(re|fwd?|fw)\s*:/i.test(String(tk.subject || ''));
-  let prev = null;
-  if (email) {
-    const r = await zdCall(env, 'GET', '/tickets/search', { orgId, query: { email, limit: '20' } });
-    const since = Date.now() - 60 * 864e5, mine = new Date(tk.createdTime).getTime();
-    prev = ((r.json && r.json.data) || []).find(t => String(t.id) !== String(tk.id) &&
-      new Date(t.createdTime).getTime() < mine && new Date(t.createdTime).getTime() >= since &&
-      (Number(t.threadCount) > 1 || /closed/i.test(t.status || ''))) || null;
-  }
-  if (!isReply && !prev) return null;
-  return { prev_ticket: prev ? String(prev.ticketNumber || '') : '', why: isReply ? 'reply subject' : 'earlier ticket' };
+  return isReply ? { prev_ticket: '', why: 'reply subject' } : null;
 }
 
 // ── Follow-ups (25-Nov-2026) ─────────────────────────────────────
