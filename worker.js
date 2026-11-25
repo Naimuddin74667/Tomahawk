@@ -14987,6 +14987,9 @@ async function mbRun(env, opts) {
 }
 async function mbRunInner(env, opts) {
   await ensureMailBotTable(env.DB);
+  mbAiBudget = opts.max ? 3 : 2;
+  // A run that was cut off can leave rows on 'working' — free them for a retry
+  await env.DB.prepare("DELETE FROM bot_reply_log WHERE result = 'working' AND processed_at < datetime('now', '-10 minutes')").run();
   const s = await mbGetSettings(env);
   if (s.mode === 'off' && !opts.force) return { ok: true, mode: 'off', handled: 0 };
   if (!env.ZOHO_DESK_REFRESH_TOKEN) return { ok: false, error: 'ZOHO_DESK_REFRESH_TOKEN secret missing' };
@@ -15042,7 +15045,13 @@ async function mbRunInner(env, opts) {
         }
         else result = 'dry_run';
       }
-    } catch (e) { result = 'error'; error = String(e.message || e).slice(0, 500); console.error('mailbot', tk.id, error); }
+    } catch (e) {
+      if (e instanceof MbAiDefer) {   // retry next run
+        await env.DB.prepare("DELETE FROM bot_reply_log WHERE ticket_id = ? AND result = 'working'").bind(String(tk.id)).run();
+        continue;
+      }
+      result = 'error'; error = String(e.message || e).slice(0, 500); console.error('mailbot', tk.id, error);
+    }
     d = d || { customer_email: tk.email || '', subject: tk.subject || '' };
     await env.DB.prepare(`UPDATE bot_reply_log SET ticket_created = ?, customer_name = ?, customer_email = ?, subject = ?, mail_text = ?,
         reply_type = ?, template = ?, order_no = ?, order_info = ?, reply_text = ?, result = ?, skip_reason = ?, error = ?, backfill = ?, template_version = ?, processed_at = datetime('now')
@@ -15081,10 +15090,13 @@ async function mbRunInner(env, opts) {
 // The AI's instructions are the editable "AI1" text on the Bot Replies page.
 const MB_AI_TEXT_MODELS = ['@cf/meta/llama-3.3-70b-instruct-fp8-fast', '@cf/meta/llama-3.1-8b-instruct'];
 const MB_AI_VISION_MODEL = '@cf/meta/llama-4-scout-17b-16e-instruct';
-const MB_UPSET_RE = /\b(appall\w*|worst|pathetic|disgust\w*|horrible|terrible|fraud|cheat\w*|scam|useless|done waiting|no response|radio silence|consumer (court|forum)|legal action|complain\w* to|unacceptable|frustrat\w*|angry|irritat\w*|bakwas|dhokha|ghatiya)\b/i;
+const MB_UPSET_RE = /\b(appal\w*|worst|pathetic|disgust\w*|horrible|terrible|fraud|cheat\w*|scam|useless|done waiting|no response|radio silence|consumer (court|forum)|legal action|complain\w* to|unacceptable|frustrat\w*|angry|irritat\w*|bakwas|dhokha|ghatiya)\b/i;
 // Skips the AI never takes over (nothing to answer, or the team owns it).
 const MB_AI_NO_DRAFT_RE = /^(System \/ internal sender|Automatic \/ system mail|Empty mail|Team already replied)/i;
 
+// AI drafts are slow, so only a few per run; the rest wait for the next run (not lost).
+let mbAiBudget = 2;
+class MbAiDefer extends Error {}
 async function mbMaybeAi(env, orgId, tk, d, contact, conv) {
   const upset = MB_UPSET_RE.test((d.subject || '') + '\n' + (conv.latestText || ''));
   if (upset) d.priority = 'upset';
@@ -15092,6 +15104,8 @@ async function mbMaybeAi(env, orgId, tk, d, contact, conv) {
   if (MB_AI_NO_DRAFT_RE.test(d.skip_reason || '')) return d;
   // Rule replies stay — except "send your order ID" to an upset customer (needs a human tone)
   if (d.reply_text && !(d.template === 'AR1' && upset)) return d;
+  if (mbAiBudget <= 0) throw new MbAiDefer('AI budget for this run used');
+  mbAiBudget--;
   try { return await mbAiDraft(env, orgId, tk, d, contact, conv); }
   catch (e) { console.error('mailbot ai', tk.id, e.message); d.ai_note = 'AI draft failed: ' + String(e.message).slice(0, 160); return d; }
 }
@@ -15181,7 +15195,7 @@ async function mbAiDraft(env, orgId, tk, d, contact, conv) {
     'You are drafting an email reply for TOMAHAWK Tools customer care (an Indian power-tools brand). A team member will review it before it is sent.',
     '', 'INSTRUCTIONS:', T.AI1.body, '',
     'FORMAT: no greeting line and no sign-off (they are added automatically). Plain text, short paragraphs separated by a blank line, no markdown.',
-    'Reply with JSON only: {"upset": true|false, "draft": "the reply text", "needs_team": "one line on what the team must check, or empty"}',
+    'Answer in EXACTLY this format, nothing else:\nUPSET: yes or no\nTEAM: one line on what our team must check (or "none")\nDRAFT:\n<the reply text>',
     '', 'FACTS (the only facts you may use):', facts.length ? facts.map(f => '- ' + f).join('\n') : '- No order or request facts found.',
     '', 'EARLIER TICKETS FROM THIS CUSTOMER:', hist.text || 'None.',
     '', 'SUBJECT: ' + (d.subject || ''), '', 'CUSTOMER\'S LATEST MAIL:', (conv.latestText || '').slice(0, 2500),
@@ -15196,13 +15210,20 @@ async function mbAiDraft(env, orgId, tk, d, contact, conv) {
     } catch (e) { lastErr = e.message; }
   }
   if (!raw) throw new Error(lastErr || 'empty AI answer');
+  // Parse "UPSET: … / TEAM: … / DRAFT: …" (falls back to JSON or the whole answer)
   let j = null;
-  try { const m = raw.match(/\{[\s\S]*\}/); j = m ? JSON.parse(m[0]) : null; } catch (e) { j = null; }
-  let draft = String((j && j.draft) || raw).trim()
+  const mU = raw.match(/UPSET:\s*(yes|no|true|false)/i), mT = raw.match(/TEAM:\s*(.+)/i), mD = raw.match(/DRAFT:\s*([\s\S]+)$/i);
+  if (mD) j = { upset: mU ? /yes|true/i.test(mU[1]) : false, needs_team: mT && !/^none\b/i.test(mT[1].trim()) ? mT[1].trim() : '', draft: mD[1] };
+  else { try { const m = raw.match(/\{[\s\S]*\}/); j = m ? JSON.parse(m[0]) : null; } catch (e) { j = null; } }
+  if (!j) {   // JSON with an unquoted draft, e.g. {"upset": true, "draft": We apologise …}
+    const md = raw.match(/"draft"\s*:\s*"?([\s\S]*?)"?\s*(,\s*"needs_team"[\s\S]*)?\}?\s*$/i);
+    j = { upset: /"upset"\s*:\s*true/i.test(raw), draft: md ? md[1] : raw.replace(/^\{|\}$/g, '') };
+  }
+  let draft = String(j.draft || '').replace(/\\n/g, '\n').trim()
     .replace(/^(hi|hello|dear)\b[^\n]*\n+/i, '').replace(/\n+(thanks|regards|thank you|warm regards|best regards)[\s\S]*$/i, '').trim();
   if (!draft) throw new Error('AI gave no draft');
-  if (j && j.upset === true) d.priority = 'upset';
-  if (j && j.needs_team) notes.push('Check: ' + String(j.needs_team).slice(0, 200));
+  if (j.upset === true) d.priority = 'upset';
+  if (j.needs_team) notes.push('Check: ' + String(j.needs_team).slice(0, 200));
   // Flag promises the AI isn't allowed to make on its own
   if (/\b(we (will|shall) (refund|replace|send you a new)|full refund|refund (has been|will be) (initiated|processed)|replacement (will be|has been) (sent|dispatched))\b/i.test(draft))
     notes.push('⚠ Draft mentions a refund / replacement — confirm before sending');
@@ -15245,7 +15266,11 @@ async function mbFollowUps(env, orgId, s, byId) {
       continue;
     }
     if (tc <= row.thread_count) continue;
-    try { await mbFollowUp(env, orgId, s, row, tk); } catch (e) { console.error('mailbot followup', row.ticket_id, e.message); }
+    try { await mbFollowUp(env, orgId, s, row, tk); }
+    catch (e) {
+      if (e instanceof MbAiDefer) { await env.DB.prepare('UPDATE bot_reply_log SET thread_count = ? WHERE id = ?').bind(row.thread_count, row.id).run(); break; }
+      console.error('mailbot followup', row.ticket_id, e.message);
+    }
     if (++n >= 4) break;
   }
   return n;
