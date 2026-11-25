@@ -14712,6 +14712,30 @@ function mbCancelText(r) {
   out.push('Thanks & Regards,');   // full signature is added only in the email (mbComposeHtml)
   return out;
 }
+// ── Reply type 2 (25-Nov-2026): AR1 — ask for the order ID / request ID ──
+// Any customer mail with no order ID and no request ID, from a sender who has no
+// website order with us (those are left for the team — we can already see them).
+// The ticket stays OPEN after this reply: the customer answers on the same ticket.
+const MB_REQUEST_ID_RE = /\b(WRN|SRN|DRN|NV|WN|SN)-?\d{6}-?\d{1,3}\b/i;
+const MB_SYSTEM_SENDER_RE = /no-?reply|mailer-daemon|postmaster|notification|judge\.me|shopify|amazon\.|flipkart\.|delhivery|ekart|unicommerce|@tomahawk\.tools$/i;
+function mbHasReference(subject, text) {
+  const all = subject + '\n' + text;
+  const ids = mbExtractOrders(subject, text);
+  if (ids.web.length || ids.amazon.length || ids.flipkart.length) return true;
+  if (MB_REQUEST_ID_RE.test(all)) return true;
+  // Flipkart order without "OD", AWB / tracking numbers: any 12+ digit number
+  return /\b\d{12,22}\b/.test(all.replace(/\s/g, ' '));
+}
+function mbAskRefText(name) {
+  return ['Hi' + (name ? ' ' + name : '') + ',',
+    'Thank you for writing to us. To help you quickly, please reply to this mail with one of these:',
+    '• Your order ID — website order like #3370, Amazon order like 402-1234567-1234567, or Flipkart order like OD123456789012345678\n' +
+    '• Or your request ID, if you have already raised a request (like WRN-261121-01)',
+    'Thanks & Regards,'];
+}
+// Replies that keep the ticket open after sending (the customer needs to answer).
+const MB_KEEP_OPEN = ['AR1'];
+
 function mbParasToHtml(paras) {
   return paras.map(p => '<p>' + mbEscHtml(p).replace(/(https:\/\/[^\s<]+)/g, '<a href="$1">$1</a>').replace(/\n/g, '<br>') + '</p>').join('');
 }
@@ -14766,7 +14790,8 @@ async function mbDecide(env, orgId, tk) {
   if (!email || /no-?reply|mailer-daemon|postmaster|@tomahawk\.tools$/i.test(email)) { out.skip_reason = 'System / internal sender'; return out; }
   out.mail_text = await mbTicketText(env, orgId, tk.id);
   const skip = mbCancelSkipReason(out.subject, out.mail_text);
-  if (skip) { out.skip_reason = skip; if (skip !== 'Not a cancellation mail') out.reply_type = 'cancellation'; return out; }
+  if (skip === 'Not a cancellation mail') return mbDecideAskRef(env, out, contact);
+  if (skip) { out.skip_reason = skip; out.reply_type = 'cancellation'; return out; }
   out.reply_type = 'cancellation';
   const r = await mbBuildCancelReply(env, { subject: out.subject, text: out.mail_text, email, contactName: contact.firstName || out.customer_name });
   if (r.skip) { out.skip_reason = r.skip; return out; }
@@ -14791,8 +14816,28 @@ async function mbMarkClosed(env, orgId, ticketId) {
 }
 // Sent but not closed yet (close failed, or sent before auto-close existed) → close now.
 async function mbCloseSent(env, orgId) {
-  const rows = (await env.DB.prepare("SELECT ticket_id FROM bot_reply_log WHERE result = 'sent' AND closed_at IS NULL LIMIT 10").all()).results || [];
+  const rows = (await env.DB.prepare("SELECT ticket_id FROM bot_reply_log WHERE result = 'sent' AND closed_at IS NULL AND COALESCE(template, '') NOT IN ('AR1') LIMIT 10").all()).results || [];
   for (const r of rows) await mbMarkClosed(env, orgId, r.ticket_id);
+}
+
+// AR1 — no order ID / request ID in the mail → ask for it (see MB_REQUEST_ID_RE above).
+async function mbDecideAskRef(env, out, contact) {
+  const all = out.subject + '\n' + out.mail_text;
+  if (MB_SYSTEM_SENDER_RE.test(out.customer_email)) { out.skip_reason = 'Automatic / system mail'; return out; }
+  if (/left a \d star review|review request|newsletter|unsubscribe/i.test(all)) { out.skip_reason = 'Automatic / system mail'; return out; }
+  if (!out.mail_text.trim()) { out.skip_reason = 'Empty mail'; return out; }
+  if (mbHasReference(out.subject, out.mail_text)) { out.skip_reason = 'Mail has an order / request ID — left for the team'; return out; }
+  if (shopifyConfigured(env)) {
+    const orders = await mbShopifyOrdersByEmail(env, out.customer_email);
+    if (orders.length) {
+      out.skip_reason = 'Sender has ' + orders.length + ' website order' + (orders.length > 1 ? 's' : '') + ' (' + orders.slice(0, 3).map(o => o.name).join(', ') + ') — left for the team';
+      return out;
+    }
+  }
+  const paras = mbAskRefText(mbFirstName(contact.firstName || out.customer_name));
+  Object.assign(out, { reply_type: 'missing_reference', template: 'AR1', order_info: 'No order ID / request ID in the mail',
+    reply_text: paras.join('\n\n'), reply_html: mbParasToHtml(paras) });
+  return out;
 }
 
 async function mbSendReply(env, orgId, ticketId, to, html) {
@@ -14856,7 +14901,7 @@ async function mbRun(env, opts) {
         const send = !backfill && (s.mode === 'live' || (s.mode === 'test' && s.test_emails.map(x => String(x).toLowerCase()).includes(d.customer_email)));
         if (send) {
           await mbSendReply(env, orgId, tk.id, d.customer_email, mbComposeHtml(d.reply_text, s)); result = 'sent';
-          await mbMarkClosed(env, orgId, tk.id);
+          if (!MB_KEEP_OPEN.includes(d.template)) await mbMarkClosed(env, orgId, tk.id);
         }
         else result = 'dry_run';
       }
@@ -14931,7 +14976,7 @@ async function mbManualSend(env, user, b) {
     return { ok: false, error: e.message };
   }
   await env.DB.prepare(`UPDATE bot_reply_log SET result = 'sent', error = '', sent_by = ?, sent_at = datetime('now') WHERE id = ?`).bind(who, row.id).run();
-  const closed = await mbMarkClosed(env, orgId, row.ticket_id);
+  const closed = MB_KEEP_OPEN.includes(row.template) ? null : await mbMarkClosed(env, orgId, row.ticket_id);
   const done = await env.DB.prepare('SELECT id, result, sent_by, sent_at, closed_at FROM bot_reply_log WHERE id = ?').bind(row.id).first();
   return { ok: true, row: done, closed };
 }

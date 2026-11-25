@@ -1314,7 +1314,8 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   var ZOHO_TICKET_URL = 'https://desk.zoho.in/agent/tomahawktools/tomahawk-tools/tickets/details/';
   var TEMPLATE_NAMES = {
     CX1: 'Can still cancel', CX2: 'Already with courier', CX3: 'Already cancelled',
-    CX4: 'Already delivered', CX5: 'Amazon / Flipkart', CX6: 'Order not found'
+    CX4: 'Already delivered', CX5: 'Amazon / Flipkart', CX6: 'Order not found',
+    AR1: 'Asked for order ID'
   };
   var MODES = [
     ['off', 'Off', 'The bot is switched off — it does not read any mails.'],
@@ -1355,7 +1356,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   function resultBadge(r) {
     if (r.backfill && r.result === 'dry_run') return '<span class="br-badge br-b-gray" title="Was already open before the bot started — logged only, never sent">Old open ticket · not sent</span>';
     if (r.result === 'sent') return '<span class="br-badge br-b-green">' + (r.sent_by ? 'Sent manually · ' + esc(r.sent_by) + (r.sent_at ? ' · ' + esc(when(r.sent_at)) : '') : 'Sent') + '</span>' +
-      (r.closed_at ? ' <span class="br-badge br-b-gray" title="Zoho ticket closed ' + esc(when(r.closed_at)) + '">Ticket closed</span>' : ' <span class="br-badge br-b-amber" title="Will be closed on the next check">Closing…</span>');
+      (r.template === 'AR1' ? ' <span class="br-badge br-b-gray" title="Waiting for the customer to send the order ID">Ticket kept open</span>' : r.closed_at ? ' <span class="br-badge br-b-gray" title="Zoho ticket closed ' + esc(when(r.closed_at)) + '">Ticket closed</span>' : ' <span class="br-badge br-b-amber" title="Will be closed on the next check">Closing…</span>');
     if (r.result === 'test') return '<span class="br-badge br-b-amber">Test · not sent</span>';
     if (r.result === 'sending') return '<span class="br-badge br-b-gray">Sending…</span>';
     if (r.result === 'dry_run') return '<span class="br-badge br-b-amber">Dry run · not sent</span>';
@@ -1413,7 +1414,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     var bar = document.getElementById('br-mode-hint');
     bar.className = 'br-mode-bar m-' + cur;
     bar.innerHTML = '<i></i><b>' + esc(m ? m[1] : '') + '</b><span>' + (m ? esc(m[2].replace('%TEST%', (settings.test_emails || []).join(', '))) : '') + '</span>' +
-      '<span class="br-mode-meta">Checking mails from ' + esc(when(settings && settings.start_at)) + ' · Replies on: <b>Cancellations</b>' +
+      '<span class="br-mode-meta">Checking mails from ' + esc(when(settings && settings.start_at)) + ' · Replies on: <b>Cancellations · Ask for order ID</b>' +
       (isAdmin() ? '' : ' · Only admins can change the mode') + '</span>';
     document.querySelectorAll('#br-modes [data-mode]').forEach(function (b) {
       b.onclick = async function () {
@@ -1460,7 +1461,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       // Send to customer (25-Nov-2026): any reply not sent yet — dry run, old open ticket, error, or a test result
       (canRate() && r.reply_text && ['dry_run', 'error', 'test'].indexOf(r.result) !== -1
         ? '<div class="br-send"><button class="br-btn primary" data-send' + (r.id ? '' : ' data-ticket="' + esc(r.ticket_number) + '"') + '>&#9993; Send to customer</button>' +
-          '<span class="br-muted">Goes to ' + esc(r.customer_email) + ' on ticket #' + esc(r.ticket_number) + ', with the full Customer Care signature — then the Zoho ticket is closed.</span></div>' : '') +
+          '<span class="br-muted">Goes to ' + esc(r.customer_email) + ' on ticket #' + esc(r.ticket_number) + ', with the full Customer Care signature' + (r.template === 'AR1' ? ' (ticket stays open).' : ' — then the Zoho ticket is closed.') + '</span></div>' : '') +
       (isReply(r) ? '<div class="br-rate">' + rateBtns +
         '<input class="br-input br-note" data-note placeholder="Note (optional) — e.g. wrong refund line" value="' + esc(r.rating_note || '') + '"' + (canR ? '' : ' disabled') + '>' +
         (r.rated_by ? '<span class="br-muted">by ' + esc(r.rated_by) + ' · ' + esc(when(r.rated_at)) + '</span>' : '') + '</div>' : '') +
@@ -1493,12 +1494,12 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 
   // Send one reply to the customer through Zoho (confirm first). b = { id } or { ticket }.
   async function sendReply(b, r, btn) {
-    if (!confirm('Send this reply to ' + r.customer_email + ' and close ticket #' + r.ticket_number + '?')) return;
+    if (!confirm('Send this reply to ' + r.customer_email + (r.template === 'AR1' ? ' on ticket #' + r.ticket_number + ' (stays open)?' : ' and close ticket #' + r.ticket_number + '?'))) return;
     btn.disabled = true; btn.textContent = 'Sending…';
     try {
       var res = await post('mailBotSend', b);
       if (!res.ok) throw new Error(res.error || 'failed');
-      if (res.closed === false) alert('Sent — but Zoho did not close the ticket yet. It will be closed on the next check.');
+      if (res.closed === false && r.template !== 'AR1') alert('Sent — but Zoho did not close the ticket yet. It will be closed on the next check.');
       await load();
       if (b.ticket) document.getElementById('br-test-out').innerHTML = '<div class="br-hint" style="margin-top:10px;color:var(--green)">&#10003; Sent to ' + esc(r.customer_email) + ' on ticket #' + esc(r.ticket_number) + '.</div>';
     } catch (e) { alert("Couldn't send: " + e.message); btn.disabled = false; btn.innerHTML = '&#9993; Send to customer'; }
