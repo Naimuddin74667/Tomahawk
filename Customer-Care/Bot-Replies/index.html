@@ -1318,7 +1318,9 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     <div id="br-tpl" hidden></div>
   </div>
 
-  <!-- R4: list -->
+  <!-- R4: ticket tabs (New / Old open / Follow-ups) + status chips + list -->
+  <div class="br-seg" id="br-kinds" role="group" aria-label="Tickets" style="margin-bottom:10px"></div>
+  <!-- list -->
   <div class="br-bar" id="br-chips"></div>
   <div id="br-list"></div>
 </div>
@@ -1344,6 +1346,16 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     ['live', 'Live', 'Replies are sent to customers.']
   ];
   var rows = [], settings = null, view = 'replies', q = '', days = 31;
+  // Ticket tabs (25-Nov-2026): which tickets — new mails, old open backlog, or customer follow-ups.
+  // Works together with the status chips below (e.g. Follow-ups + Not rated).
+  var kind = 'all';
+  var KINDS = [
+    ['all', 'All tickets', function () { return true; }],
+    ['new', 'New tickets', function (r) { return !r.zoho_id && !r.backfill; }],
+    ['old', 'Old open tickets', function (r) { return !r.zoho_id && !!r.backfill; }],
+    ['followup', 'Follow-ups', function (r) { return !!r.zoho_id; }]
+  ];
+  function kindTest() { return (KINDS.find(function (k) { return k[0] === kind; }) || KINDS[0])[2]; }
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function sessToken() { var s = window.TM_getSession && window.TM_getSession(); return (s && s.token) || ''; }
@@ -1367,7 +1379,6 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     ['good', 'Good', function (r) { return r.rating === 'good'; }],
     ['average', 'Average', function (r) { return r.rating === 'average'; }],
     ['bad', 'Bad', function (r) { return r.rating === 'bad'; }],
-    ['followup', 'Customer replied', function (r) { return !!r.zoho_id; }],
     ['skipped', 'Skipped', function (r) { return r.result === 'skipped'; }],
     ['skipped_cancel', 'Skipped cancellations', function (r) { return r.result === 'skipped' && r.reply_type === 'cancellation'; }],
     ['errors', 'Errors', function (r) { return r.result === 'error'; }],
@@ -1467,8 +1478,14 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   }
 
   function drawChips() {
+    var kt = kindTest();
+    document.getElementById('br-kinds').innerHTML = KINDS.map(function (k) {
+      return '<button class="br-seg-b' + (k[0] === kind ? ' on' : '') + '" data-kind="' + k[0] + '" style="--mode-c:var(--accent)">' + k[1] +
+        ' <i style="width:auto;height:auto;background:none;font-style:normal;opacity:.7">' + rows.filter(k[2]).length + '</i></button>';
+    }).join('');
+    document.querySelectorAll('#br-kinds [data-kind]').forEach(function (b) { b.onclick = function () { kind = b.getAttribute('data-kind'); draw(); }; });
     document.getElementById('br-chips').innerHTML = VIEWS.map(function (v) {
-      return '<button class="br-chip' + (v[0] === view ? ' on' : '') + '" data-view="' + v[0] + '">' + v[1] + '<i>' + rows.filter(v[2]).length + '</i></button>';
+      return '<button class="br-chip' + (v[0] === view ? ' on' : '') + '" data-view="' + v[0] + '">' + v[1] + '<i>' + rows.filter(kt).filter(v[2]).length + '</i></button>';
     }).join('') + '<input class="br-input" id="br-q" placeholder="Search ticket, order, customer…" value="' + esc(q) + '">';
     document.querySelectorAll('#br-chips [data-view]').forEach(function (b) { b.onclick = function () { view = b.getAttribute('data-view'); draw(); }; });
     var qi = document.getElementById('br-q');
@@ -1483,7 +1500,9 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     return '<div class="br-item" data-id="' + r.id + '">' +
       '<div class="br-item-top">' +
         '<a class="br-link" target="_blank" rel="noopener" href="' + ZOHO_TICKET_URL + encodeURIComponent(r.zoho_id || r.ticket_id) + '">#' + esc(r.ticket_number) + '</a>' +
-        (r.zoho_id ? '<span class="br-badge br-b-red" title="The customer wrote again after the bot\'s reply">Follow-up</span>' : '') +
+        (r.zoho_id ? '<span class="br-badge br-b-red" title="The customer wrote again after the bot\'s reply">Follow-up</span>'
+          : r.backfill ? '<span class="br-badge br-b-gray" title="Was already open before the bot started">Old open</span>'
+          : r.id ? '<span class="br-badge br-b-green" title="Mail came in after the bot started">New</span>' : '') +
         '<span class="br-who">' + esc(r.customer_name || r.customer_email) + '</span>' +
         '<span class="br-muted">' + esc(r.customer_email) + ' · mail ' + esc(when(r.ticket_created)) + ' · bot ' + esc(when(r.processed_at)) + '</span>' +
         '<span style="margin-left:auto;display:flex;gap:6px">' +
@@ -1510,7 +1529,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   function drawList() {
     var f = (VIEWS.find(function (v) { return v[0] === view; }) || VIEWS[0])[2];
     var ql = q.trim().toLowerCase();
-    var list = rows.filter(f).filter(function (r) {
+    var list = rows.filter(kindTest()).filter(f).filter(function (r) {
       return !ql || [r.ticket_number, r.order_no, r.customer_name, r.customer_email, r.subject, r.template].join(' ').toLowerCase().indexOf(ql) !== -1;
     });
     var el = document.getElementById('br-list');
