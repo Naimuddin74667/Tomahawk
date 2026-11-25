@@ -4886,12 +4886,26 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
   function daysAgo(t) { var d = Date.parse(t || ''); return d ? Math.max(0, Math.floor((Date.now() - d) / 86400000)) : null; }
   // Type column for requests (23-Nov-2026) — same names as the tab cards
   function reqKindLabel(r) { return isDRN(r) ? 'Delivery issue' : isNV(r) ? 'Verify order' : isSRN(r) ? 'Service' : 'Warranty'; }
-  // TAT column for requests: days since the request came in (no SLA colours yet)
-  function reqAgeHtml(r) {
+  // Hours since a request came in (null if no date)
+  function reqAgeHrs(r) {
     var t = Date.parse(r.created_at || '');
-    if (!t) return '<span class="sub">&#8212;</span>';
-    var d = Math.max(0, Math.floor((Date.now() - t) / 86400000));
-    return '<div class="tat-b tat-grey" title="Received ' + esc(fmtWhen(r.created_at)) + '"><b>' + d + 'd</b><span>' + (d === 0 ? 'Today' : 'Old') + '</span></div>';
+    return t ? Math.max(0, (Date.now() - t) / 3600000) : null;
+  }
+  // Row highlight (25-Nov-2026): only fresh requests — still untouched (status new) and under 24 hrs old
+  function isFreshReq(r) {
+    var h = reqAgeHrs(r);
+    return (r.status || 'new') === 'new' && h !== null && h < 24;
+  }
+  // TAT column for requests: days since the request came in.
+  // SLA colours (25-Nov-2026) apply only while no action is taken (status new):
+  // under 24 hrs grey, 24-48 hrs amber, over 48 hrs red
+  function reqAgeHtml(r) {
+    var h = reqAgeHrs(r);
+    if (h === null) return '<span class="sub">&#8212;</span>';
+    var d = Math.floor(h / 24);
+    var cls = 'tat-grey';
+    if ((r.status || 'new') === 'new') cls = h >= 48 ? 'tat-red' : h >= 24 ? 'tat-amber' : 'tat-grey';
+    return '<div class="tat-b ' + cls + '" title="Received ' + esc(fmtWhen(r.created_at)) + '"><b>' + d + 'd</b><span>' + (d === 0 ? 'Today' : 'Old') + '</span></div>';
   }
   // "New requests" tile = to review (SRN + WRN) + still to verify
   function reqToReview() { return requests.filter(function (r) { return isToReview(r) || reqTest('verify')(r); }); }
@@ -5009,7 +5023,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     body.innerHTML = rows.map(function (r) {
       var st = REQ_STATUS[r.status || 'new'] || [r.status, 'b-gray'];
       var cs = reqCaseStatus(r), wf = waitingFor(r);
-      return '<tr class="case-row' + ((r.status || 'new') === 'new' ? ' attn' : '') + '" data-id="' + esc(r.claim_id) + '">' +
+      return '<tr class="case-row' + (isFreshReq(r) ? ' attn' : '') + '" data-id="' + esc(r.claim_id) + '">' +
         '<td class="mono">' + esc(r.claim_id) + repeatChip(r) + (isMarketDRN(r) ? ' <span class="badge b-blue">' + esc(r.platform) + '</span>' : '') + '<div class="sub">' + esc(fmtWhen(r.created_at)) + (r.prev_claim_id ? ' · was ' + esc(r.prev_claim_id) : '') + '</div>' + stepsMini(computeSteps(reqCase(r), r, null)) + '</td>' +
         '<td class="name-cell" title="' + esc(r.name) + '">' + esc(r.name) + '</td>' +
         '<td class="name-cell">' + esc(reqKindLabel(r)) + '</td>' +
