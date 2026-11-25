@@ -1428,7 +1428,8 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   function isReply(r) { return r.result === 'sent' || r.result === 'dry_run'; }
   // Filter options (25-Nov-2026). "All" = everything except mails skipped for the team.
   var VIEWS = [
-    ['zoho', 'All tickets (Zoho open)', function () { return false; }],
+    ['zoho', 'Active tickets', function () { return false; }],
+    ['ignored', 'Ignored tickets', function () { return false; }],
     ['all', 'All', function (r) { return r.result !== 'skipped'; }],
     // Bot Draft = understood by the bot, reply ready, not sent yet (25-Nov-2026)
     ['drafts', 'Bot Draft', function (r) { return isDraft(r); }],
@@ -1478,10 +1479,10 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     };
     var pill = function (v, cls, label, num) { return '<button class="' + cls + (view === v ? ' on' : '') + '" data-view="' + v + '">' + label + ' ' + num + '</button>'; };
     document.getElementById('br-stats').innerHTML =
-      // All tickets = every open email case in Zoho right now (25-Nov-2026)
-      card('zoho', zohoList ? zohoList.length : (lastRun && lastRun.zoho_open != null ? lastRun.zoho_open : '—'), 'All tickets <span class="br-muted" style="display:block;font-size:10.5px">open email cases in Zoho</span>') +
-      card('all', rows.length, 'Mails checked' + (lastRun && lastRun.zoho_open != null
-        ? ' <span class="br-muted" style="display:block;font-size:10.5px">' + lastRun.zoho_open + ' open in Zoho now' + (lastRun.left ? ' · ' + lastRun.left + ' waiting' : ' · all checked') + '</span>' : '')) +
+      // Active = open email cases in Zoho the team works on · Ignored = open but not for this page
+      // (Shopify contact form, Judge.me reviews) — 25-Nov-2026
+      card('zoho', zohoList ? zohoList.length : '…', 'Active tickets <span class="br-muted" style="display:block;font-size:10.5px">open email cases in Zoho</span>') +
+      card('ignored', zohoIgnored ? zohoIgnored.length : '…', 'Ignored tickets <span class="br-muted" style="display:block;font-size:10.5px">Shopify contact form · Judge.me reviews</span>') +
       card('drafts', n(isDraft), 'Bot Draft <span class="br-muted" style="display:block;font-size:10.5px">reply ready · not sent</span>') +
       card('skipped', n(function (r) { return r.result === 'skipped'; }), 'Skipped (team)') +
       // One card for rating: big number = not rated; Good / Average / Bad as small filter pills
@@ -1492,8 +1493,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       el.onclick = function (e) { e.stopPropagation(); view = el.getAttribute('data-view'); page = 0; draw(); document.getElementById('br-filter').scrollIntoView({ block: 'center', behavior: 'smooth' }); };
       el.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } };
     });
-    document.getElementById('br-zoho').textContent = rows.length + ' mails checked' + (lastRun && lastRun.zoho_open != null
-      ? ' · ' + lastRun.zoho_open + ' open in Zoho' + (lastRun.left ? ' · ' + lastRun.left + ' waiting' : '') : '');
+    document.getElementById('br-zoho').textContent = lastRun && lastRun.left ? lastRun.left + ' mails waiting for the bot' : '';
   }
 
   function drawSummary() {
@@ -1550,7 +1550,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   function drawChips() {
     var sel = document.getElementById('br-filter');
     sel.innerHTML = VIEWS.map(function (v) {
-      return '<option value="' + v[0] + '"' + (v[0] === view ? ' selected' : '') + '>' + v[1] + ' (' + (v[0] === 'zoho' ? (zohoList ? zohoList.length : '…') : rows.filter(v[2]).length) + ')</option>';
+      return '<option value="' + v[0] + '"' + (v[0] === view ? ' selected' : '') + '>' + v[1] + ' (' + (v[0] === 'zoho' ? (zohoList ? zohoList.length : '…') : v[0] === 'ignored' ? (zohoIgnored ? zohoIgnored.length : '…') : rows.filter(v[2]).length) + ')</option>';
     }).join('');
     sel.onchange = function () { view = sel.value; page = 0; drawStats(); drawList(); };
     var qi = document.getElementById('br-q');
@@ -1650,7 +1650,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   }
 
   // ── All tickets (open Zoho email cases) ──
-  var zohoList = null, zohoBusy = false, rawRows = [];
+  var zohoList = null, zohoIgnored = null, zohoBusy = false, rawRows = [];
   // Closed tickets drop off the page (25-Nov-2026): keep only rows whose Zoho ticket is
   // still open. Exception: replies the bot itself sent (the bot closes those tickets) —
   // kept so they can still be rated.
@@ -1664,14 +1664,13 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   }
   function applyOpen() {
     rawRows = rawRows.filter(function (r) { return !isIgnored(r); });
-    if (zohoList) zohoList = zohoList.filter(function (t) { return !isIgnored(t); });
     if (!zohoList) { rows = rawRows; return; }
     var open = new Set(zohoList.map(function (t) { return String(t.id); }));
     rows = rawRows.filter(function (r) { return r.result === 'sent' || open.has(String(r.ticket_id)); });
   }
   async function loadZoho() {
     if (zohoBusy) return; zohoBusy = true;
-    try { var r = await api('mailBotZohoOpen'); if (!r.ok) throw new Error(r.error || 'failed'); zohoList = r.tickets; }
+    try { var r = await api('mailBotZohoOpen'); if (!r.ok) throw new Error(r.error || 'failed'); zohoIgnored = r.tickets.filter(isIgnored); zohoList = r.tickets.filter(function (t) { return !isIgnored(t); }); }
     catch (e) { zohoList = null; document.getElementById('br-list').innerHTML = '<div class="br-empty">Could not load Zoho tickets: ' + esc(e.message) + '</div>'; zohoBusy = false; return; }
     zohoBusy = false; applyOpen(); draw();
   }
@@ -1693,7 +1692,8 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     var el = document.getElementById('br-list');
     if (!zohoList) { el.innerHTML = '<div class="br-empty">Loading open tickets from Zoho…</div>'; loadZoho(); return; }
     var ql = q.trim().toLowerCase();
-    var all = zohoList.filter(function (t) { return !ql || [t.number, t.subject, t.name, t.email].join(' ').toLowerCase().indexOf(ql) !== -1; });
+    var src = view === 'ignored' ? zohoIgnored : zohoList;
+    var all = src.filter(function (t) { return !ql || [t.number, t.subject, t.name, t.email].join(' ').toLowerCase().indexOf(ql) !== -1; });
     page = Math.min(page, Math.max(0, Math.ceil(all.length / PAGE) - 1));
     var list = all.slice(page * PAGE, page * PAGE + PAGE);
     el.innerHTML = list.length ? '<table class="br-sum br-zoho"><tr><th>Ticket</th><th>Type</th><th>Subject</th><th>Customer</th><th>Created</th><th>Bot</th></tr>' +
@@ -1708,7 +1708,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       tr.onclick = function (e) {
         if (e.target.closest('a')) return;
         var id = tr.getAttribute('data-tid');
-        var t = zohoList.find(function (x) { return x.id === id; });
+        var t = src.find(function (x) { return x.id === id; });
         var r = rawRows.filter(function (x) { return String(x.ticket_id) === id; }).sort(function (a, b) { return b.id - a.id; })[0];
         if (r) openTicket(r); else openPreview(t);
       };
@@ -1736,7 +1736,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   }
 
   function drawList() {
-    if (view === 'zoho') return drawZohoList();
+    if (view === 'zoho' || view === 'ignored') return drawZohoList();
     var f = (VIEWS.find(function (v) { return v[0] === view; }) || VIEWS[0])[2];
     var ql = q.trim().toLowerCase();
     var list = rows.filter(f).filter(function (r) {
