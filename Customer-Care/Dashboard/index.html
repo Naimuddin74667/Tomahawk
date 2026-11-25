@@ -1747,7 +1747,9 @@ async function buildRefundFormPdf(d) {
 
   // ── 1. Case summary
   y = section('1. CASE SUMMARY', y);
-  y = row([['Case ID', d.caseId, .25], ['Type', d.type, .25], ['Reason', d.reason, .25], ['Case date', d.caseDate, .25]], y);
+  // 25-Nov-2026: no Case ID here (it's in the header); order facts moved up from section 3
+  y = row([['Product', d.product, .45], ['Reason', d.reason, .4], ['Type', d.type, .15]], y);
+  y = row([['Order ID', d.orderId, .3], ['Purchase date', d.orderDate, .2], ['Warranty expires', d.warranty, .27], ['Case date', d.caseDate, .23]], y);
 
   // ── 2. Customer details
   y = section('2. CUSTOMER DETAILS', y + 6);
@@ -1755,8 +1757,7 @@ async function buildRefundFormPdf(d) {
 
   // ── 3. Purchase details
   y = section('3. PURCHASE DETAILS', y + 6);
-  y = row([['Order ID', d.orderId, .4], ['Platform', d.platform, .3], ['Order date', d.orderDate, .3]], y);
-  y = row([['Warranty until', d.warranty, .4], ['Replacements sent', d.replacements, .3], ['Order item', d.orderItem, .3]], y);
+  y = row([['Platform', d.platform, .3], ['Replacements sent', d.replacements, .3], ['Order item', d.orderItem, .4]], y);
 
   // ── 4. Return pickup
   y = section('4. RETURN PICKUP', y + 6);
@@ -3905,6 +3906,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       date: pad2(now.getDate()) + '-' + pad2(now.getMonth() + 1) + '-' + now.getFullYear(),
       type: r.job_type === 'Refund' ? 'Refund' : c.type + ' → Refund',
       reason: r.refund_reason || '',
+      product: c.product || String(sh.products_desc || '').replace(/^(Repair|Replacement|Refund|Repaired|FOC)\s*-\s*/i, ''),
       caseDate: dayOf(lead.created_at),
       customer: sh.name || '', phone: sh.phone || '',
       address: [sh.add, sh.city, sh.state, sh.pin].filter(Boolean).join(', '),
