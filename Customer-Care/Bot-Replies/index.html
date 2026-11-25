@@ -1209,6 +1209,10 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
   padding: 9px 14px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--mode-c) 40%, transparent); background: color-mix(in srgb, var(--mode-c) 7%, transparent); }
 .br-mode-bar b { color: var(--text); }
 .br-mode-bar .br-mode-meta { margin-left: auto; font-size: 11.5px; }
+.br-send { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.br-sig { min-height: 70px; max-height: 240px; overflow: auto; border: 1px dashed var(--border); border-radius: 10px; padding: 10px 12px; font-size: 12.5px; background: var(--surface); }
+.br-sig[contenteditable="true"]:focus { outline: none; border-color: var(--accent); border-style: solid; }
+.br-sig img { max-width: 100%; height: auto; }
 .br-stat { cursor: pointer; transition: border-color .15s, box-shadow .15s; }
 .br-stat:hover { border-color: var(--accent); }
 .br-stat.on { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
@@ -1287,6 +1291,12 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       </div>
       <div class="br-hint" style="margin-top:6px">Shows what the bot would reply to any ticket — nothing is sent or saved.</div>
       <div id="br-test-out"></div>
+      <h3 style="margin-top:18px">Email signature</h3>
+      <div class="br-sig" id="br-sig" aria-label="Email signature"></div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+        <button class="br-btn" id="br-sig-save" hidden>Save signature</button>
+        <span class="br-hint" id="br-sig-hint"></span>
+      </div>
     </div>
     <div class="br-box">
       <h3>Ratings by reply</h3>
@@ -1350,7 +1360,9 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 
   function resultBadge(r) {
     if (r.backfill && r.result === 'dry_run') return '<span class="br-badge br-b-gray" title="Was already open before the bot started — logged only, never sent">Old open ticket · not sent</span>';
-    if (r.result === 'sent') return '<span class="br-badge br-b-green">Sent</span>';
+    if (r.result === 'sent') return '<span class="br-badge br-b-green">' + (r.sent_by ? 'Sent manually · ' + esc(r.sent_by) + (r.sent_at ? ' · ' + esc(when(r.sent_at)) : '') : 'Sent') + '</span>';
+    if (r.result === 'test') return '<span class="br-badge br-b-amber">Test · not sent</span>';
+    if (r.result === 'sending') return '<span class="br-badge br-b-gray">Sending…</span>';
     if (r.result === 'dry_run') return '<span class="br-badge br-b-amber">Dry run · not sent</span>';
     if (r.result === 'error') return '<span class="br-badge br-b-red">Error</span>';
     if (r.result === 'working') return '<span class="br-badge br-b-gray">Working…</span>';
@@ -1450,6 +1462,10 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
         '<div><div class="br-col-h">Customer mail — ' + esc(r.subject) + '</div><div class="br-text">' + esc(r.mail_text || '(empty)') + '</div></div>' +
         '<div><div class="br-col-h">Bot reply</div><div class="br-text reply">' + (r.reply_text ? esc(r.reply_text) : '<span class="br-muted">No reply — the team answers this one.</span>') + '</div></div>' +
       '</div>' +
+      // Send to customer (25-Nov-2026): any reply not sent yet — dry run, old open ticket, error, or a test result
+      (canRate() && r.reply_text && ['dry_run', 'error', 'test'].indexOf(r.result) !== -1
+        ? '<div class="br-send"><button class="br-btn primary" data-send' + (r.id ? '' : ' data-ticket="' + esc(r.ticket_number) + '"') + '>&#9993; Send to customer</button>' +
+          '<span class="br-muted">Goes to ' + esc(r.customer_email) + ' on ticket #' + esc(r.ticket_number) + ', with the full email signature.</span></div>' : '') +
       (isReply(r) ? '<div class="br-rate">' + rateBtns +
         '<input class="br-input br-note" data-note placeholder="Note (optional) — e.g. wrong refund line" value="' + esc(r.rating_note || '') + '"' + (canR ? '' : ' disabled') + '>' +
         (r.rated_by ? '<span class="br-muted">by ' + esc(r.rated_by) + ' · ' + esc(when(r.rated_at)) + '</span>' : '') + '</div>' : '') +
@@ -1468,6 +1484,8 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       var id = Number(box.getAttribute('data-id'));
       var r = rows.find(function (x) { return x.id === id; });
       var note = box.querySelector('[data-note]');
+      var sb = box.querySelector('[data-send]');
+      if (sb) sb.onclick = function () { sendReply({ id: r.id }, r, sb); };
       box.querySelectorAll('[data-rate]').forEach(function (b) {
         b.onclick = function () { var k = b.getAttribute('data-rate'); save(r, r.rating === k ? '' : k, note ? note.value : r.rating_note); };
       });
@@ -1478,6 +1496,40 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     });
   }
 
+  // Send one reply to the customer through Zoho (confirm first). b = { id } or { ticket }.
+  async function sendReply(b, r, btn) {
+    if (!confirm('Send this reply to ' + r.customer_email + ' on ticket #' + r.ticket_number + '?')) return;
+    btn.disabled = true; btn.textContent = 'Sending…';
+    try {
+      var res = await post('mailBotSend', b);
+      if (!res.ok) throw new Error(res.error || 'failed');
+      await load();
+      if (b.ticket) document.getElementById('br-test-out').innerHTML = '<div class="br-hint" style="margin-top:10px;color:var(--green)">&#10003; Sent to ' + esc(r.customer_email) + ' on ticket #' + esc(r.ticket_number) + '.</div>';
+    } catch (e) { alert("Couldn't send: " + e.message); btn.disabled = false; btn.innerHTML = '&#9993; Send to customer'; }
+  }
+
+  // Email signature (admin): pasted from Zoho once, added to every email the bot sends.
+  function drawSignature() {
+    var ed = document.getElementById('br-sig'), sv = document.getElementById('br-sig-save');
+    if (!ed || ed === document.activeElement) return;
+    ed.innerHTML = (settings && settings.signature_html) || '';
+    ed.contentEditable = isAdmin() ? 'true' : 'false';
+    sv.hidden = !isAdmin();
+    document.getElementById('br-sig-hint').textContent = settings && settings.signature_html
+      ? 'Added under every reply the bot sends (in place of the short "Regards…" shown on this page).'
+      : 'No signature yet — replies go out with the short "Regards, Team Tomahawk Tools". ' + (isAdmin() ? 'Copy your signature from Zoho Desk and paste it here.' : 'An admin can add it.');
+  }
+  document.getElementById('br-sig-save').onclick = async function () {
+    var b = this; b.disabled = true; b.textContent = 'Saving…';
+    try {
+      var res = await post('mailBotSettings', { signature_html: document.getElementById('br-sig').innerHTML });
+      if (!res.ok) throw new Error(res.error || 'failed');
+      settings = res.settings; document.getElementById('br-sig').blur(); drawSignature();
+      b.textContent = 'Saved ✓'; setTimeout(function () { b.textContent = 'Save signature'; }, 1500);
+    } catch (e) { alert("Couldn't save: " + e.message); b.textContent = 'Save signature'; }
+    b.disabled = false;
+  };
+
   async function save(r, rating, note) {
     var res = await post('mailBotRate', { id: r.id, rating: rating, note: note || '' });
     if (!res.ok) { alert("Couldn't save: " + (res.error || 'failed')); return; }
@@ -1485,7 +1537,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     draw();
   }
 
-  function draw() { drawStats(); drawSummary(); drawModes(); drawChips(); drawList(); }
+  function draw() { drawStats(); drawSummary(); drawModes(); drawChips(); drawList(); drawSignature(); }
 
   async function load() {
     var res = await api('mailBotList', '&days=' + days);
@@ -1503,8 +1555,12 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       var res = await post('mailBotTest', { ticket: document.getElementById('br-test-no').value });
       if (!res.ok) throw new Error(res.error || 'failed');
       var t = res.test;
-      out.innerHTML = '<div style="margin-top:10px">' + itemHtml(Object.assign({ id: 0, result: t.reply_text ? 'test' : 'skipped', processed_at: null }, t))
-        .replace('<span class="br-badge br-b-gray">Skipped</span>', t.reply_text ? '<span class="br-badge br-b-amber">Test · not sent</span>' : '<span class="br-badge br-b-gray">Skipped</span>') + '</div>';
+      // Already sent from the log → show it as sent (no second send)
+      var tr = Object.assign({ id: 0, processed_at: null }, t, {
+        result: t.logged_result === 'sent' ? 'sent' : t.reply_text ? 'test' : 'skipped' });
+      out.innerHTML = '<div style="margin-top:10px">' + itemHtml(tr) + '</div>';
+      var tsb = out.querySelector('[data-send]');
+      if (tsb) tsb.onclick = function () { sendReply({ ticket: t.ticket_number }, tr, tsb); };
     } catch (e) { out.innerHTML = '<div class="br-hint" style="margin-top:10px;color:var(--red)">' + esc(e.message) + '</div>'; }
     b.disabled = false;
   };

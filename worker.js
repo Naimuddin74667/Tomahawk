@@ -1439,7 +1439,7 @@ const ACTION_TIERS = {
   // Internal notes on requests / cases (20-Nov-2026)
   ccNotesList: 'viewer_read', ccNoteAdd: 'manager_up',
   // Customer Care → Bot Replies: automatic email replies log + review (25-Nov-2026)
-  mailBotList: 'viewer_read', mailBotRate: 'manager_up', mailBotTest: 'manager_up', mailBotSettings: 'admin_only', mailBotRunNow: 'admin_only',
+  mailBotList: 'viewer_read', mailBotRate: 'manager_up', mailBotTest: 'manager_up', mailBotSend: 'manager_up', mailBotSettings: 'admin_only', mailBotRunNow: 'admin_only',
   // Dashboard "Raise ticket" — record (or clear) a courier escalation ticket on one leg.
   ccMarkEscalation: 'manager_up',
   // RTO received → close the case instead of re-sending (06-Nov-2026).
@@ -1496,7 +1496,7 @@ const ACTION_TIERS = {
 
 // Actions that need a valid session + role even when enforce_auth = '0'.
 // Only add actions whose frontend already sends X-Tomahawk-Session.
-const ALWAYS_GATED = new Set(['mailBotList', 'mailBotRate', 'mailBotTest', 'ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
+const ALWAYS_GATED = new Set(['mailBotList', 'mailBotRate', 'mailBotTest', 'mailBotSend', 'ccNotesList', 'ccNoteAdd', 'ccDrnToWrn', 'ccClaimsList', 'ccClaimGet', 'ccClaimFiles', 'ccClaimAction', 'ccInvoiceRequest', 'ccMediaRequest', 'ccCloseRequest', 'ccAnalyticsData',
   'ccPaymentInfo', 'ccPaymentCreate', 'ccPaymentGet', 'ccPaymentVoid', 'ccPaymentFinal', 'ccPaymentSkipRepair', 'ccPaymentWaive', 'ccLogisticsQuote', 'ccVersion',
   'shopShipList', 'shopShipRefresh', 'shopShipReceived']);
 
@@ -2313,8 +2313,15 @@ export default {
         const s = await mbGetSettings(env);
         if (body && MB_MODES.includes(body.mode)) s.mode = body.mode;
         if (body && Array.isArray(body.test_emails)) s.test_emails = body.test_emails.map(x => String(x).trim().toLowerCase()).filter(validEmail).slice(0, 10);
+        if (body && typeof body.signature_html === 'string') s.signature_html = mbCleanSignature(body.signature_html);
         await mbSaveSettings(env, s);
-        return json({ ok: true, settings: { mode: s.mode, start_at: s.start_at, test_emails: s.test_emails } });
+        return json({ ok: true, settings: mbPublicSettings(s) });
+      }
+      if (request.method === 'POST' && act === 'mailBotSend') {
+        try {
+          const r = await mbManualSend(env, authResult.user || (await resolveSession(request, env.DB)), body || {});
+          return json(r, r.ok ? 200 : 400);
+        } catch (e) { return json({ ok: false, error: e.message }, 500); }
       }
       if (request.method === 'POST' && act === 'mailBotRunNow') {
         try { return json(await mbRun(env, {})); }
@@ -14496,7 +14503,9 @@ async function ensureMailBotTable(DB) {
     processed_at TEXT DEFAULT (datetime('now'))
   )`).run();
   // backfill = 1 → a ticket that was already open before the bot started (never sent)
-  try { await DB.prepare('ALTER TABLE bot_reply_log ADD COLUMN backfill INTEGER DEFAULT 0').run(); } catch (e) { /* already there */ }
+  for (const col of ['backfill INTEGER DEFAULT 0', 'sent_by TEXT', 'sent_at TEXT']) {   // added 25-Nov-2026
+    try { await DB.prepare('ALTER TABLE bot_reply_log ADD COLUMN ' + col).run(); } catch (e) { /* already there */ }
+  }
 }
 const MB_BACKFILL_DAYS = 30;       // old OPEN tickets this recent are checked too (log only, 25-Nov-2026)
 
@@ -14706,6 +14715,24 @@ function mbCancelText(r) {
 function mbParasToHtml(paras) {
   return paras.map(p => '<p>' + mbEscHtml(p).replace(/(https:\/\/[^\s<]+)/g, '<a href="$1">$1</a>').replace(/\n/g, '<br>') + '</p>').join('');
 }
+// Email that actually goes out (25-Nov-2026): the reply text, then the full Zoho
+// signature saved on the Bot Replies page in place of the short "Regards…" block.
+// Zoho does not add the agent signature to replies sent through its API.
+function mbComposeHtml(replyText, s) {
+  const paras = String(replyText || '').split(/\n\n/);
+  const sig = s && s.signature_html ? String(s.signature_html) : '';
+  if (sig && /^Regards,/i.test(paras[paras.length - 1] || '')) paras.pop();
+  return mbParasToHtml(paras) + (sig ? '<div>' + sig + '</div>' : '');
+}
+// Pasted signature HTML: drop scripts / event handlers / javascript: links.
+function mbCleanSignature(html) {
+  return String(html || '').slice(0, 20000)
+    .replace(/<(script|style|iframe|object|embed)[\s\S]*?<\/\1>/gi, '')
+    .replace(/<(script|iframe|object|embed)\b[^>]*>/gi, '')
+    .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/(href|src)\s*=\s*(["'])\s*javascript:[^"']*\2/gi, '$1="#"')
+    .trim();
+}
 
 // ── Zoho Desk: ticket text ──
 async function mbTicketText(env, orgId, ticketId) {
@@ -14802,9 +14829,9 @@ async function mbRun(env, opts) {
     const backfill = oldIds.has(String(tk.id));
     try {
       d = await mbDecide(env, orgId, tk);
-      if (d.reply_html) {
+      if (d.reply_text) {
         const send = !backfill && (s.mode === 'live' || (s.mode === 'test' && s.test_emails.map(x => String(x).toLowerCase()).includes(d.customer_email)));
-        if (send) { await mbSendReply(env, orgId, tk.id, d.customer_email, d.reply_html); result = 'sent'; }
+        if (send) { await mbSendReply(env, orgId, tk.id, d.customer_email, mbComposeHtml(d.reply_text, s)); result = 'sent'; }
         else result = 'dry_run';
       }
     } catch (e) { result = 'error'; error = String(e.message || e).slice(0, 500); console.error('mailbot', tk.id, error); }
@@ -14832,14 +14859,63 @@ async function mbTestTicket(env, ticketNumber) {
   }
   const d = await mbDecide(env, orgId, tk);
   delete d.reply_html;
+  // Already in the log? Say so, so the page can show its state (and not offer a second send).
+  await ensureMailBotTable(env.DB);
+  const logged = await env.DB.prepare('SELECT id, result, sent_by, sent_at FROM bot_reply_log WHERE ticket_id = ?').bind(String(tk.id)).first();
+  if (logged) Object.assign(d, { log_id: logged.id, logged_result: logged.result, sent_by: logged.sent_by, sent_at: logged.sent_at });
   return { ok: true, test: d };
+}
+
+// "Send to customer" on the Bot Replies page (25-Nov-2026): sends a reply the bot
+// only logged (dry run / old open ticket), or a "Test a ticket" result, through Zoho
+// on the same ticket. Works in every mode. Never sends the same ticket twice.
+async function mbManualSend(env, user, b) {
+  await ensureMailBotTable(env.DB);
+  const s = await mbGetSettings(env);
+  const orgId = await mbOrgId(env);
+  const who = (user && user.username) || 'admin';
+  let row = null;
+  if (b && b.id) row = await env.DB.prepare('SELECT * FROM bot_reply_log WHERE id = ?').bind(parseInt(b.id, 10) || 0).first();
+  else if (b && b.ticket) {
+    // From "Test a ticket": work the reply out again now (fresh order state), then log it.
+    const t = await mbTestTicket(env, b.ticket);
+    if (!t.ok) return t;
+    const d = t.test;
+    if (d.log_id) row = await env.DB.prepare('SELECT * FROM bot_reply_log WHERE id = ?').bind(d.log_id).first();
+    else {
+      if (!d.reply_text) return { ok: false, error: 'The bot has no reply for this ticket — ' + (d.skip_reason || 'left for the team') };
+      await env.DB.prepare(`INSERT OR IGNORE INTO bot_reply_log (ticket_id, ticket_number, ticket_created, customer_name, customer_email, subject, mail_text,
+          reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, backfill)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'dry_run', '', '', 0)`).bind(d.ticket_id, d.ticket_number, d.ticket_created || null, d.customer_name || '',
+          d.customer_email || '', d.subject || '', d.mail_text || '', d.reply_type || 'cancellation', d.template || '', d.order_no || '', d.order_info || '', d.reply_text).run();
+      row = await env.DB.prepare('SELECT * FROM bot_reply_log WHERE ticket_id = ?').bind(d.ticket_id).first();
+    }
+  }
+  if (!row) return { ok: false, error: 'Reply not found' };
+  if (row.result === 'sent') return { ok: false, error: 'Already sent' + (row.sent_by ? ' by ' + row.sent_by : '') + '.' };
+  if (!row.reply_text || !row.customer_email) return { ok: false, error: 'No reply to send for this ticket.' };
+  // Claim it first — a double click can never send twice.
+  const claim = await env.DB.prepare("UPDATE bot_reply_log SET result = 'sending' WHERE id = ? AND result IN ('dry_run', 'error')").bind(row.id).run();
+  if (!claim.meta || !claim.meta.changes) return { ok: false, error: 'This reply is already being sent.' };
+  try {
+    await mbSendReply(env, orgId, row.ticket_id, row.customer_email, mbComposeHtml(row.reply_text, s));
+  } catch (e) {
+    await env.DB.prepare('UPDATE bot_reply_log SET result = ?, error = ? WHERE id = ?').bind(row.result, String(e.message || e).slice(0, 500), row.id).run();
+    return { ok: false, error: e.message };
+  }
+  const done = await env.DB.prepare(`UPDATE bot_reply_log SET result = 'sent', error = '', sent_by = ?, sent_at = datetime('now')
+    WHERE id = ? RETURNING id, result, sent_by, sent_at`).bind(who, row.id).first();
+  return { ok: true, row: done };
 }
 
 async function mbList(env, days) {
   await ensureMailBotTable(env.DB);
   const s = await mbGetSettings(env);
   const rows = (await env.DB.prepare(`SELECT id, ticket_id, ticket_number, ticket_created, customer_name, customer_email, subject, mail_text,
-      reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, rating, rating_note, rated_by, rated_at, processed_at, backfill
+      reply_type, template, order_no, order_info, reply_text, result, skip_reason, error, rating, rating_note, rated_by, rated_at, processed_at, backfill, sent_by, sent_at
     FROM bot_reply_log WHERE processed_at >= datetime('now', ?) ORDER BY processed_at DESC, id DESC LIMIT 1000`).bind('-' + days + ' days').all()).results || [];
-  return { ok: true, rows, settings: { mode: s.mode, start_at: s.start_at, test_emails: s.test_emails }, days };
+  return { ok: true, rows, settings: mbPublicSettings(s), days };
+}
+function mbPublicSettings(s) {
+  return { mode: s.mode, start_at: s.start_at, test_emails: s.test_emails, signature_html: s.signature_html || '' };
 }
