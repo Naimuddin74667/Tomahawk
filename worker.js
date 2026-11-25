@@ -14709,7 +14709,7 @@ function mbCancelText(r) {
     out.push("We couldn't find the order from your mail. You can see and cancel your website orders yourself here: " + MB_TRACK_LINK +
       '. Just verify your mobile number with the WhatsApp OTP to see all your orders.');
   }
-  out.push('Regards,\nTeam Tomahawk Tools\n' + MB_FROM_EMAIL);
+  out.push('Thanks & Regards,');   // full signature is added only in the email (mbComposeHtml)
   return out;
 }
 function mbParasToHtml(paras) {
@@ -14718,11 +14718,14 @@ function mbParasToHtml(paras) {
 // Email that actually goes out (25-Nov-2026): the reply text, then the full Zoho
 // signature saved on the Bot Replies page in place of the short "Regards…" block.
 // Zoho does not add the agent signature to replies sent through its API.
+// Customer Care signature (agreed 25-Nov-2026). The page shows only "Thanks & Regards,".
+const MB_SIGNATURE_HTML = '<p>Thanks &amp; Regards,<br>Team TOMAHAWK&reg; Tools — Customer Care<br>' +
+  'WhatsApp: +91 89289 49415<br>Email: <a href="mailto:support@tomahawk.tools">support@tomahawk.tools</a><br>' +
+  'Mon–Fri, 9:00 AM – 5:30 PM<br><a href="https://www.tomahawk.tools">www.tomahawk.tools</a></p>';
 function mbComposeHtml(replyText, s) {
   const paras = String(replyText || '').split(/\n\n/);
-  const sig = s && s.signature_html ? String(s.signature_html) : '';
-  if (sig && /^Regards,/i.test(paras[paras.length - 1] || '')) paras.pop();
-  return mbParasToHtml(paras) + (sig ? '<div>' + sig + '</div>' : '');
+  if (/^(Thanks & )?Regards,/i.test(paras[paras.length - 1] || '')) paras.pop();   // old rows had a short sign-off too
+  return mbParasToHtml(paras) + MB_SIGNATURE_HTML;
 }
 // Pasted signature HTML: drop scripts / event handlers / javascript: links.
 function mbCleanSignature(html) {

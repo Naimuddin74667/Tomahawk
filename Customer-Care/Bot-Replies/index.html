@@ -1291,12 +1291,6 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       </div>
       <div class="br-hint" style="margin-top:6px">Shows what the bot would reply to any ticket — nothing is sent or saved.</div>
       <div id="br-test-out"></div>
-      <h3 style="margin-top:18px">Email signature</h3>
-      <div class="br-sig" id="br-sig" aria-label="Email signature"></div>
-      <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-        <button class="br-btn" id="br-sig-save" hidden>Save signature</button>
-        <span class="br-hint" id="br-sig-hint"></span>
-      </div>
     </div>
     <div class="br-box">
       <h3>Ratings by reply</h3>
@@ -1465,7 +1459,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       // Send to customer (25-Nov-2026): any reply not sent yet — dry run, old open ticket, error, or a test result
       (canRate() && r.reply_text && ['dry_run', 'error', 'test'].indexOf(r.result) !== -1
         ? '<div class="br-send"><button class="br-btn primary" data-send' + (r.id ? '' : ' data-ticket="' + esc(r.ticket_number) + '"') + '>&#9993; Send to customer</button>' +
-          '<span class="br-muted">Goes to ' + esc(r.customer_email) + ' on ticket #' + esc(r.ticket_number) + ', with the full email signature.</span></div>' : '') +
+          '<span class="br-muted">Goes to ' + esc(r.customer_email) + ' on ticket #' + esc(r.ticket_number) + ', with the full Customer Care signature.</span></div>' : '') +
       (isReply(r) ? '<div class="br-rate">' + rateBtns +
         '<input class="br-input br-note" data-note placeholder="Note (optional) — e.g. wrong refund line" value="' + esc(r.rating_note || '') + '"' + (canR ? '' : ' disabled') + '>' +
         (r.rated_by ? '<span class="br-muted">by ' + esc(r.rated_by) + ' · ' + esc(when(r.rated_at)) + '</span>' : '') + '</div>' : '') +
@@ -1508,28 +1502,6 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     } catch (e) { alert("Couldn't send: " + e.message); btn.disabled = false; btn.innerHTML = '&#9993; Send to customer'; }
   }
 
-  // Email signature (admin): pasted from Zoho once, added to every email the bot sends.
-  function drawSignature() {
-    var ed = document.getElementById('br-sig'), sv = document.getElementById('br-sig-save');
-    if (!ed || ed === document.activeElement) return;
-    ed.innerHTML = (settings && settings.signature_html) || '';
-    ed.contentEditable = isAdmin() ? 'true' : 'false';
-    sv.hidden = !isAdmin();
-    document.getElementById('br-sig-hint').textContent = settings && settings.signature_html
-      ? 'Added under every reply the bot sends (in place of the short "Regards…" shown on this page).'
-      : 'No signature yet — replies go out with the short "Regards, Team Tomahawk Tools". ' + (isAdmin() ? 'Copy your signature from Zoho Desk and paste it here.' : 'An admin can add it.');
-  }
-  document.getElementById('br-sig-save').onclick = async function () {
-    var b = this; b.disabled = true; b.textContent = 'Saving…';
-    try {
-      var res = await post('mailBotSettings', { signature_html: document.getElementById('br-sig').innerHTML });
-      if (!res.ok) throw new Error(res.error || 'failed');
-      settings = res.settings; document.getElementById('br-sig').blur(); drawSignature();
-      b.textContent = 'Saved ✓'; setTimeout(function () { b.textContent = 'Save signature'; }, 1500);
-    } catch (e) { alert("Couldn't save: " + e.message); b.textContent = 'Save signature'; }
-    b.disabled = false;
-  };
-
   async function save(r, rating, note) {
     var res = await post('mailBotRate', { id: r.id, rating: rating, note: note || '' });
     if (!res.ok) { alert("Couldn't save: " + (res.error || 'failed')); return; }
@@ -1537,7 +1509,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     draw();
   }
 
-  function draw() { drawStats(); drawSummary(); drawModes(); drawChips(); drawList(); drawSignature(); }
+  function draw() { drawStats(); drawSummary(); drawModes(); drawChips(); drawList(); }
 
   async function load() {
     var res = await api('mailBotList', '&days=' + days);
