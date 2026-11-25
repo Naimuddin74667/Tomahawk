@@ -603,6 +603,44 @@ async function syncCarOffToLedger(day, nOff, who) {
     }
   }
   if (changed) { await loadLedger(); if (currentPage === 'earnings') drawEarnings(); }
+  return changed;
+}
+/* Owner app, after the ledger loads: make sure every car-off day from CAR_OFF_RULE_FROM on is reflected
+   in the Driver ledger (catches days marked off before this rule, or saved while the ledger wasn't loaded).
+   Only adds a missing "Car off (auto)" entry — never removes anything here. */
+const CAR_OFF_RULE_FROM = '2026-11-24';
+let reconciling = false;
+async function reconcileCarOffs() {
+  if (reconciling || !LEDGER || !cloudCfg() || isViewer()) return;
+  reconciling = true;
+  try {
+    const jobs = [];
+    DB.drivers.filter(d => d.rentCycle === 'daily').forEach(d => rentPeriods(d).forEach(p => {
+      if (p.from < CAR_OFF_RULE_FROM || !p.off.length) return;
+      const n = p.off.length, who = n === 2 ? 'all' : offWho(d.id, p.off[0].date, p.off[0].half);
+      const need = ldActiveOn(p.from).some(L => (n === 2 || who === L.id) &&
+        !LEDGER.entries.some(e => e.driverId === L.id && e.date === p.from && e.kind === 'waive'));
+      if (need) jobs.push([p.from, n, who]);
+    }));
+    let n = 0;
+    for (const [day, nOff, who] of jobs) n += await addCarOffWaives(day, nOff, who);
+    if (n) { await loadLedgerOnly(); toast(n + ' car-off day' + (n > 1 ? 's' : '') + ' updated in driver ledger'); }
+  } finally { reconciling = false; }
+}
+// Add-only version of syncCarOffToLedger (no reload in between)
+async function addCarOffWaives(day, nOff, who) {
+  let n = 0;
+  for (const L of ldActiveOn(day)) {
+    if (!(nOff === 2 || who === L.id)) continue;
+    if (LEDGER.entries.some(e => e.driverId === L.id && e.date === day && e.kind === 'waive')) continue;
+    const r = await cloudFetch('/ledger/entry', { method:'POST', body: JSON.stringify({ driverId: L.id, kind: 'waive', date: day, amount: num(L.rent), note: CAR_OFF_NOTE }) }).catch(() => null);
+    if (r && r.status < 400) n++;
+  }
+  return n;
+}
+// Reload the ledger without re-running the reconcile (avoids a loop)
+async function loadLedgerOnly() {
+  try { const r = await cloudFetch('/ledger'); if (r.status < 400) { LEDGER = r.body; redrawLedger(); if (currentPage === 'earnings') drawEarnings(); } } catch {}
 }
 function halfLabel(x) { return fmtShort(x.date) + ' ' + x.half; }
 
@@ -640,6 +678,9 @@ function openPeriod(driverId, day) {
   window._pt = i => { ran[i] = !ran[i]; draw(); };
   window._sw = id => { shift = id; draw(); };
   window._ps = received => {
+    // Ledger not loaded yet → load it first so the "whose shift" rule can reach the Driver ledger
+    if (cloudCfg() && !LEDGER && !window._psTried) { window._psTried = true; toast('Loading…'); loadLedger().then(() => { draw(); window._ps(received); }); return; }
+    window._psTried = false;
     const nOff = ran.filter(r => !r).length, ldOn = ldActiveOn(day).length > 0;
     if (nOff === 1 && ldOn && !shift) { toast('Pick whose shift was off'); return; }
     const who = !ldOn ? undefined : nOff === 2 ? 'all' : shift;
@@ -2038,6 +2079,7 @@ async function loadLedger() {
       LEDGER = r.body;
       if (!USERS.length && !isViewer()) { try { USERS = (await cloudFetch('/users')).body.users || []; } catch {} }
       redrawLedger();
+      reconcileCarOffs();
     }
   } catch {}
 }
