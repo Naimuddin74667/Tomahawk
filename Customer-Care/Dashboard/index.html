@@ -5182,8 +5182,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       api('ccDeliveredDate&claim_id=' + encodeURIComponent(r.claim_id)).then(function (res) {
         var el = document.getElementById('rq-delivered'); if (!el || openReqId !== r.claim_id) return;
         if (res && res.ok && res.delivered_at) { r.delivered_at = res.delivered_at; el.textContent = fmtDay(String(res.delivered_at).slice(0, 10)); }
+        else if (res && res.ok && res.status === 'Delivered')
+          el.innerHTML = '<span class="rq-wty ok">&#10003; Delivered</span><div class="pay-hint">date not shared by ' + esc(r.platform || 'the marketplace') + '</div>';
         else el.innerHTML = '<span class="muted" title="' + esc((res && (res.reason || res.error)) || '') + '">' +
-          (/website|shopify/i.test(r.platform || '') ? 'Not delivered yet' : '— (' + esc(r.platform || 'marketplace') + ')') + '</span>';
+          (res && res.status ? esc(String(res.status).replace(/_/g, ' ').toLowerCase()) : 'Not delivered yet') + '</span>';
       }).catch(function () { var el = document.getElementById('rq-delivered'); if (el) el.textContent = '—'; });
     }
     loadNotes([r.claim_id, r.prev_claim_id], r.events, r.status === 'closed' || r.status === 'not_covered' || !!(nCase && nCase.st && nCase.st.tone === 'closed'));

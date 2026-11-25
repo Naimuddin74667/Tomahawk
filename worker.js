@@ -10938,7 +10938,8 @@ async function ccDeliveredDate(env, claimId) {
   if (!r) return { ok: false, error: 'No such request' };
   if (r.delivered_at) return { ok: true, delivered_at: r.delivered_at, cached: true };
   const num = String(r.order_id || '').replace(/\D/g, '');
-  if (!/website|shopify/i.test(r.platform || '') || !num || num.length > 6) return { ok: true, delivered_at: null, reason: 'Only website orders can be looked up' };
+  // Amazon / Flipkart / others: Unicommerce mirror — package status, and the date when UC has it
+  if (!/website|shopify/i.test(r.platform || '') || !num || num.length > 6) return ccDeliveredFromUc(env, claimId, r.order_id);
   if (!shopifyConfigured(env)) return { ok: true, delivered_at: null, reason: 'Shopify not configured' };
   const data = await shopifyGql(env, `query($q: String!) { orders(first: 5, query: $q) { nodes {
       name fulfillments(first: 10) { status deliveredAt displayStatus trackingInfo(first: 3) { company number } } } } }`, { q: 'name:' + num });
@@ -10955,6 +10956,27 @@ async function ccDeliveredDate(env, claimId) {
   const at = dates.sort().pop();
   await env.DB.prepare('UPDATE warranty_claims SET delivered_at = ? WHERE claim_id = ? AND delivered_at IS NULL').bind(at, claimId).run();
   return { ok: true, delivered_at: at };
+}
+
+async function ccDeliveredFromUc(env, claimId, orderId) {
+  const oid = String(orderId || '').trim();
+  if (!oid || !env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) return { ok: true, delivered_at: null, reason: 'No order ID' };
+  const sb = env.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/';
+  const get = async path => { const x = await fetch(sb + path, { headers: supabaseHeaders(env) }); return x.ok ? x.json() : []; };
+  const enc = encodeURIComponent(oid.replace(/[(),]/g, ''));
+  const ords = await get('uc_orders?select=code&or=(display_order_code.eq.' + enc + ',code.eq.' + enc + ')&limit=5');
+  if (!Array.isArray(ords) || !ords.length) return { ok: true, delivered_at: null, status: null, reason: 'Order not in Unicommerce' };
+  const pk = await get('uc_shipping_packages?select=status,raw->>delivered&sale_order_code=in.(' + ords.map(o => encodeURIComponent(o.code)).join(',') + ')');
+  const list = Array.isArray(pk) ? pk : [];
+  const dates = list.map(p => p.delivered).filter(Boolean).map(v => (/^\d+$/.test(String(v)) ? new Date(Number(v)).toISOString() : String(v))).sort();
+  const delivered = list.some(p => /DELIVERED/i.test(p.status || ''));
+  if (dates.length) {
+    const at = dates.pop();
+    await env.DB.prepare('UPDATE warranty_claims SET delivered_at = ? WHERE claim_id = ? AND delivered_at IS NULL').bind(at, claimId).run();
+    return { ok: true, delivered_at: at, source: 'unicommerce' };
+  }
+  return { ok: true, delivered_at: null, status: delivered ? 'Delivered' : (list[0] && list[0].status) || null,
+    reason: delivered ? 'Delivered — the marketplace does not share the delivery date' : 'Not delivered yet (Unicommerce)' };
 }
 
 async function drnParcelDelivered(env, company, awb) {
