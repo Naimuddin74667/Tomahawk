@@ -1303,6 +1303,16 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
 .br-facts b { font-weight: 600; color: var(--text); }
 .br-acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
 .br-pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 12px; font-size: 12.5px; color: var(--text2); }
+.br-modal { position: fixed; inset: 0; z-index: 900; background: rgba(0,0,0,.55); display: flex; justify-content: center; align-items: flex-start; padding: 32px 20px; overflow: auto; }
+.br-modal[hidden] { display: none; }
+.br-modal-box { width: min(1240px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.45); }
+.br-modal-bar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border); font-weight: 800; font-size: 13.5px; color: var(--text); }
+.br-modal-bar [data-mtitle] { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.br-modal [data-mbody] { padding: 4px 4px 8px; }
+.br-modal .br-item { border: 0; background: transparent; margin: 0; }
+.br-modal .br-row { cursor: default; }
+.br-modal .br-row:hover { background: transparent; }
+.br-modal .br-text { max-height: 420px; }
 .br-empty { padding: 28px; text-align: center; color: var(--text2); font-size: 13px; }
 @media (max-width: 1000px) { .br-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } .br-row2, .br-cols { grid-template-columns: 1fr; } .br-bar .br-input { margin-left: 0; width: 100%; min-width: 0; } }
 </style>
@@ -1568,9 +1578,9 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     return resultBadge(r);
   }
   function itemHtml(r, forceOpen) {
-    var open = forceOpen || !!openIds[r.id];
+    var open = !!forceOpen;
     var head = '<div class="br-row" data-toggle>' +
-      '<span class="br-chev">' + (forceOpen ? '' : open ? '&#9662;' : '&#9656;') + '</span>' +
+      (forceOpen ? '' : '<span class="br-chev">&#9656;</span>') +
       '<a class="br-link" target="_blank" rel="noopener" title="Open in Zoho" href="' + ZOHO_TICKET_URL + encodeURIComponent(r.zoho_id || r.ticket_id) + '">#' + esc(r.ticket_number) + '</a>' +
       (r.id ? kindBadge(r) : '') +
       '<span class="br-who">' + esc(r.customer_name || r.customer_email) + '</span>' +
@@ -1680,7 +1690,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       list.map(function (t) {
         return '<tr class="br-zrow' + (openTid === t.id ? ' on' : '') + '" data-tid="' + esc(t.id) + '"><td><a class="br-link" target="_blank" rel="noopener" href="' + ZOHO_TICKET_URL + encodeURIComponent(t.id) + '">#' + esc(t.number) + '</a></td><td>' + zohoType(t) + '</td>' +
           '<td>' + esc(t.subject || '(No Subject)') + '</td><td>' + esc(t.name || t.email) + '</td><td>' + esc(when(t.created)) + '</td><td>' + zohoBotBadge(t.bot) + '</td></tr>' +
-          (openTid === t.id ? '<tr class="br-zdet"><td colspan="6"><div data-zdet></div></td></tr>' : '');
+          '';
       }).join('') + '</table>' + pagerHtml(all.length) : '<div class="br-empty">Nothing here.</div>';
     wirePager(el, drawZohoList);
     // Click a row → open the ticket right here (the # link still opens Zoho)
@@ -1688,11 +1698,12 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       tr.onclick = function (e) {
         if (e.target.closest('a')) return;
         var id = tr.getAttribute('data-tid');
-        openTid = openTid === id ? null : id; drawZohoList();
+        var t = zohoList.find(function (x) { return x.id === id; });
+        var r = rawRows.filter(function (x) { return String(x.ticket_id) === id; }).sort(function (a, b) { return b.id - a.id; })[0];
+        if (r) openTicket(r); else openPreview(t);
       };
     });
-    var det = el.querySelector('[data-zdet]');
-    if (det) fillZohoDetail(det, zohoList.find(function (t) { return t.id === openTid; }));
+
   }
   var openTid = null, zPreview = {};
   async function fillZohoDetail(box, t) {
@@ -1710,7 +1721,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       var res = await post('mailBotTest', { ticket: t.number });
       if (!res.ok) throw new Error(res.error || 'failed');
       zPreview[t.id] = Object.assign({ id: 0, processed_at: null }, res.test, { result: 'preview' });
-      if (openTid === t.id) show(zPreview[t.id]);
+      if (modalId === 'z' + t.id) show(zPreview[t.id]);
     } catch (e) { box.innerHTML = '<div class="br-empty" style="color:var(--red)">Could not load: ' + esc(e.message) + '</div>'; }
   }
 
@@ -1735,12 +1746,8 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       var r = rows.find(function (x) { return x.id === id; });
       box.querySelector('[data-toggle]').onclick = function (e) {
         if (e.target.closest('a')) return;
-        openIds[id] = !openIds[id]; drawList();
-        // Opening a draft checked 30+ min ago → re-check order, courier and request now (unless you edited it)
-        var age = r.processed_at ? Date.now() - (toDate(r.processed_at) || 0) : 0;
-        if (openIds[id] && isDraft(r) && canRate() && r._draft == null && age > 30 * 60000) autoRedraft(r);
+        openTicket(r);
       };
-      if (openIds[id]) wireItem(box, r);
     });
   }
 
@@ -1771,17 +1778,96 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       }
   }
 
+  // ── Ticket window (25-Nov-2026) ──────────────────────────────────
+  // A ticket opens in its own window on top of the page, with a link
+  // (…/Bot-Replies/#t=10817). Page refreshes and list redraws never touch it,
+  // and your typed reply + Learn reason are kept in this browser until sent —
+  // so a refresh (or reopening the link) brings your work back.
+  var WORK_KEY = 'br_work_v1';
+  function workAll() { try { return JSON.parse(localStorage.getItem(WORK_KEY) || '{}'); } catch (e) { return {}; } }
+  function workGet(id) { return workAll()[id] || null; }
+  function workSet(id, patch) {
+    try { var a = workAll(); a[id] = Object.assign(a[id] || {}, patch, { at: Date.now() }); localStorage.setItem(WORK_KEY, JSON.stringify(a)); } catch (e) { /* storage off */ }
+  }
+  function workClear(id) { try { var a = workAll(); delete a[id]; localStorage.setItem(WORK_KEY, JSON.stringify(a)); } catch (e) { /* ignore */ } }
+
+  var modal = null, modalId = null;
+  function ensureModal() {
+    if (modal) return modal;
+    modal = document.createElement('div'); modal.className = 'br-modal'; modal.hidden = true;
+    modal.innerHTML = '<div class="br-modal-box"><div class="br-modal-bar"><span data-mtitle></span>' +
+      '<button class="br-btn" data-mcopy title="Copy a link that opens this ticket">&#128279; Copy link</button>' +
+      '<button class="br-btn" data-mclose>&#10005; Close</button></div><div data-mbody></div></div>';
+    document.body.appendChild(modal);
+    modal.querySelector('[data-mclose]').onclick = closeTicket;
+    modal.querySelector('[data-mcopy]').onclick = function () {
+      var b = this; navigator.clipboard && navigator.clipboard.writeText(location.href).then(function () { b.textContent = '✓ Copied'; setTimeout(function () { b.innerHTML = '&#128279; Copy link'; }, 1500); });
+    };
+    window.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !modal.hidden && !e.target.closest('textarea, input')) closeTicket(); });
+    return modal;
+  }
+  function openTicket(r) {
+    ensureModal(); modalId = r.id;
+    if (history.replaceState) history.replaceState(null, '', '#t=' + encodeURIComponent(r.ticket_number));
+    modal.hidden = false; document.body.style.overflow = 'hidden';
+    renderModal();
+    // Opening a draft checked 30+ min ago → re-check order, courier and request now (not if you edited it)
+    var age = r.processed_at ? Date.now() - (toDate(r.processed_at) || 0) : 0;
+    if (isDraft(r) && canRate() && !(workGet(r.id) || {}).draft && age > 30 * 60000) autoRedraft(r);
+  }
+  function openPreview(t) {
+    ensureModal(); modalId = 'z' + t.id;
+    if (history.replaceState) history.replaceState(null, '', '#t=' + encodeURIComponent(t.number));
+    modal.hidden = false; document.body.style.overflow = 'hidden';
+    modal.querySelector('[data-mtitle]').textContent = '#' + t.number + ' · ' + (t.subject || '');
+    fillZohoDetail(modal.querySelector('[data-mbody]'), t);
+  }
+  function closeTicket() {
+    if (!modal) return;
+    modal.hidden = true; modalId = null; document.body.style.overflow = '';
+    if (history.replaceState) history.replaceState(null, '', location.pathname + location.search);
+    drawList();
+  }
+  // Re-draw the window from the latest row data (after rating / redraft / reload)
+  function renderModal() {
+    if (!modal || modal.hidden || typeof modalId !== 'number') return;
+    var r = rawRows.find(function (x) { return x.id === modalId; });
+    if (!r) return;
+    var w = workGet(r.id);
+    if (w && w.draft != null && r._draft == null && canEdit(r)) r._draft = w.draft;
+    modal.querySelector('[data-mtitle]').textContent = '#' + r.ticket_number + ' · ' + (r.customer_name || r.customer_email) + ' · ' + (r.subject || '');
+    var body = modal.querySelector('[data-mbody]');
+    body.innerHTML = itemHtml(r, true);
+    wireItem(body.querySelector('.br-item'), r);
+    if (w && w.reason) { var lb = body.querySelector('[data-learn-box]'); if (lb) { lb.hidden = false; lb.querySelector('[data-reason]').value = w.reason; } }
+  }
+  // Page data reloaded: refresh the window only if you're not typing in it
+  function refreshModalSafe() {
+    if (!modal || modal.hidden) return;
+    var a = document.activeElement;
+    if (a && modal.contains(a) && /TEXTAREA|INPUT/.test(a.tagName)) return;
+    renderModal();
+  }
+  // Open the ticket from the link (#t=10817) after the page loads
+  function openFromHash() {
+    var m = location.hash.match(/t=(\d+)/); if (!m || (modal && !modal.hidden)) return;
+    var r = rawRows.filter(function (x) { return String(x.ticket_number) === m[1]; }).sort(function (a, b) { return b.id - a.id; })[0];
+    if (r) return openTicket(r);
+    var t = (zohoList || []).find(function (x) { return String(x.number) === m[1]; });
+    if (t) openPreview(t);
+  }
+
   async function autoRedraft(r) {
-    r._checking = true; drawList();
+    r._checking = true; renderModal();
     try { var res = await post('mailBotRedraft', { id: r.id }); if (res.ok) Object.assign(r, res.row); }
     catch (e) { /* keep the old draft */ }
-    r._checking = false; drawList();
+    r._checking = false; renderModal(); drawList();
   }
 
   // Edit · Refine with AI · Undo · Learn (25-Nov-2026)
   function wireEdit(box, ta, r) {
     var undo = box.querySelector('[data-undo]'), lb = box.querySelector('[data-learn-box]');
-    ta.oninput = function () { r._draft = ta.value; };
+    ta.oninput = function () { r._draft = ta.value; workSet(r.id, { draft: ta.value }); };
     box.querySelector('[data-redraft]').onclick = async function () {
       var b = this;
       if (r._draft != null && r._draft !== r.reply_text && !confirm('Replace your edits with a fresh bot draft?')) return;
@@ -1789,7 +1875,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       try {
         var res = await post('mailBotRedraft', { id: r.id });
         if (!res.ok) throw new Error(res.error || 'failed');
-        Object.assign(r, res.row); r._draft = null; r._undo = null; drawList();
+        Object.assign(r, res.row); r._draft = null; r._undo = null; workSet(r.id, { draft: null }); renderModal(); drawList();
       } catch (e) { alert("Couldn't redraft: " + e.message); b.disabled = false; b.innerHTML = '&#8635; Redraft'; }
     };
     box.querySelector('[data-refine]').onclick = async function () {
@@ -1798,12 +1884,13 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       try {
         var res = await post('mailBotRefine', { text: ta.value, mail: r.mail_text || '' });
         if (!res.ok) throw new Error(res.error || 'failed');
-        r._undo = ta.value; ta.value = res.text; r._draft = res.text; undo.hidden = false;
+        r._undo = ta.value; ta.value = res.text; r._draft = res.text; workSet(r.id, { draft: res.text }); undo.hidden = false;
       } catch (e) { alert("Couldn't refine: " + e.message); }
       b.disabled = false; b.innerHTML = '&#10024; Refine with AI';
     };
-    undo.onclick = function () { if (r._undo == null) return; ta.value = r._undo; r._draft = r._undo; r._undo = null; undo.hidden = true; };
+    undo.onclick = function () { if (r._undo == null) return; ta.value = r._undo; r._draft = r._undo; workSet(r.id, { draft: r._undo }); r._undo = null; undo.hidden = true; };
     box.querySelector('[data-learn]').onclick = function () { lb.hidden = !lb.hidden; if (!lb.hidden) lb.querySelector('[data-reason]').focus(); };
+    lb.querySelector('[data-reason]').oninput = function () { workSet(r.id, { reason: this.value }); };
     box.querySelector('[data-learn-save]').onclick = async function () {
       var b = this, reason = lb.querySelector('[data-reason]').value.trim();
       if (reason.length < 20) { alert('Write the reason in at least 20 characters.'); return; }
@@ -1811,6 +1898,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       try {
         var res = await post('mailBotLearn', { id: r.id, reply_text: ta.value, reason: reason });
         if (!res.ok) throw new Error(res.error || 'failed');
+        workSet(r.id, { reason: null });
         lb.innerHTML = '<span class="br-muted" style="color:var(--green)">&#10003; Lesson saved — the bot will use it on similar mails.</span>';
         lessons = null;
       } catch (e) { alert("Couldn't save: " + e.message); b.disabled = false; b.textContent = 'Save lesson'; }
@@ -1845,6 +1933,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
       var res = await post('mailBotSend', b);
       if (!res.ok) throw new Error(res.error || 'failed');
       if (res.closed === false && r.template !== 'AR1') alert('Sent — but Zoho did not close the ticket yet. It will be closed on the next check.');
+      if (b.id) workClear(b.id);   // sent — the saved draft isn't needed any more
       await load();
       if (b.ticket) document.getElementById('br-test-out').innerHTML = '<div class="br-hint" style="margin-top:10px;color:var(--green)">&#10003; Sent to ' + esc(r.customer_email) + ' on ticket #' + esc(r.ticket_number) + '.</div>';
     } catch (e) { alert("Couldn't send: " + e.message); btn.disabled = false; btn.innerHTML = '&#9993; Send to customer'; }
@@ -1938,7 +2027,7 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     draw();
   }
 
-  function draw() { drawStats(); drawSummary(); drawModes(); drawChips(); drawList(); }
+  function draw() { drawStats(); drawSummary(); drawModes(); drawChips(); drawList(); refreshModalSafe(); openFromHash(); }
 
   async function load() {
     var res = await api('mailBotList', '&days=' + days);
