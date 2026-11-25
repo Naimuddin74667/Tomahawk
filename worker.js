@@ -14600,7 +14600,6 @@ function mbExtractOrders(subject, text) {
 
 const MB_ORDER_FIELDS = `id name createdAt cancelledAt email phone displayFinancialStatus paymentGatewayNames
   totalPriceSet { shopMoney { amount } }
-  customer { firstName } billingAddress { firstName } shippingAddress { firstName }
   lineItems(first: 5) { nodes { title quantity } }
   fulfillments(first: 10) { status displayStatus deliveredAt createdAt }
   refunds(first: 5) { createdAt totalRefundedSet { shopMoney { amount } } }`;
@@ -14664,8 +14663,8 @@ async function mbBuildCancelReply(env, t) {
   if (!order) return { template: 'CX6', order_no: '#' + ids.web[0], order_info: 'Order not found in Shopify', name: mbFirstName(t.contactName) };
 
   const st = mbOrderState(order);
-  const name = mbFirstName((order.customer && order.customer.firstName) || (order.billingAddress && order.billingAddress.firstName) ||
-    (order.shippingAddress && order.shippingAddress.firstName) || t.contactName);
+  // Name from the Zoho contact — the Shopify app may read only phone + email, not names.
+  const name = mbFirstName(t.contactName);
   const product = mbProductName(order.lineItems && order.lineItems.nodes);
   const info = order.name + ' · ' + ({ open: 'not yet with courier', shipped: 'with courier', delivered: 'delivered', cancelled: 'cancelled' })[st.state] +
     ' · ' + (st.isCod ? 'COD' : st.paid ? 'Prepaid' : 'Payment ' + String(order.displayFinancialStatus || '').toLowerCase()) +
