@@ -1602,14 +1602,21 @@ html[data-theme="light"] { --todo: #ECECE6; --todo-ink: #8A8A83; }
     if (b.result === 'error') return '<span class="br-badge br-b-red">Error</span>';
     return '<span class="br-badge br-b-amber">Bot draft' + (b.template ? ' · ' + esc(b.template) : '') + (b.rating ? ' · ' + esc(b.rating) : '') + '</span>';
   }
+  // New or Follow-up (25-Nov-2026): the bot's own call when it checked the ticket;
+  // before that, a "Re:" / "Fwd:" subject counts as a follow-up.
+  function zohoType(t) {
+    var fu = t.bot ? t.bot.ticket_kind === 'followup' : /^\s*(re|fwd?|fw)\s*:/i.test(t.subject || '');
+    return fu ? '<span class="br-badge br-b-amber"' + (t.bot && t.bot.prev_ticket ? ' title="Follow-up of #' + esc(t.bot.prev_ticket) + '"' : '') + '>Follow-up</span>'
+      : '<span class="br-badge br-b-green">New</span>';
+  }
   function drawZohoList() {
     var el = document.getElementById('br-list');
     if (!zohoList) { el.innerHTML = '<div class="br-empty">Loading open tickets from Zoho…</div>'; loadZoho(); return; }
     var ql = q.trim().toLowerCase();
     var list = zohoList.filter(function (t) { return !ql || [t.number, t.subject, t.name, t.email].join(' ').toLowerCase().indexOf(ql) !== -1; });
-    el.innerHTML = list.length ? '<table class="br-sum br-zoho"><tr><th>Ticket</th><th>Subject</th><th>Customer</th><th>Created</th><th>Bot</th></tr>' +
+    el.innerHTML = list.length ? '<table class="br-sum br-zoho"><tr><th>Ticket</th><th>Type</th><th>Subject</th><th>Customer</th><th>Created</th><th>Bot</th></tr>' +
       list.map(function (t) {
-        return '<tr><td><a class="br-link" target="_blank" rel="noopener" href="' + ZOHO_TICKET_URL + encodeURIComponent(t.id) + '">#' + esc(t.number) + '</a></td>' +
+        return '<tr><td><a class="br-link" target="_blank" rel="noopener" href="' + ZOHO_TICKET_URL + encodeURIComponent(t.id) + '">#' + esc(t.number) + '</a></td><td>' + zohoType(t) + '</td>' +
           '<td>' + esc(t.subject || '(No Subject)') + '</td><td>' + esc(t.name || t.email) + '</td><td>' + esc(when(t.created)) + '</td><td>' + zohoBotBadge(t.bot) + '</td></tr>';
       }).join('') + '</table>' : '<div class="br-empty">Nothing here.</div>';
   }

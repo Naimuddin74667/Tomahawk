@@ -15608,7 +15608,7 @@ async function mbZohoOpen(env) {
   const bot = {};
   for (let i = 0; i < list.length; i += 50) {
     const part = list.slice(i, i + 50);
-    ((await env.DB.prepare('SELECT ticket_id, result, template, rating FROM bot_reply_log WHERE ticket_id IN (' + part.map(() => '?').join(',') + ') ORDER BY id')
+    ((await env.DB.prepare('SELECT ticket_id, result, template, rating, ticket_kind, prev_ticket FROM bot_reply_log WHERE ticket_id IN (' + part.map(() => '?').join(',') + ') ORDER BY id')
       .bind(...part.map(t => String(t.id))).all()).results || []).forEach(r => { bot[r.ticket_id] = r; });
   }
   const tickets = list.map(t => {
