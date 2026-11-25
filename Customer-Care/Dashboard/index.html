@@ -1780,9 +1780,12 @@ async function buildRefundFormPdf(d) {
     doc.rect(bx + 14, t[1] - 13, 15, 15);
     font('bold', 13); doc.text(t[0], bx + 38, t[1]);
   });
-  // Approved amount
-  boxLabel('Approved amount', bx + c1);
+  // Purchase amount (25-Nov-2026): printed from the order; blank line if not known
+  boxLabel('Purchase amount', bx + c1);
   rupee(bx + c1 + 14, y + 98, 18);
+  if (d.purchase !== '' && d.purchase != null) {
+    font('bold', 20); doc.text(Number(d.purchase).toLocaleString('en-IN', { maximumFractionDigits: 2 }), bx + c1 + 40, y + 96);
+  }
   doc.setLineWidth(1.2); doc.line(bx + c1 + 36, y + 100, bx + c1 + c2 - 14, y + 100);
   // Approver signature
   boxLabel('Approver signature', bx + c1 + c2);
@@ -3888,6 +3891,12 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
         d = orderCache[mid] = res && res.ok ? (res.order || { found: false }) : { error: (res && res.error) || 'failed' };
       } catch (e) { d = { error: e.message }; }
     }
+    // Full account number for the form: re-read with reveal (each reveal is logged by the Worker)
+    if (!bank.revealed) {
+      var full = await post('refundGetBank', { order_id: r.order_id, reveal: true });
+      if (!full || !full.ok) throw new Error((full && full.error) || "couldn't read the bank details");
+      bank = full;
+    }
     var ok = d && d.found && !d.error, ucs = ok ? (d.uc_orders || []) : [];
     var wu = ok && d.warranty_until, today = new Date().toISOString().slice(0, 10);
     var st = legStage(r), now = new Date();
@@ -3909,8 +3918,10 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       pickupStatus: PICKUP_LABEL[st] || st,
       received: fmtWhen(r.received_at),
       holder: bank.holder_name,
-      // Always masked on paper, even after Reveal was used on screen
-      account: bank.revealed ? 'XXXXX' + String(bank.account_number || '').slice(-4) : bank.account_number, ifsc: bank.ifsc,
+      // Full account number on paper (25-Nov-2026) — the form is used for the bank transfer.
+      account: bank.account_number, ifsc: bank.ifsc,
+      // Purchase price goes in the approval box (25-Nov-2026)
+      purchase: ok && d.price != null && d.price !== '' ? Number(d.price) : '',
       bank: bank.bank_name, branch: bank.branch, submitted: fmtWhen(bank.submitted_at),
       logoPng: await logoPngFromHeader()
     };
