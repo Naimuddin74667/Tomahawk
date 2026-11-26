@@ -1957,6 +1957,11 @@ function customerCareOpenStatus(now) {
   };
 }
 
+// ── MAIL BOT KILL SWITCH ── true = Bot Replies fully off: no */15 cron run,
+// every mailBot* API call returns {paused:true} without touching D1.
+// Paused 26 Nov 2026 to save D1 free-tier quota. Flip to false to resume.
+const MAIL_BOT_PAUSED = true;
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') {
@@ -1976,6 +1981,11 @@ export default {
       try { body = await request.json(); } catch (e) { body = {}; }
     }
     const act = (body && body.action) || action;
+
+    // Mail bot (Bot Replies) paused — answer before any D1 query (incl. auth).
+    if (MAIL_BOT_PAUSED && /^mailBot/.test(act || '')) {
+      return json({ ok: false, paused: true, error: 'Bot Replies is paused (D1 usage). Set MAIL_BOT_PAUSED = false in worker.js to resume.' });
+    }
 
     try {
       await ensureAuthTables(env.DB);
@@ -6073,7 +6083,7 @@ export default {
     // Service requests — log courier-cancelled pickups (with the reason) in the request history. */15 ticks.
     ctx.waitUntil(srPickupCancelSweep(env).catch(err => console.error('pickup cancel log:', err.message)));
     // Mail bot — automatic replies to new customer emails in Zoho Desk. */15 ticks.
-    ctx.waitUntil(mbRun(env).catch(err => console.error('mail bot:', err.message)));
+    if (!MAIL_BOT_PAUSED) ctx.waitUntil(mbRun(env).catch(err => console.error('mail bot:', err.message)));
     // Repair payments — mark requests Paid once Zoho shows the invoice paid. */15 ticks.
     ctx.waitUntil(rpCronCheck(env).catch(err => console.error('repair payments:', err.message)));
     // Delhivery — same-day pickup request for Unicommerce orders. */15 ticks;
