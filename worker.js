@@ -2160,7 +2160,7 @@ export default {
           } catch (e) { /* ignore — the submit check still applies */ }
           return json({ ok: true, format_ok: true, order_id: oc.order_id, platform_detected: oc.platform, open_request: openRequest,
             ...(openRequest ? { open_request_message: 'A request already exists for this order. If it is yours, track it on the Track Your Request page using the mobile number you gave then.' } : {}),
-            ...(await warrantyLookup(env, oc.order_id)) });
+            ...(await withWebsiteDeliveredAt(env, oc.order_id, await warrantyLookup(env, oc.order_id))) });
         } catch (e) {
           return json({ ok: false, error: 'Lookup failed — please try again later.' }, 502);
         }
@@ -10968,6 +10968,42 @@ function istDaysSince(iso) {
   if (isNaN(ms)) return null;
   const day = x => Math.floor((x + 5.5 * 3600 * 1000) / 864e5);
   return day(Date.now()) - day(ms);
+}
+
+// ── Delivery date for a website order (26-Nov-2026) ──
+// Used by the public warrantyLookup so the Service Request page can send
+// customers within 7 days of delivery to the Delivery Issue form.
+// Latest delivered parcel of the order (live courier scan first, Shopify's
+// own date as fallback). null = not delivered yet / not found / Shopify down.
+async function websiteDeliveredAt(env, orderNum) {
+  const num = String(orderNum || '').replace(/\D/g, '');
+  if (!num || num.length > 6 || !shopifyConfigured(env)) return null;
+  const data = await shopifyGql(env, `query($q: String!) { orders(first: 5, query: $q) { nodes {
+      name cancelledAt fulfillments(first: 10) { status deliveredAt displayStatus trackingInfo(first: 3) { company number } } } } }`, { q: 'name:' + num });
+  const o = ((data && data.orders && data.orders.nodes) || []).find(x => String(x.name).replace(/\D/g, '') === num);
+  if (!o || o.cancelledAt) return null;
+  const dates = [];
+  for (const f of (o.fulfillments || []).filter(x => String(x.status || '').toUpperCase() !== 'CANCELLED')) {
+    const ti = (f.trackingInfo || [])[0] || {};
+    const live = await drnParcelDelivered(env, ti.company, ti.number).catch(() => ({}));
+    const at = live.delivered_at || f.deliveredAt || null;
+    if (at) dates.push(at);
+  }
+  return dates.length ? dates.sort().pop() : null;
+}
+
+// Adds delivered_at (+ days_since_delivery, IST days) to a warrantyLookup()
+// result for website orders. Never fails the lookup — on any error the
+// fields are simply left empty and the page keeps its old behaviour.
+async function withWebsiteDeliveredAt(env, orderId, w) {
+  if (!w || !w.found || w.cancelled || !/website|shopify/i.test(w.platform || '')) return w;
+  try {
+    const at = await websiteDeliveredAt(env, orderId);
+    return { ...w, delivered_at: at, days_since_delivery: at ? istDaysSince(at) : null };
+  } catch (e) {
+    console.warn('warrantyLookup delivered_at', e.message);
+    return { ...w, delivered_at: null, days_since_delivery: null };
+  }
 }
 
 // Live courier check of one website parcel → { stage, delivered_at } (best effort).
