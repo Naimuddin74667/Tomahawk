@@ -1588,7 +1588,20 @@ async function hashPassword(password, salt) {
   return h;
 }
 
-async function ensureAuthTables(DB) {
+// ── RUN-ONCE SCHEMA SETUP (26-Nov-2026, D1 quota fix) ──
+// ensureAuthTables / ensureDelhiveryTable / ensureShopShipTable / ensureMailBotTable
+// fire CREATE TABLE + dozens of ALTER TABLE statements. They used to run on
+// EVERY request and cron tick (5k+ times a day). Now each runs once per Worker
+// isolate; a failed run is retried on the next call.
+const ENSURED = new Map();
+function onceEnsure(key, fn) {
+  return function (...args) {
+    if (!ENSURED.has(key)) ENSURED.set(key, fn.apply(this, args).catch(e => { ENSURED.delete(key); throw e; }));
+    return ENSURED.get(key);
+  };
+}
+
+const ensureAuthTables = onceEnsure('ensureAuthTables', async function ensureAuthTables_run(DB) {
   await DB.batch([
     DB.prepare(`CREATE TABLE IF NOT EXISTS tm_users (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1628,7 +1641,7 @@ async function ensureAuthTables(DB) {
       `INSERT INTO tm_users (username, password_hash, salt, role, display_name) VALUES ('admin', ?, ?, 'admin', 'Admin')`
     ).bind(hash, salt).run();
   }
-}
+});
 
 async function ensureHealthTables(DB) {
   await DB.batch([
@@ -7028,7 +7041,7 @@ async function purgeUnwantedOrders(DB) {
   } catch (e) { delhiveryPurgeDone = false; }
 }
 
-async function ensureDelhiveryTable(DB) {
+const ensureDelhiveryTable = onceEnsure('ensureDelhiveryTable', async function ensureDelhiveryTable_run(DB) {
   await DB.prepare(`CREATE TABLE IF NOT EXISTS delhivery_orders (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     order_id      TEXT,
@@ -7113,10 +7126,18 @@ async function ensureDelhiveryTable(DB) {
                      'prev_order_id TEXT', 'rto_closed_at TEXT', 'rto_closed_by TEXT', 'rto_close_reason TEXT']) {
     try { await DB.prepare(`ALTER TABLE delhivery_orders ADD COLUMN ${col}`).run(); } catch (e) { /* column already exists */ }
   }
+  // Indexes (26-Nov-2026, D1 quota fix) — tracking UPDATE ... WHERE waybill = ?,
+  // lookups by order_id / linked_order_id and the newest-first list were all
+  // full-table scans.
+  await DB.batch([
+    DB.prepare('CREATE INDEX IF NOT EXISTS idx_dlv_waybill ON delhivery_orders (waybill)'),
+    DB.prepare('CREATE INDEX IF NOT EXISTS idx_dlv_order ON delhivery_orders (order_id)'),
+    DB.prepare('CREATE INDEX IF NOT EXISTS idx_dlv_created ON delhivery_orders (created_at)')
+  ]);
   await backfillOrderClaimIds(DB);
   await purgeUnwantedOrders(DB);
   await ensureRefundTables(DB);
-}
+});
 
 // ── Refund bank details (NEFT) — kept apart from delhivery_orders so the
 // order list never carries them. Readable only by a logged-in admin /
@@ -14406,7 +14427,7 @@ async function g4gpSkFetch(env, code) {
 // The team marks an RTO parcel Received when it reaches the warehouse.
 const SHOP_SHIP_DAYS = 60;
 
-async function ensureShopShipTable(DB) {
+const ensureShopShipTable = onceEnsure('ensureShopShipTable', async function ensureShopShipTable_run(DB) {
   await DB.prepare(`CREATE TABLE IF NOT EXISTS shopify_shipments (
     awb TEXT PRIMARY KEY, courier TEXT, order_id TEXT, order_name TEXT, shipped_at TEXT,
     is_cod INTEGER, amount REAL, items TEXT, order_cancelled INTEGER DEFAULT 0,
@@ -14414,7 +14435,10 @@ async function ensureShopShipTable(DB) {
     track_stage TEXT, track_status TEXT, attempts INTEGER DEFAULT 0, rto_reason TEXT, rto_at TEXT,
     last_scan TEXT, scan_info TEXT, tracked_at TEXT, uc_status TEXT, synced_at TEXT,
     received_at TEXT, received_by TEXT)`).run();
-}
+  // order_id index — without it the customer-name UPDATE ... WHERE order_id = ?
+  // scanned the whole table per row (3.5M rows read/day, 26-Nov-2026).
+  await DB.prepare('CREATE INDEX IF NOT EXISTS idx_shopship_order ON shopify_shipments (order_id)').run();
+});
 
 function shopShipCourier(c) {
   const s = String(c || '').toLowerCase();
@@ -14555,6 +14579,9 @@ async function shopShipCustomers(env) {
   if (!shopifyConfigured(env)) return { custError: 'Shopify API not configured on the Worker' };
   const missing = (await env.DB.prepare("SELECT COUNT(*) AS n FROM shopify_shipments WHERE cust_checked = 0").first()) || {};
   if (!missing.n) return { names: 0 };
+  // Only orders still missing a name get an UPDATE (it used to rewrite every
+  // order in the window each run — 6.5k UPDATEs/day).
+  const want = new Set(((await env.DB.prepare("SELECT order_id FROM shopify_shipments WHERE cust_checked = 0").all()).results || []).map(r => String(r.order_id)));
   const since = new Date(Date.now() - (SHOP_SHIP_DAYS + 30) * 864e5).toISOString().slice(0, 10);
   const stmts = [];
   let after = null;
@@ -14567,6 +14594,7 @@ async function shopShipCustomers(env) {
         } }`, { q: 'created_at:>=' + since, after });
       const o = data && data.orders;
       ((o && o.nodes) || []).forEach(n => {
+        if (!want.has(String(n.id).split('/').pop())) return;
         const a = n.shippingAddress || {};
         const name = a.name || (n.billingAddress && n.billingAddress.name) || null;   // no customer{} — needs read_customers
         stmts.push(env.DB.prepare('UPDATE shopify_shipments SET cust_name = ?, city = ?, phone = ?, cust_checked = 1 WHERE order_id = ?')
@@ -14576,8 +14604,11 @@ async function shopShipCustomers(env) {
       after = o.pageInfo.endCursor;
     }
   } catch (e) { console.warn('shopShipCustomers', e.message); return { custError: e.message.slice(0, 200), names: 0 }; }
+  // Orders Shopify didn't return are marked checked too, so they don't
+  // re-trigger the whole lookup every run forever.
+  stmts.push(env.DB.prepare('UPDATE shopify_shipments SET cust_checked = 1 WHERE cust_checked = 0'));
   for (let i = 0; i < stmts.length; i += 80) await env.DB.batch(stmts.slice(i, i + 80));
-  return { names: stmts.length };
+  return { names: stmts.length - 1 };
 }
 
 async function shopShipRefresh(env, force, trackOnly) {
@@ -14634,7 +14665,7 @@ const MB_FROM_EMAIL = 'support@tomahawk.tools';
 const MB_MAX_PER_RUN = 5;          // tickets handled per cron tick (subrequest budget — AI drafts + history lookups)
 const MB_MODES = ['off', 'dryrun', 'test', 'live'];
 
-async function ensureMailBotTable(DB) {
+const ensureMailBotTable = onceEnsure('ensureMailBotTable', async function ensureMailBotTable_run(DB) {
   await DB.prepare(`CREATE TABLE IF NOT EXISTS bot_reply_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ticket_id TEXT UNIQUE, ticket_number TEXT, ticket_created TEXT,
@@ -14649,7 +14680,7 @@ async function ensureMailBotTable(DB) {
       'zoho_id TEXT', 'thread_count INTEGER', 'bot_thread_ids TEXT', 'bot_replies INTEGER DEFAULT 0', 'followup TEXT', 'ticket_kind TEXT', 'prev_ticket TEXT', 'priority TEXT', 'history TEXT', 'ai_note TEXT']) {   // added 25-Nov-2026
     try { await DB.prepare('ALTER TABLE bot_reply_log ADD COLUMN ' + col).run(); } catch (e) { /* already there */ }
   }
-}
+});
 const MB_BACKFILL_DAYS = 30;       // old OPEN tickets this recent are checked too (log only, 25-Nov-2026)
 
 async function mbGetSettings(env) {
