@@ -1158,7 +1158,20 @@ button[hidden] { display: none !important; }
     return api('g4gpLoad').then(function (res) {
       if (!res || res.ok === false) throw new Error((res && res.error) || 'Load failed');
       D = res; bySku = {};
-      D.stock.forEach(function (s) { bySku[s.sku] = s; });
+      // UC keeps gatepass stock in G4 until E3 receives it. For us it has left G4 the
+      // moment the gatepass is created, so take off what's still out on open G4
+      // gatepasses (qty minus anything E3 already received — UC has deducted that part).
+      var outGp = {};
+      Object.keys(D.openGp || {}).forEach(function (k) { outGp[k] = D.openGp[k]; });
+      (D.openList || []).forEach(function (g) {
+        (g.lines || []).forEach(function (l) { if (l.sku) outGp[l.sku] = (outGp[l.sku] || 0) - (l.qty - l.pending); });
+      });
+      D.outGp = outGp;
+      D.stock.forEach(function (s) {
+        s.ucG4 = s.g4;                                         // raw UC figure, kept for reference
+        s.g4 = Math.max(0, s.g4 - Math.max(0, outGp[s.sku] || 0));
+        bySku[s.sku] = s;
+      });
       var inG4 = D.stock.filter(function (s) { return s.g4 > 0; });
       // Stock Transfer: qty on G4 → E3 gatepasses created but not closed / putaway
       var ol = D.openList || [];
@@ -1228,7 +1241,7 @@ button[hidden] { display: none !important; }
         '<td class="num"><b>' + boxesText(s.g4, s.ppc) + '</b>' + (lz ? ' <span class="flag loose-flag">' + (s.g4 % s.ppc) + ' loose</span>' : '') + '</td>' +
         '<td class="num"><b>' + fmt(s.g4) + '</b></td>' +
         '<td class="num">' + fmt(s.e3) + '</td>' +
-        '<td class="num">' + (D.openGp[s.sku] ? fmt(D.openGp[s.sku]) : '<span class="muted">0</span>') + '</td></tr>';
+        '<td class="num">' + (D.outGp[s.sku] > 0 ? fmt(D.outGp[s.sku]) : '<span class="muted">0</span>') + '</td></tr>';
     }).join('') : '<tr class="empty-row"><td colspan="7">No SKUs match.</td></tr>';
   }
 
@@ -1735,7 +1748,7 @@ button[hidden] { display: none !important; }
     T(fmt(totalQty), bx2 + 18 + 16 + 9, y + 6.5, 12, true, 'center');
     doc.line(M, y + 10, W - M, y + 10);
     y += 15;
-    T('Tick each line when picked / received.  Boxes = full boxes + loose pcs.  G4 left = boxes still in G4 (UC) at print time.', M, y, 7.5, false);
+    T('Tick each line when picked / received.  Boxes = full boxes + loose pcs.  G4 left = G4 stock minus open gatepasses at print time.', M, y, 7.5, false);
 
     // ── Signatures: a line with the label under it ──
     if (y > 250) { doc.addPage(); }
