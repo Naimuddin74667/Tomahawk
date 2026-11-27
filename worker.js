@@ -14581,38 +14581,38 @@ async function shopShipTrack(env, force, ekartMax) {
 // never loses out on the Worker's per-call request budget.
 async function shopShipCustomers(env) {
   if (!shopifyConfigured(env)) return { custError: 'Shopify API not configured on the Worker' };
-  const missing = (await env.DB.prepare("SELECT COUNT(*) AS n FROM shopify_shipments WHERE cust_checked = 0").first()) || {};
-  if (!missing.n) return { names: 0 };
-  // Only orders still missing a name get an UPDATE (it used to rewrite every
-  // order in the window each run — 6.5k UPDATEs/day).
-  const want = new Set(((await env.DB.prepare("SELECT order_id FROM shopify_shipments WHERE cust_checked = 0").all()).results || []).map(r => String(r.order_id)));
-  const since = new Date(Date.now() - (SHOP_SHIP_DAYS + 30) * 864e5).toISOString().slice(0, 10);
+  // Look up ONLY the orders still missing a name, directly by ID (27-Nov-2026).
+  // Before: it paged the last 90 days of orders and rewrote every one each run
+  // (6.5k UPDATEs/day); a fixed page limit could also skip some orders.
+  const ids = [...new Set(((await env.DB.prepare("SELECT order_id FROM shopify_shipments WHERE cust_checked = 0").all()).results || [])
+    .map(r => String(r.order_id || '')))];
+  if (!ids.length) return { names: 0 };
+  const numeric = ids.filter(x => /^\d+$/.test(x));
   const stmts = [];
-  let after = null;
+  const setName = (id, name, city, phone) => stmts.push(env.DB.prepare(
+    'UPDATE shopify_shipments SET cust_name = ?, city = ?, phone = ?, cust_checked = 1 WHERE order_id = ?').bind(name, city, phone, id));
   try {
-    for (let page = 0; page < 4; page++) {
-      const data = await shopifyGql(env, `query($q: String!, $after: String) {
-        orders(first: 250, query: $q, after: $after) {
-          pageInfo { hasNextPage endCursor }
-          nodes { id shippingAddress { name city province phone } billingAddress { name } }
-        } }`, { q: 'created_at:>=' + since, after });
-      const o = data && data.orders;
-      ((o && o.nodes) || []).forEach(n => {
-        if (!want.has(String(n.id).split('/').pop())) return;
+    // Up to 300 orders per run (3 calls); anything left is picked up next run.
+    for (let k = 0; k < numeric.length && k < 300; k += 100) {
+      const part = numeric.slice(k, k + 100);
+      const data = await shopifyGql(env, `query($ids: [ID!]!) {
+        nodes(ids: $ids) { ... on Order { id shippingAddress { name city province phone } billingAddress { name } } } }`,
+        { ids: part.map(x => 'gid://shopify/Order/' + x) });
+      const found = {};
+      ((data && data.nodes) || []).forEach(n => { if (n && n.id) found[String(n.id).split('/').pop()] = n; });
+      part.forEach(id => {
+        const n = found[id];
+        if (!n) { setName(id, null, null, null); return; }   // not in Shopify (deleted etc.) — stop retrying it
         const a = n.shippingAddress || {};
         const name = a.name || (n.billingAddress && n.billingAddress.name) || null;   // no customer{} — needs read_customers
-        stmts.push(env.DB.prepare('UPDATE shopify_shipments SET cust_name = ?, city = ?, phone = ?, cust_checked = 1 WHERE order_id = ?')
-          .bind(name, [a.city, a.province].filter(Boolean).join(', ') || null, a.phone || null, String(n.id).split('/').pop()));
+        setName(id, name, [a.city, a.province].filter(Boolean).join(', ') || null, a.phone || null);
       });
-      if (!o || !o.pageInfo || !o.pageInfo.hasNextPage) break;
-      after = o.pageInfo.endCursor;
     }
   } catch (e) { console.warn('shopShipCustomers', e.message); return { custError: e.message.slice(0, 200), names: 0 }; }
-  // Orders Shopify didn't return are marked checked too, so they don't
-  // re-trigger the whole lookup every run forever.
-  stmts.push(env.DB.prepare('UPDATE shopify_shipments SET cust_checked = 1 WHERE cust_checked = 0'));
+  // Non-numeric order IDs can't be looked up in Shopify — mark them checked.
+  ids.filter(x => !/^\d+$/.test(x)).forEach(id => stmts.push(env.DB.prepare('UPDATE shopify_shipments SET cust_checked = 1 WHERE order_id = ?').bind(id)));
   for (let i = 0; i < stmts.length; i += 80) await env.DB.batch(stmts.slice(i, i + 80));
-  return { names: stmts.length - 1 };
+  return { names: stmts.length };
 }
 
 async function shopShipRefresh(env, force, trackOnly) {
