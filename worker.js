@@ -1594,10 +1594,14 @@ async function hashPassword(password, salt) {
 // EVERY request and cron tick (5k+ times a day). Now each runs once per Worker
 // isolate; a failed run is retried on the next call.
 const ENSURED = new Map();
+// Run each table-setup once per worker instance. Store only a "done" flag
+// (never the promise) — Cloudflare doesn't allow a promise made in one
+// request to be awaited in another (handle_cross_request_promise_resolution).
 function onceEnsure(key, fn) {
-  return function (...args) {
-    if (!ENSURED.has(key)) ENSURED.set(key, fn.apply(this, args).catch(e => { ENSURED.delete(key); throw e; }));
-    return ENSURED.get(key);
+  return async function (...args) {
+    if (ENSURED.get(key) === true) return;
+    await fn.apply(this, args);   // safe to run twice: CREATE IF NOT EXISTS / ALTER in try-catch
+    ENSURED.set(key, true);
   };
 }
 
