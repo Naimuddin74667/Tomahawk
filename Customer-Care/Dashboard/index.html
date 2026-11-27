@@ -4907,8 +4907,13 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     if ((r.status || 'new') === 'new') cls = h >= 48 ? 'tat-red' : h >= 24 ? 'tat-amber' : 'tat-grey';
     return '<div class="tat-b ' + cls + '" title="Received ' + esc(fmtWhen(r.created_at)) + '"><b>' + d + 'd</b><span>' + (d === 0 ? 'Today' : 'Old') + '</span></div>';
   }
-  // "New requests" tile = to review (SRN + WRN) + still to verify
-  function reqToReview() { return requests.filter(function (r) { return isToReview(r) || reqTest('verify')(r); }); }
+  // "New requests" tile = every open request in the tab (27-Nov-2026):
+  // Delivery + Verify (NV) + Service + Warranty + Waiting for customer. Closed excluded.
+  // Union, so a request matching two tabs is counted once.
+  function reqToReview() {
+    var open = ['delivery', 'verify', 'service', 'warranty', 'waiting'].map(reqTest);
+    return requests.filter(function (r) { return open.some(function (t) { return t(r); }); });
+  }
 
   async function loadRequests() {
     try {
