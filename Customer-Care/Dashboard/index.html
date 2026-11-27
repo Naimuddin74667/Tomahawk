@@ -467,6 +467,7 @@ html[data-theme="light"] .bt-red   { color: #dc2626; }
 .nt-text { white-space: pre-wrap; word-break: break-word; }
 .nt-add { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; }
 .nt-add textarea { flex: 1; resize: vertical; }
+.nt-warn { margin-top: 8px; color: var(--red, #ef4444); font-size: 13px; font-weight: 600; }
 .co-input { font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); min-width: 240px; }
 .co-warn { color: var(--red); font-weight: 600; }
 .co-ok { color: var(--green); font-weight: 600; }
@@ -4352,6 +4353,24 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     });
   }
 
+  // Internal note required (27-Nov-2026): Book Pickup, Send FOC part and Customer
+  // self-shipped stay blocked until the request has at least one internal note
+  // (any length). Returns true when the action may go ahead.
+  function noteGate() {
+    var ctx = notesCtx;
+    var n = ctx ? (ctx.list || []).length + ctx.legacy.filter(function (e) { return e.kind === 'note' && e.by !== 'system' && e.note; }).length : 0;
+    if (ctx && ctx.list !== null && n > 0) return true;
+    var el = document.getElementById('cc-notes');
+    if (el) {
+      var w = document.getElementById('nt-warn');
+      if (!w) { w = document.createElement('div'); w.id = 'nt-warn'; w.className = 'nt-warn'; el.appendChild(w); }
+      w.textContent = ctx && ctx.list === null ? 'Notes are still loading — try again in a second.' : 'Add an internal note first — it is needed before Book Pickup, Send FOC part or Customer self-shipped.';
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      var box = document.getElementById('nt-box'); if (box) box.focus();
+    }
+    return false;
+  }
+
   function caseRequest(c) {
     if (!c.claim) return null;
     return requests.filter(function (r) { return r.claim_id === c.claim || r.prev_claim_id === c.claim; })[0] || null;
@@ -5161,9 +5180,9 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     wireMediaAsk(r);
     wireClose(r);
     var rap = document.getElementById('req-approve');
-    if (rap) rap.addEventListener('click', function () { if (!rap.classList.contains('locked')) startPickup(r, rap); });
+    if (rap) rap.addEventListener('click', function () { if (!rap.classList.contains('locked') && noteGate()) startPickup(r, rap); });
     var rfoc = document.getElementById('req-foc');
-    if (rfoc) rfoc.addEventListener('click', function () { startFoc(r, rfoc); });
+    if (rfoc) rfoc.addEventListener('click', function () { if (noteGate()) startFoc(r, rfoc); });
     var rdRep = document.getElementById('req-drn-replace');
     if (rdRep) rdRep.addEventListener('click', function () { startPickup(r, rdRep, 'replace'); });
     // Re-book keeps the first booking's job (Refund / Replacement / Repair)
@@ -5175,7 +5194,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
     var rdRef = document.getElementById('req-drn-refund');
     if (rdRef) rdRef.addEventListener('click', function () { startPickup(r, rdRef, 'refund'); });
     var rself = document.getElementById('req-self');
-    if (rself) rself.addEventListener('click', function () { selfShipPanel(r); });
+    if (rself) rself.addEventListener('click', function () { if (noteGate()) selfShipPanel(r); });
     var roc = document.getElementById('rq-open-case');
     if (roc) roc.addEventListener('click', function () { var c = reqCase(r); if (c) openCase(c); });
     modal.hidden = false;
@@ -5953,7 +5972,7 @@ function drawCaseMark(PDFLib, page, font, mark, spot, rotation) {
       var b = el.querySelector('[data-new]');
       if (b) b.addEventListener('click', function () { kind === 'repair' ? repairForm(r) : logisticsForm(r, null, kind); });
       var ss = el.querySelector('[data-self]');
-      if (ss) ss.addEventListener('click', function () { selfShipPanel(r); });
+      if (ss) ss.addEventListener('click', function () { if (noteGate()) selfShipPanel(r); });
       var wv = el.querySelector('[data-waive]');
       if (wv) wv.addEventListener('click', async function () {
         var why = prompt('Free service — no charges for ' + r.claim_id + ': no payment links, no invoice; pickup, repair and send back unlock.\nReason (required), e.g. "Dealer goodwill":', '');
