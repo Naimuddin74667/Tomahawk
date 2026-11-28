@@ -1433,10 +1433,62 @@ button[hidden] { display: none !important; }
     if (!cur) return;
     $('btn-print').disabled = true;
     Promise.all([loadScript(JSPDF_URL, 'jspdf'), loadScript(JSBARCODE_URL, 'JsBarcode').catch(function () {})])
-      .then(logoPng).then(buildPdf)
+      .then(refreshLiveForPrint).then(logoPng).then(buildPdf)
       .catch(function (e) { toast(e.message, 'err'); })
       .then(function () { $('btn-print').disabled = false; });
   }
+
+  // ── G4 left for the gatepass being printed (28-Nov-2026) ──
+  // UC keeps gatepass stock in G4 until E3 receives it; for us it leaves G4 when
+  // the gatepass is created. G4 left = raw UC G4 stock − every OPEN G4 stock
+  // transfer created up to and including this one (so 0286 → 99−5 = 94, then
+  // 0287 → 94−5 = 89, and a reprint of 0286 still shows 94).
+  // Open gatepasses come from the Supabase sync (~15 min behind) PLUS today's
+  // live UC list, so a gatepass printed straight after creating it still counts.
+  function tsOf(v) {
+    if (!v) return 0;
+    if (typeof v === 'number' || /^\d{10,13}$/.test(String(v))) { var n = Number(v); return n < 1e12 ? n * 1000 : n; }
+    var t = Date.parse(String(v).replace(' ', 'T').replace(/([+-]\d\d)$/, '$1:00'));
+    return isNaN(t) ? 0 : t;
+  }
+  function isOpenSt(st) { return ['CLOSED', 'CANCELLED', 'DISCARDED'].indexOf(String(st || '').toUpperCase()) === -1; }
+  // Fetch today's live UC gatepasses before printing, unless this one is already in the sync
+  function refreshLiveForPrint() {
+    var g = cur;
+    var inSync = (D.openList || []).some(function (o) { return o.code === g.code; });
+    if (inSync || !isOpenSt(g.status)) return Promise.resolve();
+    return api('g4gpUcLive').then(function (res) {
+      if (res && res.ok) (res.gatepasses || []).forEach(function (x) { if (x.type === 'STOCK_TRANSFER') live[x.code] = x; });
+    }).catch(function () { /* print with what we have */ });
+  }
+  // sku → pcs still out on open stock transfers created up to `upto` (incl. that gatepass)
+  function outUpTo(g) {
+    var upto = tsOf(g.created), byCode = {};
+    (D.openList || []).forEach(function (o) {
+      byCode[o.code] = { t: tsOf(o.created), lines: o.lines.map(function (l) { return { sku: l.sku, out: l.pending }; }) };
+    });
+    function addUc(x) {   // a gatepass straight from UC (live / opened) not yet in the sync
+      if (!x || byCode[x.code] || !isOpenSt(x.status) || (x.type && x.type !== 'STOCK_TRANSFER')) return;
+      byCode[x.code] = { t: tsOf(x.created), lines: (x.items || []).map(function (i) { return { sku: i.sku, out: i.qty - (i.received || 0) }; }) };
+    }
+    Object.keys(live).forEach(function (k) { addUc(live[k]); });
+    addUc(g);
+    var out = {};
+    Object.keys(byCode).forEach(function (k) {
+      var e = byCode[k];
+      if (k !== g.code && upto && e.t && e.t > upto) return;   // made after this one → not counted
+      e.lines.forEach(function (l) { if (l.sku && l.out > 0) out[l.sku] = (out[l.sku] || 0) + l.out; });
+    });
+    // Other open G4 gatepass types (non-returnable etc.) — always taken off
+    var stOut = {};
+    (D.openList || []).forEach(function (o) { o.lines.forEach(function (l) { stOut[l.sku] = (stOut[l.sku] || 0) + l.qty; }); });
+    Object.keys(D.openGp || {}).forEach(function (sku) {
+      var other = D.openGp[sku] - (stOut[sku] || 0);
+      if (other > 0) out[sku] = (out[sku] || 0) + other;
+    });
+    return out;
+  }
+  function stLabel(st) { return ({ RETURN_AWAITED: 'Return awaited', CREATED: 'Created', CLOSED: 'Closed', CANCELLED: 'Cancelled' })[st] || st || '—'; }
 
   // ════════════ BOX LABELS (Inward Label Generator "Factory" label) ════════════
   // Same 150×100 mm label + same PDF method as /Inward-Label-Generator/
@@ -1656,6 +1708,8 @@ button[hidden] { display: none !important; }
     var GREY = 236;
     var user = (function () { try { var s = JSON.parse(localStorage.getItem('tm_session_v1') || 'null'); return s && (s.display_name || s.username); } catch (e) { return ''; } })();
     var bc = window.JsBarcode ? barcodePng(g.code) : null;
+    var gpOut = outUpTo(g);
+    function g4LeftOf(s, sku) { return s.ucG4 == null ? null : Math.max(0, s.ucG4 - (gpOut[sku] || 0)); }
 
     function T(t, x, yy, size, bold, align) {
       doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(size);
@@ -1687,7 +1741,7 @@ button[hidden] { display: none !important; }
     by += 13;
     // Line 2: one thin-ruled strip — From → To · Created · Status · Reference · Printed
     var cells = [
-      ['From / To', 'G4  >  ' + destLabel(g), 45], ['Created', fmtDT(g.created), 37], ['UC status', g.status, 21],
+      ['From / To', 'G4  >  ' + destLabel(g), 45], ['Created', fmtDT(g.created), 37], ['UC status', stLabel(g.status), 21],
       ['Reference', g.reference || '—', 27], ['Printed', fmtDT(new Date().toISOString()) + (user ? ' · ' + String(user).split(' ')[0] : ''), CW - 45 - 37 - 21 - 27]
     ];
     doc.setDrawColor(180); doc.setLineWidth(0.2);
@@ -1734,7 +1788,7 @@ button[hidden] { display: none !important; }
         else if (ci === 3) T(boxesText(it.qty, ppc), cx, mid, 12, true, 'center');
         else if (ci === 4) T(ppc || '—', cx, mid, 9.5, false, 'center');
         else if (ci === 5) T(fmt(it.qty), cx, mid, 12, true, 'center');
-        else if (ci === 7) T(s.g4 == null ? '—' : (ppc ? boxesText(s.g4, ppc) : s.g4 + ' pcs'), cx, mid, 9.5, false, 'center');
+        else if (ci === 7) { var gl = g4LeftOf(s, it.sku); T(gl == null ? '—' : (ppc ? boxesText(gl, ppc) : gl + ' pcs'), cx, mid, 9.5, false, 'center'); }
         x += c.w;
       });
       doc.setDrawColor(170); doc.line(M, y + h, W - M, y + h); doc.setDrawColor(0);
@@ -1748,7 +1802,7 @@ button[hidden] { display: none !important; }
     T(fmt(totalQty), bx2 + 18 + 16 + 9, y + 6.5, 12, true, 'center');
     doc.line(M, y + 10, W - M, y + 10);
     y += 15;
-    T('Tick each line when picked / received.  Boxes = full boxes + loose pcs.  G4 left = G4 stock minus open gatepasses at print time.', M, y, 7.5, false);
+    T('Tick each line when picked / received.  Boxes = full boxes + loose pcs.  G4 left = G4 stock minus open gatepasses up to this one.', M, y, 7.5, false);
 
     // ── Signatures: a line with the label under it ──
     if (y > 250) { doc.addPage(); }
